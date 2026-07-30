@@ -144,12 +144,25 @@ write new ones against `Simulator`:
 
 `CortexM0Core.execute_instruction()` is a large `if`/`elif` chain re-evaluated for every emulated
 instruction - straightforward to port faithfully, but CPython interprets it roughly two orders of
-magnitude slower than V8 JIT-compiles the equivalent JS. Measured on this machine, booting
-MicroPython 1.28 with a populated `littlefs.img` (real firmware boot through to the REPL, which is
-what `ci-micropython.yml`'s `--expect-text` checks exercise) takes on the order of **minutes**
-under CPython 3.10, vs. rp2040js's sub-10-second budget in the equivalent upstream CI job. This is
-a throughput limitation, not a correctness bug - both CPython and PyPy reach the same correct
-"Hello, MicroPython!" REPL output, just at very different speeds.
+magnitude slower than V8 JIT-compiles the equivalent JS. This is a throughput limitation, not a
+correctness bug - every interpreter below reaches the same correct "Hello, MicroPython!" REPL
+output, just at very different speeds.
+
+`demo/benchmark.py` is a reproducible benchmark for this (see its docstring for usage): a
+synthetic mode that isolates raw instruction-dispatch overhead (no bus/peripheral traffic beyond
+RAM fetches), and a firmware mode that boots a real image to a REPL/`--expect-text` match, the
+same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise. Measured on this machine:
+
+| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs boot |
+|---|---|---|
+| CPython 3.10 | 245,081 | 326.98s (198,789 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 441,113 (~1.8x) | 195.26s (~1.7x, 332,888 steps/sec) |
+| PyPy 3.10 | 10,340,279 (~42x) | 15.90s (~21x, 4,087,432 steps/sec) |
+
+("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
+it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
+interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
+biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
 
 Two mitigations, worth combining:
 
@@ -160,10 +173,10 @@ Two mitigations, worth combining:
   dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
   ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
   mypy/ruff/pytest tooling, not for running the emulator itself, which has zero runtime
-  dependencies. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps under
-  *both* CPython (10-minute timeout, since a real boot can take several minutes) and PyPy (same
-  10-minute timeout, comfortably enough), so a CPython-only regression can't slip through even
-  though PyPy is the realistic day-to-day way to run this.
+  dependencies. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a
+  `python_runtime` matrix - `pypy-3.10`, `cpython-3.10`, and `cpython-3.14` (with `PYTHON_JIT=1`)
+  - each with a 10-minute timeout, so a regression specific to any one interpreter can't slip
+  through even though PyPy is the realistic day-to-day way to run this.
 - If profiling ever calls for it, `RP2040.read_uint32`/`write_uint32` and
   `CortexM0Core.execute_instruction()` are the hot path (per `cProfile` on a real boot): the
   bootrom-bounds check used to call `len()` on a `Uint32Array` (a Python-level `__len__`) on every

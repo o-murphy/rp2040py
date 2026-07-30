@@ -37,11 +37,21 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 
 > [!TIP]
 > Booting real firmware means executing millions of Thumb instructions through a pure-Python
-> interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js -
-> booting MicroPython with a populated filesystem can take minutes under CPython. For CPU-bound
-> runs, [PyPy](https://pypy.org) gives roughly a 15x speedup: `uv run --python pypy3.10 --no-dev
-> -- python demo/micropython_run.py ...`. See [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js)
-> for details.
+> interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js.
+> Measured with [demo/benchmark.py](demo/benchmark.py) booting MicroPython 1.28 + littlefs to the
+> REPL:
+>
+> | Interpreter | Time |
+> |---|---|
+> | CPython 3.10 | 326.98s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 195.26s (~1.7x) |
+> | PyPy 3.10 | 15.90s (~21x) |
+>
+> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- python
+> demo/micropython_run.py ...`. See
+> [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
+> (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
+> all three.
 
 ```sh
 uv run python demo/micropython_run.py --image my_image.uf2

@@ -11,9 +11,10 @@ concurrency:
 
 jobs:
   test-pico-sdk:
-    name: Test Pi Pico SDK
+    name: Pico SDK ${{ matrix.sdk_version }} / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         sdk_version:
           - 1.2.0
@@ -22,6 +23,10 @@ jobs:
           - 1.5.1
           - 2.0.0
           - 2.1.1
+        python_runtime:
+          - pypy-3.10
+          - cpython-3.10
+          - cpython-3.14
     steps:
       - uses: actions/checkout@v7
 
@@ -56,20 +61,17 @@ jobs:
         with:
           python-version: "3.10"
 
-      # CortexM0Core.execute_instruction() is a pure-Python instruction interpreter, and CPython
-      # is much slower here than V8 JIT-compiling the equivalent JS in rp2040js (see
-      # docs/PORTING.md#known-differences-from-rp2040js), hence the generous 10-minute timeout.
-      # demo/micropython_run.py has zero runtime dependencies, so no `uv sync` is needed here.
-      - name: Test "Hello World" example (CPython)
-        run: timeout 10m uv run --python 3.10 --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
-
-      # Also test under PyPy: its JIT gives roughly a 15x instructions/sec speedup over CPython
-      # for this workload (see docs/PORTING.md#known-differences-from-rp2040js), so this is the
-      # realistic way to run CPU-bound firmware in the emulator day-to-day.
-      - name: Install PyPy
+      - name: Setup Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
-          python-version: "pypy3.10"
+          python-version: ${{ matrix.python_runtime }}
 
-      - name: Test "Hello World" example (PyPy)
-        run: timeout 10m uv run --python pypy3.10 --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
+      # CortexM0Core.execute_instruction() is a pure-Python instruction interpreter; CPython is
+      # much slower here than V8 JIT-compiling the equivalent JS in rp2040js, hence the generous
+      # 10-minute timeout - and why this also runs under PyPy and CPython 3.14's experimental JIT
+      # (see docs/PORTING.md#known-differences-from-rp2040js). demo/micropython_run.py has zero
+      # runtime dependencies, so no `uv sync` is needed here.
+      - name: Test "Hello World" example ${{ matrix.python_runtime }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

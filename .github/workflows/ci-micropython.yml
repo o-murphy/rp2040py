@@ -28,10 +28,6 @@ jobs:
           - pypy-3.10
           - cpython-3.10
           - cpython-3.14
-        include:
-          # Enable JIT for CPython 3.14
-          - python_runtime: cpython-3.14
-            env_jit: "PYTHON_JIT=1"
 
     steps:
       - uses: actions/checkout@v7
