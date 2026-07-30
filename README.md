@@ -76,7 +76,10 @@ from littlefs import LittleFS
 
 files = ["your.py", "files.py", "here.py", "main.py"]
 output_image = "output/littlefs.img"  # symlinked/copied to rp2040py root directory
-lfs = LittleFS(block_size=4096, block_count=352, prog_size=256)
+# disk_version=0x00020000 pins the on-disk format to littlefs v2.0, which both old and new
+# MicroPython releases can mount - newer littlefs-python defaults to a newer format (v2.1) that
+# MicroPython <=1.21 can't read. See docs/PORTING.md#known-differences-from-rp2040js.
+lfs = LittleFS(block_size=4096, block_count=352, prog_size=256, disk_version=0x00020000)
 for filename in files:
     with open(filename, "rb") as src_file, lfs.open(filename, "w") as lfs_file:
         lfs_file.write(src_file.read())

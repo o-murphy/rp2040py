@@ -140,6 +140,28 @@ write new ones against `Simulator`:
   entry points (`demo/emulator_run.py`, `demo/micropython_run.py`,
   `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
 
+### littlefs image format vs. old MicroPython (not actually a port bug)
+
+`ci-micropython.yml` builds a `littlefs.img` via `tests/mklittlefs.py` and expects MicroPython to
+auto-run `main.py` from it. This worked for MicroPython 1.28 but hung indefinitely - CPU spinning
+forever re-acquiring an SIO hardware spinlock with interrupts disabled - for every older version
+(<=1.21) in the CI matrix.
+
+Root cause, confirmed by bisecting against the JS original itself (running the real
+`wokwi/rp2040js` checkout locally against the same firmware/image reproduced the identical hang,
+including on the exact commit whose CI run shows green - ruling out a port-specific bug entirely):
+`tests/mklittlefs.py` depends on `littlefs-python>=0.4.0` with no upper bound, and newer releases
+of that package default to a newer littlefs on-disk format (v2.1) than the one MicroPython <=1.21's
+bundled littlefs C implementation understands (v2.0). Confirmed byte-for-byte: `LittleFS(...,
+disk_version=0x00020000)` under `littlefs-python==0.18.0` produces an image identical to
+`littlefs-python==0.4.0`'s default output (which upstream rp2040js's `test/requirements.txt` pins
+exactly, sidestepping the issue there). MicroPython 1.28's newer littlefs implementation reads
+*both* formats fine, so pinning the on-disk *format* - not the `littlefs-python` package version -
+is a strictly better fix: `tests/mklittlefs.py` and the README's filesystem-image snippet now both
+pass `disk_version=0x00020000` explicitly, keeping `littlefs-python` itself unpinned (avoids that
+package's own baggage - 0.4.0 imports the deprecated `pkg_resources` API, which newer `setuptools`
+no longer bundles by default).
+
 ### Performance: pure-Python interpretation is much slower than V8
 
 `CortexM0Core.execute_instruction()` is a large `if`/`elif` chain re-evaluated for every emulated
