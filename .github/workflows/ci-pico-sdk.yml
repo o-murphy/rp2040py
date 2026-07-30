@@ -23,6 +23,8 @@ jobs:
           - 1.5.1
           - 2.0.0
           - 2.1.1
+          - 2.2.0
+          - 2.3.0
         python_runtime:
           - pypy-3.10
           - cpython-3.10
