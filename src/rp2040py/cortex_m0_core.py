@@ -508,11 +508,11 @@ class CortexM0Core:
         if self.interrupts_updated and self.check_for_interrupts():
             self.waiting = False
         # ARM Thumb instruction encoding - 16 bits / 2 bytes
-        opcode_pc = self.pc & ~1  # ensure no LSB set PC are executed
+        opcode_pc = self.registers[PC_REGISTER] & ~1  # ensure no LSB set PC are executed
         opcode = self.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
         opcode2 = self.read_uint16(opcode_pc + 2) if wide_instruction else 0
-        self.pc += 2
+        self.registers[PC_REGISTER] += 2
         delta_cycles = 1
         # ADCS
         if opcode >> 6 == 0b0100000101:
@@ -549,8 +549,8 @@ class CortexM0Core:
         elif opcode >> 8 == 0b01000100:
             rm = (opcode >> 3) & 0xF
             rdn = ((opcode & 0x80) >> 4) | (opcode & 0x7)
-            left_value = self.pc + 2 if rdn == PC_REGISTER else self.registers[rdn]
-            right_value = self.pc + 2 if rm == PC_REGISTER else self.registers[rm]
+            left_value = self.registers[PC_REGISTER] + 2 if rdn == PC_REGISTER else self.registers[rdn]
+            right_value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
             result = left_value + right_value
             if rdn != SP_REGISTER and rdn != PC_REGISTER:
                 self.registers[rdn] = result
@@ -605,14 +605,14 @@ class CortexM0Core:
             if imm8 & (1 << 8):
                 imm8 = (imm8 & 0x1FF) - 0x200
             if self.check_condition(cond):
-                self.pc += imm8 + 2
+                self.registers[PC_REGISTER] += imm8 + 2
                 delta_cycles += 1
         # B
         elif opcode >> 11 == 0b11100:
             imm11 = (opcode & 0x7FF) << 1
             if imm11 & (1 << 11):
                 imm11 = (imm11 & 0x7FF) - 0x800
-            self.pc += imm11 + 2
+            self.registers[PC_REGISTER] += imm11 + 2
             delta_cycles += 1
         # BICS
         elif opcode >> 6 == 0b0100001110:
@@ -637,15 +637,15 @@ class CortexM0Core:
             i1 = 1 - (s ^ j1)
             i2 = 1 - (s ^ j2)
             imm32 = ((0b11111111 if s else 0) << 24) | ((i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1))
-            self.lr = (self.pc + 2) | 0x1
-            self.pc += 2 + imm32
+            self.lr = (self.registers[PC_REGISTER] + 2) | 0x1
+            self.registers[PC_REGISTER] += 2 + imm32
             delta_cycles += 2
             self.bl_taken(self, False)
         # BLX
         elif opcode >> 7 == 0b010001111 and (opcode & 0x7) == 0:
             rm = (opcode >> 3) & 0xF
-            self.lr = self.pc | 0x1
-            self.pc = self.registers[rm] & ~1
+            self.lr = self.registers[PC_REGISTER] | 0x1
+            self.registers[PC_REGISTER] = self.registers[rm] & ~1
             delta_cycles += 1
             self.bl_taken(self, True)
         # BX
@@ -682,11 +682,11 @@ class CortexM0Core:
             self.interrupts_updated = True
         # DMB SY
         elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F50:  # noqa: SIM114
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
             delta_cycles += 2
         # DSB SY
         elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F40:
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
             delta_cycles += 2
         # EORS
         elif opcode >> 6 == 0b0100000001:
@@ -698,7 +698,7 @@ class CortexM0Core:
             self.z = u32(result) == 0
         # ISB SY
         elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F60:
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
             delta_cycles += 2
         # LDMIA
         elif opcode >> 11 == 0b11001:
@@ -732,7 +732,7 @@ class CortexM0Core:
         elif opcode >> 11 == 0b01001:
             imm8 = (opcode & 0xFF) << 2
             rt = (opcode >> 8) & 7
-            next_pc = self.pc + 2
+            next_pc = self.registers[PC_REGISTER] + 2
             addr = (next_pc & 0xFFFFFFFC) + imm8
             delta_cycles += self.cycles_io(addr)
             self.registers[rt] = self.read_uint32(addr)
@@ -845,7 +845,7 @@ class CortexM0Core:
         elif opcode >> 8 == 0b01000110:
             rm = (opcode >> 3) & 0xF
             rd = ((opcode >> 4) & 0x8) | (opcode & 0x7)
-            value = self.pc + 2 if rm == PC_REGISTER else self.registers[rm]
+            value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
             if rd == PC_REGISTER:
                 delta_cycles += 1
                 value &= ~1
@@ -864,14 +864,14 @@ class CortexM0Core:
             sysm = opcode2 & 0xFF
             rd = (opcode2 >> 8) & 0xF
             self.registers[rd] = self.read_special_register(sysm)
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
             delta_cycles += 2
         # MSR
         elif opcode >> 4 == 0b111100111000 and opcode2 >> 8 == 0b10001000:
             sysm = opcode2 & 0xFF
             rn = opcode & 0xF
             self.write_special_register(sysm, self.registers[rn])
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
             delta_cycles += 2
         # MULS
         elif opcode >> 6 == 0b0100001101:
@@ -1105,7 +1105,7 @@ class CortexM0Core:
             imm12 = opcode2 & 0xFFF
             self.break_rewind = 4
             self.rp2040.on_break((imm4 << 12) | imm12)
-            self.pc += 2
+            self.registers[PC_REGISTER] += 2
         # UXTB
         elif opcode >> 6 == 0b1011001011:
             rm = (opcode >> 3) & 0x7

@@ -35,6 +35,14 @@ uv run python demo/micropython_run.py
 
 and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPython UF2 image can be loaded by supplying the `--image` option:
 
+> [!TIP]
+> Booting real firmware means executing millions of Thumb instructions through a pure-Python
+> interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js -
+> booting MicroPython with a populated filesystem can take minutes under CPython. For CPU-bound
+> runs, [PyPy](https://pypy.org) gives roughly a 15x speedup: `uv run --python pypy3.10 --no-dev
+> -- python demo/micropython_run.py ...`. See [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js)
+> for details.
+
 ```sh
 uv run python demo/micropython_run.py --image my_image.uf2
 ```

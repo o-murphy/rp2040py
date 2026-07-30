@@ -106,3 +106,73 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `ci-test.yml` → covered by the existing `pre-commit.yml` (mypy + ruff + pytest, equivalent lint/test gate)
 - [x] `ci-micropython.yml` → `ci-micropython.yml` (uv-based)
 - [x] `ci-pico-sdk.yml` → `ci-pico-sdk.yml` (uv-based)
+
+## Known differences from rp2040js
+
+Places where the Python port's runtime behavior necessarily diverges from the JS original,
+beyond straightforward syntax translation.
+
+### Threading model (`Simulator.execute()` / `RPPIO.run()`)
+
+Upstream JS yields back to Node's single-threaded event loop every N steps via
+`setTimeout(() => this.execute(), 0)`, so an external `stop()` call (or the process exiting)
+can interleave between bursts. Python has no equivalent single-threaded event loop, so this was
+ported using `threading.Timer(0, self.execute)` instead - the closest analogue, but it introduces
+**real concurrency** the JS version never had: every burst after the first runs on a new,
+non-main thread.
+
+Two concrete consequences, both already handled in the demo scripts but worth knowing if you
+write new ones against `Simulator`:
+
+- **Use `os._exit(code)`, not `sys.exit(code)`, to stop the process from inside a simulation
+  callback** (GPIO listeners, `USBCDC.on_serial_data`, etc.). Those callbacks run on a
+  `Simulator` worker thread once the first 1,000,000-step burst has completed, and
+  `sys.exit()`/`SystemExit` only unwinds the thread that raised it - it will not terminate the
+  process the way Node's `process.exit()` does. See `demo/micropython_run.py` and
+  `tests/micropython_spi_run.py` for the pattern.
+- **Wait on the main thread after calling `simulator.execute()`**, e.g.
+  `while simulator.executing: time.sleep(0.1)`. `execute()` only runs the first burst
+  synchronously and then returns, rescheduling itself via a non-daemon `threading.Timer` so the
+  process stays alive while the simulation runs (matching Node keeping the event loop alive). If
+  `main()` returns without waiting, Python proceeds straight into interpreter shutdown, which
+  blocks joining that non-daemon timer thread - and a Ctrl+C at that point produces an ugly
+  `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All three demo
+  entry points (`demo/emulator_run.py`, `demo/micropython_run.py`,
+  `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
+
+### Performance: pure-Python interpretation is much slower than V8
+
+`CortexM0Core.execute_instruction()` is a large `if`/`elif` chain re-evaluated for every emulated
+instruction - straightforward to port faithfully, but CPython interprets it roughly two orders of
+magnitude slower than V8 JIT-compiles the equivalent JS. Measured on this machine, booting
+MicroPython 1.28 with a populated `littlefs.img` (real firmware boot through to the REPL, which is
+what `ci-micropython.yml`'s `--expect-text` checks exercise) takes on the order of **minutes**
+under CPython 3.10, vs. rp2040js's sub-10-second budget in the equivalent upstream CI job. This is
+a throughput limitation, not a correctness bug - both CPython and PyPy reach the same correct
+"Hello, MicroPython!" REPL output, just at very different speeds.
+
+Two mitigations, worth combining:
+
+- **Run CPU-bound demo/CI workloads under PyPy** (`uv run --python pypy3.10 --no-dev -- python
+  demo/micropython_run.py ...`) instead of CPython. PyPy's JIT gave a ~15x instructions/sec
+  speedup in local benchmarking (once warmed up) and comfortably completes the same MicroPython +
+  littlefs boot in well under a minute. Note `--no-dev` (or a separate PyPy-only sync): the `dev`
+  dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
+  ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
+  mypy/ruff/pytest tooling, not for running the emulator itself, which has zero runtime
+  dependencies. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps under
+  *both* CPython (10-minute timeout, since a real boot can take several minutes) and PyPy (same
+  10-minute timeout, comfortably enough), so a CPython-only regression can't slip through even
+  though PyPy is the realistic day-to-day way to run this.
+- If profiling ever calls for it, `RP2040.read_uint32`/`write_uint32` and
+  `CortexM0Core.execute_instruction()` are the hot path (per `cProfile` on a real boot): the
+  bootrom-bounds check used to call `len()` on a `Uint32Array` (a Python-level `__len__`) on every
+  single bus access regardless of target address - now cached once as `RP2040.bootrom_byte_size`.
+  `CortexM0Core.pc` also used to be a `property` indirecting through `Uint32Array.__getitem__`/
+  `__setitem__`; the hot path inside `execute_instruction()` now indexes
+  `self.registers[PC_REGISTER]` directly (the `pc` property itself is unchanged and still used by
+  external callers like the demo scripts and GDB target). Together these gave roughly a 10-15%
+  instructions/sec improvement under CPython in local benchmarking. A dispatch-table redesign of
+  `execute_instruction()` (opcode → handler function, replacing the linear `if`/`elif` scan) would
+  likely be the single biggest remaining win, but was deferred as a larger, higher-risk refactor
+  touching all ~90 instruction handlers.
