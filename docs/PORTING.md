@@ -130,18 +130,32 @@ demo/*.py` commands keep working unchanged for anyone working from a checkout ra
 pip/uv install.
 
 `bootrom.py`/`load_flash.py` (moved there from `demo/`) and `raw_repl.py` deliberately live under
-`src/rp2040py/device/` instead of `cli/`, alongside a `MicroPythonDevice` class
-(`device/__init__.py`) that is *not* CLI plumbing: it's a programmatic API for booting a
-MicroPython/CircuitPython image and running code on it (`device.exec("print(1+1)")`,
-`device.exec_file(path)`) from another Python program - a context manager wrapping a daemon-thread
-`Simulator` plus the raw-REPL protocol (`raw_repl.py`; the same Ctrl-A/Ctrl-D protocol
-`mpremote run`/`tools/pyboard.py` use over real serial). `cli/__init__.py`'s `micropython
--c/-m/<filename>` batch mode is itself just a caller of this API, not a separate implementation.
-This split exists because `rp2040py.cli` (needing `device`) and `rp2040py.device` (needing
-`bootrom`/`load_flash`) would otherwise form a circular import if the latter stayed nested under
-`cli/` - `device/` has no dependency on `cli/` in either direction. `tests/micropython_spi_run.py`
-(test-only SPI harness, not part of the general CLI) imports `rp2040py.device.bootrom`/
-`load_flash` directly rather than duplicating them.
+`src/rp2040py/device/` instead of `cli/`, alongside `MicroPythonDevice` (`device/mp_device.py`,
+re-exported from `device/__init__.py`) that is *not* CLI plumbing: it's a programmatic API for
+booting a MicroPython/CircuitPython image and running code on it from another Python program
+(`device.exec("print(1+1)")`, `device.exec_file(path)`) via the raw-REPL protocol (`raw_repl.py`;
+the same Ctrl-A/Ctrl-D protocol `mpremote run`/`tools/pyboard.py` use over real serial).
+`cli/__init__.py`'s `micropython -c/-m/<filename>` batch mode is itself just a caller of this API,
+not a separate implementation. This split exists because `rp2040py.cli` (needing `device`) and
+`rp2040py.device` (needing `bootrom`/`load_flash`) would otherwise form a circular import if the
+latter stayed nested under `cli/` - `device/` has no dependency on `cli/` in either direction.
+`tests/micropython_spi_run.py` (test-only SPI harness, not part of the general CLI) imports
+`rp2040py.device.bootrom`/`load_flash` directly rather than duplicating them.
+
+`start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
+(`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
+`astart()`/`aexec()`/`aexec_file()` for asyncio. All of these submit the same plain blocking
+implementation (`threading.Event.wait()`) to one `ThreadPoolExecutor(max_workers=1)` per device -
+deliberately reusing the standard library's own executor/Future machinery rather than hand-rolling
+a queue: the device only has one REPL channel and can't run two `exec()`s at once, so a
+single-worker executor gets FIFO queueing of overlapping calls, `Future.add_done_callback()` for
+callback style, and cancellation of not-yet-started calls, all for free. (An earlier version of
+this hand-rolled the queue with a `deque` + a `Future`-per-call + a `threading.Timer` timeout
+watchdog; it worked, but was substantially more code for the same guarantees the stdlib already
+provides.) `concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class,
+distinct from the builtin `TimeoutError`, until Python 3.11 - `_result()`/`_await()` in
+`mp_device.py` normalize all three to the builtin one so `except TimeoutError` behaves the same
+everywhere on the 3.10 floor this project supports.
 
 ### Threading model (`Simulator.execute()` / `RPPIO.run()`)
 

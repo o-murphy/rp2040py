@@ -67,10 +67,10 @@ def test_context_manager_calls_start_then_stop(garbage_image, monkeypatch):
 
 
 def _pretend_started(device: MicroPythonDevice) -> None:
-    # exec()'s only precondition check is "has start() been called" (self._thread is not None) -
-    # poke it directly so exec()'s own logic can be tested by driving device.cdc (a public
-    # attribute) as a stand-in for real firmware, without paying for an actual firmware boot.
-    device._thread = threading.Thread()
+    # exec()'s only precondition check is "has start() been called" (self._started) - poke it
+    # directly so exec()'s own logic can be tested by driving device.cdc (a public attribute) as
+    # a stand-in for real firmware, without paying for an actual firmware boot.
+    device._started = True
 
 
 def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_image):

@@ -5,15 +5,17 @@ evaluate code against a device and read back the result).
 
 ``start()``/``exec()``/``exec_file()`` block the calling thread. Each has an ``_async`` twin
 (``start_async()``/``exec_async()``/``exec_file_async()``) returning a `concurrent.futures.Future`
-instead - the blocking methods are one-line wrappers around them (``future.result()``). A Future
-already supports callback style for free (``future.add_done_callback(...)``), and
-``astart()``/``aexec()``/``aexec_file()`` are thin ``async def`` wrappers
-(``await asyncio.wrap_future(future)``) for asyncio callers. All of these ultimately share one
-implementation - there's exactly one place that knows when a boot/exec has actually finished.
+instead - the blocking methods are one-line wrappers around them. A Future already supports
+callback style for free (``future.add_done_callback(...)``), and
+``astart()``/``aexec()``/``aexec_file()`` are thin ``async def`` wrappers for asyncio callers.
 
-The device only has one REPL channel, so it can't run two ``exec()``s at once: calling
-``exec_async()``/``aexec()`` again before a previous one finishes doesn't error, it queues - each
-call always gets its own Future, resolved once its turn comes.
+All of these share one `concurrent.futures.ThreadPoolExecutor` with a single worker: the device
+only has one REPL channel, so it can't run two ``exec()``s at once anyway - a single-worker
+executor gets queueing (extra calls simply wait their turn), Future/callback/async support, and
+cancellation of not-yet-started calls all from the standard library, instead of a hand-rolled
+alternative. Both boot and exec submit *plain blocking* work to it (`threading.Event.wait`) - the
+executor is what turns "blocking" into "queued, cancellable, awaitable" for callers, without the
+underlying implementation needing to know or care which style is being used.
 
 .. code-block:: python
 
@@ -26,8 +28,9 @@ call always gets its own Future, resolved once its turn comes.
 
 import asyncio
 import threading
-from collections import deque
-from concurrent.futures import Future, InvalidStateError
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from typing import TypeVar
 
 from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image, load_uf2
@@ -38,6 +41,8 @@ from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
+_T = TypeVar("_T")
+
 __all__ = (
     "DEFAULT_TIMEOUT",
     "MicroPythonDevice",
@@ -46,66 +51,63 @@ __all__ = (
 DEFAULT_TIMEOUT = 30.0
 
 
-def _resolve_once(future: "Future", *, result: object = None, exception: "BaseException | None" = None) -> None:
-    # Tolerates the future already being resolved - e.g. a timeout watchdog racing the real
-    # completion callback. Whichever gets there first wins; the other is a harmless no-op, rather
-    # than the InvalidStateError Future.set_result()/set_exception() would otherwise raise.
-    if future.done():
-        return
+def _result(future: "Future[_T]", timeout: "float | None") -> _T:
+    """future.result(timeout), raising the builtin TimeoutError uniformly - concurrent.futures'
+    own TimeoutError is a distinct, unrelated class on Python <3.11, so plain `except TimeoutError`
+    would otherwise silently miss "still queued behind other work" timeouts on those versions."""
     try:
-        if exception is not None:
-            future.set_exception(exception)
-        else:
-            future.set_result(result)
-    except InvalidStateError:
-        pass  # the same done()-raced-us case, just not caught by the check above
+        return future.result(timeout)
+    except FutureTimeoutError as exc:
+        raise TimeoutError(f"did not complete within {timeout}s") from exc
 
 
-def _arm_timeout(future: "Future", timeout: "float | None", message: str) -> "threading.Timer | None":
-    """Guarantees `future` resolves within `timeout` seconds even if nothing else ever does -
-    with the builtin TimeoutError, not concurrent.futures.TimeoutError (a distinct class on
-    Python <3.11), so `except TimeoutError` works the same for the blocking and async callers."""
-    if timeout is None:
-        return None
-    timer = threading.Timer(timeout, _resolve_once, kwargs={"future": future, "exception": TimeoutError(message)})
-    timer.daemon = True
-    timer.start()
-    return timer
+async def _await(future: "Future[_T]", timeout: "float | None") -> _T:
+    """asyncio.wrap_future(future), with the same TimeoutError normalization as _result()."""
+    try:
+        return await asyncio.wait_for(asyncio.wrap_future(future), timeout)
+    except (FutureTimeoutError, asyncio.TimeoutError) as exc:
+        raise TimeoutError(f"did not complete within {timeout}s") from exc
 
 
-def _disarm(timer: "threading.Timer | None") -> None:
-    if timer is not None:
-        timer.cancel()
+def _connect_blocking(cdc: USBCDC, simulator: Simulator, mcu: RP2040, timeout: "float | None") -> None:
+    connected = threading.Event()
+    cdc.on_device_connected = connected.set
+    mcu.core.pc = FLASH_START_ADDRESS
+    threading.Thread(target=simulator.execute, daemon=True).start()
+    if not connected.wait(timeout):
+        raise TimeoutError(f"device did not enumerate over USB within {timeout}s")
 
 
-def _exec_via_raw_repl(cdc: USBCDC, source: bytes, timeout: "float | None") -> "Future[tuple[bytes, bytes]]":
-    future: Future[tuple[bytes, bytes]] = Future()
+def _exec_blocking(cdc: USBCDC, source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
     runner = RawReplRunner(source, cdc.send_serial_byte)
-    timer = _arm_timeout(future, timeout, f"raw-REPL exec did not complete within {timeout}s")
+    done = threading.Event()
+    errors: list[RawReplError] = []
 
     def _on_serial_data(data: bytes | bytearray) -> None:
         try:
             runner.feed(data)
         except RawReplError as exc:
-            _disarm(timer)
-            _resolve_once(future, exception=exc)
+            errors.append(exc)
+            done.set()
             return
         if runner.result is not None:
-            _disarm(timer)
-            _resolve_once(future, result=runner.result)
+            done.set()
 
-    # Runs on the Simulator's worker thread, not the caller's - the Future is what turns this into
-    # a blocking call (.result()), callback style (.add_done_callback()), or an awaitable
-    # (asyncio.wrap_future()), without this function needing to know or care which.
     cdc.on_serial_data = _on_serial_data
     runner.start()
-    return future
+
+    if not done.wait(timeout):
+        raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s")
+    if errors:
+        raise errors[0]
+    assert runner.result is not None
+    return runner.result
 
 
 class MicroPythonDevice:
-    """Boots a MicroPython/CircuitPython UF2 image on a daemon thread and lets you run code on
-    it programmatically via the raw-REPL protocol (the same one `mpremote run`/`pyboard.py` and
-    Thonny's "Run" use over a real serial port).
+    """Boots a MicroPython/CircuitPython UF2 image and lets you run code on it programmatically
+    via the raw-REPL protocol (the same one `mpremote run`/`pyboard.py` and Thonny's "Run" use
+    over a real serial port).
 
     Use as a context manager (or `async with`), or call `start()`/`stop()` directly for more
     control over the lifecycle. See the module docstring for the blocking/callback/async story.
@@ -130,41 +132,26 @@ class MicroPythonDevice:
             load_circuitpython_flash_image(fat12, self.mcu)
         self.circuitpython = circuitpython
         self.cdc = USBCDC(self.mcu.usb_ctrl)
-        self._thread: threading.Thread | None = None
-        # The raw-REPL protocol is a single request/response channel - the device can't run two
-        # exec()s at once - so overlapping exec_async()/aexec() calls queue instead of erroring.
-        self._exec_lock = threading.Lock()
-        self._exec_queue: deque[tuple[bytes, float | None, Future]] = deque()
-        self._exec_running = False
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._started = False
 
     # -- start -----------------------------------------------------------------------------
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
-        """Boot the device on a daemon thread. Returns a Future that resolves once it enumerates
-        over USB, or fails with TimeoutError after `timeout` (if given)."""
-        if self._thread is not None:
+        """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails
+        with TimeoutError after `timeout` (if given)."""
+        if self._started:
             raise RuntimeError("start()/start_async() already called")
-
-        future: Future[None] = Future()
-        timer = _arm_timeout(future, timeout, f"device did not enumerate over USB within {timeout}s")
-
-        def _on_connected() -> None:
-            _disarm(timer)
-            _resolve_once(future, result=None)
-
-        self.cdc.on_device_connected = _on_connected
-        self.mcu.core.pc = FLASH_START_ADDRESS
-        self._thread = threading.Thread(target=self.simulator.execute, daemon=True)
-        self._thread.start()
-        return future
+        self._started = True
+        return self._executor.submit(_connect_blocking, self.cdc, self.simulator, self.mcu, timeout)
 
     def start(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
         """Blocking version of `start_async()`."""
-        self.start_async(timeout).result()
+        _result(self.start_async(timeout), timeout)
 
     async def astart(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
         """asyncio version of `start_async()`."""
-        await asyncio.wrap_future(self.start_async(timeout))
+        await _await(self.start_async(timeout), timeout)
 
     def stop(self) -> None:
         """Halt the emulator. Safe to call even if `start()` was never called.
@@ -185,51 +172,25 @@ class MicroPythonDevice:
         Interrupts anything already running on the device first (e.g. an auto-run `main.py` from
         a littlefs image), same as `mpremote run`/`pyboard.py` do.
 
-        Never blocks and never raises for "another exec is running": if one is, this call queues
-        behind it and runs once its turn comes (the device only has one REPL channel, it can't
-        run two exec()s at once). Callers that don't want to wait in line should wait on the
-        previous Future themselves before issuing the next call.
+        Never raises for "another exec is running": if one is (or `start_async()` hasn't finished
+        connecting yet), this call queues behind it and runs once its turn comes - the device only
+        has one REPL channel, it can't run two exec()s at once. A queued call's own `timeout`
+        starts counting from when it actually begins, not from when it was queued; use
+        `future.result(timeout)`/`await asyncio.wait_for(...)` if you want to bound the wait
+        including queue time too.
         """
-        if self._thread is None:
+        if not self._started:
             raise RuntimeError("call start()/start_async() (or enter as a context manager) before exec_async()")
-
-        future: Future[tuple[bytes, bytes]] = Future()
-        with self._exec_lock:
-            if self._exec_running:
-                self._exec_queue.append((code.encode(), timeout, future))
-            else:
-                self._exec_running = True
-                self._start_exec(code.encode(), timeout, future)
-        return future
-
-    def _start_exec(self, source: bytes, timeout: "float | None", future: "Future[tuple[bytes, bytes]]") -> None:
-        inner = _exec_via_raw_repl(self.cdc, source, timeout)
-
-        def _relay(done_inner: "Future[tuple[bytes, bytes]]") -> None:
-            exc = done_inner.exception()
-            if exc is not None:
-                _resolve_once(future, exception=exc)
-            else:
-                _resolve_once(future, result=done_inner.result())
-            self._advance_exec_queue()
-
-        inner.add_done_callback(_relay)
-
-    def _advance_exec_queue(self) -> None:
-        with self._exec_lock:
-            if self._exec_queue:
-                source, timeout, next_future = self._exec_queue.popleft()
-                self._start_exec(source, timeout, next_future)
-            else:
-                self._exec_running = False
+        return self._executor.submit(_exec_blocking, self.cdc, code.encode(), timeout)
 
     def exec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
-        """Blocking version of `exec_async()`."""
-        return self.exec_async(code, timeout).result()
+        """Blocking version of `exec_async()` - `timeout` bounds the *entire* wait, including any
+        time spent queued behind another exec()."""
+        return _result(self.exec_async(code, timeout), timeout)
 
     async def aexec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
-        """asyncio version of `exec_async()`."""
-        return await asyncio.wrap_future(self.exec_async(code, timeout))
+        """asyncio version of `exec_async()` (see `exec()` re: `timeout` covering queue time too)."""
+        return await _await(self.exec_async(code, timeout), timeout)
 
     def exec_file_async(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[tuple[bytes, bytes]]":
         with open(path) as f:
@@ -237,11 +198,11 @@ class MicroPythonDevice:
 
     def exec_file(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """Blocking version of `exec_file_async()`."""
-        return self.exec_file_async(path, timeout=timeout).result()
+        return _result(self.exec_file_async(path, timeout=timeout), timeout)
 
     async def aexec_file(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """asyncio version of `exec_file_async()`."""
-        return await asyncio.wrap_future(self.exec_file_async(path, timeout=timeout))
+        return await _await(self.exec_file_async(path, timeout=timeout), timeout)
 
     # -- context managers --------------------------------------------------------------------
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b2] - 2026-07-31
+
 ### Added
 - `rp2040py` console script (and `python -m rp2040py`) with `run`, `micropython`, and `bench`
   subcommands, so the emulator is runnable from a plain `pip install rp2040py` / `uv add
@@ -22,12 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the device non-interactively via the raw-REPL protocol, prints its stdout/stderr, and exits
   with its status (0, or 1 if it raised).
 - `rp2040py.device.MicroPythonDevice`, a programmatic API for booting a MicroPython/CircuitPython
-  image and running code on it from another Python program (`device.exec("print(1+1)")`,
-  `device.exec_file(path)`), as a context manager wrapping a daemon-thread `Simulator` plus the
-  raw-REPL protocol - previously this was CLI-only. The CLI's `micropython -c/-m/<filename>` is
-  now itself a caller of this API. `bootrom.py`/`load_flash.py`/`raw_repl.py` moved from `cli/` to
-  `device/` accordingly (they aren't CLI-specific, and `device` importing from `cli` would have
-  been circular).
+  image and running code on it from another Python program - previously this was CLI-only, and the
+  CLI's `micropython -c/-m/<filename>` is now itself just a caller of this API. `start()`/`exec()`/
+  `exec_file()` block the calling thread; each has a `_async` twin (`start_async()`/
+  `exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus `astart()`/
+  `aexec()`/`aexec_file()` for asyncio. All of these share one `ThreadPoolExecutor(max_workers=1)`
+  per device: since the device only has one REPL channel and can't run two `exec()`s at once,
+  overlapping calls queue behind each other automatically instead of erroring, and get
+  cancellation of not-yet-started calls for free from the standard library.
+  `bootrom.py`/`load_flash.py`/`raw_repl.py` moved from `cli/` to the new `device/` subpackage
+  accordingly (they aren't CLI-specific, and `device` importing from `cli` would have been
+  circular).
 - `rp2040py --version`.
 
 ## [0.1.0b1] - 2026-07-30
@@ -57,5 +64,6 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b2...HEAD
+[0.1.0b2]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b1...v0.1.0b2
 [0.1.0b1]: https://github.com/o-murphy/rp2040py/releases/tag/v0.1.0b1

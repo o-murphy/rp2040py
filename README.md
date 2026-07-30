@@ -164,7 +164,9 @@ While CircuitPython does not typically use a writeable filesystem, note that thi
 
 ### Library API
 
-Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image on a daemon thread and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use:
+Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
+
+**Blocking** (`exec()`/`exec_file()`) is the simplest form - each call returns once the device finishes, or raises `TimeoutError` after `timeout` elapses (30s by default, since unlike the CLI there's no Ctrl+C to fall back on):
 
 ```python
 from rp2040py.device import MicroPythonDevice
@@ -176,7 +178,25 @@ with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
     stdout, stderr = device.exec_file("my_script.py")
 ```
 
-`exec()`/`exec_file()` block the calling thread until the device finishes (or `timeout` elapses - they default to 30s, since unlike the CLI there's no Ctrl+C to fall back on) and interrupt anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image), same as real raw-REPL tooling does. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this API, not a separate implementation. `start()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
+**Callback style**, via `exec_async()`'s `concurrent.futures.Future` - no separate API needed, `Future.add_done_callback()` does this out of the box:
+
+```python
+def on_done(future):
+    stdout, stderr = future.result()
+    print(stdout.decode())
+
+device.exec_async("print(1 + 1)").add_done_callback(on_done)
+```
+
+**asyncio**, via `astart()`/`aexec()`/`aexec_file()`:
+
+```python
+async def main():
+    async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+        stdout, stderr = await device.aexec("print(1 + 1)")
+```
+
+All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(max_workers=1)` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start()`/`start_async()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
 
 ## Learn more
 
