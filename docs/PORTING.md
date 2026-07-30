@@ -206,6 +206,15 @@ it's not directly comparable to the synthetic column's pure instructions/sec - t
 interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
 biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
 
+**MicroPython 1.21 is the recommended version to boot in the emulator, not 1.28**: the boot time
+above is dominated by how much work the firmware itself does before dropping to the REPL, not just
+interpreter speed. On the same machine, under the same CPython 3.10, MicroPython 1.21 reaches the
+REPL in 6.85s (2,000,000 steps) versus 1.28's 160.35s (65,000,000 steps) - over 20x fewer steps for
+an otherwise identical boot-to-prompt workload. 1.28 still boots and mounts a `mklittlefs`-built
+littlefs image correctly (that's exactly the version pinned `disk_version` fixed compatibility
+for, see below), it's simply much slower to reach interactively; use it only when you specifically
+need whatever changed between 1.21 and 1.28.
+
 Two mitigations, worth combining:
 
 - **Run CPU-bound demo/CI workloads under PyPy** (`uv run --python pypy3.10 --no-dev -- python

@@ -64,7 +64,7 @@ to the console.
 
 ### MicroPython code
 
-To run the MicroPython demo, first download [RPI_PICO-20230426-v1.20.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20230426-v1.20.0.uf2), place it in the rp2040py root directory, then run:
+To run the MicroPython demo, first download a MicroPython UF2 build and place it in the rp2040py root directory. **[RPI_PICO-20231005-v1.21.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20231005-v1.21.0.uf2) is recommended**: it does far less work before dropping to the REPL prompt than newer releases, so it boots dramatically faster in the emulator (see the benchmark below). Newer releases work too, just slower to reach the REPL - e.g. [RPI_PICO-20260406-v1.28.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20260406-v1.28.0.uf2). Then run:
 
 ```sh
 rp2040py micropython
@@ -91,6 +91,12 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 > [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.
+>
+> This is also why **1.21 is the recommended version**: on the same machine and CPython 3.10,
+> 1.21 reaches the REPL in 6.85s (2,000,000 steps) versus 1.28's 160.35s (65,000,000 steps) - over
+> 20x fewer steps to boot the same emulator. 1.28 works fine too (as does the littlefs image
+> produced by `mklittlefs`, mounting correctly on both), it's just a much slower REPL to reach
+> interactively.
 
 ```sh
 rp2040py micropython --image my_image.uf2
@@ -103,6 +109,14 @@ rp2040py micropython --gdb
 ```
 
 For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
+
+For one-shot, non-interactive runs (like `micropython`'s own CLI), pass one of `-c <command>`, `-m <module>`, or a script `<filename>` - mutually exclusive, matching `[-c <command> | -m <module> | <filename>]`. Instead of dropping into the REPL, rp2040py boots the device, runs it via the raw-REPL protocol, prints its stdout/stderr, and exits with the device's exit status (0 on success, 1 if it raised):
+
+```sh
+rp2040py micropython -c "print(1 + 1)"
+rp2040py micropython -m sys
+rp2040py micropython path/to/script.py
+```
 
 #### Filesystem support
 
