@@ -43,9 +43,9 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 >
 > | Interpreter | Time |
 > |---|---|
-> | CPython 3.10 | 326.98s |
-> | CPython 3.14 + `PYTHON_JIT=1` | 195.26s (~1.7x) |
-> | PyPy 3.10 | 15.90s (~21x) |
+> | CPython 3.10 | 312.48s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 175.41s (~1.8x) |
+> | PyPy 3.10 | 9.55s (~33x) |
 >
 > For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- python
 > demo/micropython_run.py ...`. See

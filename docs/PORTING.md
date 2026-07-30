@@ -155,9 +155,9 @@ same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise. Measured on t
 
 | Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs boot |
 |---|---|---|
-| CPython 3.10 | 245,081 | 326.98s (198,789 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 441,113 (~1.8x) | 195.26s (~1.7x, 332,888 steps/sec) |
-| PyPy 3.10 | 10,340,279 (~42x) | 15.90s (~21x, 4,087,432 steps/sec) |
+| CPython 3.10 | 251,654 | 312.48s (208,014 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 478,319 (~1.9x) | 175.41s (~1.8x, 370,570 steps/sec) |
+| PyPy 3.10 | 28,975,249 (~115x) | 9.55s (~33x, 6,803,084 steps/sec) |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
@@ -189,7 +189,15 @@ Two mitigations, worth combining:
   that did nothing but forward to the identically-named `RP2040` methods - pure indirection with
   no external callers (nothing outside the class used `core.read_uint32(...)` etc.), so those were
   removed and all internal call sites now call `self.rp2040.read_uint32(...)` etc. directly.
-  Together these gave roughly a 15-20% instructions/sec improvement under CPython in local
+  `utils/bit.py`'s `read_uint16_le`/`write_uint16_le`/`read_uint32_le`/`write_uint32_le` used to
+  slice out a temporary `bytes` object and call `int.from_bytes()`/`int.to_bytes()` on it; they now
+  use module-level pre-built `struct.Struct("<H")`/`struct.Struct("<I")` instances'
+  `unpack_from`/`pack_into` instead, which read/write directly against the buffer with no
+  intermediate allocation - measured ~40% faster for these four functions in isolation, and (more
+  strikingly) cut the real MicroPython + littlefs boot time roughly in half under PyPy specifically
+  (15.87s -> 9.55s), since PyPy's JIT couldn't optimize away the old temporary-`bytes`-object
+  allocation the way it can lean on the already-C-implemented `struct` module. Together with the
+  two items above, these gave roughly a 20-25% instructions/sec improvement under CPython in local
   benchmarking. A dispatch-table redesign of `execute_instruction()` (opcode → handler function,
   replacing the linear `if`/`elif` scan) would likely be the single biggest remaining win, but was
   deferred as a larger, higher-risk refactor touching all ~90 instruction handlers.
