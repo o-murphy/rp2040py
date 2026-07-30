@@ -4,7 +4,8 @@ import time
 
 import pytest
 
-from rp2040py.device import DEFAULT_TIMEOUT, MicroPythonDevice
+from rp2040py.device.mp_device import DEFAULT_TIMEOUT, MicroPythonDevice
+from rp2040py.device.raw_repl import RawReplError
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -99,3 +100,78 @@ def test_exec_raises_timeout_error_if_the_device_never_responds(garbage_image):
     _pretend_started(device)
     with pytest.raises(TimeoutError):
         device.exec("1", timeout=0.3)
+
+
+def _serve_queued_execs(device: MicroPythonDevice, replies: "list[bytes]") -> None:
+    # Answers each exec in turn, only once exec_async() has actually dequeued and started it
+    # (i.e. registered a fresh on_serial_data handler for it) - mirrors real firmware only ever
+    # answering whichever request currently owns the REPL, one at a time.
+    last_handler = None
+    for reply in replies:
+        while device.cdc.on_serial_data is last_handler:
+            time.sleep(0.001)
+        # Capture *before* replying, not after: the final on_serial_data call below can
+        # synchronously cascade all the way into starting the next queued exec (its done-callback
+        # runs synchronously off the last byte of this reply) - reading on_serial_data afterwards
+        # would already see that next handler, not the one we're about to finish serving.
+        handler_being_served = device.cdc.on_serial_data
+        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
+        device.cdc.on_serial_data(b"OK")
+        device.cdc.on_serial_data(reply)
+        device.cdc.on_serial_data(bytes([4]))
+        device.cdc.on_serial_data(bytes([4]))
+        last_handler = handler_being_served
+
+
+def test_overlapping_exec_async_calls_queue_and_run_in_order(garbage_image):
+    device = MicroPythonDevice(garbage_image)
+    _pretend_started(device)
+    replies = [b"1\r\n", b"2\r\n", b"3\r\n"]
+
+    threading.Thread(target=_serve_queued_execs, args=(device, replies)).start()
+
+    # All three are issued back-to-back, well before the first has a reply - exec_async() must
+    # not raise or block for #2/#3 just because #1 is still in flight.
+    futures = [device.exec_async(f"print({i})") for i in (1, 2, 3)]
+
+    assert [f.result(timeout=5)[0] for f in futures] == replies
+
+
+def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image):
+    device = MicroPythonDevice(garbage_image)
+    _pretend_started(device)
+
+    def _serve() -> None:
+        last_handler = None
+
+        def _next_handler():
+            nonlocal last_handler
+            while device.cdc.on_serial_data is last_handler:
+                time.sleep(0.001)
+            last_handler = device.cdc.on_serial_data
+
+        _next_handler()
+        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
+        device.cdc.on_serial_data(b"OK")
+        device.cdc.on_serial_data(b"1\r\n")
+        device.cdc.on_serial_data(bytes([4]))
+        device.cdc.on_serial_data(bytes([4]))
+
+        _next_handler()  # 2nd exec: malformed ack -> RawReplError, shouldn't wedge the 3rd
+        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
+        device.cdc.on_serial_data(b"XY")
+
+        _next_handler()
+        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
+        device.cdc.on_serial_data(b"OK")
+        device.cdc.on_serial_data(b"3\r\n")
+        device.cdc.on_serial_data(bytes([4]))
+        device.cdc.on_serial_data(bytes([4]))
+
+    threading.Thread(target=_serve).start()
+
+    first, second, third = (device.exec_async(f"print({i})") for i in (1, 2, 3))
+    assert first.result(timeout=5) == (b"1\r\n", b"")
+    with pytest.raises(RawReplError):
+        second.result(timeout=5)
+    assert third.result(timeout=5) == (b"3\r\n", b"")

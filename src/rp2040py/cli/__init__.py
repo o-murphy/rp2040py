@@ -29,7 +29,6 @@ from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import build_littlefs_image
-from rp2040py.device import MicroPythonDevice
 from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
@@ -37,6 +36,7 @@ from rp2040py.device.load_flash import (
     load_micropython_flash_image,
     load_uf2,
 )
+from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.device.raw_repl import RawReplError
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.memory_map import RAM_START_ADDRESS
