@@ -9,6 +9,7 @@ import os
 import sys
 import termios
 import threading
+import time
 import tty
 
 from bootrom import BOOTROM_B1
@@ -25,6 +26,7 @@ def main() -> None:
     parser.add_argument("--image")
     parser.add_argument("--expect-text")
     parser.add_argument("--gdb", action="store_true")
+    parser.add_argument("--gdb-port", type=int, default=3333)
     parser.add_argument("--circuitpython", action="store_true")
     args = parser.parse_args()
 
@@ -47,7 +49,7 @@ def main() -> None:
         load_circuitpython_flash_image("fat12.img", mcu)
 
     if args.gdb:
-        gdb_server = GDBTCPServer(simulator, 3333)
+        gdb_server = GDBTCPServer(simulator, args.gdb_port)
         print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
 
     cdc = USBCDC(mcu.usb_ctrl)
@@ -116,6 +118,21 @@ def main() -> None:
 
     simulator.rp2040.core.pc = 0x10000000
     simulator.execute()
+
+    # simulator.execute() only runs the first burst synchronously and then
+    # reschedules itself via threading.Timer, so main() would otherwise return
+    # immediately and leave the process hanging in interpreter shutdown,
+    # joining that non-daemon timer chain forever - and unresponsive to
+    # Ctrl+C there. Waiting here on the main thread keeps KeyboardInterrupt
+    # handling clean.
+    try:
+        while simulator.executing:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        if old_termios is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
+        simulator.stop()
+        os._exit(130)
 
 
 if __name__ == "__main__":

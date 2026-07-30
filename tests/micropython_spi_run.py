@@ -7,6 +7,7 @@ Usage: python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef..
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "demo"))
 
@@ -73,6 +74,19 @@ def main() -> None:
 
     mcu.core.pc = 0x10000000
     simulator.execute()
+
+    # simulator.execute() only runs the first burst synchronously and then
+    # reschedules itself via threading.Timer, so main() would otherwise return
+    # immediately and leave the process hanging in interpreter shutdown,
+    # joining that non-daemon timer chain forever - and unresponsive to
+    # Ctrl+C there. Waiting here on the main thread keeps KeyboardInterrupt
+    # handling clean.
+    try:
+        while simulator.executing:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        simulator.stop()
+        os._exit(130)
 
 
 if __name__ == "__main__":
