@@ -19,6 +19,9 @@ jobs:
           - 20230426-v1.20.0
           - 20231005-v1.21.0
           - 20260406-v1.28.0
+        python_version:
+          - pypy3.10
+          -
     steps:
       - uses: actions/checkout@v4
 
@@ -45,11 +48,6 @@ jobs:
       # is much slower here than V8 JIT-compiling the equivalent JS in rp2040js (see
       # docs/PORTING.md#known-differences-from-rp2040js) - a real MicroPython + littlefs boot can
       # take several minutes under CPython, hence the generous 10-minute timeout below.
-      - name: Test Micropython (CPython)
-        run: timeout 10m uv run python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
-
-      - name: Test Micropython SPI (CPython)
-        run: timeout 10m uv run python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
 
       # Also test under PyPy: its JIT gives roughly a 15x instructions/sec speedup over CPython
       # for this workload (see docs/PORTING.md#known-differences-from-rp2040js), so this is the
@@ -57,13 +55,14 @@ jobs:
       # zero runtime dependencies, so PyPy needs no `uv sync` of its own; littlefs.img creation
       # above stays on CPython because littlefs-python (a dev-only dependency) doesn't build under
       # PyPy 3.10 yet.
-      - name: Install PyPy
+
+      - name: Install Python (${{ matrix.python_version }})
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
-          python-version: "pypy3.10"
+          python-version: ${{ matrix.python_version }}
 
       - name: Test Micropython (PyPy)
-        run: timeout 10m uv run --python pypy3.10 --no-dev -- python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
+        run: timeout 10m uv run --python ${{ matrix.python_version }} --no-dev -- python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
 
       - name: Test Micropython SPI (PyPy)
-        run: timeout 10m uv run --python pypy3.10 --no-dev -- python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+        run: timeout 10m uv run --python ${{ matrix.python_version }} --no-dev -- python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
