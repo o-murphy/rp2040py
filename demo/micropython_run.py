@@ -75,7 +75,11 @@ def main() -> None:
                 if args.expect_text and args.expect_text in current_line:
                     print(f'Expected text found: "{args.expect_text}"')
                     print("TEST PASSED.")
-                    sys.exit(0)
+                    # os._exit(), not sys.exit(): this callback runs on a Simulator
+                    # worker thread (threading.Timer), and sys.exit() there only
+                    # terminates that thread, not the whole process (unlike Node's
+                    # process.exit(), which the upstream JS relies on here).
+                    os._exit(0)
                 current_line = ""
             else:
                 current_line += char
@@ -96,7 +100,12 @@ def main() -> None:
                     break
                 # 24 is Ctrl+X
                 if chunk[0] == 24:
-                    sys.exit(0)
+                    # os._exit(), not sys.exit(): this runs on the dedicated stdin
+                    # reader thread, not the main thread, so sys.exit() would only
+                    # terminate that thread instead of the whole process.
+                    if old_termios is not None:
+                        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
+                    os._exit(0)
                 for byte in chunk:
                     cdc.send_serial_byte(byte)
         finally:

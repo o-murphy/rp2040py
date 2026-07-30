@@ -1,0 +1,47 @@
+name: Test MicroPython Releases
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-micropython:
+    name: Micropython ${{ matrix.micropython_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        micropython_version:
+          - 20210618-v1.16
+          - 20210902-v1.17
+          - 20220117-v1.18
+          - 20220618-v1.19.1
+          - 20230426-v1.20.0
+          - 20231005-v1.21.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Download Micropython
+        run: curl -o micropython.uf2 "https://micropython.org/resources/firmware/RPI_PICO-${VERSION}.uf2"
+        env:
+          VERSION: ${{ matrix.micropython_version }}
+
+      - name: Create filesystem
+        run: uv run python tests/mklittlefs.py littlefs.img tests/micropython/main.py
+
+      - name: Test Micropython
+        run: timeout 10 uv run python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
+
+      - name: Create SPI test filesystem
+        run: uv run python tests/mklittlefs.py littlefs-spi.img tests/micropython/main-spi.py
+
+      - name: Test Micropython SPI
+        run: timeout 10 uv run python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"

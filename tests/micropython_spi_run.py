@@ -48,14 +48,18 @@ def main() -> None:
             expected = expected_messages.pop(0) if expected_messages else None
             if spi_buf.decode("latin-1") != expected:
                 print("SPI TEST FAILED.")
-                sys.exit(1)
+                # os._exit(), not sys.exit(): this callback runs on a Simulator
+                # worker thread (threading.Timer), and sys.exit() there only
+                # terminates that thread, not the whole process (unlike Node's
+                # process.exit(), which the upstream JS relies on here).
+                os._exit(1)
             else:
                 print("SPI MESSAGE RECEIVED.")
                 spi_buf.clear()
 
             if not expected_messages:
                 print("SPI TEST PASSED.")
-                sys.exit(0)
+                os._exit(0)
 
     mcu.gpio[5].add_listener(_on_cs_changed)
 

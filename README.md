@@ -1,107 +1,110 @@
+![](../../actions/workflows/pre-commit.yml/badge.svg) ![](../../actions/workflows/ci-micropython.yml/badge.svg) ![](../../actions/workflows/ci-pico-sdk.yml/badge.svg)
+
 # rp2040py
 
-Port of [rp2040js](https://github.com/wokwi/rp2040js) from TypeScript to Python — a Raspberry Pi Pico (RP2040) emulator.
+Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](https://github.com/wokwi/rp2040js). It blinks, runs native code, and even the MicroPython REPL!
 
-## Port checklist (temporary, file by file)
+See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
 
-Order — from fewest dependencies to most.
+## Run the demo project
 
-### utils / base types
-- [x] `utils/bit.ts` → `utils/bit.py`
-- [x] `utils/fifo.ts` → `utils/fifo.py`
-- [x] `utils/logging.ts` → `utils/logging.py`
-- [x] `utils/time.ts` → `utils/time.py`
-- [x] `utils/timer32.ts` → `utils/timer32.py`
-- [x] `utils/assembler.ts` → `utils/assembler.py`
-- [x] `utils/pio-assembler.ts` → `utils/pio_assembler.py`
-- [x] `irq.ts` → `irq.py`
-- [x] `interpolator.ts` → `interpolator.py`
-- [x] `gdb/gdb-utils.ts` → `gdb/gdb_utils.py`
+### Native code
 
-### clock
-- [x] `clock/clock.ts` → `clock/clock.py`
-- [x] `clock/mock-clock.ts` → `clock/mock_clock.py`
-- [x] `clock/simulation-clock.ts` → `clock/simulation_clock.py`
+You'd need to get `hello_uart.hex` by building it from the [pico-examples repo](https://github.com/raspberrypi/pico-examples/tree/master/uart/hello_uart), then copy it to the rp2040py root directory and run:
 
-### peripherals — base
-- [x] `peripherals/peripheral.ts` → `peripherals/peripheral.py`
+```sh
+uv run python demo/emulator_run.py
+```
 
-### peripherals — simple (only depend on `peripheral.py`)
-- [x] `peripherals/sysinfo.ts` → `peripherals/sysinfo.py`
-- [x] `peripherals/tbman.ts` → `peripherals/tbman.py`
-- [x] `peripherals/syscfg.ts` → `peripherals/syscfg.py`
-- [x] `peripherals/psm.ts` → `peripherals/psm.py`
-- [x] `peripherals/reset.ts` → `peripherals/reset.py`
-- [x] `peripherals/ssi.ts` → `peripherals/ssi.py`
-- [x] `peripherals/xosc.ts` → `peripherals/xosc.py`
-- [x] `peripherals/rtc.ts` → `peripherals/rtc.py`
+You can also specify the path to the image on the command line and/or load a UF2 image:
 
-### peripherals — need `RP2040` / `GPIOPin` (forward-ref)
-- [x] `peripherals/pads.ts` → `peripherals/pads.py`
-- [x] `peripherals/busctrl.ts` → `peripherals/busctrl.py`
-- [x] `peripherals/io.ts` → `peripherals/io.py`
-- [x] `peripherals/ppb.ts` → `peripherals/ppb.py`
-- [x] `peripherals/clocks.ts` → `peripherals/clocks.py`
-- [x] `peripherals/watchdog.ts` → `peripherals/watchdog.py`
-- [x] `peripherals/timer.ts` → `peripherals/timer.py`
+```sh
+uv run python demo/emulator_run.py --image ./my-pico-project.uf2
+```
 
-### peripherals — need `dma.py` (DREQChannel)
-- [x] `peripherals/dma.ts` → `peripherals/dma.py`
-- [x] `peripherals/spi.ts` → `peripherals/spi.py`
-- [x] `peripherals/uart.ts` → `peripherals/uart.py`
-- [x] `peripherals/adc.ts` → `peripherals/adc.py`
-- [x] `peripherals/pwm.ts` → `peripherals/pwm.py`
-- [x] `peripherals/i2c.ts` → `peripherals/i2c.py`
-- [x] `peripherals/pio.ts` → `peripherals/pio.py`
-- [x] `peripherals/usb.ts` → `peripherals/usb.py`
+A GDB server will be available on port 3333, and the data written to UART0 will be printed
+to the console.
 
-### core
-- [x] `gpio-pin.ts` → `gpio_pin.py`
-- [x] `sio.ts` → `sio.py`
-- [x] `cortex-m0-core.ts` → `cortex_m0_core.py`
-- [x] `rp2040.ts` → `rp2040.py`
-- [x] `simulator.ts` → `simulator.py`
-- [x] `index.ts` → `__init__.py`
+### MicroPython code
 
-### gdb
-- [x] `gdb/gdb-utils.ts` → `gdb/gdb_utils.py`
-- [x] `gdb/gdb-target.ts` → `gdb/gdb_target.py`
-- [x] `gdb/gdb-server.ts` → `gdb/gdb_server.py`
-- [x] `gdb/gdb-connection.ts` → `gdb/gdb_connection.py`
-- [x] `gdb/gdb-tcp-server.ts` → `gdb/gdb_tcp_server.py` (Node `net` → Python `socket`+`threading`)
+To run the MicroPython demo, first download [RPI_PICO-20230426-v1.20.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20230426-v1.20.0.uf2), place it in the rp2040py root directory, then run:
 
-### usb
-- [x] `usb/interfaces.ts` → `usb/interfaces.py`
-- [x] `usb/setup.ts` → `usb/setup.py`
-- [x] `usb/usb-device.ts` → `usb/usb_device.py`
-- [x] `usb/cdc.ts` → `usb/cdc.py`
+```sh
+uv run python demo/micropython_run.py
+```
 
-### tests (`*.spec.ts` → `tests/test_*.py`, pytest)
-- [x] `test-utils/*.ts` → `tests/utils/*.py` (shared driver infra for instructions/sio/pio tests; the GDB-driver variant was not ported)
-- [x] `utils/fifo.spec.ts` → `tests/test_fifo.py`
-- [x] `utils/time.spec.ts` → `tests/test_time.py`
-- [x] `utils/assembler.spec.ts` → `tests/test_assembler.py`
-- [x] `utils/pio-assembler.spec.ts` → `tests/test_pio_assembler.py`
-- [x] `peripherals/timer.spec.ts` → `tests/test_timer.py`
-- [x] `peripherals/dma.spec.ts` → `tests/test_dma.py`
-- [x] `peripherals/uart.spec.ts` → `tests/test_uart.py`
-- [ ] `peripherals/pio.spec.ts` → `tests/test_pio.py`
-- [ ] `usb/cdc.spec.ts` → `tests/test_cdc.py`
-- [x] `instructions.spec.ts` → `tests/test_instructions.py` (126/126 passing)
-- [ ] `rp2040.spec.ts` → `tests/test_rp2040.py`
-- [ ] `sio.spec.ts` → `tests/test_sio.py`
+and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPython UF2 image can be loaded by supplying the `--image` option:
 
-### demo / debug (needed to actually run firmware, e.g. MicroPython)
-- [x] `demo/bootrom.ts` → `demo/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
-- [x] `demo/intelhex.ts` → `demo/intelhex.py`
-- [x] `demo/load-flash.ts` → `demo/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
-- [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server)
-- [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console)
-- [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` (deferred - needs real-hardware GDB client (`test-utils/gdbclient.ts`), out of scope for running firmware in the emulator)
+```sh
+uv run python demo/micropython_run.py --image my_image.uf2
+```
 
-### MicroPython CI test fixtures (`test/` in rp2040js)
-- [x] `test/micropython/main.py` → `tests/micropython/main.py` (copied verbatim - already Python, runs *inside* the emulated device)
-- [x] `test/micropython/main-spi.py` → `tests/micropython/main-spi.py` (copied verbatim, same reason)
-- [x] `test/mklittlefs.py` → `tests/mklittlefs.py` (needs `littlefs-python`, added as a dev dependency)
-- [x] `test/micropython-spi-test.ts` → `tests/micropython_spi_run.py`
-- [ ] `.github/workflows/ci-micropython.yml` → not ported (CI wiring, not code)
+A GDB server on port 3333 can be enabled by specifying the `--gdb` flag:
+
+```sh
+uv run python demo/micropython_run.py --gdb
+```
+
+For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
+
+#### Filesystem support
+
+With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there.
+
+Using [littlefs-python](https://pypi.org/project/littlefs-python/), you can create such an image like this:
+
+```python
+from littlefs import LittleFS
+
+files = ["your.py", "files.py", "here.py", "main.py"]
+output_image = "output/littlefs.img"  # symlinked/copied to rp2040py root directory
+lfs = LittleFS(block_size=4096, block_count=352, prog_size=256)
+for filename in files:
+    with open(filename, "rb") as src_file, lfs.open(filename, "w") as lfs_file:
+        lfs_file.write(src_file.read())
+with open(output_image, "wb") as fh:
+    fh.write(lfs.context.buffer)
+```
+
+See [tests/mklittlefs.py](tests/mklittlefs.py) for a minimal working example used by this project's own CI.
+
+Currently, the filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented yet.
+
+### CircuitPython code
+
+To run the CircuitPython demo, you can follow the directions above for MicroPython, except download [adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2](https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2) instead of the MicroPython UF2 file. Place it in the rp2040py root directory, then run:
+
+```sh
+uv run python demo/micropython_run.py --circuitpython
+```
+
+and start the CircuitPython REPL! The rest of the experience is the same as the MicroPython demo (Ctrl+X to exit, using the `--image` and `--gdb` options, etc).
+
+#### Filesystem support
+
+For CircuitPython, you can create a FAT12 filesystem in Linux using the `truncate` and `mkfs.vfat` utilities:
+
+```shell
+truncate fat12.img -s 1M  # make the image file
+mkfs.vfat -F12 -S512 fat12.img  # create the FAT12 filesystem
+```
+
+You can then mount the filesystem image and add files to it:
+
+```shell
+mkdir fat12  # create the mounting folder if needed
+sudo mount -o loop fat12.img fat12/  # mount the filesystem to the folder
+sudo cp code.py fat12/  # copy code.py to the filesystem
+sudo umount fat12/  # unmount the filesystem
+```
+
+While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
+
+## Learn more
+
+- [rp2040js](https://github.com/wokwi/rp2040js) — the upstream TypeScript emulator this project is ported from.
+- [docs/PORTING.md](docs/PORTING.md) — port status, file by file.
+
+## License
+
+Released under the MIT license. Copyright (c) 2021, Uri Shaked. Copyright (c) 2026, Dmytro Yaroshenko.
