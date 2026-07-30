@@ -5,11 +5,16 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-pico-sdk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-pico-sdk:
-    name: Test Pi Pico SDK
+    name: Pico SDK ${{ matrix.sdk_version }} / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         sdk_version:
           - 1.2.0
@@ -18,12 +23,18 @@ jobs:
           - 1.5.1
           - 2.0.0
           - 2.1.1
+          - 2.2.0
+          - 2.3.0
+        python_runtime:
+          - pypy-3.10
+          - cpython-3.10
+          - cpython-3.14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Pico SDK
         id: cache-pico-sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/pico
           key: ${{ runner.os }}-pico-sdk-${{ matrix.sdk_version }}
@@ -52,8 +63,17 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Setup Python ${{ matrix.python_runtime }}
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: ${{ matrix.python_runtime }}
 
-      - name: Test "Hello World" example
-        run: timeout 10 uv run python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
+      # CortexM0Core.execute_instruction() is a pure-Python instruction interpreter; CPython is
+      # much slower here than V8 JIT-compiling the equivalent JS in rp2040js, hence the generous
+      # 10-minute timeout - and why this also runs under PyPy and CPython 3.14's experimental JIT
+      # (see docs/PORTING.md#known-differences-from-rp2040js). demo/micropython_run.py has zero
+      # runtime dependencies, so no `uv sync` is needed here.
+      - name: Test "Hello World" example ${{ matrix.python_runtime }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

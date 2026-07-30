@@ -5,11 +5,16 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-micropython-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-micropython:
-    name: Micropython ${{ matrix.micropython_version }}
+    name: Micropython ${{ matrix.micropython_version }} / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         micropython_version:
           - 20210618-v1.16
@@ -19,8 +24,13 @@ jobs:
           - 20230426-v1.20.0
           - 20231005-v1.21.0
           - 20260406-v1.28.0
+        python_runtime:
+          - pypy-3.10
+          - cpython-3.10
+          - cpython-3.14
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
@@ -30,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Download Micropython
+      - name: Download MicroPython ${{ matrix.micropython_version }}
         run: curl -o micropython.uf2 "https://micropython.org/resources/firmware/RPI_PICO-${VERSION}.uf2"
         env:
           VERSION: ${{ matrix.micropython_version }}
@@ -38,11 +48,20 @@ jobs:
       - name: Create filesystem
         run: uv run python tests/mklittlefs.py littlefs.img tests/micropython/main.py
 
-      - name: Test Micropython
-        run: timeout 10 uv run python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
-
       - name: Create SPI test filesystem
         run: uv run python tests/mklittlefs.py littlefs-spi.img tests/micropython/main-spi.py
 
-      - name: Test Micropython SPI
-        run: timeout 10 uv run python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+      - name: Setup Python ${{ matrix.python_runtime }}
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: ${{ matrix.python_runtime }}
+
+      - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image micropython.uf2 --expect-text "Hello, MicroPython!"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+      - name: Test MicroPython SPI ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

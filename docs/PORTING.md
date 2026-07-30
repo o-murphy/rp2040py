@@ -106,3 +106,120 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `ci-test.yml` → covered by the existing `pre-commit.yml` (mypy + ruff + pytest, equivalent lint/test gate)
 - [x] `ci-micropython.yml` → `ci-micropython.yml` (uv-based)
 - [x] `ci-pico-sdk.yml` → `ci-pico-sdk.yml` (uv-based)
+
+## Known differences from rp2040js
+
+Places where the Python port's runtime behavior necessarily diverges from the JS original,
+beyond straightforward syntax translation.
+
+### Threading model (`Simulator.execute()` / `RPPIO.run()`)
+
+Upstream JS yields back to Node's single-threaded event loop every N steps via
+`setTimeout(() => this.execute(), 0)`, so an external `stop()` call (or the process exiting)
+can interleave between bursts. Python has no equivalent single-threaded event loop, so this was
+ported using `threading.Timer(0, self.execute)` instead - the closest analogue, but it introduces
+**real concurrency** the JS version never had: every burst after the first runs on a new,
+non-main thread.
+
+Two concrete consequences, both already handled in the demo scripts but worth knowing if you
+write new ones against `Simulator`:
+
+- **Use `os._exit(code)`, not `sys.exit(code)`, to stop the process from inside a simulation
+  callback** (GPIO listeners, `USBCDC.on_serial_data`, etc.). Those callbacks run on a
+  `Simulator` worker thread once the first 1,000,000-step burst has completed, and
+  `sys.exit()`/`SystemExit` only unwinds the thread that raised it - it will not terminate the
+  process the way Node's `process.exit()` does. See `demo/micropython_run.py` and
+  `tests/micropython_spi_run.py` for the pattern.
+- **Wait on the main thread after calling `simulator.execute()`**, e.g.
+  `while simulator.executing: time.sleep(0.1)`. `execute()` only runs the first burst
+  synchronously and then returns, rescheduling itself via a non-daemon `threading.Timer` so the
+  process stays alive while the simulation runs (matching Node keeping the event loop alive). If
+  `main()` returns without waiting, Python proceeds straight into interpreter shutdown, which
+  blocks joining that non-daemon timer thread - and a Ctrl+C at that point produces an ugly
+  `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All three demo
+  entry points (`demo/emulator_run.py`, `demo/micropython_run.py`,
+  `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
+
+### littlefs image format vs. old MicroPython (not actually a port bug)
+
+`ci-micropython.yml` builds a `littlefs.img` via `tests/mklittlefs.py` and expects MicroPython to
+auto-run `main.py` from it. This worked for MicroPython 1.28 but hung indefinitely - CPU spinning
+forever re-acquiring an SIO hardware spinlock with interrupts disabled - for every older version
+(<=1.21) in the CI matrix.
+
+Root cause, confirmed by bisecting against the JS original itself (running the real
+`wokwi/rp2040js` checkout locally against the same firmware/image reproduced the identical hang,
+including on the exact commit whose CI run shows green - ruling out a port-specific bug entirely):
+`tests/mklittlefs.py` depends on `littlefs-python>=0.4.0` with no upper bound, and newer releases
+of that package default to a newer littlefs on-disk format (v2.1) than the one MicroPython <=1.21's
+bundled littlefs C implementation understands (v2.0). Confirmed byte-for-byte: `LittleFS(...,
+disk_version=0x00020000)` under `littlefs-python==0.18.0` produces an image identical to
+`littlefs-python==0.4.0`'s default output (which upstream rp2040js's `test/requirements.txt` pins
+exactly, sidestepping the issue there). MicroPython 1.28's newer littlefs implementation reads
+*both* formats fine, so pinning the on-disk *format* - not the `littlefs-python` package version -
+is a strictly better fix: `tests/mklittlefs.py` and the README's filesystem-image snippet now both
+pass `disk_version=0x00020000` explicitly, keeping `littlefs-python` itself unpinned (avoids that
+package's own baggage - 0.4.0 imports the deprecated `pkg_resources` API, which newer `setuptools`
+no longer bundles by default).
+
+### Performance: pure-Python interpretation is much slower than V8
+
+`CortexM0Core.execute_instruction()` is a large `if`/`elif` chain re-evaluated for every emulated
+instruction - straightforward to port faithfully, but CPython interprets it roughly two orders of
+magnitude slower than V8 JIT-compiles the equivalent JS. This is a throughput limitation, not a
+correctness bug - every interpreter below reaches the same correct "Hello, MicroPython!" REPL
+output, just at very different speeds.
+
+`demo/benchmark.py` is a reproducible benchmark for this (see its docstring for usage): a
+synthetic mode that isolates raw instruction-dispatch overhead (no bus/peripheral traffic beyond
+RAM fetches), and a firmware mode that boots a real image to a REPL/`--expect-text` match, the
+same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise. Measured on this machine:
+
+| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs boot |
+|---|---|---|
+| CPython 3.10 | 251,654 | 312.48s (208,014 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 478,319 (~1.9x) | 175.41s (~1.8x, 370,570 steps/sec) |
+| PyPy 3.10 | 28,975,249 (~115x) | 9.55s (~33x, 6,803,084 steps/sec) |
+
+("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
+it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
+interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
+biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
+
+Two mitigations, worth combining:
+
+- **Run CPU-bound demo/CI workloads under PyPy** (`uv run --python pypy3.10 --no-dev -- python
+  demo/micropython_run.py ...`) instead of CPython. PyPy's JIT gave a ~15x instructions/sec
+  speedup in local benchmarking (once warmed up) and comfortably completes the same MicroPython +
+  littlefs boot in well under a minute. Note `--no-dev` (or a separate PyPy-only sync): the `dev`
+  dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
+  ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
+  mypy/ruff/pytest tooling, not for running the emulator itself, which has zero runtime
+  dependencies. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a
+  `python_runtime` matrix - `pypy-3.10`, `cpython-3.10`, and `cpython-3.14` (with `PYTHON_JIT=1`)
+  - each with a 10-minute timeout, so a regression specific to any one interpreter can't slip
+  through even though PyPy is the realistic day-to-day way to run this.
+- If profiling ever calls for it, `RP2040.read_uint32`/`write_uint32` and
+  `CortexM0Core.execute_instruction()` are the hot path (per `cProfile` on a real boot): the
+  bootrom-bounds check used to call `len()` on a `Uint32Array` (a Python-level `__len__`) on every
+  single bus access regardless of target address - now cached once as `RP2040.bootrom_byte_size`.
+  `CortexM0Core.pc` also used to be a `property` indirecting through `Uint32Array.__getitem__`/
+  `__setitem__`; the hot path inside `execute_instruction()` now indexes
+  `self.registers[PC_REGISTER]` directly (the `pc` property itself is unchanged and still used by
+  external callers like the demo scripts and GDB target). `CortexM0Core` also used to expose its
+  own `read_uint32`/`read_uint16`/`read_uint8`/`write_uint32`/`write_uint16`/`write_uint8` methods
+  that did nothing but forward to the identically-named `RP2040` methods - pure indirection with
+  no external callers (nothing outside the class used `core.read_uint32(...)` etc.), so those were
+  removed and all internal call sites now call `self.rp2040.read_uint32(...)` etc. directly.
+  `utils/bit.py`'s `read_uint16_le`/`write_uint16_le`/`read_uint32_le`/`write_uint32_le` used to
+  slice out a temporary `bytes` object and call `int.from_bytes()`/`int.to_bytes()` on it; they now
+  use module-level pre-built `struct.Struct("<H")`/`struct.Struct("<I")` instances'
+  `unpack_from`/`pack_into` instead, which read/write directly against the buffer with no
+  intermediate allocation - measured ~40% faster for these four functions in isolation, and (more
+  strikingly) cut the real MicroPython + littlefs boot time roughly in half under PyPy specifically
+  (15.87s -> 9.55s), since PyPy's JIT couldn't optimize away the old temporary-`bytes`-object
+  allocation the way it can lean on the already-C-implemented `struct` module. Together with the
+  two items above, these gave roughly a 20-25% instructions/sec improvement under CPython in local
+  benchmarking. A dispatch-table redesign of `execute_instruction()` (opcode → handler function,
+  replacing the linear `if`/`elif` scan) would likely be the single biggest remaining win, but was
+  deferred as a larger, higher-risk refactor touching all ~90 instruction handlers.

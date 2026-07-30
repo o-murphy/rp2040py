@@ -35,6 +35,24 @@ uv run python demo/micropython_run.py
 
 and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPython UF2 image can be loaded by supplying the `--image` option:
 
+> [!TIP]
+> Booting real firmware means executing millions of Thumb instructions through a pure-Python
+> interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js.
+> Measured with [demo/benchmark.py](demo/benchmark.py) booting MicroPython 1.28 + littlefs to the
+> REPL:
+>
+> | Interpreter | Time |
+> |---|---|
+> | CPython 3.10 | 312.48s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 175.41s (~1.8x) |
+> | PyPy 3.10 | 9.55s (~33x) |
+>
+> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- python
+> demo/micropython_run.py ...`. See
+> [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
+> (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
+> all three.
+
 ```sh
 uv run python demo/micropython_run.py --image my_image.uf2
 ```
@@ -58,7 +76,10 @@ from littlefs import LittleFS
 
 files = ["your.py", "files.py", "here.py", "main.py"]
 output_image = "output/littlefs.img"  # symlinked/copied to rp2040py root directory
-lfs = LittleFS(block_size=4096, block_count=352, prog_size=256)
+# disk_version=0x00020000 pins the on-disk format to littlefs v2.0, which both old and new
+# MicroPython releases can mount - newer littlefs-python defaults to a newer format (v2.1) that
+# MicroPython <=1.21 can't read. See docs/PORTING.md#known-differences-from-rp2040js.
+lfs = LittleFS(block_size=4096, block_count=352, prog_size=256, disk_version=0x00020000)
 for filename in files:
     with open(filename, "rb") as src_file, lfs.open(filename, "w") as lfs_file:
         lfs_file.write(src_file.read())

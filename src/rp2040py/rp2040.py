@@ -73,6 +73,10 @@ class RP2040:
         self.clock = clock if clock is not None else SimulationClock()
 
         self.bootrom = Uint32Array(4 * KB)
+        # Cached rather than recomputed via len(self.bootrom) on every bus access: bootrom size
+        # never changes after construction, and len() on a Uint32Array is a Python-level call
+        # (unlike len() on a bytearray), so this matters on the hot read_uint32/write_uint32 path.
+        self.bootrom_byte_size = len(self.bootrom) * 4
         self.sram = bytearray(264 * KB)
         self.flash = bytearray(16 * MB)
         self.usb_dpram = bytearray(4 * KB)
@@ -181,7 +185,7 @@ class RP2040:
             self.logger.error(LOG_NAME, f"read from address {address:x}, which is not 32 bit aligned")
 
         bootrom = self.bootrom
-        if address < len(bootrom) * 4:
+        if address < self.bootrom_byte_size:
             return bootrom[address // 4]
         if FLASH_START_ADDRESS <= address < FLASH_END_ADDRESS:
             # Flash is mirrored four times:
@@ -241,7 +245,7 @@ class RP2040:
             atomic_type = (address & 0x3000) >> 12
             offset = address & 0xFFF
             peripheral.write_uint32_atomic(offset, value, atomic_type)
-        elif address < len(bootrom) * 4:
+        elif address < self.bootrom_byte_size:
             bootrom[address // 4] = value
         elif FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + len(self.flash):
             write_uint32_le(self.flash, address - FLASH_START_ADDRESS, value)
