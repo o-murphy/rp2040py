@@ -5,6 +5,8 @@ Part of AVR8js
 Copyright (C) 2019, Uri Shaked
 """
 
+__all__ = ("load_hex",)
+
 
 def load_hex(source: str, target: bytearray, base_address: int = 0) -> None:
     high_addr = 0

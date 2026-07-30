@@ -28,6 +28,9 @@ classifiers = [
 dependencies = []
 dynamic = ["version"]
 
+[project.scripts]
+rp2040py = "rp2040py.__main__:main"
+
 [project.urls]
 "Homepage" = "https://github.com/o-murphy/rp2040py"
 "Documentation" = "https://o-murphy.github.io/rp2040py"

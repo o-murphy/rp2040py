@@ -3,6 +3,8 @@ RP2040 bootrom binary, built from https://github.com/raspberrypi/pico-bootrom
 revision: B1 (00a4a19114195e20fb817bdfbca1165e157eef37)
 """
 
+__all__ = ("BOOTROM_B1",)
+
 BOOTROM_B1 = [
     0x20041F00,
     0x000000EF,

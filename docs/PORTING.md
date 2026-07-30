@@ -89,11 +89,11 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [ ] `sio.spec.ts` → `tests/test_sio.py`
 
 ### demo / debug (needed to actually run firmware, e.g. MicroPython)
-- [x] `demo/bootrom.ts` → `demo/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
-- [x] `demo/intelhex.ts` → `demo/intelhex.py`
-- [x] `demo/load-flash.ts` → `demo/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
-- [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server)
-- [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console)
+- [x] `demo/bootrom.ts` → `src/rp2040py/cli/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
+- [x] `demo/intelhex.ts` → `src/rp2040py/cli/intelhex.py`
+- [x] `demo/load-flash.ts` → `src/rp2040py/cli/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
+- [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server; thin wrapper around `rp2040py.cli`'s `run` subcommand - see "CLI packaging" below)
+- [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console; thin wrapper around `rp2040py.cli`'s `micropython` subcommand)
 - [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` (deferred - needs real-hardware GDB client (`test-utils/gdbclient.ts`), out of scope for running firmware in the emulator)
 
 ### MicroPython CI test fixtures (`test/` in rp2040js)
@@ -111,6 +111,21 @@ rp2040py (Python), ordered from fewest dependencies to most.
 
 Places where the Python port's runtime behavior necessarily diverges from the JS original,
 beyond straightforward syntax translation.
+
+### CLI packaging (no rp2040js equivalent)
+
+rp2040js's `demo/*.ts` scripts are only ever run from a checkout (`npm run start`, `tsx
+demo/emulator-run.ts`, etc.) - there's no npm-packaged CLI, since rp2040js is primarily consumed
+as a library (e.g. embedded in Wokwi). rp2040py adds one: `src/rp2040py/cli/` is a real subpackage
+(`bootrom.py`, `intelhex.py`, `load_flash.py` - moved there from `demo/`, plus the argparse
+dispatch in `cli/__init__.py`) that ships in the wheel, exposed as the `rp2040py` console script
+(`[project.scripts]` in `pyproject.toml`) and via `python -m rp2040py` (`src/rp2040py/__main__.py`
+is a two-line shim). `demo/emulator_run.py`, `demo/micropython_run.py`, and `demo/benchmark.py`
+are now thin wrappers around the same `rp2040py.cli` subcommands (`run`, `micropython`, `bench`),
+kept so the documented `uv run python demo/*.py` commands keep working unchanged for anyone
+working from a checkout rather than a pip/uv install. `tests/micropython_spi_run.py` (test-only
+SPI harness, not part of the general CLI) imports `rp2040py.cli.bootrom`/`load_flash` directly
+rather than duplicating them.
 
 ### Threading model (`Simulator.execute()` / `RPPIO.run()`)
 

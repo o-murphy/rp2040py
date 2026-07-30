@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rp2040py` console script (and `python -m rp2040py`) with `run`, `micropython`, and `bench`
+  subcommands, so the emulator is runnable from a plain `pip install rp2040py` / `uv add
+  rp2040py` / `uvx rp2040py ...` - no git checkout required. `demo/*.py` remain as thin wrappers
+  around the same code for anyone working from a checkout.
+
 ## [0.1.0b1] - 2026-07-30
 
 Initial beta release: a complete port of [rp2040js](https://github.com/wokwi/rp2040js) to Python,

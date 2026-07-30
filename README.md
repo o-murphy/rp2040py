@@ -12,20 +12,51 @@ Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](
 
 See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
 
+## Installation
+
+```sh
+pip install rp2040py
+```
+
+or, with [uv](https://docs.astral.sh/uv/):
+
+```sh
+uv add rp2040py       # into a project
+uv tool install rp2040py   # as a standalone CLI tool
+uvx rp2040py ...           # run without installing at all
+```
+
+Any of these gives you the `rp2040py` console script (`python -m rp2040py` works identically), so
+the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
+below for the checkout-equivalent commands.
+
 ## Run the demo project
+
+The commands below assume `rp2040py` is installed (`pip install rp2040py` / `uv add rp2040py` /
+`uv tool install rp2040py`, or run ad hoc with `uvx rp2040py ...`). From a checkout of this repo
+instead, each maps 1:1 onto `uv run python demo/*.py` (`demo/*.py` are thin wrappers around the
+same [src/rp2040py/cli](src/rp2040py/cli) code):
+
+| `rp2040py` subcommand | Checkout equivalent |
+|---|---|
+| `rp2040py run ...` | `uv run python demo/emulator_run.py ...` |
+| `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
+| `rp2040py bench ...` | `uv run python demo/benchmark.py ...` |
 
 ### Native code
 
 You'd need to get `hello_uart.hex` by building it from the [pico-examples repo](https://github.com/raspberrypi/pico-examples/tree/master/uart/hello_uart), then copy it to the rp2040py root directory and run:
 
 ```sh
-uv run python demo/emulator_run.py
+rp2040py run
+# or, without installing:
+uvx rp2040py run
 ```
 
 You can also specify the path to the image on the command line and/or load a UF2 image:
 
 ```sh
-uv run python demo/emulator_run.py --image ./my-pico-project.uf2
+rp2040py run --image ./my-pico-project.uf2
 ```
 
 A GDB server will be available on port 3333, and the data written to UART0 will be printed
@@ -36,7 +67,9 @@ to the console.
 To run the MicroPython demo, first download [RPI_PICO-20230426-v1.20.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20230426-v1.20.0.uf2), place it in the rp2040py root directory, then run:
 
 ```sh
-uv run python demo/micropython_run.py
+rp2040py micropython
+# or, without installing:
+uvx rp2040py micropython
 ```
 
 and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPython UF2 image can be loaded by supplying the `--image` option:
@@ -53,20 +86,20 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 > | CPython 3.14 + `PYTHON_JIT=1` | 121.74s (~1.8x) |
 > | PyPy 3.10 | 9.59s (~23x) |
 >
-> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- python
-> demo/micropython_run.py ...`. See
+> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- rp2040py
+> micropython ...` (or `... -- python demo/micropython_run.py ...` from a checkout). See
 > [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.
 
 ```sh
-uv run python demo/micropython_run.py --image my_image.uf2
+rp2040py micropython --image my_image.uf2
 ```
 
 A GDB server on port 3333 can be enabled by specifying the `--gdb` flag:
 
 ```sh
-uv run python demo/micropython_run.py --gdb
+rp2040py micropython --gdb
 ```
 
 For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
@@ -102,7 +135,7 @@ Currently, the filesystem is not writeable, as the SSI peripheral required for f
 To run the CircuitPython demo, you can follow the directions above for MicroPython, except download [adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2](https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2) instead of the MicroPython UF2 file. Place it in the rp2040py root directory, then run:
 
 ```sh
-uv run python demo/micropython_run.py --circuitpython
+rp2040py micropython --circuitpython
 ```
 
 and start the CircuitPython REPL! The rest of the experience is the same as the MicroPython demo (Ctrl+X to exit, using the `--image` and `--gdb` options, etc).

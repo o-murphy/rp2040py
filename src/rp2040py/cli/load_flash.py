@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.rp2040 import RP2040
 
+__all__ = (
+    "UF2Block",
+    "decode_block",
+    "load_circuitpython_flash_image",
+    "load_micropython_flash_image",
+    "load_uf2",
+)
+
 MICROPYTHON_FS_FLASH_START = 0xA0000
 MICROPYTHON_FS_BLOCKSIZE = 4096
 MICROPYTHON_FS_BLOCKCOUNT = 352
