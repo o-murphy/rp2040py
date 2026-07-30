@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rp2040py"
+authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+description = "A Raspberry Pi Pico Emulator in Python"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = []
+license = { file = "LICENSE" }
+classifiers = [
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Programming Language :: Python",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = []
+dynamic = ["version"]
+
+[project.urls]
+"Homepage" = "https://github.com/o-murphy/rp2040py"
+"Documentation" = "https://o-murphy.github.io/rp2040py"
+"Bug Reports" = "https://github.com/o-murphy/rp2040py/issues"
+"Source" = "https://github.com/o-murphy/rp2040py"
+
+[tool.pytest.ini_options]
+minversion = "9"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+# tests/micropython/*.py are MicroPython payload scripts that run *inside* the emulated device,
+# copied verbatim from upstream rp2040js's test fixtures - not our code style to enforce.
+extend-exclude = ["tests/micropython"]
+
+[tool.ruff.lint]
+ignore = []
+
+[tool.mypy]
+mypy_path = "src"
+files = ["src"]
+disable_error_code = ["annotation-unchecked"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rp2040py"]
+
+[dependency-groups]
+dev = ["mypy>=2.3.0", "pre-commit>=4.6.1", "pytest>=9.1.1", "ruff>=0.16.0", "littlefs-python>=0.4.0"]
