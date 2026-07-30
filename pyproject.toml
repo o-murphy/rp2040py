@@ -60,4 +60,11 @@ source = "vcs"
 packages = ["src/rp2040py"]
 
 [dependency-groups]
-dev = ["mypy>=2.3.0", "pre-commit>=4.6.1", "pytest>=9.1.1", "ruff>=0.16.0", "littlefs-python>=0.4.0"]
+dev = [
+    "mypy>=2.3.0",
+    "pre-commit>=4.6.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.0",
+    "littlefs-python>=0.4.0",
+    "pytest-cov>=7.1.0",
+]

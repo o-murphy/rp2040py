@@ -65,6 +65,18 @@ class StackPointerBank(IntEnum):
 LOG_NAME = "CortexM0Core"
 
 
+OpcodeHandler = Callable[["CortexM0Core", int, int, int], int]
+"""A compiled instruction handler: (core, opcode, opcode2, opcode_pc) -> delta_cycles."""
+
+# Opcodes in this range are resolved by CortexM0Core._resolve_wide() instead of _DISPATCH_TABLE,
+# since some instructions there (BL, DMB, DSB, ISB, MRS, MSR, UDF T2) need opcode2 as well as
+# opcode to decode correctly. See _build_dispatch_table()'s assertion and
+# tests/test_dispatch_table.py, which both check that no *other* instruction pattern ever matches
+# an opcode in this range - if that stops holding, _resolve_wide() needs the new pattern too.
+WIDE_RANGE_START = 0xF000
+WIDE_RANGE_END = 0xF800  # exclusive
+
+
 class CortexM0Core:
     def __init__(self, rp2040: "RP2040"):
         self.rp2040 = rp2040
@@ -488,6 +500,893 @@ class CortexM0Core:
             return 4 if write else 3
         return 1
 
+    def _op_adcs(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADCS
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        self.registers[rdn] = self._add_update_flags(self.registers[rm], self.registers[rdn] + (1 if self.c else 0))
+        return delta_cycles
+
+    def _op_add_register_sp_plus_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADD (register = SP plus immediate)
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        rd = (opcode >> 8) & 0x7
+        self.registers[rd] = self.sp + (imm8 << 2)
+        return delta_cycles
+
+    def _op_add_sp_plus_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADD (SP plus immediate)
+        delta_cycles = 1
+        imm32 = (opcode & 0x7F) << 2
+        self.sp += imm32
+        return delta_cycles
+
+    def _op_adds_encoding_t1(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADDS (Encoding T1)
+        delta_cycles = 1
+        imm3 = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self._add_update_flags(self.registers[rn], imm3)
+        return delta_cycles
+
+    def _op_adds_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADDS (Encoding T2)
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        rdn = (opcode >> 8) & 0x7
+        self.registers[rdn] = self._add_update_flags(self.registers[rdn], imm8)
+        return delta_cycles
+
+    def _op_adds_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADDS (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self._add_update_flags(self.registers[rn], self.registers[rm])
+        return delta_cycles
+
+    def _op_add_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADD (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0xF
+        rdn = ((opcode & 0x80) >> 4) | (opcode & 0x7)
+        left_value = self.registers[PC_REGISTER] + 2 if rdn == PC_REGISTER else self.registers[rdn]
+        right_value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
+        result = left_value + right_value
+        if rdn != SP_REGISTER and rdn != PC_REGISTER:
+            self.registers[rdn] = result
+        elif rdn == PC_REGISTER:
+            self.registers[rdn] = result & ~0x1
+            delta_cycles += 1
+        elif rdn == SP_REGISTER:
+            self.registers[rdn] = result & ~0x3
+        return delta_cycles
+
+    def _op_adr(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ADR
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        rd = (opcode >> 8) & 0x7
+        self.registers[rd] = (opcode_pc & 0xFFFFFFFC) + 4 + (imm8 << 2)
+        return delta_cycles
+
+    def _op_ands_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ANDS (Encoding T2)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        result = self.registers[rdn] & self.registers[rm]
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = (result & 0xFFFFFFFF) == 0
+        return delta_cycles
+
+    def _op_asrs_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ASRS (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        shift_n = imm5 if imm5 else 32
+        result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
+        self.registers[rd] = result
+        self.n = bool(result & 0x80000000)
+        self.z = (result & 0xFFFFFFFF) == 0
+        self.c = bool(input_value & (1 << (shift_n - 1)))
+        return delta_cycles
+
+    def _op_asrs_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ASRS (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        input_value = self.registers[rdn]
+        shift_n = min(32, self.registers[rm] & 255)
+        result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = (result & 0xFFFFFFFF) == 0
+        # NOTE: shift_n can be 0 here (unlike the immediate form above), and JS `1 << -1`
+        # wraps the shift amount mod 32 rather than raising - `& 31` replicates that so
+        # Python's `<<` doesn't raise ValueError on a negative count.
+        self.c = bool(input_value & (1 << ((shift_n - 1) & 31)))
+        return delta_cycles
+
+    def _op_b_with_cond(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # B (with cond)
+        delta_cycles = 1
+        imm8 = (opcode & 0xFF) << 1
+        cond = (opcode >> 8) & 0xF
+        if imm8 & (1 << 8):
+            imm8 = (imm8 & 0x1FF) - 0x200
+        if self.check_condition(cond):
+            self.registers[PC_REGISTER] += imm8 + 2
+            delta_cycles += 1
+        return delta_cycles
+
+    def _op_b(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # B
+        delta_cycles = 1
+        imm11 = (opcode & 0x7FF) << 1
+        if imm11 & (1 << 11):
+            imm11 = (imm11 & 0x7FF) - 0x800
+        self.registers[PC_REGISTER] += imm11 + 2
+        delta_cycles += 1
+        return delta_cycles
+
+    def _op_bics(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # BICS
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        result = self.registers[rdn] & ~self.registers[rm]
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        return delta_cycles
+
+    def _op_bkpt(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # BKPT
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        self.break_rewind = 2
+        self.rp2040.on_break(imm8)
+        return delta_cycles
+
+    def _op_bl(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # BL
+        delta_cycles = 1
+        imm11 = opcode2 & 0x7FF
+        j2 = (opcode2 >> 11) & 0x1
+        j1 = (opcode2 >> 13) & 0x1
+        imm10 = opcode & 0x3FF
+        s = (opcode >> 10) & 0x1
+        i1 = 1 - (s ^ j1)
+        i2 = 1 - (s ^ j2)
+        imm32 = ((0b11111111 if s else 0) << 24) | ((i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1))
+        self.lr = (self.registers[PC_REGISTER] + 2) | 0x1
+        self.registers[PC_REGISTER] += 2 + imm32
+        delta_cycles += 2
+        self.bl_taken(self, False)
+        return delta_cycles
+
+    def _op_blx(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # BLX
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0xF
+        self.lr = self.registers[PC_REGISTER] | 0x1
+        self.registers[PC_REGISTER] = self.registers[rm] & ~1
+        delta_cycles += 1
+        self.bl_taken(self, True)
+        return delta_cycles
+
+    def _op_bx(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # BX
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0xF
+        self.bx_write_pc(self.registers[rm])
+        delta_cycles += 1
+        return delta_cycles
+
+    def _op_cmn_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CMN (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rn = opcode & 0x7
+        self._add_update_flags(self.registers[rn], self.registers[rm])
+        return delta_cycles
+
+    def _op_cmp_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CMP immediate
+        delta_cycles = 1
+        rn = (opcode >> 8) & 0x7
+        imm8 = opcode & 0xFF
+        self._subtract_update_flags(self.registers[rn], imm8)
+        return delta_cycles
+
+    def _op_cmp_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CMP (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rn = opcode & 0x7
+        self._subtract_update_flags(self.registers[rn], self.registers[rm])
+        return delta_cycles
+
+    def _op_cmp_register_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CMP (register) encoding T2
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0xF
+        rn = ((opcode >> 4) & 0x8) | (opcode & 0x7)
+        self._subtract_update_flags(self.registers[rn], self.registers[rm])
+        return delta_cycles
+
+    def _op_cpsid_i(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CPSID i
+        delta_cycles = 1
+        self.pm = True
+        return delta_cycles
+
+    def _op_cpsie_i(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # CPSIE i
+        delta_cycles = 1
+        self.pm = False
+        self.interrupts_updated = True
+        return delta_cycles
+
+    def _op_dmb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # DMB SY
+        delta_cycles = 1
+        self.registers[PC_REGISTER] += 2
+        delta_cycles += 2
+        return delta_cycles
+
+    def _op_dsb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # DSB SY
+        delta_cycles = 1
+        self.registers[PC_REGISTER] += 2
+        delta_cycles += 2
+        return delta_cycles
+
+    def _op_eors(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # EORS
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        result = self.registers[rm] ^ self.registers[rdn]
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        return delta_cycles
+
+    def _op_isb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ISB SY
+        delta_cycles = 1
+        self.registers[PC_REGISTER] += 2
+        delta_cycles += 2
+        return delta_cycles
+
+    def _op_ldmia(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDMIA
+        delta_cycles = 1
+        rn = (opcode >> 8) & 0x7
+        reg_list = opcode & 0xFF
+        address = self.registers[rn]
+        for i in range(8):
+            if reg_list & (1 << i):
+                self.registers[i] = self.rp2040.read_uint32(address)
+                address += 4
+                delta_cycles += 1
+        # Write back
+        if not (reg_list & (1 << rn)):
+            self.registers[rn] = address
+        return delta_cycles
+
+    def _op_ldr_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDR (immediate)
+        delta_cycles = 1
+        imm5 = ((opcode >> 6) & 0x1F) << 2
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rn] + imm5
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint32(addr)
+        return delta_cycles
+
+    def _op_ldr_sp_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDR (sp + immediate)
+        delta_cycles = 1
+        rt = (opcode >> 8) & 0x7
+        imm8 = opcode & 0xFF
+        addr = self.sp + (imm8 << 2)
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint32(addr)
+        return delta_cycles
+
+    def _op_ldr_literal(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDR (literal)
+        delta_cycles = 1
+        imm8 = (opcode & 0xFF) << 2
+        rt = (opcode >> 8) & 7
+        next_pc = self.registers[PC_REGISTER] + 2
+        addr = (next_pc & 0xFFFFFFFC) + imm8
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint32(addr)
+        return delta_cycles
+
+    def _op_ldr_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDR (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint32(addr)
+        return delta_cycles
+
+    def _op_ldrb_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRB (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rn] + imm5
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint8(addr)
+        return delta_cycles
+
+    def _op_ldrb_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRB (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint8(addr)
+        return delta_cycles
+
+    def _op_ldrh_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRH (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rn] + (imm5 << 1)
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint16(addr)
+        return delta_cycles
+
+    def _op_ldrh_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRH (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = self.rp2040.read_uint16(addr)
+        return delta_cycles
+
+    def _op_ldrsb(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRSB
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = sign_extend8(self.rp2040.read_uint8(addr))
+        return delta_cycles
+
+    def _op_ldrsh(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LDRSH
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        addr = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(addr)
+        self.registers[rt] = sign_extend16(self.rp2040.read_uint16(addr))
+        return delta_cycles
+
+    def _op_lsls_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LSLS (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        result = input_value << imm5
+        self.registers[rd] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        self.c = bool(input_value & (1 << (32 - imm5))) if imm5 else self.c
+        return delta_cycles
+
+    def _op_lsls_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LSLS (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        input_value = self.registers[rdn]
+        shift_count = self.registers[rm] & 0xFF
+        result = 0 if shift_count >= 32 else input_value << shift_count
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        # NOTE: shift_count ranges 0-255 here (unlike the immediate form's 0-31 imm5), so
+        # `32 - shift_count` can go negative; `& 31` replicates JS's mod-32 shift-amount
+        # wraparound instead of raising ValueError on a negative count in Python.
+        self.c = bool(input_value & (1 << ((32 - shift_count) & 31))) if shift_count else self.c
+        return delta_cycles
+
+    def _op_lsrs_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LSRS (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        result = input_value >> imm5 if imm5 else 0
+        self.registers[rd] = result
+        self.n = bool(result & 0x80000000)
+        self.z = result == 0
+        self.c = bool((input_value >> (imm5 - 1 if imm5 else 31)) & 0x1)
+        return delta_cycles
+
+    def _op_lsrs_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # LSRS (register)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        shift_amount = self.registers[rm] & 0xFF
+        input_value = self.registers[rdn]
+        result = input_value >> shift_amount if shift_amount < 32 else 0
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = result == 0
+        # NOTE: shift_amount can be 0 here, making `shift_amount - 1` negative; `& 31`
+        # replicates JS's mod-32 shift-amount wraparound instead of raising ValueError.
+        self.c = bool((input_value >> ((shift_amount - 1) & 31)) & 0x1) if shift_amount <= 32 else False
+        return delta_cycles
+
+    def _op_mov(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MOV
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0xF
+        rd = ((opcode >> 4) & 0x8) | (opcode & 0x7)
+        value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
+        if rd == PC_REGISTER:
+            delta_cycles += 1
+            value &= ~1
+        elif rd == SP_REGISTER:
+            value &= ~3
+        self.registers[rd] = value
+        return delta_cycles
+
+    def _op_movs(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MOVS
+        delta_cycles = 1
+        value = opcode & 0xFF
+        rd = (opcode >> 8) & 7
+        self.registers[rd] = value
+        self.n = bool(value & 0x80000000)
+        self.z = value == 0
+        return delta_cycles
+
+    def _op_mrs(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MRS
+        delta_cycles = 1
+        sysm = opcode2 & 0xFF
+        rd = (opcode2 >> 8) & 0xF
+        self.registers[rd] = self.read_special_register(sysm)
+        self.registers[PC_REGISTER] += 2
+        delta_cycles += 2
+        return delta_cycles
+
+    def _op_msr(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MSR
+        delta_cycles = 1
+        sysm = opcode2 & 0xFF
+        rn = opcode & 0xF
+        self.write_special_register(sysm, self.registers[rn])
+        self.registers[PC_REGISTER] += 2
+        delta_cycles += 2
+        return delta_cycles
+
+    def _op_muls(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MULS
+        delta_cycles = 1
+        rn = (opcode >> 3) & 0x7
+        rdm = opcode & 0x7
+        result = (self.registers[rn] * self.registers[rdm]) & 0xFFFFFFFF
+        self.registers[rdm] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        return delta_cycles
+
+    def _op_mvns(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # MVNS
+        delta_cycles = 1
+        rm = (opcode >> 3) & 7
+        rd = opcode & 7
+        result = ~self.registers[rm]
+        self.registers[rd] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        return delta_cycles
+
+    def _op_orrs_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ORRS (Encoding T2)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        result = self.registers[rdn] | self.registers[rm]
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = (result & 0xFFFFFFFF) == 0
+        return delta_cycles
+
+    def _op_pop(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # POP
+        delta_cycles = 1
+        p = (opcode >> 8) & 1
+        address = self.sp
+        for i in range(8):
+            if opcode & (1 << i):
+                self.registers[i] = self.rp2040.read_uint32(address)
+                address += 4
+                delta_cycles += 1
+        if p:
+            self.sp = address + 4
+            self.bx_write_pc(self.rp2040.read_uint32(address))
+            delta_cycles += 2
+        else:
+            self.sp = address
+        return delta_cycles
+
+    def _op_push(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # PUSH
+        delta_cycles = 1
+        bit_count = 0
+        for i in range(9):
+            if opcode & (1 << i):
+                bit_count += 1
+        address = self.sp - 4 * bit_count
+        for i in range(8):
+            if opcode & (1 << i):
+                self.rp2040.write_uint32(address, self.registers[i])
+                delta_cycles += 1
+                address += 4
+        if opcode & (1 << 8):
+            self.rp2040.write_uint32(address, self.registers[14])
+        self.sp -= 4 * bit_count
+        return delta_cycles
+
+    def _op_rev(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # REV
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        self.registers[rd] = (
+            ((input_value & 0xFF) << 24)
+            | (((input_value >> 8) & 0xFF) << 16)
+            | (((input_value >> 16) & 0xFF) << 8)
+            | ((input_value >> 24) & 0xFF)
+        )
+        return delta_cycles
+
+    def _op_rev16(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # REV16
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        self.registers[rd] = (
+            (((input_value >> 16) & 0xFF) << 24)
+            | (((input_value >> 24) & 0xFF) << 16)
+            | ((input_value & 0xFF) << 8)
+            | ((input_value >> 8) & 0xFF)
+        )
+        return delta_cycles
+
+    def _op_revsh(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # REVSH
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        input_value = self.registers[rm]
+        self.registers[rd] = sign_extend16(((input_value & 0xFF) << 8) | ((input_value >> 8) & 0xFF))
+        return delta_cycles
+
+    def _op_ror(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # ROR
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        input_value = self.registers[rdn]
+        shift = (self.registers[rm] & 0xFF) % 32
+        result = (input_value >> shift) | (input_value << (32 - shift))
+        self.registers[rdn] = result
+        self.n = bool(result & 0x80000000)
+        self.z = u32(result) == 0
+        self.c = bool(result & 0x80000000)
+        return delta_cycles
+
+    def _op_negs_rsbs(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # NEGS / RSBS
+        delta_cycles = 1
+        rn = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self._subtract_update_flags(0, self.registers[rn])
+        return delta_cycles
+
+    def _op_nop(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # NOP
+        delta_cycles = 1
+        # Do nothing!
+        return delta_cycles
+
+    def _op_sbcs_encoding_t1(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SBCS (Encoding T1)
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rdn = opcode & 0x7
+        self.registers[rdn] = self._subtract_update_flags(
+            self.registers[rdn], self.registers[rm] + (1 - (1 if self.c else 0))
+        )
+        return delta_cycles
+
+    def _op_sev(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SEV
+        delta_cycles = 1
+        self.logger.info(LOG_NAME, "SEV")
+        return delta_cycles
+
+    def _op_stmia(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STMIA
+        delta_cycles = 1
+        rn = (opcode >> 8) & 0x7
+        reg_list = opcode & 0xFF
+        address = self.registers[rn]
+        for i in range(8):
+            if reg_list & (1 << i):
+                self.rp2040.write_uint32(address, self.registers[i])
+                address += 4
+                delta_cycles += 1
+        # Write back
+        if not (reg_list & (1 << rn)):
+            self.registers[rn] = address
+        return delta_cycles
+
+    def _op_str_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STR (immediate)
+        delta_cycles = 1
+        imm5 = ((opcode >> 6) & 0x1F) << 2
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rn] + imm5
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint32(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_str_sp_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STR (sp + immediate)
+        delta_cycles = 1
+        rt = (opcode >> 8) & 0x7
+        imm8 = opcode & 0xFF
+        address = self.sp + (imm8 << 2)
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint32(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_str_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STR (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint32(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_strb_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STRB (immediate)
+        delta_cycles = 1
+        imm5 = (opcode >> 6) & 0x1F
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rn] + imm5
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint8(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_strb_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STRB (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint8(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_strh_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STRH (immediate)
+        delta_cycles = 1
+        imm5 = ((opcode >> 6) & 0x1F) << 1
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rn] + imm5
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint16(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_strh_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # STRH (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rt = opcode & 0x7
+        address = self.registers[rm] + self.registers[rn]
+        delta_cycles += self.cycles_io(address, True)
+        self.rp2040.write_uint16(address, self.registers[rt])
+        return delta_cycles
+
+    def _op_sub_sp_minus_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SUB (SP minus immediate)
+        delta_cycles = 1
+        imm32 = (opcode & 0x7F) << 2
+        self.sp -= imm32
+        return delta_cycles
+
+    def _op_subs_encoding_t1(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SUBS (Encoding T1)
+        delta_cycles = 1
+        imm3 = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self._subtract_update_flags(self.registers[rn], imm3)
+        return delta_cycles
+
+    def _op_subs_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SUBS (Encoding T2)
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        rdn = (opcode >> 8) & 0x7
+        self.registers[rdn] = self._subtract_update_flags(self.registers[rdn], imm8)
+        return delta_cycles
+
+    def _op_subs_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SUBS (register)
+        delta_cycles = 1
+        rm = (opcode >> 6) & 0x7
+        rn = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self._subtract_update_flags(self.registers[rn], self.registers[rm])
+        return delta_cycles
+
+    def _op_svc(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SVC
+        delta_cycles = 1
+        self.pending_svcall = True
+        self.interrupts_updated = True
+        return delta_cycles
+
+    def _op_sxtb(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SXTB
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = sign_extend8(self.registers[rm])
+        return delta_cycles
+
+    def _op_sxth(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # SXTH
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = sign_extend16(self.registers[rm])
+        return delta_cycles
+
+    def _op_tst(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # TST
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rn = opcode & 0x7
+        result = self.registers[rn] & self.registers[rm]
+        self.n = bool(result & 0x80000000)
+        self.z = result == 0
+        return delta_cycles
+
+    def _op_udf(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # UDF
+        delta_cycles = 1
+        imm8 = opcode & 0xFF
+        self.break_rewind = 2
+        self.rp2040.on_break(imm8)
+        return delta_cycles
+
+    def _op_udf_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # UDF (Encoding T2)
+        delta_cycles = 1
+        imm4 = opcode & 0xF
+        imm12 = opcode2 & 0xFFF
+        self.break_rewind = 4
+        self.rp2040.on_break((imm4 << 12) | imm12)
+        self.registers[PC_REGISTER] += 2
+        return delta_cycles
+
+    def _op_uxtb(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # UXTB
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self.registers[rm] & 0xFF
+        return delta_cycles
+
+    def _op_uxth(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # UXTH
+        delta_cycles = 1
+        rm = (opcode >> 3) & 0x7
+        rd = opcode & 0x7
+        self.registers[rd] = self.registers[rm] & 0xFFFF
+        return delta_cycles
+
+    def _op_wfe(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # WFE
+        delta_cycles = 1
+        delta_cycles += 1
+        if self.event_registered:
+            self.event_registered = False
+        else:
+            self.waiting = True
+        return delta_cycles
+
+    def _op_wfi(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # WFI
+        delta_cycles = 1
+        delta_cycles += 1
+        self.waiting = True
+        return delta_cycles
+
+    def _op_yield(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        # YIELD
+        delta_cycles = 1
+        # do nothing for now. Wait for event!
+        self.logger.info(LOG_NAME, "Yield")
+        return delta_cycles
+
+    def _resolve_wide(self, opcode: int, opcode2: int) -> "OpcodeHandler | None":
+        # Opcode range 0xF000-0xF7FF is exclusively owned by these 7 opcode2-dependent
+        # conditions (verified: no other instruction pattern's condition ever matches an
+        # opcode in this range - see the assertion after _DISPATCH_TABLE's construction
+        # below, and docs/PORTING.md). Order matters and mirrors the original priority.
+        if opcode >> 11 == 0b11110 and opcode2 >> 14 == 0b11 and ((opcode2 >> 12) & 0x1) == 1:
+            return CortexM0Core._op_bl
+        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F50:
+            return CortexM0Core._op_dmb_sy
+        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F40:
+            return CortexM0Core._op_dsb_sy
+        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F60:
+            return CortexM0Core._op_isb_sy
+        elif opcode == 0b1111001111101111 and opcode2 >> 12 == 0b1000:
+            return CortexM0Core._op_mrs
+        elif opcode >> 4 == 0b111100111000 and opcode2 >> 8 == 0b10001000:
+            return CortexM0Core._op_msr
+        elif opcode >> 4 == 0b111101111111 and opcode2 >> 12 == 0b1010:
+            return CortexM0Core._op_udf_encoding_t2
+        return None
+
     def execute_instruction(self) -> int:
         if self.interrupts_updated and self.check_for_interrupts():
             self.waiting = False
@@ -497,627 +1396,120 @@ class CortexM0Core:
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
         opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
         self.registers[PC_REGISTER] += 2
-        delta_cycles = 1
-        # ADCS
-        if opcode >> 6 == 0b0100000101:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            self.registers[rdn] = self._add_update_flags(self.registers[rm], self.registers[rdn] + (1 if self.c else 0))
-        # ADD (register = SP plus immediate)
-        elif opcode >> 11 == 0b10101:
-            imm8 = opcode & 0xFF
-            rd = (opcode >> 8) & 0x7
-            self.registers[rd] = self.sp + (imm8 << 2)
-        # ADD (SP plus immediate)
-        elif opcode >> 7 == 0b101100000:
-            imm32 = (opcode & 0x7F) << 2
-            self.sp += imm32
-        # ADDS (Encoding T1)
-        elif opcode >> 9 == 0b0001110:
-            imm3 = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self._add_update_flags(self.registers[rn], imm3)
-        # ADDS (Encoding T2)
-        elif opcode >> 11 == 0b00110:
-            imm8 = opcode & 0xFF
-            rdn = (opcode >> 8) & 0x7
-            self.registers[rdn] = self._add_update_flags(self.registers[rdn], imm8)
-        # ADDS (register)
-        elif opcode >> 9 == 0b0001100:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self._add_update_flags(self.registers[rn], self.registers[rm])
-        # ADD (register)
-        elif opcode >> 8 == 0b01000100:
-            rm = (opcode >> 3) & 0xF
-            rdn = ((opcode & 0x80) >> 4) | (opcode & 0x7)
-            left_value = self.registers[PC_REGISTER] + 2 if rdn == PC_REGISTER else self.registers[rdn]
-            right_value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
-            result = left_value + right_value
-            if rdn != SP_REGISTER and rdn != PC_REGISTER:
-                self.registers[rdn] = result
-            elif rdn == PC_REGISTER:
-                self.registers[rdn] = result & ~0x1
-                delta_cycles += 1
-            elif rdn == SP_REGISTER:
-                self.registers[rdn] = result & ~0x3
-        # ADR
-        elif opcode >> 11 == 0b10100:
-            imm8 = opcode & 0xFF
-            rd = (opcode >> 8) & 0x7
-            self.registers[rd] = (opcode_pc & 0xFFFFFFFC) + 4 + (imm8 << 2)
-        # ANDS (Encoding T2)
-        elif opcode >> 6 == 0b0100000000:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            result = self.registers[rdn] & self.registers[rm]
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = (result & 0xFFFFFFFF) == 0
-        # ASRS (immediate)
-        elif opcode >> 11 == 0b00010:
-            imm5 = (opcode >> 6) & 0x1F
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            shift_n = imm5 if imm5 else 32
-            result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
-            self.registers[rd] = result
-            self.n = bool(result & 0x80000000)
-            self.z = (result & 0xFFFFFFFF) == 0
-            self.c = bool(input_value & (1 << (shift_n - 1)))
-        # ASRS (register)
-        elif opcode >> 6 == 0b0100000100:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            input_value = self.registers[rdn]
-            shift_n = min(32, self.registers[rm] & 255)
-            result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = (result & 0xFFFFFFFF) == 0
-            # NOTE: shift_n can be 0 here (unlike the immediate form above), and JS `1 << -1`
-            # wraps the shift amount mod 32 rather than raising - `& 31` replicates that so
-            # Python's `<<` doesn't raise ValueError on a negative count.
-            self.c = bool(input_value & (1 << ((shift_n - 1) & 31)))
-        # B (with cond)
-        elif opcode >> 12 == 0b1101 and ((opcode >> 9) & 0x7) != 0b111:
-            imm8 = (opcode & 0xFF) << 1
-            cond = (opcode >> 8) & 0xF
-            if imm8 & (1 << 8):
-                imm8 = (imm8 & 0x1FF) - 0x200
-            if self.check_condition(cond):
-                self.registers[PC_REGISTER] += imm8 + 2
-                delta_cycles += 1
-        # B
-        elif opcode >> 11 == 0b11100:
-            imm11 = (opcode & 0x7FF) << 1
-            if imm11 & (1 << 11):
-                imm11 = (imm11 & 0x7FF) - 0x800
-            self.registers[PC_REGISTER] += imm11 + 2
-            delta_cycles += 1
-        # BICS
-        elif opcode >> 6 == 0b0100001110:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            result = self.registers[rdn] & ~self.registers[rm]
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-        # BKPT
-        elif opcode >> 8 == 0b10111110:
-            imm8 = opcode & 0xFF
-            self.break_rewind = 2
-            self.rp2040.on_break(imm8)
-        # BL
-        elif opcode >> 11 == 0b11110 and opcode2 >> 14 == 0b11 and ((opcode2 >> 12) & 0x1) == 1:
-            imm11 = opcode2 & 0x7FF
-            j2 = (opcode2 >> 11) & 0x1
-            j1 = (opcode2 >> 13) & 0x1
-            imm10 = opcode & 0x3FF
-            s = (opcode >> 10) & 0x1
-            i1 = 1 - (s ^ j1)
-            i2 = 1 - (s ^ j2)
-            imm32 = ((0b11111111 if s else 0) << 24) | ((i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1))
-            self.lr = (self.registers[PC_REGISTER] + 2) | 0x1
-            self.registers[PC_REGISTER] += 2 + imm32
-            delta_cycles += 2
-            self.bl_taken(self, False)
-        # BLX
-        elif opcode >> 7 == 0b010001111 and (opcode & 0x7) == 0:
-            rm = (opcode >> 3) & 0xF
-            self.lr = self.registers[PC_REGISTER] | 0x1
-            self.registers[PC_REGISTER] = self.registers[rm] & ~1
-            delta_cycles += 1
-            self.bl_taken(self, True)
-        # BX
-        elif opcode >> 7 == 0b010001110 and (opcode & 0x7) == 0:
-            rm = (opcode >> 3) & 0xF
-            self.bx_write_pc(self.registers[rm])
-            delta_cycles += 1
-        # CMN (register)
-        elif opcode >> 6 == 0b0100001011:
-            rm = (opcode >> 3) & 0x7
-            rn = opcode & 0x7
-            self._add_update_flags(self.registers[rn], self.registers[rm])
-        # CMP immediate
-        elif opcode >> 11 == 0b00101:
-            rn = (opcode >> 8) & 0x7
-            imm8 = opcode & 0xFF
-            self._subtract_update_flags(self.registers[rn], imm8)
-        # CMP (register)
-        elif opcode >> 6 == 0b0100001010:
-            rm = (opcode >> 3) & 0x7
-            rn = opcode & 0x7
-            self._subtract_update_flags(self.registers[rn], self.registers[rm])
-        # CMP (register) encoding T2
-        elif opcode >> 8 == 0b01000101:
-            rm = (opcode >> 3) & 0xF
-            rn = ((opcode >> 4) & 0x8) | (opcode & 0x7)
-            self._subtract_update_flags(self.registers[rn], self.registers[rm])
-        # CPSID i
-        elif opcode == 0xB672:
-            self.pm = True
-        # CPSIE i
-        elif opcode == 0xB662:
-            self.pm = False
-            self.interrupts_updated = True
-        # DMB SY
-        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F50:  # noqa: SIM114
-            self.registers[PC_REGISTER] += 2
-            delta_cycles += 2
-        # DSB SY
-        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F40:
-            self.registers[PC_REGISTER] += 2
-            delta_cycles += 2
-        # EORS
-        elif opcode >> 6 == 0b0100000001:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            result = self.registers[rm] ^ self.registers[rdn]
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-        # ISB SY
-        elif opcode == 0xF3BF and (opcode2 & 0xFFF0) == 0x8F60:
-            self.registers[PC_REGISTER] += 2
-            delta_cycles += 2
-        # LDMIA
-        elif opcode >> 11 == 0b11001:
-            rn = (opcode >> 8) & 0x7
-            reg_list = opcode & 0xFF
-            address = self.registers[rn]
-            for i in range(8):
-                if reg_list & (1 << i):
-                    self.registers[i] = self.rp2040.read_uint32(address)
-                    address += 4
-                    delta_cycles += 1
-            # Write back
-            if not (reg_list & (1 << rn)):
-                self.registers[rn] = address
-        # LDR (immediate)
-        elif opcode >> 11 == 0b01101:
-            imm5 = ((opcode >> 6) & 0x1F) << 2
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rn] + imm5
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint32(addr)
-        # LDR (sp + immediate)
-        elif opcode >> 11 == 0b10011:
-            rt = (opcode >> 8) & 0x7
-            imm8 = opcode & 0xFF
-            addr = self.sp + (imm8 << 2)
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint32(addr)
-        # LDR (literal)
-        elif opcode >> 11 == 0b01001:
-            imm8 = (opcode & 0xFF) << 2
-            rt = (opcode >> 8) & 7
-            next_pc = self.registers[PC_REGISTER] + 2
-            addr = (next_pc & 0xFFFFFFFC) + imm8
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint32(addr)
-        # LDR (register)
-        elif opcode >> 9 == 0b0101100:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint32(addr)
-        # LDRB (immediate)
-        elif opcode >> 11 == 0b01111:
-            imm5 = (opcode >> 6) & 0x1F
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rn] + imm5
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint8(addr)
-        # LDRB (register)
-        elif opcode >> 9 == 0b0101110:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint8(addr)
-        # LDRH (immediate)
-        elif opcode >> 11 == 0b10001:
-            imm5 = (opcode >> 6) & 0x1F
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rn] + (imm5 << 1)
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint16(addr)
-        # LDRH (register)
-        elif opcode >> 9 == 0b0101101:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.rp2040.read_uint16(addr)
-        # LDRSB
-        elif opcode >> 9 == 0b0101011:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = sign_extend8(self.rp2040.read_uint8(addr))
-        # LDRSH
-        elif opcode >> 9 == 0b0101111:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            addr = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = sign_extend16(self.rp2040.read_uint16(addr))
-        # LSLS (immediate)
-        elif opcode >> 11 == 0b00000:
-            imm5 = (opcode >> 6) & 0x1F
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            result = input_value << imm5
-            self.registers[rd] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-            self.c = bool(input_value & (1 << (32 - imm5))) if imm5 else self.c
-        # LSLS (register)
-        elif opcode >> 6 == 0b0100000010:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            input_value = self.registers[rdn]
-            shift_count = self.registers[rm] & 0xFF
-            result = 0 if shift_count >= 32 else input_value << shift_count
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-            # NOTE: shift_count ranges 0-255 here (unlike the immediate form's 0-31 imm5), so
-            # `32 - shift_count` can go negative; `& 31` replicates JS's mod-32 shift-amount
-            # wraparound instead of raising ValueError on a negative count in Python.
-            self.c = bool(input_value & (1 << ((32 - shift_count) & 31))) if shift_count else self.c
-        # LSRS (immediate)
-        elif opcode >> 11 == 0b00001:
-            imm5 = (opcode >> 6) & 0x1F
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            result = input_value >> imm5 if imm5 else 0
-            self.registers[rd] = result
-            self.n = bool(result & 0x80000000)
-            self.z = result == 0
-            self.c = bool((input_value >> (imm5 - 1 if imm5 else 31)) & 0x1)
-        # LSRS (register)
-        elif opcode >> 6 == 0b0100000011:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            shift_amount = self.registers[rm] & 0xFF
-            input_value = self.registers[rdn]
-            result = input_value >> shift_amount if shift_amount < 32 else 0
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = result == 0
-            # NOTE: shift_amount can be 0 here, making `shift_amount - 1` negative; `& 31`
-            # replicates JS's mod-32 shift-amount wraparound instead of raising ValueError.
-            self.c = bool((input_value >> ((shift_amount - 1) & 31)) & 0x1) if shift_amount <= 32 else False
-        # MOV
-        elif opcode >> 8 == 0b01000110:
-            rm = (opcode >> 3) & 0xF
-            rd = ((opcode >> 4) & 0x8) | (opcode & 0x7)
-            value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
-            if rd == PC_REGISTER:
-                delta_cycles += 1
-                value &= ~1
-            elif rd == SP_REGISTER:
-                value &= ~3
-            self.registers[rd] = value
-        # MOVS
-        elif opcode >> 11 == 0b00100:
-            value = opcode & 0xFF
-            rd = (opcode >> 8) & 7
-            self.registers[rd] = value
-            self.n = bool(value & 0x80000000)
-            self.z = value == 0
-        # MRS
-        elif opcode == 0b1111001111101111 and opcode2 >> 12 == 0b1000:
-            sysm = opcode2 & 0xFF
-            rd = (opcode2 >> 8) & 0xF
-            self.registers[rd] = self.read_special_register(sysm)
-            self.registers[PC_REGISTER] += 2
-            delta_cycles += 2
-        # MSR
-        elif opcode >> 4 == 0b111100111000 and opcode2 >> 8 == 0b10001000:
-            sysm = opcode2 & 0xFF
-            rn = opcode & 0xF
-            self.write_special_register(sysm, self.registers[rn])
-            self.registers[PC_REGISTER] += 2
-            delta_cycles += 2
-        # MULS
-        elif opcode >> 6 == 0b0100001101:
-            rn = (opcode >> 3) & 0x7
-            rdm = opcode & 0x7
-            result = (self.registers[rn] * self.registers[rdm]) & 0xFFFFFFFF
-            self.registers[rdm] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-        # MVNS
-        elif opcode >> 6 == 0b0100001111:
-            rm = (opcode >> 3) & 7
-            rd = opcode & 7
-            result = ~self.registers[rm]
-            self.registers[rd] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-        # ORRS (Encoding T2)
-        elif opcode >> 6 == 0b0100001100:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            result = self.registers[rdn] | self.registers[rm]
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = (result & 0xFFFFFFFF) == 0
-        # POP
-        elif opcode >> 9 == 0b1011110:
-            p = (opcode >> 8) & 1
-            address = self.sp
-            for i in range(8):
-                if opcode & (1 << i):
-                    self.registers[i] = self.rp2040.read_uint32(address)
-                    address += 4
-                    delta_cycles += 1
-            if p:
-                self.sp = address + 4
-                self.bx_write_pc(self.rp2040.read_uint32(address))
-                delta_cycles += 2
-            else:
-                self.sp = address
-        # PUSH
-        elif opcode >> 9 == 0b1011010:
-            bit_count = 0
-            for i in range(9):
-                if opcode & (1 << i):
-                    bit_count += 1
-            address = self.sp - 4 * bit_count
-            for i in range(8):
-                if opcode & (1 << i):
-                    self.rp2040.write_uint32(address, self.registers[i])
-                    delta_cycles += 1
-                    address += 4
-            if opcode & (1 << 8):
-                self.rp2040.write_uint32(address, self.registers[14])
-            self.sp -= 4 * bit_count
-        # REV
-        elif opcode >> 6 == 0b1011101000:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            self.registers[rd] = (
-                ((input_value & 0xFF) << 24)
-                | (((input_value >> 8) & 0xFF) << 16)
-                | (((input_value >> 16) & 0xFF) << 8)
-                | ((input_value >> 24) & 0xFF)
-            )
-        # REV16
-        elif opcode >> 6 == 0b1011101001:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            self.registers[rd] = (
-                (((input_value >> 16) & 0xFF) << 24)
-                | (((input_value >> 24) & 0xFF) << 16)
-                | ((input_value & 0xFF) << 8)
-                | ((input_value >> 8) & 0xFF)
-            )
-        # REVSH
-        elif opcode >> 6 == 0b1011101011:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            input_value = self.registers[rm]
-            self.registers[rd] = sign_extend16(((input_value & 0xFF) << 8) | ((input_value >> 8) & 0xFF))
-        # ROR
-        elif opcode >> 6 == 0b0100000111:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            input_value = self.registers[rdn]
-            shift = (self.registers[rm] & 0xFF) % 32
-            result = (input_value >> shift) | (input_value << (32 - shift))
-            self.registers[rdn] = result
-            self.n = bool(result & 0x80000000)
-            self.z = u32(result) == 0
-            self.c = bool(result & 0x80000000)
-        # NEGS / RSBS
-        elif opcode >> 6 == 0b0100001001:
-            rn = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self._subtract_update_flags(0, self.registers[rn])
-        # NOP
-        elif opcode == 0b1011111100000000:
-            pass  # Do nothing!
-        # SBCS (Encoding T1)
-        elif opcode >> 6 == 0b0100000110:
-            rm = (opcode >> 3) & 0x7
-            rdn = opcode & 0x7
-            self.registers[rdn] = self._subtract_update_flags(
-                self.registers[rdn], self.registers[rm] + (1 - (1 if self.c else 0))
-            )
-        # SEV
-        elif opcode == 0b1011111101000000:
-            self.logger.info(LOG_NAME, "SEV")
-        # STMIA
-        elif opcode >> 11 == 0b11000:
-            rn = (opcode >> 8) & 0x7
-            reg_list = opcode & 0xFF
-            address = self.registers[rn]
-            for i in range(8):
-                if reg_list & (1 << i):
-                    self.rp2040.write_uint32(address, self.registers[i])
-                    address += 4
-                    delta_cycles += 1
-            # Write back
-            if not (reg_list & (1 << rn)):
-                self.registers[rn] = address
-        # STR (immediate)
-        elif opcode >> 11 == 0b01100:
-            imm5 = ((opcode >> 6) & 0x1F) << 2
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rn] + imm5
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint32(address, self.registers[rt])
-        # STR (sp + immediate)
-        elif opcode >> 11 == 0b10010:
-            rt = (opcode >> 8) & 0x7
-            imm8 = opcode & 0xFF
-            address = self.sp + (imm8 << 2)
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint32(address, self.registers[rt])
-        # STR (register)
-        elif opcode >> 9 == 0b0101000:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint32(address, self.registers[rt])
-        # STRB (immediate)
-        elif opcode >> 11 == 0b01110:
-            imm5 = (opcode >> 6) & 0x1F
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rn] + imm5
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint8(address, self.registers[rt])
-        # STRB (register)
-        elif opcode >> 9 == 0b0101010:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint8(address, self.registers[rt])
-        # STRH (immediate)
-        elif opcode >> 11 == 0b10000:
-            imm5 = ((opcode >> 6) & 0x1F) << 1
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rn] + imm5
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint16(address, self.registers[rt])
-        # STRH (register)
-        elif opcode >> 9 == 0b0101001:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rt = opcode & 0x7
-            address = self.registers[rm] + self.registers[rn]
-            delta_cycles += self.cycles_io(address, True)
-            self.rp2040.write_uint16(address, self.registers[rt])
-        # SUB (SP minus immediate)
-        elif opcode >> 7 == 0b101100001:
-            imm32 = (opcode & 0x7F) << 2
-            self.sp -= imm32
-        # SUBS (Encoding T1)
-        elif opcode >> 9 == 0b0001111:
-            imm3 = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self._subtract_update_flags(self.registers[rn], imm3)
-        # SUBS (Encoding T2)
-        elif opcode >> 11 == 0b00111:
-            imm8 = opcode & 0xFF
-            rdn = (opcode >> 8) & 0x7
-            self.registers[rdn] = self._subtract_update_flags(self.registers[rdn], imm8)
-        # SUBS (register)
-        elif opcode >> 9 == 0b0001101:
-            rm = (opcode >> 6) & 0x7
-            rn = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self._subtract_update_flags(self.registers[rn], self.registers[rm])
-        # SVC
-        elif opcode >> 8 == 0b11011111:
-            self.pending_svcall = True
-            self.interrupts_updated = True
-        # SXTB
-        elif opcode >> 6 == 0b1011001001:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = sign_extend8(self.registers[rm])
-        # SXTH
-        elif opcode >> 6 == 0b1011001000:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = sign_extend16(self.registers[rm])
-        # TST
-        elif opcode >> 6 == 0b0100001000:
-            rm = (opcode >> 3) & 0x7
-            rn = opcode & 0x7
-            result = self.registers[rn] & self.registers[rm]
-            self.n = bool(result & 0x80000000)
-            self.z = result == 0
-        # UDF
-        elif opcode >> 8 == 0b11011110:
-            imm8 = opcode & 0xFF
-            self.break_rewind = 2
-            self.rp2040.on_break(imm8)
-        # UDF (Encoding T2)
-        elif opcode >> 4 == 0b111101111111 and opcode2 >> 12 == 0b1010:
-            imm4 = opcode & 0xF
-            imm12 = opcode2 & 0xFFF
-            self.break_rewind = 4
-            self.rp2040.on_break((imm4 << 12) | imm12)
-            self.registers[PC_REGISTER] += 2
-        # UXTB
-        elif opcode >> 6 == 0b1011001011:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self.registers[rm] & 0xFF
-        # UXTH
-        elif opcode >> 6 == 0b1011001010:
-            rm = (opcode >> 3) & 0x7
-            rd = opcode & 0x7
-            self.registers[rd] = self.registers[rm] & 0xFFFF
-        # WFE
-        elif opcode == 0b1011111100100000:
-            delta_cycles += 1
-            if self.event_registered:
-                self.event_registered = False
-            else:
-                self.waiting = True
-        # WFI
-        elif opcode == 0b1011111100110000:
-            delta_cycles += 1
-            self.waiting = True
-        # YIELD
-        elif opcode == 0b1011111100010000:
-            # do nothing for now. Wait for event!
-            self.logger.info(LOG_NAME, "Yield")
+
+        if WIDE_RANGE_START <= opcode < WIDE_RANGE_END:
+            handler = self._resolve_wide(opcode, opcode2)
         else:
+            handler = _DISPATCH_TABLE[opcode]
+
+        if handler is not None:
+            delta_cycles = handler(self, opcode, opcode2, opcode_pc)
+        else:
+            delta_cycles = 1
             self.logger.warning(LOG_NAME, f"Warning: Instruction at {opcode_pc:x} is not implemented yet!")
             self.logger.warning(LOG_NAME, f"Opcode: 0x{opcode:x} (0x{opcode2:x})")
 
         self.cycles += delta_cycles
         return delta_cycles
+
+
+_DISPATCH_PATTERNS: list[tuple[Callable[[int], bool], OpcodeHandler]] = [
+    (lambda opcode: opcode >> 6 == 0b0100000101, CortexM0Core._op_adcs),
+    (lambda opcode: opcode >> 11 == 0b10101, CortexM0Core._op_add_register_sp_plus_immediate),
+    (lambda opcode: opcode >> 7 == 0b101100000, CortexM0Core._op_add_sp_plus_immediate),
+    (lambda opcode: opcode >> 9 == 0b0001110, CortexM0Core._op_adds_encoding_t1),
+    (lambda opcode: opcode >> 11 == 0b00110, CortexM0Core._op_adds_encoding_t2),
+    (lambda opcode: opcode >> 9 == 0b0001100, CortexM0Core._op_adds_register),
+    (lambda opcode: opcode >> 8 == 0b01000100, CortexM0Core._op_add_register),
+    (lambda opcode: opcode >> 11 == 0b10100, CortexM0Core._op_adr),
+    (lambda opcode: opcode >> 6 == 0b0100000000, CortexM0Core._op_ands_encoding_t2),
+    (lambda opcode: opcode >> 11 == 0b00010, CortexM0Core._op_asrs_immediate),
+    (lambda opcode: opcode >> 6 == 0b0100000100, CortexM0Core._op_asrs_register),
+    (lambda opcode: opcode >> 12 == 0b1101 and ((opcode >> 9) & 0x7) != 0b111, CortexM0Core._op_b_with_cond),
+    (lambda opcode: opcode >> 11 == 0b11100, CortexM0Core._op_b),
+    (lambda opcode: opcode >> 6 == 0b0100001110, CortexM0Core._op_bics),
+    (lambda opcode: opcode >> 8 == 0b10111110, CortexM0Core._op_bkpt),
+    (lambda opcode: opcode >> 7 == 0b010001111 and (opcode & 0x7) == 0, CortexM0Core._op_blx),
+    (lambda opcode: opcode >> 7 == 0b010001110 and (opcode & 0x7) == 0, CortexM0Core._op_bx),
+    (lambda opcode: opcode >> 6 == 0b0100001011, CortexM0Core._op_cmn_register),
+    (lambda opcode: opcode >> 11 == 0b00101, CortexM0Core._op_cmp_immediate),
+    (lambda opcode: opcode >> 6 == 0b0100001010, CortexM0Core._op_cmp_register),
+    (lambda opcode: opcode >> 8 == 0b01000101, CortexM0Core._op_cmp_register_encoding_t2),
+    (lambda opcode: opcode == 0xB672, CortexM0Core._op_cpsid_i),
+    (lambda opcode: opcode == 0xB662, CortexM0Core._op_cpsie_i),
+    (lambda opcode: opcode >> 6 == 0b0100000001, CortexM0Core._op_eors),
+    (lambda opcode: opcode >> 11 == 0b11001, CortexM0Core._op_ldmia),
+    (lambda opcode: opcode >> 11 == 0b01101, CortexM0Core._op_ldr_immediate),
+    (lambda opcode: opcode >> 11 == 0b10011, CortexM0Core._op_ldr_sp_immediate),
+    (lambda opcode: opcode >> 11 == 0b01001, CortexM0Core._op_ldr_literal),
+    (lambda opcode: opcode >> 9 == 0b0101100, CortexM0Core._op_ldr_register),
+    (lambda opcode: opcode >> 11 == 0b01111, CortexM0Core._op_ldrb_immediate),
+    (lambda opcode: opcode >> 9 == 0b0101110, CortexM0Core._op_ldrb_register),
+    (lambda opcode: opcode >> 11 == 0b10001, CortexM0Core._op_ldrh_immediate),
+    (lambda opcode: opcode >> 9 == 0b0101101, CortexM0Core._op_ldrh_register),
+    (lambda opcode: opcode >> 9 == 0b0101011, CortexM0Core._op_ldrsb),
+    (lambda opcode: opcode >> 9 == 0b0101111, CortexM0Core._op_ldrsh),
+    (lambda opcode: opcode >> 11 == 0b00000, CortexM0Core._op_lsls_immediate),
+    (lambda opcode: opcode >> 6 == 0b0100000010, CortexM0Core._op_lsls_register),
+    (lambda opcode: opcode >> 11 == 0b00001, CortexM0Core._op_lsrs_immediate),
+    (lambda opcode: opcode >> 6 == 0b0100000011, CortexM0Core._op_lsrs_register),
+    (lambda opcode: opcode >> 8 == 0b01000110, CortexM0Core._op_mov),
+    (lambda opcode: opcode >> 11 == 0b00100, CortexM0Core._op_movs),
+    (lambda opcode: opcode >> 6 == 0b0100001101, CortexM0Core._op_muls),
+    (lambda opcode: opcode >> 6 == 0b0100001111, CortexM0Core._op_mvns),
+    (lambda opcode: opcode >> 6 == 0b0100001100, CortexM0Core._op_orrs_encoding_t2),
+    (lambda opcode: opcode >> 9 == 0b1011110, CortexM0Core._op_pop),
+    (lambda opcode: opcode >> 9 == 0b1011010, CortexM0Core._op_push),
+    (lambda opcode: opcode >> 6 == 0b1011101000, CortexM0Core._op_rev),
+    (lambda opcode: opcode >> 6 == 0b1011101001, CortexM0Core._op_rev16),
+    (lambda opcode: opcode >> 6 == 0b1011101011, CortexM0Core._op_revsh),
+    (lambda opcode: opcode >> 6 == 0b0100000111, CortexM0Core._op_ror),
+    (lambda opcode: opcode >> 6 == 0b0100001001, CortexM0Core._op_negs_rsbs),
+    (lambda opcode: opcode == 0b1011111100000000, CortexM0Core._op_nop),
+    (lambda opcode: opcode >> 6 == 0b0100000110, CortexM0Core._op_sbcs_encoding_t1),
+    (lambda opcode: opcode == 0b1011111101000000, CortexM0Core._op_sev),
+    (lambda opcode: opcode >> 11 == 0b11000, CortexM0Core._op_stmia),
+    (lambda opcode: opcode >> 11 == 0b01100, CortexM0Core._op_str_immediate),
+    (lambda opcode: opcode >> 11 == 0b10010, CortexM0Core._op_str_sp_immediate),
+    (lambda opcode: opcode >> 9 == 0b0101000, CortexM0Core._op_str_register),
+    (lambda opcode: opcode >> 11 == 0b01110, CortexM0Core._op_strb_immediate),
+    (lambda opcode: opcode >> 9 == 0b0101010, CortexM0Core._op_strb_register),
+    (lambda opcode: opcode >> 11 == 0b10000, CortexM0Core._op_strh_immediate),
+    (lambda opcode: opcode >> 9 == 0b0101001, CortexM0Core._op_strh_register),
+    (lambda opcode: opcode >> 7 == 0b101100001, CortexM0Core._op_sub_sp_minus_immediate),
+    (lambda opcode: opcode >> 9 == 0b0001111, CortexM0Core._op_subs_encoding_t1),
+    (lambda opcode: opcode >> 11 == 0b00111, CortexM0Core._op_subs_encoding_t2),
+    (lambda opcode: opcode >> 9 == 0b0001101, CortexM0Core._op_subs_register),
+    (lambda opcode: opcode >> 8 == 0b11011111, CortexM0Core._op_svc),
+    (lambda opcode: opcode >> 6 == 0b1011001001, CortexM0Core._op_sxtb),
+    (lambda opcode: opcode >> 6 == 0b1011001000, CortexM0Core._op_sxth),
+    (lambda opcode: opcode >> 6 == 0b0100001000, CortexM0Core._op_tst),
+    (lambda opcode: opcode >> 8 == 0b11011110, CortexM0Core._op_udf),
+    (lambda opcode: opcode >> 6 == 0b1011001011, CortexM0Core._op_uxtb),
+    (lambda opcode: opcode >> 6 == 0b1011001010, CortexM0Core._op_uxth),
+    (lambda opcode: opcode == 0b1011111100100000, CortexM0Core._op_wfe),
+    (lambda opcode: opcode == 0b1011111100110000, CortexM0Core._op_wfi),
+    (lambda opcode: opcode == 0b1011111100010000, CortexM0Core._op_yield),
+]
+
+
+def _build_dispatch_table() -> "list[OpcodeHandler | None]":
+    table: list[OpcodeHandler | None] = [None] * 0x10000
+    for opcode in range(0x10000):
+        if WIDE_RANGE_START <= opcode < WIDE_RANGE_END:
+            # Handled separately by CortexM0Core._resolve_wide() - see the assertion below.
+            continue
+        for predicate, handler in _DISPATCH_PATTERNS:
+            if predicate(opcode):
+                table[opcode] = handler
+                break
+    return table
+
+
+_DISPATCH_TABLE = _build_dispatch_table()
+assert all(_DISPATCH_TABLE[opcode] is None for opcode in range(WIDE_RANGE_START, WIDE_RANGE_END)), (
+    "A non-opcode2-dependent instruction pattern now matches an opcode in 0xF000-0xF7FF, which "
+    "CortexM0Core._resolve_wide() assumes it exclusively owns (see docs/PORTING.md). Add the new "
+    "pattern to _resolve_wide() too, in the correct priority position relative to the existing "
+    "opcode2-dependent patterns there."
+)

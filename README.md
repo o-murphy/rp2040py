@@ -1,6 +1,12 @@
-![](../../actions/workflows/pre-commit.yml/badge.svg) ![](../../actions/workflows/ci-micropython.yml/badge.svg) ![](../../actions/workflows/ci-pico-sdk.yml/badge.svg)
-
 # rp2040py
+
+[![license]][license-url]
+[![pypi version]][PyPiUrl]
+[![python versions]][PyPiUrl]
+[![Pre-commit]][pre-commit-workflow]
+[![Test MicroPython Releases]][micropython-workflow]
+[![Test Pi Pico SDK]][pico-sdk-workflow]
+[![coverage]][CodecovUrl]
 
 Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](https://github.com/wokwi/rp2040js). It blinks, runs native code, and even the MicroPython REPL!
 
@@ -43,9 +49,9 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 >
 > | Interpreter | Time |
 > |---|---|
-> | CPython 3.10 | 312.48s |
-> | CPython 3.14 + `PYTHON_JIT=1` | 175.41s (~1.8x) |
-> | PyPy 3.10 | 9.55s (~33x) |
+> | CPython 3.10 | 221.11s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 121.74s (~1.8x) |
+> | PyPy 3.10 | 9.59s (~23x) |
 >
 > For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- python
 > demo/micropython_run.py ...`. See
@@ -129,3 +135,44 @@ While CircuitPython does not typically use a writeable filesystem, note that thi
 ## License
 
 Released under the MIT license. Copyright (c) 2021, Uri Shaked. Copyright (c) 2026, Dmytro Yaroshenko.
+
+<!-- REUSABLE LINKS -->
+
+[license]:
+https://img.shields.io/github/license/o-murphy/rp2040py
+
+[license-url]:
+https://opensource.org/licenses/MIT
+
+[pypi version]:
+https://img.shields.io/pypi/v/rp2040py
+
+[python versions]:
+https://img.shields.io/pypi/pyversions/rp2040py
+
+[PyPiUrl]:
+https://pypi.org/project/rp2040py/
+
+[Pre-commit]:
+https://github.com/o-murphy/rp2040py/actions/workflows/pre-commit.yml/badge.svg
+
+[pre-commit-workflow]:
+https://github.com/o-murphy/rp2040py/actions/workflows/pre-commit.yml
+
+[Test MicroPython Releases]:
+https://github.com/o-murphy/rp2040py/actions/workflows/ci-micropython.yml/badge.svg
+
+[micropython-workflow]:
+https://github.com/o-murphy/rp2040py/actions/workflows/ci-micropython.yml
+
+[Test Pi Pico SDK]:
+https://github.com/o-murphy/rp2040py/actions/workflows/ci-pico-sdk.yml/badge.svg
+
+[pico-sdk-workflow]:
+https://github.com/o-murphy/rp2040py/actions/workflows/ci-pico-sdk.yml
+
+[coverage]:
+https://codecov.io/gh/o-murphy/rp2040py/graph/badge.svg
+
+[CodecovUrl]:
+https://codecov.io/gh/o-murphy/rp2040py
