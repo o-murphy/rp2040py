@@ -89,9 +89,9 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [ ] `sio.spec.ts` → `tests/test_sio.py`
 
 ### demo / debug (needed to actually run firmware, e.g. MicroPython)
-- [x] `demo/bootrom.ts` → `src/rp2040py/cli/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
+- [x] `demo/bootrom.ts` → `src/rp2040py/device/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
 - [x] `demo/intelhex.ts` → `src/rp2040py/cli/intelhex.py`
-- [x] `demo/load-flash.ts` → `src/rp2040py/cli/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
+- [x] `demo/load-flash.ts` → `src/rp2040py/device/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
 - [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server; thin wrapper around `rp2040py.cli`'s `run` subcommand - see "CLI packaging" below)
 - [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console; thin wrapper around `rp2040py.cli`'s `micropython` subcommand)
 - [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` (deferred - needs real-hardware GDB client (`test-utils/gdbclient.ts`), out of scope for running firmware in the emulator)
@@ -117,19 +117,31 @@ beyond straightforward syntax translation.
 rp2040js's `demo/*.ts` scripts are only ever run from a checkout (`npm run start`, `tsx
 demo/emulator-run.ts`, etc.) - there's no npm-packaged CLI, since rp2040js is primarily consumed
 as a library (e.g. embedded in Wokwi). rp2040py adds one: `src/rp2040py/cli/` is a real subpackage
-(`bootrom.py`, `intelhex.py`, `load_flash.py` - moved there from `demo/`, `mklittlefs.py` - moved
-there from `tests/`, plus the argparse dispatch in `cli/__init__.py`) that ships in the wheel,
-exposed as the `rp2040py` console script (`[project.scripts]` in `pyproject.toml`) and via `python
--m rp2040py` (`src/rp2040py/__main__.py` is a two-line shim). `mklittlefs` is the one subcommand
-with a dependency (`littlefs-python`), so it's gated behind the optional `fs` extra
-(`[project.optional-dependencies]`) rather than pulled into the zero-runtime-dependency default
-install; the `dev` dependency group depends on `rp2040py[fs]` so it's still there for `uv sync` in
-CI and local dev. `demo/emulator_run.py`, `demo/micropython_run.py`, and `demo/benchmark.py`
-are now thin wrappers around the same `rp2040py.cli` subcommands (`run`, `micropython`, `bench`),
-kept so the documented `uv run python demo/*.py` commands keep working unchanged for anyone
-working from a checkout rather than a pip/uv install. `tests/micropython_spi_run.py` (test-only
-SPI harness, not part of the general CLI) imports `rp2040py.cli.bootrom`/`load_flash` directly
-rather than duplicating them.
+(`intelhex.py`, `mklittlefs.py` - moved there from `tests/`, plus the argparse dispatch in
+`cli/__init__.py`) that ships in the wheel, exposed as the `rp2040py` console script
+(`[project.scripts]` in `pyproject.toml`) and via `python -m rp2040py` (`src/rp2040py/__main__.py`
+is a two-line shim). `mklittlefs` is the one subcommand with a dependency (`littlefs-python`), so
+it's gated behind the optional `fs` extra (`[project.optional-dependencies]`) rather than pulled
+into the zero-runtime-dependency default install; the `dev` dependency group depends on
+`rp2040py[fs]` so it's still there for `uv sync` in CI and local dev. `demo/emulator_run.py`,
+`demo/micropython_run.py`, and `demo/benchmark.py` are now thin wrappers around the same
+`rp2040py.cli` subcommands (`run`, `micropython`, `bench`), kept so the documented `uv run python
+demo/*.py` commands keep working unchanged for anyone working from a checkout rather than a
+pip/uv install.
+
+`bootrom.py`/`load_flash.py` (moved there from `demo/`) and `raw_repl.py` deliberately live under
+`src/rp2040py/device/` instead of `cli/`, alongside a `MicroPythonDevice` class
+(`device/__init__.py`) that is *not* CLI plumbing: it's a programmatic API for booting a
+MicroPython/CircuitPython image and running code on it (`device.exec("print(1+1)")`,
+`device.exec_file(path)`) from another Python program - a context manager wrapping a daemon-thread
+`Simulator` plus the raw-REPL protocol (`raw_repl.py`; the same Ctrl-A/Ctrl-D protocol
+`mpremote run`/`tools/pyboard.py` use over real serial). `cli/__init__.py`'s `micropython
+-c/-m/<filename>` batch mode is itself just a caller of this API, not a separate implementation.
+This split exists because `rp2040py.cli` (needing `device`) and `rp2040py.device` (needing
+`bootrom`/`load_flash`) would otherwise form a circular import if the latter stayed nested under
+`cli/` - `device/` has no dependency on `cli/` in either direction. `tests/micropython_spi_run.py`
+(test-only SPI harness, not part of the general CLI) imports `rp2040py.device.bootrom`/
+`load_flash` directly rather than duplicating them.
 
 ### Threading model (`Simulator.execute()` / `RPPIO.run()`)
 

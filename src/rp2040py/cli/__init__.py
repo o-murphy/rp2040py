@@ -7,7 +7,9 @@ Subcommands:
 
 - ``run``: generic hex/uf2 firmware runner with a GDB server, for native code (e.g. built from
   pico-examples).
-- ``micropython``: MicroPython/CircuitPython UF2 runner with a USB CDC console.
+- ``micropython``: MicroPython/CircuitPython UF2 runner with a USB CDC console. ``-c <command>``,
+  ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
+  instead of dropping into the REPL, mirroring ``micropython``'s own CLI.
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
 - ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
@@ -25,16 +27,17 @@ import tty
 from collections.abc import Callable
 from importlib.metadata import version
 
-from rp2040py.cli.bootrom import BOOTROM_B1
 from rp2040py.cli.intelhex import load_hex
-from rp2040py.cli.load_flash import (
+from rp2040py.cli.mklittlefs import build_littlefs_image
+from rp2040py.device import MicroPythonDevice
+from rp2040py.device.bootrom import BOOTROM_B1
+from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
-    load_circuitpython_flash_image,
     load_micropython_flash_image,
     load_uf2,
 )
-from rp2040py.cli.mklittlefs import build_littlefs_image
+from rp2040py.device.raw_repl import RawReplError
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.memory_map import RAM_START_ADDRESS
 from rp2040py.rp2040 import RP2040
@@ -102,41 +105,58 @@ def _cmd_run(args: argparse.Namespace) -> None:
     _wait_for_simulator(simulator)
 
 
-def _cmd_micropython(args: argparse.Namespace) -> None:
-    simulator = Simulator()
-    mcu = simulator.rp2040
-    mcu.load_bootrom(BOOTROM_B1)
-    mcu.logger = ConsoleLogger(LogLevel.ERROR)
+def _raw_repl_source(args: argparse.Namespace) -> "str | None":
+    if args.command is not None:
+        return args.command
+    if args.module is not None:
+        return f"import {args.module}"
+    if args.filename is not None:
+        with open(args.filename) as f:
+            return f.read()
+    return None
 
+
+def _cmd_micropython(args: argparse.Namespace) -> None:
     if not args.circuitpython:
         image_name = args.image or "RPI_PICO-20230426-v1.20.0.uf2"
     else:
         image_name = args.image or "adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2"
     print(f"Loading uf2 image {image_name}")
-    load_uf2(image_name, mcu)
 
-    if os.path.exists("littlefs.img") and not args.circuitpython:
+    littlefs = "littlefs.img" if os.path.exists("littlefs.img") and not args.circuitpython else None
+    fat12 = "fat12.img" if os.path.exists("fat12.img") and args.circuitpython else None
+    if littlefs is not None:
         print("Loading uf2 image littlefs.img")
-        load_micropython_flash_image("littlefs.img", mcu)
-    elif os.path.exists("fat12.img") and args.circuitpython:
-        load_circuitpython_flash_image("fat12.img", mcu)
+
+    device = MicroPythonDevice(image_name, littlefs=littlefs, fat12=fat12, circuitpython=args.circuitpython)
 
     if args.gdb:
-        gdb_server = GDBTCPServer(simulator, args.gdb_port)
+        gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
         print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
 
-    cdc = USBCDC(mcu.usb_ctrl)
+    raw_repl_source = _raw_repl_source(args)
+    if raw_repl_source is not None:
+        # No timeout (unlike MicroPythonDevice's library default): matches this CLI's existing
+        # philosophy elsewhere of running until done or Ctrl+C, not an arbitrary deadline.
+        try:
+            device.start(timeout=None)
+            stdout, stderr = device.exec(raw_repl_source, timeout=None)
+        except KeyboardInterrupt:
+            device.stop()
+            sys.exit(130)
+        except (TimeoutError, RawReplError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            device.stop()
+            sys.exit(1)
+        sys.stdout.buffer.write(stdout)
+        sys.stdout.flush()
+        if stderr:
+            sys.stderr.buffer.write(stderr)
+            sys.stderr.flush()
+        device.stop()
+        sys.exit(1 if stderr else 0)
 
-    def _on_device_connected() -> None:
-        if not args.circuitpython:
-            # We send a newline so the user sees the MicroPython prompt
-            cdc.send_serial_byte(ord("\r"))
-            cdc.send_serial_byte(ord("\n"))
-        else:
-            cdc.send_serial_byte(3)
-
-    cdc.on_device_connected = _on_device_connected
-
+    cdc = device.cdc
     current_line = ""
 
     def _on_serial_data(value: bytes | bytearray) -> None:
@@ -159,6 +179,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
             else:
                 current_line += char
 
+    # Registered before start() so nothing the device prints while enumerating is dropped.
     cdc.on_serial_data = _on_serial_data
 
     stdin_fd = sys.stdin.fileno()
@@ -191,9 +212,15 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
     threading.Thread(target=_read_stdin_loop, daemon=True).start()
 
-    mcu.core.pc = 0x10000000
-    simulator.execute()
-    _wait_for_simulator(simulator, on_interrupt=_restore_termios)
+    device.start(timeout=None)
+    if not args.circuitpython:
+        # We send a newline so the user sees the MicroPython prompt
+        cdc.send_serial_byte(ord("\r"))
+        cdc.send_serial_byte(ord("\n"))
+    else:
+        cdc.send_serial_byte(3)
+
+    _wait_for_simulator(device.simulator, on_interrupt=_restore_termios)
 
 
 def _interpreter_label() -> str:
@@ -326,6 +353,19 @@ def main(argv: "list[str] | None" = None) -> None:
     mp_parser.add_argument("--gdb", action="store_true")
     mp_parser.add_argument("--gdb-port", type=int, default=3333)
     mp_parser.add_argument("--circuitpython", action="store_true")
+    mp_source_group = mp_parser.add_mutually_exclusive_group()
+    mp_source_group.add_argument(
+        "-c", dest="command", metavar="<command>", help="execute the given command on the device, then exit"
+    )
+    mp_source_group.add_argument(
+        "-m",
+        dest="module",
+        metavar="<module>",
+        help="import the given module on the device (approximates `-m`), then exit",
+    )
+    mp_source_group.add_argument(
+        "filename", nargs="?", help="run the given local script file on the device, then exit"
+    )
     mp_parser.set_defaults(func=_cmd_micropython)
 
     bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")

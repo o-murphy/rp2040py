@@ -16,7 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the `micropython` subcommand's filesystem support - opens and updates the image in place if
   it already exists, rather than always reformatting. Needs the new optional `fs` extra
   (`pip install rp2040py[fs]`), which keeps `littlefs-python` out of the zero-dependency default
-  install.
+  install. Only registered as a subcommand when `littlefs-python` is actually installed.
+- `micropython -c <command>` / `-m <module>` / `<filename>` (mutually exclusive), matching
+  `micropython`'s own CLI: instead of dropping into the REPL, runs the given command/module/script
+  on the device non-interactively via the raw-REPL protocol, prints its stdout/stderr, and exits
+  with its status (0, or 1 if it raised).
+- `rp2040py.device.MicroPythonDevice`, a programmatic API for booting a MicroPython/CircuitPython
+  image and running code on it from another Python program (`device.exec("print(1+1)")`,
+  `device.exec_file(path)`), as a context manager wrapping a daemon-thread `Simulator` plus the
+  raw-REPL protocol - previously this was CLI-only. The CLI's `micropython -c/-m/<filename>` is
+  now itself a caller of this API. `bootrom.py`/`load_flash.py`/`raw_repl.py` moved from `cli/` to
+  `device/` accordingly (they aren't CLI-specific, and `device` importing from `cli` would have
+  been circular).
+- `rp2040py --version`.
 
 ## [0.1.0b1] - 2026-07-30
 

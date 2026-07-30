@@ -7,7 +7,7 @@ lazily here so the rest of the CLI stays usable without it.
 import os
 from collections.abc import Sequence
 
-from rp2040py.cli.load_flash import MICROPYTHON_FS_BLOCKCOUNT, MICROPYTHON_FS_BLOCKSIZE
+from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKCOUNT, MICROPYTHON_FS_BLOCKSIZE
 
 __all__ = ("build_littlefs_image",)
 

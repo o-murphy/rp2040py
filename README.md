@@ -162,6 +162,22 @@ sudo umount fat12/  # unmount the filesystem
 
 While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
 
+### Library API
+
+Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image on a daemon thread and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use:
+
+```python
+from rp2040py.device import MicroPythonDevice
+
+with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+    stdout, stderr = device.exec("print(1 + 1)")
+    assert stdout == b"2\r\n"
+
+    stdout, stderr = device.exec_file("my_script.py")
+```
+
+`exec()`/`exec_file()` block the calling thread until the device finishes (or `timeout` elapses - they default to 30s, since unlike the CLI there's no Ctrl+C to fall back on) and interrupt anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image), same as real raw-REPL tooling does. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this API, not a separate implementation. `start()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
+
 ## Learn more
 
 - [rp2040js](https://github.com/wokwi/rp2040js) — the upstream TypeScript emulator this project is ported from.
