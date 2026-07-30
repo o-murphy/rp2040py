@@ -184,8 +184,12 @@ Two mitigations, worth combining:
   `CortexM0Core.pc` also used to be a `property` indirecting through `Uint32Array.__getitem__`/
   `__setitem__`; the hot path inside `execute_instruction()` now indexes
   `self.registers[PC_REGISTER]` directly (the `pc` property itself is unchanged and still used by
-  external callers like the demo scripts and GDB target). Together these gave roughly a 10-15%
-  instructions/sec improvement under CPython in local benchmarking. A dispatch-table redesign of
-  `execute_instruction()` (opcode → handler function, replacing the linear `if`/`elif` scan) would
-  likely be the single biggest remaining win, but was deferred as a larger, higher-risk refactor
-  touching all ~90 instruction handlers.
+  external callers like the demo scripts and GDB target). `CortexM0Core` also used to expose its
+  own `read_uint32`/`read_uint16`/`read_uint8`/`write_uint32`/`write_uint16`/`write_uint8` methods
+  that did nothing but forward to the identically-named `RP2040` methods - pure indirection with
+  no external callers (nothing outside the class used `core.read_uint32(...)` etc.), so those were
+  removed and all internal call sites now call `self.rp2040.read_uint32(...)` etc. directly.
+  Together these gave roughly a 15-20% instructions/sec improvement under CPython in local
+  benchmarking. A dispatch-table redesign of `execute_instruction()` (opcode → handler function,
+  replacing the linear `if`/`elif` scan) would likely be the single biggest remaining win, but was
+  deferred as a larger, higher-risk refactor touching all ~90 instruction handlers.

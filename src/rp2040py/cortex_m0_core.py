@@ -192,24 +192,6 @@ class CortexM0Core:
             result = True
         return not result if (cond & 0b1 and cond != 0b1111) else result
 
-    def read_uint32(self, address: int) -> int:
-        return self.rp2040.read_uint32(address)
-
-    def read_uint16(self, address: int) -> int:
-        return self.rp2040.read_uint16(address)
-
-    def read_uint8(self, address: int) -> int:
-        return self.rp2040.read_uint8(address)
-
-    def write_uint32(self, address: int, value: int) -> None:
-        self.rp2040.write_uint32(address, value)
-
-    def write_uint16(self, address: int, value: int) -> None:
-        self.rp2040.write_uint16(address, value)
-
-    def write_uint8(self, address: int, value: int) -> None:
-        self.rp2040.write_uint8(address, value)
-
     def switch_stack(self, stack: StackPointerBank) -> None:
         if self.sp_sel != stack:
             temp = self.sp
@@ -252,14 +234,14 @@ class CortexM0Core:
             self.sp_main = (self.sp_main - 0x20) & ~0b100
             frame_ptr = self.sp_main
         # only the stack locations, not the store order, are architected
-        self.write_uint32(frame_ptr, self.registers[0])
-        self.write_uint32(frame_ptr + 0x4, self.registers[1])
-        self.write_uint32(frame_ptr + 0x8, self.registers[2])
-        self.write_uint32(frame_ptr + 0xC, self.registers[3])
-        self.write_uint32(frame_ptr + 0x10, self.registers[12])
-        self.write_uint32(frame_ptr + 0x14, self.lr)
-        self.write_uint32(frame_ptr + 0x18, self.pc & ~1)  # ReturnAddress(ExceptionType);
-        self.write_uint32(frame_ptr + 0x1C, (self.x_psr & ~(1 << 9)) | (frame_ptr_align << 9))
+        self.rp2040.write_uint32(frame_ptr, self.registers[0])
+        self.rp2040.write_uint32(frame_ptr + 0x4, self.registers[1])
+        self.rp2040.write_uint32(frame_ptr + 0x8, self.registers[2])
+        self.rp2040.write_uint32(frame_ptr + 0xC, self.registers[3])
+        self.rp2040.write_uint32(frame_ptr + 0x10, self.registers[12])
+        self.rp2040.write_uint32(frame_ptr + 0x14, self.lr)
+        self.rp2040.write_uint32(frame_ptr + 0x18, self.pc & ~1)  # ReturnAddress(ExceptionType);
+        self.rp2040.write_uint32(frame_ptr + 0x1C, (self.x_psr & ~(1 << 9)) | (frame_ptr_align << 9))
         if self.current_mode == ExecutionMode.MODE_HANDLER:
             self.lr = 0xFFFFFFF1
         elif not self.sp_sel:
@@ -272,7 +254,7 @@ class CortexM0Core:
         self.switch_stack(StackPointerBank.SP_MAIN)
         self.event_registered = True
         vector_table = self.vtor
-        self.pc = self.read_uint32(vector_table + 4 * exception_number)
+        self.pc = self.rp2040.read_uint32(vector_table + 4 * exception_number)
 
     def exception_return(self, exc_return: int) -> None:
         frame_ptr = self.sp_main
@@ -291,16 +273,18 @@ class CortexM0Core:
         # if CONTROL.nPRIV is set to 1
 
         # PopStack:
-        self.registers[0] = self.read_uint32(frame_ptr)  # Stack accesses are performed as Unprivileged accesses if
-        self.registers[1] = self.read_uint32(
+        self.registers[0] = self.rp2040.read_uint32(
+            frame_ptr
+        )  # Stack accesses are performed as Unprivileged accesses if
+        self.registers[1] = self.rp2040.read_uint32(
             frame_ptr + 0x4
         )  # CONTROL<0>=='1' && EXC_RETURN<3>=='1' Privileged otherwise
-        self.registers[2] = self.read_uint32(frame_ptr + 0x8)
-        self.registers[3] = self.read_uint32(frame_ptr + 0xC)
-        self.registers[12] = self.read_uint32(frame_ptr + 0x10)
-        self.lr = self.read_uint32(frame_ptr + 0x14)
-        self.pc = self.read_uint32(frame_ptr + 0x18)
-        psr = self.read_uint32(frame_ptr + 0x1C)
+        self.registers[2] = self.rp2040.read_uint32(frame_ptr + 0x8)
+        self.registers[3] = self.rp2040.read_uint32(frame_ptr + 0xC)
+        self.registers[12] = self.rp2040.read_uint32(frame_ptr + 0x10)
+        self.lr = self.rp2040.read_uint32(frame_ptr + 0x14)
+        self.pc = self.rp2040.read_uint32(frame_ptr + 0x18)
+        psr = self.rp2040.read_uint32(frame_ptr + 0x1C)
 
         frame_ptr_align = 0b100 if psr & (1 << 9) else 0
 
@@ -509,9 +493,9 @@ class CortexM0Core:
             self.waiting = False
         # ARM Thumb instruction encoding - 16 bits / 2 bytes
         opcode_pc = self.registers[PC_REGISTER] & ~1  # ensure no LSB set PC are executed
-        opcode = self.read_uint16(opcode_pc)
+        opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
-        opcode2 = self.read_uint16(opcode_pc + 2) if wide_instruction else 0
+        opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
         self.registers[PC_REGISTER] += 2
         delta_cycles = 1
         # ADCS
@@ -707,7 +691,7 @@ class CortexM0Core:
             address = self.registers[rn]
             for i in range(8):
                 if reg_list & (1 << i):
-                    self.registers[i] = self.read_uint32(address)
+                    self.registers[i] = self.rp2040.read_uint32(address)
                     address += 4
                     delta_cycles += 1
             # Write back
@@ -720,14 +704,14 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rn] + imm5
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint32(addr)
+            self.registers[rt] = self.rp2040.read_uint32(addr)
         # LDR (sp + immediate)
         elif opcode >> 11 == 0b10011:
             rt = (opcode >> 8) & 0x7
             imm8 = opcode & 0xFF
             addr = self.sp + (imm8 << 2)
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint32(addr)
+            self.registers[rt] = self.rp2040.read_uint32(addr)
         # LDR (literal)
         elif opcode >> 11 == 0b01001:
             imm8 = (opcode & 0xFF) << 2
@@ -735,7 +719,7 @@ class CortexM0Core:
             next_pc = self.registers[PC_REGISTER] + 2
             addr = (next_pc & 0xFFFFFFFC) + imm8
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint32(addr)
+            self.registers[rt] = self.rp2040.read_uint32(addr)
         # LDR (register)
         elif opcode >> 9 == 0b0101100:
             rm = (opcode >> 6) & 0x7
@@ -743,7 +727,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint32(addr)
+            self.registers[rt] = self.rp2040.read_uint32(addr)
         # LDRB (immediate)
         elif opcode >> 11 == 0b01111:
             imm5 = (opcode >> 6) & 0x1F
@@ -751,7 +735,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rn] + imm5
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint8(addr)
+            self.registers[rt] = self.rp2040.read_uint8(addr)
         # LDRB (register)
         elif opcode >> 9 == 0b0101110:
             rm = (opcode >> 6) & 0x7
@@ -759,7 +743,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint8(addr)
+            self.registers[rt] = self.rp2040.read_uint8(addr)
         # LDRH (immediate)
         elif opcode >> 11 == 0b10001:
             imm5 = (opcode >> 6) & 0x1F
@@ -767,7 +751,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rn] + (imm5 << 1)
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint16(addr)
+            self.registers[rt] = self.rp2040.read_uint16(addr)
         # LDRH (register)
         elif opcode >> 9 == 0b0101101:
             rm = (opcode >> 6) & 0x7
@@ -775,7 +759,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = self.read_uint16(addr)
+            self.registers[rt] = self.rp2040.read_uint16(addr)
         # LDRSB
         elif opcode >> 9 == 0b0101011:
             rm = (opcode >> 6) & 0x7
@@ -783,7 +767,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = sign_extend8(self.read_uint8(addr))
+            self.registers[rt] = sign_extend8(self.rp2040.read_uint8(addr))
         # LDRSH
         elif opcode >> 9 == 0b0101111:
             rm = (opcode >> 6) & 0x7
@@ -791,7 +775,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             addr = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(addr)
-            self.registers[rt] = sign_extend16(self.read_uint16(addr))
+            self.registers[rt] = sign_extend16(self.rp2040.read_uint16(addr))
         # LSLS (immediate)
         elif opcode >> 11 == 0b00000:
             imm5 = (opcode >> 6) & 0x1F
@@ -903,12 +887,12 @@ class CortexM0Core:
             address = self.sp
             for i in range(8):
                 if opcode & (1 << i):
-                    self.registers[i] = self.read_uint32(address)
+                    self.registers[i] = self.rp2040.read_uint32(address)
                     address += 4
                     delta_cycles += 1
             if p:
                 self.sp = address + 4
-                self.bx_write_pc(self.read_uint32(address))
+                self.bx_write_pc(self.rp2040.read_uint32(address))
                 delta_cycles += 2
             else:
                 self.sp = address
@@ -921,11 +905,11 @@ class CortexM0Core:
             address = self.sp - 4 * bit_count
             for i in range(8):
                 if opcode & (1 << i):
-                    self.write_uint32(address, self.registers[i])
+                    self.rp2040.write_uint32(address, self.registers[i])
                     delta_cycles += 1
                     address += 4
             if opcode & (1 << 8):
-                self.write_uint32(address, self.registers[14])
+                self.rp2040.write_uint32(address, self.registers[14])
             self.sp -= 4 * bit_count
         # REV
         elif opcode >> 6 == 0b1011101000:
@@ -991,7 +975,7 @@ class CortexM0Core:
             address = self.registers[rn]
             for i in range(8):
                 if reg_list & (1 << i):
-                    self.write_uint32(address, self.registers[i])
+                    self.rp2040.write_uint32(address, self.registers[i])
                     address += 4
                     delta_cycles += 1
             # Write back
@@ -1004,14 +988,14 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rn] + imm5
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint32(address, self.registers[rt])
+            self.rp2040.write_uint32(address, self.registers[rt])
         # STR (sp + immediate)
         elif opcode >> 11 == 0b10010:
             rt = (opcode >> 8) & 0x7
             imm8 = opcode & 0xFF
             address = self.sp + (imm8 << 2)
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint32(address, self.registers[rt])
+            self.rp2040.write_uint32(address, self.registers[rt])
         # STR (register)
         elif opcode >> 9 == 0b0101000:
             rm = (opcode >> 6) & 0x7
@@ -1019,7 +1003,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint32(address, self.registers[rt])
+            self.rp2040.write_uint32(address, self.registers[rt])
         # STRB (immediate)
         elif opcode >> 11 == 0b01110:
             imm5 = (opcode >> 6) & 0x1F
@@ -1027,7 +1011,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rn] + imm5
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint8(address, self.registers[rt])
+            self.rp2040.write_uint8(address, self.registers[rt])
         # STRB (register)
         elif opcode >> 9 == 0b0101010:
             rm = (opcode >> 6) & 0x7
@@ -1035,7 +1019,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint8(address, self.registers[rt])
+            self.rp2040.write_uint8(address, self.registers[rt])
         # STRH (immediate)
         elif opcode >> 11 == 0b10000:
             imm5 = ((opcode >> 6) & 0x1F) << 1
@@ -1043,7 +1027,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rn] + imm5
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint16(address, self.registers[rt])
+            self.rp2040.write_uint16(address, self.registers[rt])
         # STRH (register)
         elif opcode >> 9 == 0b0101001:
             rm = (opcode >> 6) & 0x7
@@ -1051,7 +1035,7 @@ class CortexM0Core:
             rt = opcode & 0x7
             address = self.registers[rm] + self.registers[rn]
             delta_cycles += self.cycles_io(address, True)
-            self.write_uint16(address, self.registers[rt])
+            self.rp2040.write_uint16(address, self.registers[rt])
         # SUB (SP minus immediate)
         elif opcode >> 7 == 0b101100001:
             imm32 = (opcode & 0x7F) << 2
