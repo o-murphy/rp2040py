@@ -108,25 +108,13 @@ For using the MicroPython demo code in tests, `--expect-text` can come in handy:
 
 With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there.
 
-Using [littlefs-python](https://pypi.org/project/littlefs-python/), you can create such an image like this:
+The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
+rp2040py[fs]` / `uv sync --extra fs`). The first file becomes `main.py`; if the output image
+already exists, it's opened and updated in place rather than reformatted:
 
-```python
-from littlefs import LittleFS
-
-files = ["your.py", "files.py", "here.py", "main.py"]
-output_image = "output/littlefs.img"  # symlinked/copied to rp2040py root directory
-# disk_version=0x00020000 pins the on-disk format to littlefs v2.0, which both old and new
-# MicroPython releases can mount - newer littlefs-python defaults to a newer format (v2.1) that
-# MicroPython <=1.21 can't read. See docs/PORTING.md#known-differences-from-rp2040js.
-lfs = LittleFS(block_size=4096, block_count=352, prog_size=256, disk_version=0x00020000)
-for filename in files:
-    with open(filename, "rb") as src_file, lfs.open(filename, "w") as lfs_file:
-        lfs_file.write(src_file.read())
-with open(output_image, "wb") as fh:
-    fh.write(lfs.context.buffer)
+```sh
+rp2040py mklittlefs littlefs.img your_main.py your.py files.py here.py
 ```
-
-See [tests/mklittlefs.py](tests/mklittlefs.py) for a minimal working example used by this project's own CI.
 
 Currently, the filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented yet.
 

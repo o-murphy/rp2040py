@@ -10,9 +10,12 @@ Subcommands:
 - ``micropython``: MicroPython/CircuitPython UF2 runner with a USB CDC console.
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
+- ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
+  the optional ``fs`` extra: ``pip install rp2040py[fs]``).
 """
 
 import argparse
+import importlib.util
 import os
 import sys
 import termios
@@ -20,10 +23,18 @@ import threading
 import time
 import tty
 from collections.abc import Callable
+from importlib.metadata import version
 
 from rp2040py.cli.bootrom import BOOTROM_B1
 from rp2040py.cli.intelhex import load_hex
-from rp2040py.cli.load_flash import load_circuitpython_flash_image, load_micropython_flash_image, load_uf2
+from rp2040py.cli.load_flash import (
+    MICROPYTHON_FS_BLOCKCOUNT,
+    MICROPYTHON_FS_BLOCKSIZE,
+    load_circuitpython_flash_image,
+    load_micropython_flash_image,
+    load_uf2,
+)
+from rp2040py.cli.mklittlefs import build_littlefs_image
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.memory_map import RAM_START_ADDRESS
 from rp2040py.rp2040 import RP2040
@@ -33,6 +44,11 @@ from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
+
+# mklittlefs's only dependency, littlefs-python, is the optional `fs` extra rather than a hard
+# runtime dependency - only register the subcommand (and thus advertise it in --help) when it's
+# actually installed, instead of adding it unconditionally and failing lazily once invoked.
+_HAS_LITTLEFS = importlib.util.find_spec("littlefs") is not None
 
 
 def _load_image(image_name: str, rp2040: RP2040) -> None:
@@ -289,8 +305,14 @@ def _cmd_bench(args: argparse.Namespace) -> None:
         _bench_synthetic(args.instructions, args.block_size)
 
 
+def _cmd_mklittlefs(args: argparse.Namespace) -> None:
+    build_littlefs_image(args.output, args.files, block_size=args.block_size, block_count=args.block_count)
+    print(f"Wrote littlefs image: {args.output}")
+
+
 def main(argv: "list[str] | None" = None) -> None:
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {version('rp2040py')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run", help="run a native .hex/.uf2 image with a GDB server")
@@ -314,6 +336,16 @@ def main(argv: "list[str] | None" = None) -> None:
     bench_parser.add_argument("--expect-text", help="firmware mode: stop once this text appears on UART0")
     bench_parser.add_argument("--timeout", type=float, default=60.0, help="firmware mode: seconds before giving up")
     bench_parser.set_defaults(func=_cmd_bench)
+
+    if _HAS_LITTLEFS:
+        mklittlefs_parser = subparsers.add_parser(
+            "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
+        )
+        mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
+        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add; the first becomes main.py")
+        mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
+        mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
+        mklittlefs_parser.set_defaults(func=_cmd_mklittlefs)
 
     args = parser.parse_args(argv)
     args.func(args)

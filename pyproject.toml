@@ -28,6 +28,9 @@ classifiers = [
 dependencies = []
 dynamic = ["version"]
 
+[project.optional-dependencies]
+fs = ["littlefs-python>=0.4.0"]
+
 [project.scripts]
 rp2040py = "rp2040py.__main__:main"
 
@@ -68,6 +71,6 @@ dev = [
     "pre-commit>=4.6.1",
     "pytest>=9.1.1",
     "ruff>=0.16.0",
-    "littlefs-python>=0.4.0",
+    "rp2040py[fs]",
     "pytest-cov>=7.1.0",
 ]

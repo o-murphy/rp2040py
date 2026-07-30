@@ -99,7 +99,7 @@ rp2040py (Python), ordered from fewest dependencies to most.
 ### MicroPython CI test fixtures (`test/` in rp2040js)
 - [x] `test/micropython/main.py` → `tests/micropython/main.py` (copied verbatim - already Python, runs *inside* the emulated device)
 - [x] `test/micropython/main-spi.py` → `tests/micropython/main-spi.py` (copied verbatim, same reason)
-- [x] `test/mklittlefs.py` → `tests/mklittlefs.py` (needs `littlefs-python`, added as a dev dependency)
+- [x] `test/mklittlefs.py` → `src/rp2040py/cli/mklittlefs.py`, exposed as the `mklittlefs` subcommand (needs `littlefs-python`, an optional `fs` extra rather than a hard runtime dependency - see "CLI packaging" below)
 - [x] `test/micropython-spi-test.ts` → `tests/micropython_spi_run.py`
 
 ### CI (`.github/workflows/`)
@@ -117,10 +117,14 @@ beyond straightforward syntax translation.
 rp2040js's `demo/*.ts` scripts are only ever run from a checkout (`npm run start`, `tsx
 demo/emulator-run.ts`, etc.) - there's no npm-packaged CLI, since rp2040js is primarily consumed
 as a library (e.g. embedded in Wokwi). rp2040py adds one: `src/rp2040py/cli/` is a real subpackage
-(`bootrom.py`, `intelhex.py`, `load_flash.py` - moved there from `demo/`, plus the argparse
-dispatch in `cli/__init__.py`) that ships in the wheel, exposed as the `rp2040py` console script
-(`[project.scripts]` in `pyproject.toml`) and via `python -m rp2040py` (`src/rp2040py/__main__.py`
-is a two-line shim). `demo/emulator_run.py`, `demo/micropython_run.py`, and `demo/benchmark.py`
+(`bootrom.py`, `intelhex.py`, `load_flash.py` - moved there from `demo/`, `mklittlefs.py` - moved
+there from `tests/`, plus the argparse dispatch in `cli/__init__.py`) that ships in the wheel,
+exposed as the `rp2040py` console script (`[project.scripts]` in `pyproject.toml`) and via `python
+-m rp2040py` (`src/rp2040py/__main__.py` is a two-line shim). `mklittlefs` is the one subcommand
+with a dependency (`littlefs-python`), so it's gated behind the optional `fs` extra
+(`[project.optional-dependencies]`) rather than pulled into the zero-runtime-dependency default
+install; the `dev` dependency group depends on `rp2040py[fs]` so it's still there for `uv sync` in
+CI and local dev. `demo/emulator_run.py`, `demo/micropython_run.py`, and `demo/benchmark.py`
 are now thin wrappers around the same `rp2040py.cli` subcommands (`run`, `micropython`, `bench`),
 kept so the documented `uv run python demo/*.py` commands keep working unchanged for anyone
 working from a checkout rather than a pip/uv install. `tests/micropython_spi_run.py` (test-only
@@ -157,7 +161,8 @@ write new ones against `Simulator`:
 
 ### littlefs image format vs. old MicroPython (not actually a port bug)
 
-`ci-micropython.yml` builds a `littlefs.img` via `tests/mklittlefs.py` and expects MicroPython to
+`ci-micropython.yml` builds a `littlefs.img` via `tests/mklittlefs.py` (now the `mklittlefs`
+subcommand, `src/rp2040py/cli/mklittlefs.py`) and expects MicroPython to
 auto-run `main.py` from it. This worked for MicroPython 1.28 but hung indefinitely - CPU spinning
 forever re-acquiring an SIO hardware spinlock with interrupts disabled - for every older version
 (<=1.21) in the CI matrix.
@@ -165,14 +170,14 @@ forever re-acquiring an SIO hardware spinlock with interrupts disabled - for eve
 Root cause, confirmed by bisecting against the JS original itself (running the real
 `wokwi/rp2040js` checkout locally against the same firmware/image reproduced the identical hang,
 including on the exact commit whose CI run shows green - ruling out a port-specific bug entirely):
-`tests/mklittlefs.py` depends on `littlefs-python>=0.4.0` with no upper bound, and newer releases
+`tests/mklittlefs.py` (as it was at the time) depended on `littlefs-python>=0.4.0` with no upper bound, and newer releases
 of that package default to a newer littlefs on-disk format (v2.1) than the one MicroPython <=1.21's
 bundled littlefs C implementation understands (v2.0). Confirmed byte-for-byte: `LittleFS(...,
 disk_version=0x00020000)` under `littlefs-python==0.18.0` produces an image identical to
 `littlefs-python==0.4.0`'s default output (which upstream rp2040js's `test/requirements.txt` pins
 exactly, sidestepping the issue there). MicroPython 1.28's newer littlefs implementation reads
 *both* formats fine, so pinning the on-disk *format* - not the `littlefs-python` package version -
-is a strictly better fix: `tests/mklittlefs.py` and the README's filesystem-image snippet now both
+is a strictly better fix: the `mklittlefs` subcommand and the README's filesystem-image snippet now both
 pass `disk_version=0x00020000` explicitly, keeping `littlefs-python` itself unpinned (avoids that
 package's own baggage - 0.4.0 imports the deprecated `pkg_resources` API, which newer `setuptools`
 no longer bundles by default).
