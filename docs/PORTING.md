@@ -177,9 +177,9 @@ same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise. Measured on t
 
 | Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs boot |
 |---|---|---|
-| CPython 3.10 | 251,654 | 312.48s (208,014 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 478,319 (~1.9x) | 175.41s (~1.8x, 370,570 steps/sec) |
-| PyPy 3.10 | 28,975,249 (~115x) | 9.55s (~33x, 6,803,084 steps/sec) |
+| CPython 3.10 | 426,854 | 221.11s (293,976 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 779,343 (~1.8x) | 121.74s (~1.8x, 533,917 steps/sec) |
+| PyPy 3.10 | 36,320,045 (~85x) | 9.59s (~23x, 6,778,518 steps/sec) |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
@@ -220,6 +220,23 @@ Two mitigations, worth combining:
   (15.87s -> 9.55s), since PyPy's JIT couldn't optimize away the old temporary-`bytes`-object
   allocation the way it can lean on the already-C-implemented `struct` module. Together with the
   two items above, these gave roughly a 20-25% instructions/sec improvement under CPython in local
-  benchmarking. A dispatch-table redesign of `execute_instruction()` (opcode → handler function,
-  replacing the linear `if`/`elif` scan) would likely be the single biggest remaining win, but was
-  deferred as a larger, higher-risk refactor touching all ~90 instruction handlers.
+  benchmarking.
+- **`execute_instruction()` now dispatches via a precomputed table instead of a linear `if`/`elif`
+  scan.** Each of the ~90 instruction patterns became its own `_op_*` method; a module-level
+  `_DISPATCH_TABLE` (65536 entries, built once at import time from `_DISPATCH_PATTERNS`, in
+  original priority order) maps `opcode -> handler` directly for O(1) lookup. Seven patterns
+  (`BL`, `DMB`, `DSB`, `ISB`, `MRS`, `MSR`, `UDF` encoding T2) need `opcode2` as well as `opcode`
+  to decode correctly, which a flat `opcode`-keyed table alone can't express; their opcode-only
+  prefixes all happen to fall inside `0xF000`-`0xF7FF` with zero overlap from any other
+  instruction (verified exhaustively, and enforced both by an assertion in
+  `_build_dispatch_table()` and by `tests/test_dispatch_table.py`), so that narrow range is
+  special-cased to a small hand-written `_resolve_wide()` resolver instead of the table, and the
+  main table simply never gets populated there. This was the single biggest lever in the whole
+  session: `execute_instruction()`'s own `cProfile` self-time dropped ~65% (the O(n) scan was
+  replaced by a single array index), cumulative real-boot `cProfile` time dropped a further ~21%
+  on top of the two items above, and the synthetic instructions/sec benchmark went from ~251,654
+  to ~426,854 under CPython 3.10 (+70%). Generated mechanically (a one-off script split the
+  original `if`/`elif` chain into methods verbatim, preserving every condition's exact source
+  text as a lambda rather than hand-deriving mask/value bit patterns) and verified via the full
+  126-case instruction test suite plus real MicroPython + littlefs boots on both old (1.16) and
+  new (1.28) firmware before and after.
