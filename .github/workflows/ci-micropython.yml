@@ -2,8 +2,13 @@ name: Test MicroPython Releases
 
 on:
   push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
+    paths-ignore: *non-code-paths
 
 concurrency:
   group: ci-micropython-${{ github.workflow }}-${{ github.ref }}
@@ -46,10 +51,10 @@ jobs:
           VERSION: ${{ matrix.micropython_version }}
 
       - name: Create filesystem
-        run: uv run python tests/mklittlefs.py littlefs.img tests/micropython/main.py
+        run: uv run rp2040py mklittlefs littlefs.img tests/micropython/main.py
 
       - name: Create SPI test filesystem
-        run: uv run python tests/mklittlefs.py littlefs-spi.img tests/micropython/main-spi.py
+        run: uv run rp2040py mklittlefs littlefs-spi.img tests/micropython/main-spi.py
 
       - name: Setup Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9

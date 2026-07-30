@@ -6,14 +6,10 @@ Usage: python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef..
 
 import argparse
 import os
-import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "demo"))
-
-from bootrom import BOOTROM_B1
-from load_flash import load_micropython_flash_image, load_uf2
-
+from rp2040py.device.bootrom import BOOTROM_B1
+from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
 from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.simulator import Simulator
 from rp2040py.utils.logging import ConsoleLogger, LogLevel

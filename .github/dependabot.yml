@@ -27,3 +27,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # rp2040js-dependabot-tracker
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns:
+          - "*"
