@@ -5,6 +5,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-pico-sdk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-pico-sdk:
     name: Test Pi Pico SDK
@@ -19,11 +23,11 @@ jobs:
           - 2.0.0
           - 2.1.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Pico SDK
         id: cache-pico-sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/pico
           key: ${{ runner.os }}-pico-sdk-${{ matrix.sdk_version }}
