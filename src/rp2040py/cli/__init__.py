@@ -363,9 +363,7 @@ def main(argv: "list[str] | None" = None) -> None:
         metavar="<module>",
         help="import the given module on the device (approximates `-m`), then exit",
     )
-    mp_source_group.add_argument(
-        "filename", nargs="?", help="run the given local script file on the device, then exit"
-    )
+    mp_source_group.add_argument("filename", nargs="?", help="run the given local script file on the device, then exit")
     mp_parser.set_defaults(func=_cmd_micropython)
 
     bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")

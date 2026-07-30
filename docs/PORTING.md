@@ -107,6 +107,18 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `ci-micropython.yml` → `ci-micropython.yml` (uv-based)
 - [x] `ci-pico-sdk.yml` → `ci-pico-sdk.yml` (uv-based)
 
+## Backlog
+
+Deferred, not blocked on anything technical - just not done yet.
+
+- [ ] `peripherals/pio.spec.ts` → `tests/test_pio.py`
+- [ ] `usb/cdc.spec.ts` → `tests/test_cdc.py`
+- [ ] `rp2040.spec.ts` → `tests/test_rp2040.py`
+- [ ] `sio.spec.ts` → `tests/test_sio.py`
+- [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` - previously marked out of scope (needed a real Pico
+      and its GDB client to diff emulator behavior against), no longer the case now that real
+      hardware is available for comparison; `test-utils/gdbclient.ts` needs porting alongside it.
+
 ## Known differences from rp2040js
 
 Places where the Python port's runtime behavior necessarily diverges from the JS original,

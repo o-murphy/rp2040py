@@ -2,8 +2,13 @@ name: Test MicroPython Releases
 
 on:
   push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
+    paths-ignore: *non-code-paths
 
 concurrency:
   group: ci-micropython-${{ github.workflow }}-${{ github.ref }}

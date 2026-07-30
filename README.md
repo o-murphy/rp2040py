@@ -185,6 +185,7 @@ def on_done(future):
     stdout, stderr = future.result()
     print(stdout.decode())
 
+
 device.exec_async("print(1 + 1)").add_done_callback(on_done)
 ```
 

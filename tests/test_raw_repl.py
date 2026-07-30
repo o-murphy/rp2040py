@@ -41,7 +41,7 @@ def test_stderr_captured_on_error():
     runner.feed(RAW_REPL_BANNER)
     runner.feed(b"OK")
     runner.feed(bytes([CTRL_D]))  # empty stdout
-    traceback = b"Traceback (most recent call last):\r\n  File \"<stdin>\", line 1\r\nValueError: boom\r\n"
+    traceback = b'Traceback (most recent call last):\r\n  File "<stdin>", line 1\r\nValueError: boom\r\n'
     runner.feed(traceback)
     runner.feed(bytes([CTRL_D]))
     assert runner.result == (b"", traceback)

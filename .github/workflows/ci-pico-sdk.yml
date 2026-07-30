@@ -2,8 +2,13 @@ name: Test Pi Pico SDK
 
 on:
   push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
+    paths-ignore: *non-code-paths
 
 concurrency:
   group: ci-pico-sdk-${{ github.workflow }}-${{ github.ref }}
