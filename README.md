@@ -217,10 +217,10 @@ https://img.shields.io/github/license/o-murphy/rp2040py
 https://opensource.org/licenses/MIT
 
 [pypi version]:
-https://img.shields.io/pypi/v/rp2040py
+https://img.shields.io/pypi/v/rp2040py?logo=pypi
 
 [python versions]:
-https://img.shields.io/pypi/pyversions/rp2040py
+https://img.shields.io/pypi/pyversions/rp2040py?logo=python
 
 [PyPiUrl]:
 https://pypi.org/project/rp2040py/
