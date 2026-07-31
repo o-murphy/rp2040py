@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b4] - 2026-07-31
+
 ### Changed
 - **Breaking:** `mklittlefs` no longer auto-picks the first file as `main.py` - every file now
   keeps its own basename. Pass the new `--main <basename>` (`build_littlefs_image(..., main=...)`)
@@ -133,6 +135,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b2...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b4...HEAD
+[0.1.0b4]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b3...v0.1.0b4
+[0.1.0b3]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b2...v0.1.0b3
 [0.1.0b2]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b1...v0.1.0b2
 [0.1.0b1]: https://github.com/o-murphy/rp2040py/releases/tag/v0.1.0b1
