@@ -349,14 +349,35 @@ def _cmd_bench(args: argparse.Namespace) -> None:
 
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
-    build_littlefs_image(
-        args.output,
-        args.files,
-        block_size=args.block_size,
-        block_count=args.block_count,
-        disk_version=args.disk_version,
-    )
+    try:
+        build_littlefs_image(
+            args.output,
+            args.files,
+            block_size=args.block_size,
+            block_count=args.block_count,
+            disk_version=args.disk_version,
+            main=args.main,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"Wrote littlefs image: {args.output}")
+
+    if sys.implementation.name == "pypy":
+        # os._exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
+        # can get finalized out of order during interpreter shutdown - even after an explicit
+        # lfs.unmount() and gc.collect() - crashing the process with "lfs_file_sync: Assertion
+        # `lfs_mlist_isopen(...)` failed" (SIGABRT) despite the image already having been written
+        # correctly. Confirmed with `uv tool install --python pypy-3.10 rp2040py[fs]`; not
+        # reproducible under CPython, hence gating this rather than doing it unconditionally - an
+        # unconditional os._exit() here would also kill the whole process if _cmd_mklittlefs (or
+        # main()) is ever called in-process rather than as the actual entry point, e.g. from a test
+        # suite. The image on disk is already complete and correct at this point, so skipping the
+        # rest of shutdown is safe for the *pypy CLI* case specifically - it doesn't help a
+        # long-running PyPy program that calls build_littlefs_image() as a library and keeps
+        # running afterwards, which is a real upstream littlefs-python/PyPy limitation, not
+        # something rp2040py can fully paper over.
+        os._exit(0)
 
 
 def main(argv: "list[str] | None" = None) -> None:
@@ -404,7 +425,10 @@ def main(argv: "list[str] | None" = None) -> None:
             "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
         )
         mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
-        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add; the first becomes main.py")
+        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
+        mklittlefs_parser.add_argument(
+            "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
+        )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
         mklittlefs_parser.add_argument(

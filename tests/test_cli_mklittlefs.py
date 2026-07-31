@@ -23,40 +23,93 @@ def _read_back(image: str, filename: str) -> bytes:
         return f.read()
 
 
-def test_first_file_becomes_main_py(tmp_path):
-    main_src = tmp_path / "app.py"
-    main_src.write_bytes(b"print('hello')\n")
-    image = str(tmp_path / "littlefs.img")
-
-    build_littlefs_image(image, [str(main_src)])
-
-    assert _read_back(image, "main.py") == b"print('hello')\n"
-
-
-def test_subsequent_files_keep_their_basename(tmp_path):
-    main_src = tmp_path / "app.py"
-    main_src.write_bytes(b"import lib\n")
+def test_files_keep_their_own_basename_by_default(tmp_path):
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"import lib\n")
     lib_src = tmp_path / "lib.py"
     lib_src.write_bytes(b"VALUE = 42\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(main_src), str(lib_src)])
+    build_littlefs_image(image, [str(app_src), str(lib_src)])
 
-    assert _read_back(image, "main.py") == b"import lib\n"
+    assert _read_back(image, "app.py") == b"import lib\n"
     assert _read_back(image, "lib.py") == b"VALUE = 42\n"
+
+
+def test_no_main_py_is_written_without_the_main_option(tmp_path):
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"pass\n")
+    image = str(tmp_path / "littlefs.img")
+
+    build_littlefs_image(image, [str(app_src)])
+
+    with pytest.raises(OSError):
+        _read_back(image, "main.py")
+
+
+def test_main_option_writes_the_given_file_as_main_py(tmp_path):
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"print('hello')\n")
+    lib_src = tmp_path / "lib.py"
+    lib_src.write_bytes(b"VALUE = 42\n")
+    image = str(tmp_path / "littlefs.img")
+
+    build_littlefs_image(image, [str(app_src), str(lib_src)], main=app_src.name)
+
+    assert _read_back(image, "main.py") == b"print('hello')\n"
+    assert _read_back(image, "lib.py") == b"VALUE = 42\n"
+    with pytest.raises(OSError):
+        _read_back(image, "app.py")  # renamed to main.py, not also kept under its own name
+
+
+def test_main_not_in_files_raises_value_error(tmp_path):
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"pass\n")
+    image = str(tmp_path / "littlefs.img")
+
+    with pytest.raises(ValueError, match="main"):
+        build_littlefs_image(image, [str(app_src)], main="not_in_files.py")
+
+
+def test_main_colliding_with_a_file_already_named_main_py_raises_value_error(tmp_path):
+    # `--main other.py` alongside a file that's *already* named main.py would otherwise silently
+    # overwrite one of the two on disk, with whichever gets written last winning.
+    existing_main = tmp_path / "main.py"
+    existing_main.write_bytes(b"existing\n")
+    other_src = tmp_path / "other.py"
+    other_src.write_bytes(b"other\n")
+    image = str(tmp_path / "littlefs.img")
+
+    with pytest.raises(ValueError, match="main.py"):
+        build_littlefs_image(image, [str(existing_main), str(other_src)], main=other_src.name)
+
+
+def test_duplicate_basenames_raise_value_error_even_without_main(tmp_path):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    first = src_dir / "util.py"
+    first.write_bytes(b"first\n")
+    second = lib_dir / "util.py"
+    second.write_bytes(b"second\n")
+    image = str(tmp_path / "littlefs.img")
+
+    with pytest.raises(ValueError, match="util.py"):
+        build_littlefs_image(image, [str(first), str(second)])
 
 
 def test_binary_content_is_preserved_byte_for_byte(tmp_path):
     # mklittlefs used to open source files in text mode, which corrupted .mpy (compiled
     # MicroPython bytecode) files and any other non-UTF-8/binary content, plus translated line
     # endings in .py sources - writing/reading raw bytes here guards against a regression.
-    main_src = tmp_path / "app.py"
-    main_src.write_bytes(b"\r\n\x00\xff\xfe binary garbage \r\n")
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"\r\n\x00\xff\xfe binary garbage \r\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(main_src)])
+    build_littlefs_image(image, [str(app_src)])
 
-    assert _read_back(image, "main.py") == b"\r\n\x00\xff\xfe binary garbage \r\n"
+    assert _read_back(image, "app.py") == b"\r\n\x00\xff\xfe binary garbage \r\n"
 
 
 def test_existing_image_is_updated_in_place_not_reformatted(tmp_path):
@@ -68,8 +121,8 @@ def test_existing_image_is_updated_in_place_not_reformatted(tmp_path):
     other_src.write_bytes(b"other\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(first_src), str(other_src)])
-    build_littlefs_image(image, [str(second_src), str(other_src)])
+    build_littlefs_image(image, [str(first_src), str(other_src)], main=first_src.name)
+    build_littlefs_image(image, [str(second_src), str(other_src)], main=second_src.name)
 
     # main.py now comes from the second build, but other.py survives untouched from the first.
     assert _read_back(image, "main.py") == b"second\n"
@@ -77,23 +130,23 @@ def test_existing_image_is_updated_in_place_not_reformatted(tmp_path):
 
 
 def test_unknown_disk_version_raises_value_error_instead_of_crashing_in_littlefs_python(tmp_path):
-    main_src = tmp_path / "app.py"
-    main_src.write_bytes(b"pass\n")
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"pass\n")
     image = str(tmp_path / "littlefs.img")
 
     with pytest.raises(ValueError, match="disk_version"):
-        build_littlefs_image(image, [str(main_src)], disk_version="9.9")
+        build_littlefs_image(image, [str(app_src)], disk_version="9.9")
 
 
 @pytest.mark.parametrize("disk_version", list(LITTLEFS_DISK_VERSIONS))
 def test_every_advertised_disk_version_actually_works(tmp_path, disk_version):
-    main_src = tmp_path / "app.py"
-    main_src.write_bytes(b"pass\n")
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"pass\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(main_src)], disk_version=disk_version)
+    build_littlefs_image(image, [str(app_src)], disk_version=disk_version)
 
-    assert _read_back(image, "main.py") == b"pass\n"
+    assert _read_back(image, "app.py") == b"pass\n"
 
 
 def test_default_disk_version_is_2_0_for_old_micropython_compatibility():

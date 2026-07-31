@@ -11,21 +11,26 @@ inputs:
       `rp2040py[fs]==<version>`. If empty, installs the latest published release.
     required: false
     default: ""
+  python_version:
+    description: >
+      Python interpreter to install rp2040py's tool environment under (e.g. "pypy-3.10",
+      "cpython-3.12"). Defaults to PyPy for its large real-firmware-boot speedup - see
+      docs/PORTING.md#known-differences-from-rp2040js.
+    required: false
+    default: "pypy-3.10"
 
 runs:
   using: composite
   steps:
     - name: Install uv
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
-      with:
-        python-version: "pypy-3.10"
 
     - name: Install rp2040py and verify
       shell: bash
       run: |
         if [ -z "${{ inputs.version }}" ]; then
-          uv tool install rp2040py[fs]
+          uv tool install --python "${{ inputs.python_version }}" rp2040py[fs]
         else
-          uv tool install rp2040py[fs]==${{ inputs.version }}
+          uv tool install --python "${{ inputs.python_version }}" rp2040py[fs]==${{ inputs.version }}
         fi
         rp2040py --version

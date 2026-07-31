@@ -133,11 +133,13 @@ rp2040py micropython path/to/script.py
 With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there. A different path can be supplied with `--littlefs` (it's silently skipped, not an error, if the file doesn't exist).
 
 The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
-rp2040py[fs]` / `uv sync --extra fs`). The first file becomes `main.py`; if the output image
-already exists, it's opened and updated in place rather than reformatted:
+rp2040py[fs]` / `uv sync --extra fs`). Every file keeps its own basename; pass `--main` to mark one
+of them as `main.py` (auto-run on boot) - omit it entirely for a filesystem with no auto-run
+script, e.g. modules staged for a raw-REPL-driven test. If the output image already exists, it's
+opened and updated in place rather than reformatted:
 
 ```sh
-rp2040py mklittlefs littlefs.img your_main.py your.py files.py here.py
+rp2040py mklittlefs littlefs.img your_main.py your.py files.py here.py --main your_main.py
 ```
 
 `--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython

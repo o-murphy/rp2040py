@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `mklittlefs` no longer auto-picks the first file as `main.py` - every file now
+  keeps its own basename. Pass the new `--main <basename>` (`build_littlefs_image(..., main=...)`)
+  to mark one of them as `main.py` explicitly - matched against each file's basename (e.g.
+  `--main app.py` for a `files` entry of `src/app.py`), not the full path, so it doesn't need
+  repeating; omit it entirely for filesystems that don't need an auto-run entry point (e.g. modules
+  staged only for a raw-REPL-driven test). `--main` must match one of the given files' basenames,
+  or `mklittlefs` exits with a clear error instead of silently writing no `main.py`. Two files that
+  would land on the same destination name - a duplicate basename, or a file already named `main.py`
+  colliding with `--main`'s target - is now also a clear error instead of one silently overwriting
+  the other in the image.
+
+### Fixed
+- `mklittlefs` no longer crashes (SIGABRT, `lfs_file_sync: Assertion` \`lfs_mlist_isopen(...)\`
+  `failed`) under PyPy after successfully writing the image - `littlefs-python`'s C objects were
+  getting finalized out of order during PyPy's interpreter shutdown. Only reproducible when
+  running under PyPy specifically (e.g. via `setup-rp2040py`'s composite action, which installs
+  `rp2040py` under PyPy for the emulator speedup); not an issue under CPython.
+
 ## [0.1.0b3] - 2026-07-31
 
 ### Added
