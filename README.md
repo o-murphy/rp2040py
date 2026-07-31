@@ -64,7 +64,7 @@ to the console.
 
 ### MicroPython code
 
-To run the MicroPython demo, first download a MicroPython UF2 build and place it in the rp2040py root directory. **[RPI_PICO-20231005-v1.21.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20231005-v1.21.0.uf2) is recommended**: it does far less work before dropping to the REPL prompt than newer releases, so it boots dramatically faster in the emulator (see the benchmark below). Newer releases work too, just slower to reach the REPL - e.g. [RPI_PICO-20260406-v1.28.0.uf2](https://micropython.org/resources/firmware/RPI_PICO-20260406-v1.28.0.uf2). Then run:
+No manual download needed: just run
 
 ```sh
 rp2040py micropython
@@ -72,7 +72,16 @@ rp2040py micropython
 uvx rp2040py micropython
 ```
 
-and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPython UF2 image can be loaded by supplying the `--image` option:
+and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. The first run fetches the recommended
+MicroPython build (**1.21.0**, currently) from [micropython.org](https://micropython.org/download/RPI_PICO/)
+into the current directory and reuses that local file afterwards. 1.21 is recommended: it does far
+less work before dropping to the REPL prompt than newer releases, so it boots dramatically faster in
+the emulator (see the benchmark below). Newer releases work too, just slower to reach the REPL -
+e.g. 1.28.0.
+
+A different version, a local UF2 file, or a CircuitPython version (`--circuitpython`, see below) can
+be loaded by supplying the `--image` option - a known version tag (`1.28.0`), or a path to a UF2
+file already on disk:
 
 > [!TIP]
 > Booting real firmware means executing millions of Thumb instructions through a pure-Python
@@ -99,6 +108,7 @@ and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. A different MicroPyth
 > interactively.
 
 ```sh
+rp2040py micropython --image 1.28.0
 rp2040py micropython --image my_image.uf2
 ```
 
@@ -120,7 +130,7 @@ rp2040py micropython path/to/script.py
 
 #### Filesystem support
 
-With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there.
+With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there. A different path can be supplied with `--littlefs` (it's silently skipped, not an error, if the file doesn't exist).
 
 The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
 rp2040py[fs]` / `uv sync --extra fs`). The first file becomes `main.py`; if the output image
@@ -130,17 +140,25 @@ already exists, it's opened and updated in place rather than reformatted:
 rp2040py mklittlefs littlefs.img your_main.py your.py files.py here.py
 ```
 
+`--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
+<=1.21's bundled littlefs can only mount `2.0`, while 1.28's reads both - see
+[docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
+for why.
+
 Currently, the filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented yet.
 
 ### CircuitPython code
 
-To run the CircuitPython demo, you can follow the directions above for MicroPython, except download [adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2](https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2) instead of the MicroPython UF2 file. Place it in the rp2040py root directory, then run:
+To run the CircuitPython demo, follow the directions above for MicroPython but add `--circuitpython`:
 
 ```sh
 rp2040py micropython --circuitpython
 ```
 
-and start the CircuitPython REPL! The rest of the experience is the same as the MicroPython demo (Ctrl+X to exit, using the `--image` and `--gdb` options, etc).
+and start the CircuitPython REPL! As with MicroPython, the firmware (**8.0.2** by default) is
+downloaded automatically on first use; a different version or a local file can be given via
+`--image` (e.g. `--image 10.2.1` or a path to an already-downloaded UF2). The rest of the experience
+is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc).
 
 #### Filesystem support
 

@@ -82,11 +82,11 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `peripherals/timer.spec.ts` → `tests/test_timer.py`
 - [x] `peripherals/dma.spec.ts` → `tests/test_dma.py`
 - [x] `peripherals/uart.spec.ts` → `tests/test_uart.py`
-- [ ] `peripherals/pio.spec.ts` → `tests/test_pio.py`
-- [ ] `usb/cdc.spec.ts` → `tests/test_cdc.py`
+- [x] `peripherals/pio.spec.ts` → `tests/test_pio.py` (35/35 passing)
+- [x] `usb/cdc.spec.ts` → `tests/test_cdc.py`
 - [x] `instructions.spec.ts` → `tests/test_instructions.py` (126/126 passing)
-- [ ] `rp2040.spec.ts` → `tests/test_rp2040.py`
-- [ ] `sio.spec.ts` → `tests/test_sio.py`
+- [x] `rp2040.spec.ts` → `tests/test_rp2040.py`
+- [x] `sio.spec.ts` → `tests/test_sio.py`
 
 ### demo / debug (needed to actually run firmware, e.g. MicroPython)
 - [x] `demo/bootrom.ts` → `src/rp2040py/device/bootrom.py` (RP2040 bootrom binary, data only; verified: real bootrom executes thousands of instructions correctly)
@@ -111,10 +111,6 @@ rp2040py (Python), ordered from fewest dependencies to most.
 
 Deferred, not blocked on anything technical - just not done yet.
 
-- [ ] `peripherals/pio.spec.ts` → `tests/test_pio.py`
-- [ ] `usb/cdc.spec.ts` → `tests/test_cdc.py`
-- [ ] `rp2040.spec.ts` → `tests/test_rp2040.py`
-- [ ] `sio.spec.ts` → `tests/test_sio.py`
 - [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` - previously marked out of scope (needed a real Pico
       and its GDB client to diff emulator behavior against), no longer the case now that real
       hardware is available for comparison; `test-utils/gdbclient.ts` needs porting alongside it.
@@ -140,6 +136,17 @@ into the zero-runtime-dependency default install; the `dev` dependency group dep
 `rp2040py.cli` subcommands (`run`, `micropython`, `bench`), kept so the documented `uv run python
 demo/*.py` commands keep working unchanged for anyone working from a checkout rather than a
 pip/uv install.
+
+`cli/mp_retrieve.py` (also no rp2040js equivalent) resolves the `micropython --image`/`--circuitpython`
+argument: a known version tag (`MICROPYTHON_KNOWN_FW_VERSIONS`/`CIRCUITPYTHON_DEFAULT_TAG`) or an
+existing local path, downloading the matching UF2 from micropython.org/Adafruit's S3 bucket into the
+current directory on first use and reusing it thereafter. This replaces the previous "download it
+yourself and drop it next to the CLI" instructions in the README; `ci-micropython.yml`'s separate
+`curl` download step was removed accordingly, since `--image <tag>` now does the same job on demand.
+
+`bootrom.py`'s `BOOTROM_B1` (a ~4,100-element constant list) is imported lazily inside the functions
+that need it (`_cmd_run`, `MicroPythonDevice.__init__`, etc.) rather than at module import time, so
+commands that don't boot a device - `--version`, `mklittlefs`, `--help` - aren't paying to parse it.
 
 `bootrom.py`/`load_flash.py` (moved there from `demo/`) and `raw_repl.py` deliberately live under
 `src/rp2040py/device/` instead of `cli/`, alongside `MicroPythonDevice` (`device/mp_device.py`,
@@ -197,6 +204,21 @@ write new ones against `Simulator`:
   entry points (`demo/emulator_run.py`, `demo/micropython_run.py`,
   `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
 
+### `pio_assembler.py`'s `pio_jmp`/`pio_mov` argument order differs from upstream
+
+`utils/pio_assembler.py`'s `pio_jmp(address, cond=0, delay=0)` and
+`pio_mov(dest, src, op=0, delay=0)` take their arguments in a different order than upstream's
+`pioJMP(cond = 0, address, delay = 0)` and `pioMOV(dest, op = 0, src, delay = 0)`. This isn't a
+stylistic choice - it's forced by a language difference. TS/JS allows a defaulted parameter before
+a required one (the default only kicks in when the argument is literally `undefined`), so upstream
+puts `cond`/`op` first. Python's `def` syntax rejects that outright - a non-default parameter can't
+follow a default one - so the required `address`/`src` had to move first, pushing `cond`/`op` after
+it. Both encode identically; this is purely a call-site ordering gotcha, not a behavior difference.
+But it means TS call sites can't be transliterated positionally - every call in `tests/test_pio.py`
+(ported from `pio.spec.ts`) was individually verified against the emulator rather than translated
+by argument position. Trips up anyone porting more `pioJMP`/`pioMOV` call sites from upstream in
+the future.
+
 ### littlefs image format vs. old MicroPython (not actually a port bug)
 
 `ci-micropython.yml` builds a `littlefs.img` via `tests/mklittlefs.py` (now the `mklittlefs`
@@ -219,6 +241,12 @@ is a strictly better fix: the `mklittlefs` subcommand and the README's filesyste
 pass `disk_version=0x00020000` explicitly, keeping `littlefs-python` itself unpinned (avoids that
 package's own baggage - 0.4.0 imports the deprecated `pkg_resources` API, which newer `setuptools`
 no longer bundles by default).
+
+`mklittlefs` now exposes this as a `--disk-version {2.0,2.1}` flag (`LITTLEFS_DISK_VERSIONS` /
+`build_littlefs_image(..., disk_version=...)` in `mklittlefs.py`) rather than hardcoding `2.0`
+unconditionally, still defaulting to `2.0` for the reasons above. The `fs` extra's floor was also
+raised to `littlefs-python>=0.18.0` (from `>=0.4.0`) - the version the byte-for-byte comparison
+above was actually run against - while still leaving the upper bound open.
 
 ### Performance: pure-Python interpretation is much slower than V8
 

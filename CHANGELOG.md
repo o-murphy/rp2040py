@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b3] - 2026-07-31
+
+### Added
+- Automatic MicroPython/CircuitPython firmware download: `micropython --image` now accepts a known
+  version tag (e.g. `1.21.0`, `1.28.0`, `10.2.1` for CircuitPython) in addition to a local file path,
+  downloading the matching UF2 from micropython.org/Adafruit's S3 bucket into the current directory
+  on first use and reusing it thereafter (`rp2040py.cli.mp_retrieve`). Omitting `--image` now falls
+  back to downloading the recommended version (MicroPython 1.21.0 / CircuitPython 8.0.2) instead of
+  requiring it to already be present. `ci-micropython.yml`'s separate `curl` download step was
+  removed in favor of this.
+- `micropython --littlefs`/`--fat12` options to point at a littlefs/FAT12 filesystem image from a
+  path other than the default `littlefs.img`/`fat12.img`.
+- `mklittlefs --disk-version {2.0,2.1}` to choose the littlefs on-disk format explicitly (defaults
+  to `2.0`, still the safe choice for MicroPython <=1.21 - see
+  [docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)).
+- `-V` as a short alias for `--version`.
+- Test coverage raised from 56% to 66% (241 -> 345 tests): `tests/test_cli.py`,
+  `tests/test_cli_mklittlefs.py`, `tests/test_cli_mp_retrieve.py`, and `tests/test_cli_intelhex.py`
+  cover the CLI package end to end (previously untested at 0%), including regression tests for the
+  three bugs below. `tests/test_pio.py`, `tests/test_sio.py`, `tests/test_rp2040.py`, and
+  `tests/test_cdc.py` port the remaining upstream `*.spec.ts` backlog from
+  [docs/PORTING.md](docs/PORTING.md), each call individually verified against the emulator rather
+  than translated by argument position (see
+  [docs/PORTING.md](docs/PORTING.md#pio_assemblerpys-pio_jmppio_mov-argument-order-differs-from-upstream)
+  for a `pio_jmp`/`pio_mov` argument-order gotcha found along the way).
+
+### Changed
+- `fs` extra's `littlefs-python` floor raised to `>=0.18.0` (from `>=0.4.0`), matching the version
+  the pinned on-disk format was verified against.
+- `mklittlefs` writes source files into the image in binary mode instead of text mode, fixing
+  corruption of `.mpy` (compiled MicroPython bytecode) files - and non-UTF-8/binary files in
+  general, plus platform-dependent line-ending translation on `.py` sources.
+- `bootrom.py`'s large bootrom constant table is now imported lazily where it's actually needed
+  (`run`/`micropython`/`bench`), so commands that don't boot a device (`--version`, `mklittlefs`,
+  `--help`) start faster.
+- `ci-micropython.yml`'s `micropython_version` matrix now uses bare version tags (e.g. `1.21.0`)
+  instead of dated firmware slugs, resolved through the new download helper.
+
+### Fixed
+- `micropython --circuitpython` was silently never loading a `fat12.img`, regardless of whether one
+  existed - a regression from refactoring the littlefs/fat12 path-resolution logic into a single
+  `if not args.circuitpython` branch that (incorrectly) gated both.
+- The "could not find image" error messages (`micropython`, `tests/micropython_spi_run.py`) always
+  printed the literal string `None` instead of the version/path that was actually requested.
+- `mklittlefs`/`build_littlefs_image` now raises a clear `ValueError` for an unrecognized
+  `disk_version` instead of passing `None` through to `littlefs-python` and failing with an opaque
+  `TypeError`.
+- `tests/micropython_spi_run.py` passed the parsed `argparse.Namespace` to `load_uf2()` instead of
+  the resolved image filename, which would always raise a `TypeError`.
+
 ## [0.1.0b2] - 2026-07-31
 
 ### Added

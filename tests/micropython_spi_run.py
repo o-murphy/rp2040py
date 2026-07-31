@@ -1,14 +1,17 @@
-"""Runs micropython.uf2 + littlefs-spi.img and checks the bytes bit-banged over SPI0
+"""Runs a MicroPython image + littlefs-spi.img and checks the bytes bit-banged over SPI0
 against the expected messages passed as positional command-line arguments.
 
-Usage: python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef..."
+Usage: python tests/micropython_spi_run.py [--image <tag|path>] "hello world" "h" "0123456789abcdef..."
+
+``--image`` defaults to ``micropython.uf2`` but also accepts a known version tag (e.g. ``1.21.0``);
+either way it's downloaded automatically via ``rp2040py.cli.mp_retrieve`` if not found locally.
 """
 
 import argparse
 import os
 import time
 
-from rp2040py.device.bootrom import BOOTROM_B1
+from rp2040py.cli.mp_retrieve import retrieve_micropython
 from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
 from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.simulator import Simulator
@@ -18,15 +21,23 @@ from rp2040py.utils.logging import ConsoleLogger, LogLevel
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("expected", nargs="*")
+    parser.add_argument("--image", default="micropython.uf2")
     args = parser.parse_args()
     expected_messages = list(args.expected)
 
     simulator = Simulator()
     mcu = simulator.rp2040
+
+    from rp2040py.device.bootrom import BOOTROM_B1
+
     mcu.load_bootrom(BOOTROM_B1)
     mcu.logger = ConsoleLogger(LogLevel.ERROR)
 
-    image_name = "micropython.uf2"
+    image_name = retrieve_micropython(args.image)
+    if image_name is None:
+        print(f"Could not find micropython image: {args.image}")
+        os._exit(1)
+
     print(f"Loading uf2 image {image_name}")
     load_uf2(image_name, mcu)
 

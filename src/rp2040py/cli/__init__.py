@@ -9,11 +9,14 @@ Subcommands:
   pico-examples).
 - ``micropython``: MicroPython/CircuitPython UF2 runner with a USB CDC console. ``-c <command>``,
   ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
-  instead of dropping into the REPL, mirroring ``micropython``'s own CLI.
+  instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
+  known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
+  missing firmware is downloaded automatically (see ``rp2040py.cli.mp_retrieve``).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
 - ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
-  the optional ``fs`` extra: ``pip install rp2040py[fs]``).
+  the optional ``fs`` extra: ``pip install rp2040py[fs]``). ``--disk-version`` selects the
+  littlefs on-disk format (defaults to ``2.0``, for compatibility with MicroPython <=1.21).
 """
 
 import argparse
@@ -28,8 +31,8 @@ from collections.abc import Callable
 from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
-from rp2040py.cli.mklittlefs import build_littlefs_image
-from rp2040py.device.bootrom import BOOTROM_B1
+from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
+from rp2040py.cli.mp_retrieve import retrieve_micropython
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
@@ -87,6 +90,9 @@ def _wait_for_simulator(simulator: Simulator, on_interrupt: "Callable[[], None] 
 def _cmd_run(args: argparse.Namespace) -> None:
     simulator = Simulator()
     mcu = simulator.rp2040
+
+    from rp2040py.device.bootrom import BOOTROM_B1
+
     mcu.load_bootrom(BOOTROM_B1)
 
     _load_image(args.image, mcu)
@@ -117,16 +123,20 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
 
 
 def _cmd_micropython(args: argparse.Namespace) -> None:
-    if not args.circuitpython:
-        image_name = args.image or "RPI_PICO-20230426-v1.20.0.uf2"
-    else:
-        image_name = args.image or "adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2"
-    print(f"Loading uf2 image {image_name}")
+    image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
+    if image_name is None:
+        print(f"Could not find micropython image: {args.image}")
+        sys.exit(1)
 
-    littlefs = "littlefs.img" if os.path.exists("littlefs.img") and not args.circuitpython else None
-    fat12 = "fat12.img" if os.path.exists("fat12.img") and args.circuitpython else None
+    print(f"Loading uf2 image {image_name}")
+    littlefs = args.littlefs if not args.circuitpython and os.path.exists(args.littlefs) else None
+    fat12 = args.fat12 if args.circuitpython and os.path.exists(args.fat12) else None
+
     if littlefs is not None:
-        print("Loading uf2 image littlefs.img")
+        print(f"Loading littlefs image {littlefs}")
+
+    if fat12 is not None:
+        print(f"Loading fat12 image {fat12}")
 
     device = MicroPythonDevice(image_name, littlefs=littlefs, fat12=fat12, circuitpython=args.circuitpython)
 
@@ -233,6 +243,9 @@ def _interpreter_label() -> str:
 
 def _bench_synthetic(instruction_count: int, block_size: int) -> None:
     rp2040 = RP2040()
+
+    from rp2040py.device.bootrom import BOOTROM_B1
+
     rp2040.load_bootrom(BOOTROM_B1)
     rp2040.logger = ConsoleLogger(LogLevel.ERROR)
 
@@ -266,6 +279,9 @@ def _bench_firmware(image: str, littlefs: str | None, expect_text: str | None, t
     simulator = Simulator()
     rp2040 = simulator.rp2040
     clock = simulator.clock
+
+    from rp2040py.device.bootrom import BOOTROM_B1
+
     rp2040.load_bootrom(BOOTROM_B1)
     rp2040.logger = ConsoleLogger(LogLevel.ERROR)
 
@@ -333,13 +349,19 @@ def _cmd_bench(args: argparse.Namespace) -> None:
 
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
-    build_littlefs_image(args.output, args.files, block_size=args.block_size, block_count=args.block_count)
+    build_littlefs_image(
+        args.output,
+        args.files,
+        block_size=args.block_size,
+        block_count=args.block_count,
+        disk_version=args.disk_version,
+    )
     print(f"Wrote littlefs image: {args.output}")
 
 
 def main(argv: "list[str] | None" = None) -> None:
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"%(prog)s {version('rp2040py')}")
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run", help="run a native .hex/.uf2 image with a GDB server")
@@ -353,6 +375,8 @@ def main(argv: "list[str] | None" = None) -> None:
     mp_parser.add_argument("--gdb", action="store_true")
     mp_parser.add_argument("--gdb-port", type=int, default=3333)
     mp_parser.add_argument("--circuitpython", action="store_true")
+    mp_parser.add_argument("--littlefs", help="firmware mode: optional littlefs.img to load", default="littlefs.img")
+    mp_parser.add_argument("--fat12", help="firmware mode: optional fat12.img to load", default="fat12.img")
     mp_source_group = mp_parser.add_mutually_exclusive_group()
     mp_source_group.add_argument(
         "-c", dest="command", metavar="<command>", help="execute the given command on the device, then exit"
@@ -383,6 +407,13 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.add_argument("files", nargs="+", help="source files to add; the first becomes main.py")
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
+        mklittlefs_parser.add_argument(
+            "--disk-version",
+            type=str,
+            choices=LITTLEFS_DISK_VERSIONS.keys(),
+            default=LITTLEFS_DEFAULT_DISK_VERSION,
+            help=f"(defaults to {LITTLEFS_DEFAULT_DISK_VERSION})",
+        )
         mklittlefs_parser.set_defaults(func=_cmd_mklittlefs)
 
     args = parser.parse_args(argv)

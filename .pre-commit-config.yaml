@@ -15,7 +15,7 @@ repos:
       - id: uv-sync
         name: uv sync before hooks
         entry: uv
-        args: ["sync"]
+        args: ["sync", "--python", "cpython-3.10"]
         language: system
         pass_filenames: false
 
