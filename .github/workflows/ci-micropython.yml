@@ -45,11 +45,6 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      # - name: Download MicroPython ${{ matrix.micropython_version }}
-      #   run: curl -o micropython.uf2 "https://micropython.org/resources/firmware/RPI_PICO-${VERSION}.uf2"
-      #   env:
-      #     VERSION: ${{ matrix.micropython_version }}
-
       - name: Create filesystem
         run: uv run rp2040py mklittlefs littlefs.img tests/micropython/main.py
 

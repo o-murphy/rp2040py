@@ -1,7 +1,10 @@
-"""Runs micropython.uf2 + littlefs-spi.img and checks the bytes bit-banged over SPI0
+"""Runs a MicroPython image + littlefs-spi.img and checks the bytes bit-banged over SPI0
 against the expected messages passed as positional command-line arguments.
 
-Usage: python tests/micropython_spi_run.py "hello world" "h" "0123456789abcdef..."
+Usage: python tests/micropython_spi_run.py [--image <tag|path>] "hello world" "h" "0123456789abcdef..."
+
+``--image`` defaults to ``micropython.uf2`` but also accepts a known version tag (e.g. ``1.21.0``);
+either way it's downloaded automatically via ``rp2040py.cli.mp_retrieve`` if not found locally.
 """
 
 import argparse
@@ -32,11 +35,11 @@ def main() -> None:
 
     image_name = retrieve_micropython(args.image)
     if image_name is None:
-        print(f"Could not find micropython image: {image_name}")
+        print(f"Could not find micropython image: {args.image}")
         os._exit(1)
 
-    print(f"Loading uf2 image {args.image}")
-    load_uf2(args, mcu)
+    print(f"Loading uf2 image {image_name}")
+    load_uf2(image_name, mcu)
 
     littlefs = "littlefs-spi.img"
     if os.path.exists(littlefs):

@@ -1,0 +1,31 @@
+name: Setup rp2040py
+description: >
+  Installs rp2040py emulator globally as a standalone tool.
+  After this action, you can use rp2040py command directly
+  in subsequent steps.
+
+inputs:
+  version:
+    description: >
+      rp2040py release version to install from PyPI (e.g. "0.1.0b2"), passed as
+      `rp2040py[fs]==<version>`. If empty, installs the latest published release.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      with:
+        python-version: "pypy-3.10"
+
+    - name: Install rp2040py and verify
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.version }}" ]; then
+          uv tool install rp2040py[fs]
+        else
+          uv tool install rp2040py[fs]==${{ inputs.version }}
+        fi
+        rp2040py --version

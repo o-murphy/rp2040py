@@ -33,6 +33,8 @@ def build_littlefs_image(
     """Write ``files`` into a littlefs image at ``output``, the first becoming ``main.py``.
 
     If ``output`` already exists, it's opened and updated in place rather than reformatted.
+    ``disk_version`` selects the littlefs on-disk format, one of ``LITTLEFS_DISK_VERSIONS``
+    (``"2.0"`` or ``"2.1"``).
     """
     try:
         from littlefs import LittleFS, UserContext
@@ -40,6 +42,9 @@ def build_littlefs_image(
         raise SystemExit(
             "littlefs-python is required for mklittlefs; install it with `pip install rp2040py[fs]`"
         ) from exc
+
+    if disk_version not in LITTLEFS_DISK_VERSIONS:
+        raise ValueError(f"unknown disk_version {disk_version!r}; expected one of {tuple(LITTLEFS_DISK_VERSIONS)}")
 
     if os.path.exists(output):
         with open(output, "rb") as fh:
@@ -49,9 +54,12 @@ def build_littlefs_image(
 
     # mount=True (the default) mounts the existing filesystem if the buffer holds one, and falls
     # back to formatting it otherwise - giving us "create or open if it exists" for free.
-    disk_version_ = LITTLEFS_DISK_VERSIONS.get(disk_version)
     lfs = LittleFS(
-        context=context, block_size=block_size, block_count=block_count, prog_size=256, disk_version=disk_version_
+        context=context,
+        block_size=block_size,
+        block_count=block_count,
+        prog_size=256,
+        disk_version=LITTLEFS_DISK_VERSIONS[disk_version],
     )
 
     main = True

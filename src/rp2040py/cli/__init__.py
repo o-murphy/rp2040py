@@ -9,11 +9,14 @@ Subcommands:
   pico-examples).
 - ``micropython``: MicroPython/CircuitPython UF2 runner with a USB CDC console. ``-c <command>``,
   ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
-  instead of dropping into the REPL, mirroring ``micropython``'s own CLI.
+  instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
+  known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
+  missing firmware is downloaded automatically (see ``rp2040py.cli.mp_retrieve``).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
 - ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
-  the optional ``fs`` extra: ``pip install rp2040py[fs]``).
+  the optional ``fs`` extra: ``pip install rp2040py[fs]``). ``--disk-version`` selects the
+  littlefs on-disk format (defaults to ``2.0``, for compatibility with MicroPython <=1.21).
 """
 
 import argparse
@@ -122,17 +125,15 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
 def _cmd_micropython(args: argparse.Namespace) -> None:
     image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
     if image_name is None:
-        print(f"Could not find micropython image: {image_name}")
+        print(f"Could not find micropython image: {args.image}")
         sys.exit(1)
 
     print(f"Loading uf2 image {image_name}")
-    littlefs, fat12 = None, None
-    if not args.circuitpython:
-        littlefs = args.littlefs if os.path.exists(args.littlefs) else None
-        fat12 = args.fat12 if os.path.exists(args.fat12) else None
+    littlefs = args.littlefs if not args.circuitpython and os.path.exists(args.littlefs) else None
+    fat12 = args.fat12 if args.circuitpython and os.path.exists(args.fat12) else None
 
     if littlefs is not None:
-        print(f"Loading uf2 image {littlefs}")
+        print(f"Loading littlefs image {littlefs}")
 
     if fat12 is not None:
         print(f"Loading fat12 image {fat12}")
