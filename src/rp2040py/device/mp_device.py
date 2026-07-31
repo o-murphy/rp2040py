@@ -32,6 +32,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TypeVar
 
+from rp2040py.clock.clock import IClock
 from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image, load_uf2
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
 from rp2040py.memory_map import FLASH_START_ADDRESS
@@ -77,8 +78,8 @@ def _connect_blocking(cdc: USBCDC, simulator: Simulator, mcu: RP2040, timeout: "
         raise TimeoutError(f"device did not enumerate over USB within {timeout}s")
 
 
-def _exec_blocking(cdc: USBCDC, source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
-    runner = RawReplRunner(source, cdc.send_serial_byte)
+def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
+    runner = RawReplRunner(source, cdc.send_serial_byte, lambda: cdc.tx_fifo.size - cdc.tx_fifo.item_count)
     done = threading.Event()
     errors: list[RawReplError] = []
 
@@ -92,8 +93,35 @@ def _exec_blocking(cdc: USBCDC, source: bytes, timeout: "float | None") -> "tupl
         if runner.result is not None:
             done.set()
 
+    def _pump_until_sent() -> None:
+        # feed() only pushes as much of the source as fits in cdc's FIFO right away (see
+        # RawReplRunner.pump()'s docstring for why) - this drip-feeds the rest, giving the
+        # simulator loop room to actually drain the FIFO between attempts (pump() itself can't do
+        # that: like feed(), it'd be running synchronously inside the emulated CPU's own call
+        # chain). Scheduled via the simulated clock, not threading.Timer: a real-time timer fires
+        # on its own OS thread, which then races USBCDC.tx_fifo.push()/pull() against whichever
+        # thread is driving the simulator (pull() happens deep in the emulated USB peripheral's own
+        # read path, mid-instruction-execution) - USBCDC/FIFO were never meant to be thread-safe
+        # (it's a hot path used everywhere in peripheral emulation, not worth locking globally for
+        # this one caller), and that race really did corrupt uploads intermittently (confirmed:
+        # different corruption each run - an IndentationError one run, a SyntaxError the next, same
+        # input). An alarm callback instead runs synchronously inside Clock.tick(), on whatever
+        # thread is already driving the simulator - same thread as feed()/pull(), no race. Keeps
+        # rescheduling until `done` regardless of pump()'s own return value - there's nothing
+        # queued to send yet the first few times this fires (feed() only populates it once the
+        # raw-REPL banner arrives), so an empty-queue "nothing to send" from pump() isn't a
+        # reliable "fully sent, stop" signal on its own; `done` (set once the exec has actually
+        # finished or errored) is.
+        if done.is_set():
+            return
+        runner.pump()
+        pump_alarm.schedule(1_000_000)  # 1ms of emulated time, in nanoseconds
+
+    pump_alarm = clock.create_alarm(_pump_until_sent)
+
     cdc.on_serial_data = _on_serial_data
     runner.start()
+    pump_alarm.schedule(1_000_000)
 
     if not done.wait(timeout):
         raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s")
@@ -183,7 +211,7 @@ class MicroPythonDevice:
         """
         if not self._started:
             raise RuntimeError("call start()/start_async() (or enter as a context manager) before exec_async()")
-        return self._executor.submit(_exec_blocking, self.cdc, code.encode(), timeout)
+        return self._executor.submit(_exec_blocking, self.cdc, self.simulator.clock, code.encode(), timeout)
 
     def exec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """Blocking version of `exec_async()` - `timeout` bounds the *entire* wait, including any

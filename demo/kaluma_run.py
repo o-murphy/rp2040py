@@ -87,6 +87,16 @@ def main() -> None:
                     _restore_termios()
                     os._exit(0)
                 for byte in chunk:
+                    # Backpressure, not a plain send_serial_byte() loop: cdc.tx_fifo is a bounded
+                    # 512-byte buffer that silently drops pushes once full instead of raising or
+                    # blocking (see RawReplRunner.pump()'s docstring for the full story - same
+                    # underlying issue, found there first). A single large paste into the terminal
+                    # can easily arrive as one >512-byte os.read() chunk, so this waits for room
+                    # rather than assuming send_serial_byte() always has some. Blocking this
+                    # dedicated stdin thread is fine - unlike in the raw-REPL upload path, nothing
+                    # else needs it to keep running.
+                    while cdc.tx_fifo.item_count >= cdc.tx_fifo.size:
+                        time.sleep(0.001)
                     cdc.send_serial_byte(byte)
         finally:
             _restore_termios()

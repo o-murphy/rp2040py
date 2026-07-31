@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b5] - 2026-07-31
+
+### Added
+- `demo/kaluma_run.py`, a generic USB-CDC REPL runner for firmware other than
+  MicroPython/CircuitPython - talks to `USBCDC` directly rather than wrapping an `rp2040py.cli`
+  subcommand (unlike the other `demo/*.py` scripts), demonstrating that the USB/CDC emulation
+  itself isn't MicroPython-specific. Verified against [Kaluma](https://kaluma.io/) 1.2.1: boots,
+  USB enumerates, and evaluates real JS at its REPL prompt.
+
+### Fixed
+- **Raw-REPL code uploads (`micropython <filename>`, `MicroPythonDevice.exec()`/`exec_file()`)
+  silently hung forever on any source over ~512 bytes**, with zero output - a real, previously
+  undiscovered bug, not a throughput/timeout issue. `RawReplRunner.feed()` used to push the entire
+  source into the device's USB-CDC receive FIFO (`TX_FIFO_SIZE = 512` in `usb/cdc.py`) in one
+  synchronous burst; that FIFO silently drops pushes once full instead of raising or blocking, so
+  anything past ~512 bytes - including the terminating Ctrl-D - was lost, leaving the device
+  waiting forever for an end-of-paste marker it had already been sent but never actually received.
+  Confirmed against real firmware: a 440-byte script ran fine, an otherwise-identical 890-byte one
+  hung indefinitely. `RawReplRunner` now paces uploads via a new `pump()` method that only ever
+  sends what currently fits, retried until the whole payload's out; `MicroPythonDevice` schedules
+  those retries through the simulated clock (`Clock.create_alarm()`), not a real
+  `threading.Timer` - the latter's callback runs on its own OS thread, racing `USBCDC.tx_fifo`
+  against whatever thread is driving the simulator (`pull()` happens deep in the emulated USB
+  peripheral's own read path, mid-instruction-execution) and intermittently corrupting uploads
+  (confirmed the hard way: a different `IndentationError`/`SyntaxError` almost every run, same
+  input) - `FIFO`/`USBCDC` were never meant to be thread-safe, and adding locking there wasn't an
+  option (it's a hot path used everywhere in peripheral emulation). An alarm callback instead runs
+  synchronously inside `Clock.tick()`, on whichever thread already drives the simulator - same
+  thread `feed()`/`pull()` run on, no race. Verified end to end against a real natmod build
+  ([ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc)'s
+  ~13KB `tests/test_bclibc.py`, previously hanging indefinitely under both CPython and PyPy) -
+  passes cleanly and repeatably now.
+- The same unbounded-burst pattern in `micropython`'s interactive-mode stdin forwarding (and
+  `demo/kaluma_run.py`'s) could hit the same FIFO-overflow silent-drop for a single large paste
+  into the terminal (`os.read()` can return up to 4096 bytes in one chunk - well over the 512-byte
+  FIFO). Both now back off and retry while the FIFO's full, rather than assuming
+  `send_serial_byte()` always has room. This path runs on its own dedicated stdin-reader thread,
+  not the simulator's, so a plain blocking retry (no clock-alarm scheduling needed) is safe here.
+
 ## [0.1.0b4] - 2026-07-31
 
 ### Changed
