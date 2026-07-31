@@ -85,3 +85,44 @@ def test_malformed_ok_ack_raises_raw_repl_error():
     runner.feed(RAW_REPL_BANNER)
     with pytest.raises(RawReplError):
         runner.feed(b"XY")
+
+
+def test_pump_paces_uploads_larger_than_the_send_buffer():
+    # Regression test: feed() used to push the whole source into send_byte in one synchronous
+    # burst regardless of how much room the receiving end actually had. Against a real USBCDC,
+    # that end is a fixed-size FIFO (512 bytes) that silently drops anything past capacity instead
+    # of raising or blocking - so any source bigger than the FIFO lost everything past that point,
+    # *including the terminating Ctrl-D*, leaving the device waiting forever for an end-of-paste
+    # marker it never received. Confirmed against real firmware: a 440-byte script ran fine, an
+    # otherwise-identical 890-byte one hung indefinitely with zero output. pump() must only ever
+    # send what currently fits, relying on repeated calls (as the receiving buffer drains) to get
+    # the rest out - never one unbounded burst.
+    capacity = 8
+    in_flight = 0
+    sent = bytearray()
+
+    def send_byte(byte: int) -> None:
+        nonlocal in_flight
+        sent.append(byte)
+        in_flight += 1
+
+    def free_space() -> int:
+        return capacity - in_flight
+
+    source = b"print(1 + 1)" * 10  # far bigger than `capacity`
+    runner = RawReplRunner(source, send_byte, free_space)
+    runner.start()
+    sent.clear()
+    in_flight = 0  # pretend the 3 start() control bytes have already been consumed
+
+    runner.feed(RAW_REPL_BANNER)
+    # Only as much as currently fits went out - not the whole burst at once.
+    assert len(sent) == capacity
+
+    previous_len = len(sent)
+    while not runner.pump():
+        assert len(sent) - previous_len <= capacity  # never oversends past free_space() in one call
+        previous_len = len(sent)
+        in_flight = 0  # the "device" finishes consuming what's in flight between attempts
+
+    assert bytes(sent) == source + bytes([CTRL_D])

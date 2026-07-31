@@ -206,6 +206,58 @@ write new ones against `Simulator`:
   `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All four demo
   entry points (`demo/emulator_run.py`, `demo/micropython_run.py`, `demo/kaluma_run.py`,
   `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
+- **Don't schedule follow-up work with `threading.Timer`/a real OS thread if it touches anything a
+  `Simulator` worker thread also touches** (a FIFO, a peripheral register, `USBCDC.tx_fifo`, etc.)
+  - use `simulator.clock.create_alarm(...)` instead, whose callback runs synchronously inside
+    `Clock.tick()` on whichever thread is already driving the simulator. See the next section for
+    a real bug this exact mistake caused.
+
+### Raw-REPL uploads and cross-thread `USBCDC.tx_fifo` access (a real, previously undiscovered bug)
+
+`device/raw_repl.py`'s `RawReplRunner.feed()` originally pushed an entire raw-REPL upload (the
+whole `source` argument to `MicroPythonDevice.exec()`/`exec_file()`, or the CLI's
+`micropython <filename>`) into `send_byte` - ultimately `USBCDC.send_serial_byte()` - in one
+synchronous burst, the instant the raw-REPL banner arrived. `send_serial_byte()` just pushes into
+`tx_fifo`, a fixed-size `FIFO` (`TX_FIFO_SIZE = 512` in `usb/cdc.py`) that silently drops anything
+pushed once full (`FIFO.push()` in `utils/fifo.py` just no-ops past capacity - no exception, no
+blocking). Any upload over ~512 bytes therefore lost everything past that point, *including the
+terminating Ctrl-D* - the device was left waiting forever for an end-of-paste marker it had
+already been "sent" but never actually received. Confirmed against real firmware, not assumed: a
+440-byte script ran fine; an otherwise-identical 890-byte one hung indefinitely with zero output.
+Real-world impact was large - `tests/test_bclibc.py` in
+[ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc), a
+perfectly ordinary ~13KB test file, silently hung forever under both CPython and PyPy.
+
+`feed()` can't drain the FIFO itself mid-burst to make room: it's invoked synchronously from
+*inside* the emulated CPU's own `execute_instruction()` call chain (the device writing to its USB
+TX register), so nothing else runs - and no bytes actually get pulled from `tx_fifo` - until it
+returns. Pacing has to happen *across* separate calls instead. `RawReplRunner` gained a `pump()`
+method that sends only as much as an optional `free_space()` callback currently allows, returning
+whether everything's out yet; call it again while it isn't.
+
+The first fix attempt scheduled those repeat `pump()` calls with `threading.Timer` from
+`MicroPythonDevice`'s `_exec_blocking()`. That "worked" in the sense that uploads no longer hung -
+but intermittently corrupted them instead: a different `IndentationError`, then a `SyntaxError` on
+an otherwise-untouched line, on repeated runs of the identical input. Root cause: a real `Timer`
+fires its callback on its own OS thread, which raced `tx_fifo.push()` (from `pump()`, called via
+the timer) against `tx_fifo.pull()` (from the emulated USB peripheral's own register-read path,
+invoked deep inside `execute_instruction()` on whichever thread is driving the simulator) - `FIFO`
+was never written to be thread-safe, and it's a hot enough path (used by every peripheral's FIFO
+registers, not just CDC) that adding locking there for this one caller wasn't acceptable. The fix
+that actually stuck: schedule `pump()` retries via `simulator.clock.create_alarm(...)` instead of
+`threading.Timer`. An alarm's callback runs synchronously inside `Clock.tick()`, on whatever thread
+already drives the simulator - the same thread `feed()`/`pull()` run on - so there's no second
+thread to race in the first place. `MicroPythonDevice._exec_blocking()` now takes the device's
+`Simulator.clock` for exactly this. Re-verified against the same real `test_bclibc.py` build,
+repeatably clean.
+
+The same unbounded-burst pattern existed in `micropython`'s interactive-mode stdin-forwarding loop
+(`cli/__init__.py`) and `demo/kaluma_run.py`'s: `os.read()` can return up to 4096 bytes in one
+chunk from a single large paste into the terminal, comfortably over the 512-byte FIFO. Both now
+retry with a short sleep while the FIFO's full instead of assuming `send_serial_byte()` always has
+room - safe as a plain blocking retry here (no clock-alarm scheduling needed) because this loop
+runs on its own dedicated stdin-reader thread, not the simulator's; blocking it briefly doesn't
+race anything.
 
 ### `pio_assembler.py`'s `pio_jmp`/`pio_mov` argument order differs from upstream
 
