@@ -363,6 +363,22 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
         sys.exit(1)
     print(f"Wrote littlefs image: {args.output}")
 
+    if sys.implementation.name == "pypy":
+        # os._exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
+        # can get finalized out of order during interpreter shutdown - even after an explicit
+        # lfs.unmount() and gc.collect() - crashing the process with "lfs_file_sync: Assertion
+        # `lfs_mlist_isopen(...)` failed" (SIGABRT) despite the image already having been written
+        # correctly. Confirmed with `uv tool install --python pypy-3.10 rp2040py[fs]`; not
+        # reproducible under CPython, hence gating this rather than doing it unconditionally - an
+        # unconditional os._exit() here would also kill the whole process if _cmd_mklittlefs (or
+        # main()) is ever called in-process rather than as the actual entry point, e.g. from a test
+        # suite. The image on disk is already complete and correct at this point, so skipping the
+        # rest of shutdown is safe for the *pypy CLI* case specifically - it doesn't help a
+        # long-running PyPy program that calls build_littlefs_image() as a library and keeps
+        # running afterwards, which is a real upstream littlefs-python/PyPy limitation, not
+        # something rp2040py can fully paper over.
+        os._exit(0)
+
 
 def main(argv: "list[str] | None" = None) -> None:
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)

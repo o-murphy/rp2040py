@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   basename, or a file already named `main.py` colliding with `--main`'s target - is now also a
   clear error instead of one silently overwriting the other in the image.
 
+### Fixed
+- `mklittlefs` no longer crashes (SIGABRT, `lfs_file_sync: Assertion` \`lfs_mlist_isopen(...)\`
+  `failed`) under PyPy after successfully writing the image - `littlefs-python`'s C objects were
+  getting finalized out of order during PyPy's interpreter shutdown. Only reproducible when
+  running under PyPy specifically (e.g. via `setup-rp2040py`'s composite action, which installs
+  `rp2040py` under PyPy for the emulator speedup); not an issue under CPython.
+
 ## [0.1.0b3] - 2026-07-31
 
 ### Added

@@ -84,5 +84,12 @@ def build_littlefs_image(
         with open(filename, "rb") as src_file, lfs.open(dest_name, "wb") as lfs_file:
             lfs_file.write(src_file.read())
 
+    # Explicit unmount, not left to GC: littlefs-python's LittleFS otherwise only gets torn down
+    # implicitly when garbage collected, and under PyPy's non-refcounting GC that can happen at an
+    # arbitrary later point (even interpreter shutdown) instead of deterministically here like
+    # under CPython - confirmed as the cause of a real "lfs_file_sync: Assertion
+    # `lfs_mlist_isopen(...)` failed" abort (SIGABRT) writing a multi-file image under PyPy.
+    lfs.unmount()
+
     with open(output, "wb") as fh:
         fh.write(lfs.context.buffer)
