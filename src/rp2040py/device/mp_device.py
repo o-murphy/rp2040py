@@ -32,7 +32,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TypeVar
 
-from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image, load_uf2
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
 from rp2040py.memory_map import FLASH_START_ADDRESS
@@ -123,6 +122,9 @@ class MicroPythonDevice:
     ) -> None:
         self.simulator = Simulator()
         self.mcu: RP2040 = self.simulator.rp2040
+
+        from rp2040py.device.bootrom import BOOTROM_B1
+
         self.mcu.load_bootrom(BOOTROM_B1)
         self.mcu.logger = ConsoleLogger(LogLevel.ERROR)
         load_uf2(image, self.mcu)

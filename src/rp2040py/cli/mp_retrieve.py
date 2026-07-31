@@ -4,7 +4,7 @@ __all__ = ("retrieve_micropython",)
 
 MICROPYTHON_FW_FILENAME = "RPI_PICO-{version}.uf2"
 MICROPYTHON_FW_DOWNLOAD_URL = "https://micropython.org/resources/firmware/{filename}"
-MICROPYTHON_TESTED_FW_VERSIONS = {
+MICROPYTHON_KNOWN_FW_VERSIONS = {
     "1.16": "20210618-v1.16",
     "1.17": "20210902-v1.17",
     "1.18": "20220117-v1.18",
@@ -22,9 +22,16 @@ CIRCUITPYTHON_FW_DOWNLOAD_URL = (
 CIRCUITPYTHON_DEFAULT_TAG = "8.0.2"  # newest is "10.2.1"
 
 
-def _resolve_known_version(tag: str) -> str | None:
-    if tag.removeprefix("v") in MICROPYTHON_TESTED_FW_VERSIONS:
-        return MICROPYTHON_TESTED_FW_VERSIONS[tag]
+def _resolve_known_version(tag: str, is_circuitpython: bool = False) -> str | None:
+    if is_circuitpython:
+        return tag.removeprefix("v")
+    versions = MICROPYTHON_KNOWN_FW_VERSIONS
+    tag = tag.removeprefix("v")
+    if tag in versions:
+        return versions[tag]
+    for version in versions:
+        if version.startswith(tag):
+            return versions[version]
     return None
 
 
@@ -33,13 +40,13 @@ def _resolve_url(version_or_tag: str, is_circuitpython: bool = False) -> tuple[s
         filename = CIRCUITPYTHON_FW_FILENAME.format(version=version_or_tag)
         return filename, CIRCUITPYTHON_FW_DOWNLOAD_URL.format(filename=filename)
     else:
-        resolved = _resolve_known_version(version_or_tag)
+        resolved = _resolve_known_version(version_or_tag, is_circuitpython=is_circuitpython)
         version = resolved or version_or_tag
         filename = MICROPYTHON_FW_FILENAME.format(version=version)
         return filename, MICROPYTHON_FW_DOWNLOAD_URL.format(filename=filename)
 
 
-def retrieve_micropython(image: str | None = None, is_circuitpython: bool = False):
+def retrieve_micropython(image: str | None = None, is_circuitpython: bool = False) -> str | None:
     """
     Args:
        image (str | None): micropython version tag (defaults to *DEFAULT_TAG), local filepath or version
@@ -57,6 +64,7 @@ def retrieve_micropython(image: str | None = None, is_circuitpython: bool = Fals
         print(f"Found local image: {filename}")
         return filename
 
+    from urllib.error import HTTPError
     from urllib.request import urlretrieve
 
     def report_hook(chunk: int, chunk_size: int, size: int) -> object:
@@ -64,8 +72,12 @@ def retrieve_micropython(image: str | None = None, is_circuitpython: bool = Fals
             print(f"Download: {filename} from {url}")
         elif chunk * chunk_size >= size:
             print(f"Download complete: file saved to: {filename}")
+        return None
 
-    urlretrieve(url, filename, reporthook=report_hook)
+    try:
+        urlretrieve(url, filename, reporthook=report_hook)
+    except HTTPError:
+        return None
     return filename
 
 
