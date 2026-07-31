@@ -29,6 +29,7 @@ from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import build_littlefs_image
+from rp2040py.cli.mp_fetch import retrieve_micropython
 from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
@@ -117,10 +118,7 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
 
 
 def _cmd_micropython(args: argparse.Namespace) -> None:
-    if not args.circuitpython:
-        image_name = args.image or "RPI_PICO-20230426-v1.20.0.uf2"
-    else:
-        image_name = args.image or "adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2"
+    image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
     print(f"Loading uf2 image {image_name}")
 
     littlefs = "littlefs.img" if os.path.exists("littlefs.img") and not args.circuitpython else None
@@ -339,7 +337,7 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
 
 def main(argv: "list[str] | None" = None) -> None:
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"%(prog)s {version('rp2040py')}")
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run", help="run a native .hex/.uf2 image with a GDB server")
