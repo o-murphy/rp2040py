@@ -34,10 +34,9 @@ def _resolve_url(version_or_tag: str, is_circuitpython: bool = False) -> tuple[s
         return filename, CIRCUITPYTHON_FW_DOWNLOAD_URL.format(filename=filename)
     else:
         resolved = _resolve_known_version(version_or_tag)
-        if resolved is not None:
-            version = resolved
-    filename = MICROPYTHON_FW_FILENAME.format(version=version)
-    return filename, MICROPYTHON_FW_DOWNLOAD_URL.format(filename=filename)
+        version = resolved or version_or_tag
+        filename = MICROPYTHON_FW_FILENAME.format(version=version)
+        return filename, MICROPYTHON_FW_DOWNLOAD_URL.format(filename=filename)
 
 
 def retrieve_micropython(image: str | None = None, is_circuitpython: bool = False):
@@ -52,7 +51,7 @@ def retrieve_micropython(image: str | None = None, is_circuitpython: bool = Fals
         print(f"Found local image: {image}")
         return image
 
-    filename, url = _resolve_url(image)
+    filename, url = _resolve_url(image, is_circuitpython=is_circuitpython)
 
     if os.path.exists(filename):
         print(f"Found local image: {filename}")
@@ -64,9 +63,7 @@ def retrieve_micropython(image: str | None = None, is_circuitpython: bool = Fals
         if chunk == 0:
             print(f"Download: {filename} from {url}")
         elif chunk * chunk_size >= size:
-            print(f"Download complete, file saved to: {filename}")
-        else:
-            print("Error occurred during download")
+            print(f"Download complete: file saved to: {filename}")
 
     urlretrieve(url, filename, reporthook=report_hook)
     return filename
