@@ -54,7 +54,7 @@ def test_main_option_writes_the_given_file_as_main_py(tmp_path):
     lib_src.write_bytes(b"VALUE = 42\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(app_src), str(lib_src)], main=str(app_src))
+    build_littlefs_image(image, [str(app_src), str(lib_src)], main=app_src.name)
 
     assert _read_back(image, "main.py") == b"print('hello')\n"
     assert _read_back(image, "lib.py") == b"VALUE = 42\n"
@@ -68,7 +68,7 @@ def test_main_not_in_files_raises_value_error(tmp_path):
     image = str(tmp_path / "littlefs.img")
 
     with pytest.raises(ValueError, match="main"):
-        build_littlefs_image(image, [str(app_src)], main=str(tmp_path / "not_in_files.py"))
+        build_littlefs_image(image, [str(app_src)], main="not_in_files.py")
 
 
 def test_main_colliding_with_a_file_already_named_main_py_raises_value_error(tmp_path):
@@ -81,7 +81,7 @@ def test_main_colliding_with_a_file_already_named_main_py_raises_value_error(tmp
     image = str(tmp_path / "littlefs.img")
 
     with pytest.raises(ValueError, match="main.py"):
-        build_littlefs_image(image, [str(existing_main), str(other_src)], main=str(other_src))
+        build_littlefs_image(image, [str(existing_main), str(other_src)], main=other_src.name)
 
 
 def test_duplicate_basenames_raise_value_error_even_without_main(tmp_path):
@@ -121,8 +121,8 @@ def test_existing_image_is_updated_in_place_not_reformatted(tmp_path):
     other_src.write_bytes(b"other\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(first_src), str(other_src)], main=str(first_src))
-    build_littlefs_image(image, [str(second_src), str(other_src)], main=str(second_src))
+    build_littlefs_image(image, [str(first_src), str(other_src)], main=first_src.name)
+    build_littlefs_image(image, [str(second_src), str(other_src)], main=second_src.name)
 
     # main.py now comes from the second build, but other.py survives untouched from the first.
     assert _read_back(image, "main.py") == b"second\n"

@@ -427,7 +427,7 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
         mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
         mklittlefs_parser.add_argument(
-            "--main", metavar="<file>", help="write this file (one of `files`, verbatim) as main.py"
+            "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)

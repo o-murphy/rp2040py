@@ -9,13 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Breaking:** `mklittlefs` no longer auto-picks the first file as `main.py` - every file now
-  keeps its own basename. Pass the new `--main <file>` (`build_littlefs_image(..., main=...)`) to
-  mark one of them as `main.py` explicitly; omit it entirely for filesystems that don't need an
-  auto-run entry point (e.g. modules staged only for a raw-REPL-driven test). `--main` must match
-  one of the given files verbatim, or `mklittlefs` exits with a clear error instead of silently
-  writing no `main.py`. Two files that would land on the same destination name - a duplicate
-  basename, or a file already named `main.py` colliding with `--main`'s target - is now also a
-  clear error instead of one silently overwriting the other in the image.
+  keeps its own basename. Pass the new `--main <basename>` (`build_littlefs_image(..., main=...)`)
+  to mark one of them as `main.py` explicitly - matched against each file's basename (e.g.
+  `--main app.py` for a `files` entry of `src/app.py`), not the full path, so it doesn't need
+  repeating; omit it entirely for filesystems that don't need an auto-run entry point (e.g. modules
+  staged only for a raw-REPL-driven test). `--main` must match one of the given files' basenames,
+  or `mklittlefs` exits with a clear error instead of silently writing no `main.py`. Two files that
+  would land on the same destination name - a duplicate basename, or a file already named `main.py`
+  colliding with `--main`'s target - is now also a clear error instead of one silently overwriting
+  the other in the image.
 
 ### Fixed
 - `mklittlefs` no longer crashes (SIGABRT, `lfs_file_sync: Assertion` \`lfs_mlist_isopen(...)\`

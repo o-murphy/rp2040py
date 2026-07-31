@@ -33,9 +33,10 @@ def build_littlefs_image(
 ) -> None:
     """Write ``files`` into a littlefs image at ``output``, each keeping its own basename.
 
-    ``main``, if given, must be one of ``files`` (matched exactly, same string) - that file is
-    written as ``main.py`` (MicroPython's auto-run entry point) instead of its own basename. Pass
-    nothing for filesystems that don't need one, e.g. staging modules for a raw-REPL-driven test.
+    ``main``, if given, must match the *basename* of one of ``files`` (e.g. ``"app.py"``, not
+    ``"src/app.py"``) - that file is written as ``main.py`` (MicroPython's auto-run entry point)
+    instead of its own basename. Pass nothing for filesystems that don't need one, e.g. staging
+    modules for a raw-REPL-driven test.
 
     If ``output`` already exists, it's opened and updated in place rather than reformatted.
     ``disk_version`` selects the littlefs on-disk format, one of ``LITTLEFS_DISK_VERSIONS``
@@ -51,15 +52,16 @@ def build_littlefs_image(
     if disk_version not in LITTLEFS_DISK_VERSIONS:
         raise ValueError(f"unknown disk_version {disk_version!r}; expected one of {tuple(LITTLEFS_DISK_VERSIONS)}")
 
-    if main is not None and main not in files:
-        raise ValueError(f"--main {main!r} must be one of the given files: {list(files)}")
+    basenames = [os.path.basename(f) for f in files]
+    if main is not None and main not in basenames:
+        raise ValueError(f"--main {main!r} must match the basename of one of the given files: {basenames}")
 
     # Two files landing on the same littlefs destination (two same-named files in different host
     # directories, or a file already named main.py colliding with --main's target) would otherwise
     # silently overwrite one another - whichever gets written last wins, with no warning.
     dest_names: dict[str, str] = {}
     for filename in files:
-        dest_name = "main.py" if filename == main else os.path.basename(filename)
+        dest_name = "main.py" if os.path.basename(filename) == main else os.path.basename(filename)
         if dest_name in dest_names:
             raise ValueError(f"{filename!r} and {dest_names[dest_name]!r} would both be written as {dest_name!r}")
         dest_names[dest_name] = filename
