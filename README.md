@@ -182,6 +182,23 @@ sudo umount fat12/  # unmount the filesystem
 
 While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
 
+### Other USB-CDC firmware (not MicroPython/CircuitPython)
+
+The `micropython` subcommand's interactive mode assumes MicroPython/CircuitPython's own REPL
+conventions, but rp2040py's USB/CDC emulation itself isn't MicroPython-specific - any firmware
+presenting a CDC-ACM serial console works the same way underneath. [demo/kaluma_run.py](demo/kaluma_run.py)
+is a generic USB-CDC REPL runner built directly on the same `USBCDC` building block, verified
+against [Kaluma](https://kaluma.io/) (a JavaScript runtime for RP2040) 1.2.1 - it boots, USB
+enumerates, and evaluates real JS at its REPL prompt:
+
+```sh
+python demo/kaluma_run.py --image kaluma-rp2-pico-1.2.1.uf2
+```
+
+Ctrl+X to exit, same as the MicroPython demo. Not installed as an `rp2040py` console subcommand
+(unlike `run`/`micropython`/`bench`/`mklittlefs`) since it isn't part of the CLI's
+MicroPython/CircuitPython-focused scope - run it from a checkout.
+
 ### Library API
 
 Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).

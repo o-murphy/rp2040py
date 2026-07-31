@@ -94,6 +94,9 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `demo/load-flash.ts` → `src/rp2040py/device/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
 - [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server; thin wrapper around `rp2040py.cli`'s `run` subcommand - see "CLI packaging" below)
 - [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console; thin wrapper around `rp2040py.cli`'s `micropython` subcommand)
+- [x] `demo/kaluma_run.py` (no rp2040js equivalent) - generic USB-CDC REPL runner for non-MicroPython
+  firmware, talking to `USBCDC` directly rather than wrapping a `rp2040py.cli` subcommand (unlike
+  the two above); verified against [Kaluma](https://kaluma.io/) 1.2.1 - see "CLI packaging" below
 - [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` (deferred - needs real-hardware GDB client (`test-utils/gdbclient.ts`), out of scope for running firmware in the emulator)
 
 ### MicroPython CI test fixtures (`test/` in rp2040js)
@@ -200,8 +203,8 @@ write new ones against `Simulator`:
   process stays alive while the simulation runs (matching Node keeping the event loop alive). If
   `main()` returns without waiting, Python proceeds straight into interpreter shutdown, which
   blocks joining that non-daemon timer thread - and a Ctrl+C at that point produces an ugly
-  `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All three demo
-  entry points (`demo/emulator_run.py`, `demo/micropython_run.py`,
+  `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All four demo
+  entry points (`demo/emulator_run.py`, `demo/micropython_run.py`, `demo/kaluma_run.py`,
   `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
 
 ### `pio_assembler.py`'s `pio_jmp`/`pio_mov` argument order differs from upstream
