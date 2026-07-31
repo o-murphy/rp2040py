@@ -29,7 +29,7 @@ dependencies = []
 dynamic = ["version"]
 
 [project.optional-dependencies]
-fs = ["littlefs-python>=0.4.0"]
+fs = ["littlefs-python>=0.18.0"]
 
 [project.scripts]
 rp2040py = "rp2040py.__main__:main"
@@ -67,10 +67,11 @@ packages = ["src/rp2040py"]
 
 [dependency-groups]
 dev = [
-    "mypy>=2.3.0",
+    "mypy>=2.3.0; implementation_name != 'pypy'",
     "pre-commit>=4.6.1",
     "pytest>=9.1.1",
     "ruff>=0.16.0",
     "rp2040py[fs]",
     "pytest-cov>=7.1.0",
+    "littlefs-python>=0.18.0",
 ]

@@ -93,3 +93,4 @@ Thumbs.db
 # images
 **/*.img
 **/*.uf2
+tmp/

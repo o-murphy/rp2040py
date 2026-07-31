@@ -57,7 +57,7 @@ def build_littlefs_image(
     main = True
     for filename in files:
         dest_name = "main.py" if main else os.path.basename(filename)
-        with open(filename) as src_file, lfs.open(dest_name, "w") as lfs_file:
+        with open(filename, "rb") as src_file, lfs.open(dest_name, "wb") as lfs_file:
             lfs_file.write(src_file.read())
         main = False
 

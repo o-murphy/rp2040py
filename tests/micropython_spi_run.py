@@ -30,7 +30,7 @@ def main() -> None:
     mcu.load_bootrom(BOOTROM_B1)
     mcu.logger = ConsoleLogger(LogLevel.ERROR)
 
-    image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
+    image_name = retrieve_micropython(args.image)
     if image_name is None:
         print(f"Could not find micropython image: {image_name}")
         os._exit(1)

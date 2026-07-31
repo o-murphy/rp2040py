@@ -407,7 +407,11 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
         mklittlefs_parser.add_argument(
-            "--disk-version", type=str, choices=LITTLEFS_DISK_VERSIONS.keys(), default=LITTLEFS_DEFAULT_DISK_VERSION
+            "--disk-version",
+            type=str,
+            choices=LITTLEFS_DISK_VERSIONS.keys(),
+            default=LITTLEFS_DEFAULT_DISK_VERSION,
+            help=f"(defaults to {LITTLEFS_DEFAULT_DISK_VERSION})",
         )
         mklittlefs_parser.set_defaults(func=_cmd_mklittlefs)
 
