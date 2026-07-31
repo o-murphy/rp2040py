@@ -349,13 +349,18 @@ def _cmd_bench(args: argparse.Namespace) -> None:
 
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
-    build_littlefs_image(
-        args.output,
-        args.files,
-        block_size=args.block_size,
-        block_count=args.block_count,
-        disk_version=args.disk_version,
-    )
+    try:
+        build_littlefs_image(
+            args.output,
+            args.files,
+            block_size=args.block_size,
+            block_count=args.block_count,
+            disk_version=args.disk_version,
+            main=args.main,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"Wrote littlefs image: {args.output}")
 
 
@@ -404,7 +409,10 @@ def main(argv: "list[str] | None" = None) -> None:
             "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
         )
         mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
-        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add; the first becomes main.py")
+        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
+        mklittlefs_parser.add_argument(
+            "--main", metavar="<file>", help="write this file (one of `files`, verbatim) as main.py"
+        )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
         mklittlefs_parser.add_argument(

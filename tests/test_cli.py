@@ -208,3 +208,18 @@ def test_mklittlefs_end_to_end_through_argparse(tmp_path):
     cli.main(["mklittlefs", str(image), str(main_src)])
 
     assert image.exists()
+
+
+def test_mklittlefs_rejects_main_not_in_files_cleanly(capsys, tmp_path):
+    # Regression test: build_littlefs_image's ValueError for an unmatched --main used to bubble
+    # up as a raw Python traceback instead of the CLI's usual "error: ..." + exit(1) style.
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    app_src = tmp_path / "app.py"
+    app_src.write_text("pass\n")
+    image = tmp_path / "out.img"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["mklittlefs", str(image), str(app_src), "--main", "not_in_files.py"])
+
+    assert exc_info.value.code == 1
+    assert "error:" in capsys.readouterr().err
