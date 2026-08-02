@@ -194,7 +194,7 @@ def test_version_flag_prints_version_and_exits_zero(capsys):
 def test_mklittlefs_rejects_unknown_disk_version(capsys):
     pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
     with pytest.raises(SystemExit) as exc_info:
-        cli.main(["mklittlefs", "out.img", "--disk-version", "9.9", "main.py"])
+        cli.main(["mklittlefs", "-o", "out.img", "--disk-version", "9.9", "main.py"])
     assert exc_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 
@@ -205,7 +205,7 @@ def test_mklittlefs_end_to_end_through_argparse(tmp_path):
     main_src.write_text("print('hi')\n")
     image = tmp_path / "out.img"
 
-    cli.main(["mklittlefs", str(image), str(main_src)])
+    cli.main(["mklittlefs", "-o", str(image), str(main_src)])
 
     assert image.exists()
 
@@ -219,7 +219,7 @@ def test_mklittlefs_rejects_main_not_in_files_cleanly(capsys, tmp_path):
     image = tmp_path / "out.img"
 
     with pytest.raises(SystemExit) as exc_info:
-        cli.main(["mklittlefs", str(image), str(app_src), "--main", "not_in_files.py"])
+        cli.main(["mklittlefs", "-o", str(image), str(app_src), "--main", "not_in_files.py"])
 
     assert exc_info.value.code == 1
     assert "error:" in capsys.readouterr().err

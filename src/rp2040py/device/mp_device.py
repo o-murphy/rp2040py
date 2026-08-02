@@ -79,19 +79,18 @@ def _connect_blocking(cdc: USBCDC, simulator: Simulator, mcu: RP2040, timeout: "
 
 
 def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
-    runner = RawReplRunner(source, cdc.send_serial_byte, lambda: cdc.tx_fifo.size - cdc.tx_fifo.item_count)
     done = threading.Event()
     errors: list[RawReplError] = []
 
-    def _on_serial_data(data: bytes | bytearray) -> None:
-        try:
-            runner.feed(data)
-        except RawReplError as exc:
-            errors.append(exc)
-            done.set()
-            return
-        if runner.result is not None:
-            done.set()
+    def _on_result(_result: "tuple[bytes, bytes]") -> None:
+        done.set()
+
+    def _on_error(exc: Exception) -> None:
+        assert isinstance(exc, RawReplError)
+        errors.append(exc)
+        done.set()
+
+    runner = RawReplRunner(cdc, source, on_result=_on_result, on_error=_on_error)
 
     def _pump_until_sent() -> None:
         # feed() only pushes as much of the source as fits in cdc's FIFO right away (see
@@ -119,12 +118,12 @@ def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float 
 
     pump_alarm = clock.create_alarm(_pump_until_sent)
 
-    cdc.on_serial_data = _on_serial_data
-    runner.start()
+    runner.start()  # wires cdc.on_serial_data = runner.feed, then sends CTRL_C, CTRL_C, CTRL_A
     pump_alarm.schedule(1_000_000)
 
     if not done.wait(timeout):
         raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s")
+    runner.stop()
     if errors:
         raise errors[0]
     assert runner.result is not None

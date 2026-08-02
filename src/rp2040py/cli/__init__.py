@@ -23,16 +23,16 @@ import argparse
 import importlib.util
 import os
 import sys
-import termios
-import threading
 import time
-import tty
 from collections.abc import Callable
 from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.mp_retrieve import retrieve_micropython
+from rp2040py.cli.stdio_repl import StdioInteractiveRepl
+from rp2040py.cli.stdio_repl import buf_write as _buf_write
+from rp2040py.cli.stdio_repl import os_exit as _os_exit
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
@@ -60,11 +60,11 @@ _HAS_LITTLEFS = importlib.util.find_spec("littlefs") is not None
 def _load_image(image_name: str, rp2040: RP2040) -> None:
     extension = image_name.rsplit(".", 1)[-1]
     if extension == "hex":
-        print(f"Loading hex image {image_name}")
+        print(f"Loading hex image: {image_name}")
         with open(image_name) as f:
             load_hex(f.read(), rp2040.flash, 0x10000000)
     elif extension == "uf2":
-        print(f"Loading uf2 image {image_name}")
+        print(f"Loading uf2 image: {image_name}")
         load_uf2(image_name, rp2040)
     else:
         print(f"Unsupported file type: {extension}")
@@ -84,7 +84,7 @@ def _wait_for_simulator(simulator: Simulator, on_interrupt: "Callable[[], None] 
         if on_interrupt is not None:
             on_interrupt()
         simulator.stop()
-        os._exit(130)
+        _os_exit(130)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -101,8 +101,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
 
     def _on_byte(value: int) -> None:
-        sys.stdout.buffer.write(bytes([value]))
-        sys.stdout.flush()
+        _buf_write(sys.stdout, value)
 
     mcu.uart[0].on_byte = _on_byte
 
@@ -117,7 +116,7 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
     if args.module is not None:
         return f"import {args.module}"
     if args.filename is not None:
-        with open(args.filename) as f:
+        with open(args.filename, encoding="utf-8", errors="replace") as f:
             return f.read()
     return None
 
@@ -128,15 +127,15 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         print(f"Could not find micropython image: {args.image}")
         sys.exit(1)
 
-    print(f"Loading uf2 image {image_name}")
+    print(f"Loading uf2 image: {image_name}")
     littlefs = args.littlefs if not args.circuitpython and os.path.exists(args.littlefs) else None
     fat12 = args.fat12 if args.circuitpython and os.path.exists(args.fat12) else None
 
     if littlefs is not None:
-        print(f"Loading littlefs image {littlefs}")
+        print(f"Loading littlefs image: {littlefs}")
 
     if fat12 is not None:
-        print(f"Loading fat12 image {fat12}")
+        print(f"Loading fat12 image: {fat12}")
 
     device = MicroPythonDevice(image_name, littlefs=littlefs, fat12=fat12, circuitpython=args.circuitpython)
 
@@ -158,79 +157,36 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
             print(f"error: {exc}", file=sys.stderr)
             device.stop()
             sys.exit(1)
-        sys.stdout.buffer.write(stdout)
-        sys.stdout.flush()
+        _buf_write(sys.stdout, stdout)
         if stderr:
-            sys.stderr.buffer.write(stderr)
-            sys.stderr.flush()
+            _buf_write(sys.stderr, stderr)
         device.stop()
         sys.exit(1 if stderr else 0)
 
     cdc = device.cdc
     current_line = ""
 
-    def _on_serial_data(value: bytes | bytearray) -> None:
+    def _watch_expect_text(value: bytes | bytearray) -> None:
         nonlocal current_line
-        sys.stdout.buffer.write(value)
-        sys.stdout.flush()
-
         for byte in value:
             char = chr(byte)
             if char == "\n":
                 if args.expect_text and args.expect_text in current_line:
                     print(f'Expected text found: "{args.expect_text}"')
                     print("TEST PASSED.")
-                    # os._exit(), not sys.exit(): this callback runs on a Simulator worker thread
+                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
                     # (threading.Timer), and sys.exit() there only terminates that thread, not the
                     # whole process (unlike Node's process.exit(), which the upstream JS relies on
                     # here).
-                    os._exit(0)
+                    _os_exit(0)
                 current_line = ""
             else:
                 current_line += char
 
-    # Registered before start() so nothing the device prints while enumerating is dropped.
-    cdc.on_serial_data = _on_serial_data
-
-    stdin_fd = sys.stdin.fileno()
-    old_termios = None
-    if sys.stdin.isatty():
-        old_termios = termios.tcgetattr(stdin_fd)
-        tty.setraw(stdin_fd)
-
-    def _restore_termios() -> None:
-        if old_termios is not None:
-            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
-
-    def _read_stdin_loop() -> None:
-        try:
-            while True:
-                chunk = os.read(stdin_fd, 4096)
-                if not chunk:
-                    break
-                # 24 is Ctrl+X
-                if chunk[0] == 24:
-                    # os._exit(), not sys.exit(): this runs on the dedicated stdin reader thread,
-                    # not the main thread, so sys.exit() would only terminate that thread instead
-                    # of the whole process.
-                    _restore_termios()
-                    os._exit(0)
-                for byte in chunk:
-                    # Backpressure, not a plain send_serial_byte() loop: cdc.tx_fifo is a bounded
-                    # 512-byte buffer that silently drops pushes once full instead of raising or
-                    # blocking (see RawReplRunner.pump()'s docstring for the full story - same
-                    # underlying issue, found there first). A single large paste into the terminal
-                    # can easily arrive as one >512-byte os.read() chunk, so this waits for room
-                    # rather than assuming send_serial_byte() always has some. Blocking this
-                    # dedicated stdin thread is fine - unlike in the raw-REPL upload path, nothing
-                    # else needs it to keep running.
-                    while cdc.tx_fifo.item_count >= cdc.tx_fifo.size:
-                        time.sleep(0.001)
-                    cdc.send_serial_byte(byte)
-        finally:
-            _restore_termios()
-
-    threading.Thread(target=_read_stdin_loop, daemon=True).start()
+    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+    # while enumerating is dropped.
+    repl = StdioInteractiveRepl(cdc, on_data=_watch_expect_text)
+    repl.start()
 
     device.start(timeout=None)
     if not args.circuitpython:
@@ -240,7 +196,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     else:
         cdc.send_serial_byte(3)
 
-    _wait_for_simulator(device.simulator, on_interrupt=_restore_termios)
+    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 
 
 def _interpreter_label() -> str:
@@ -374,20 +330,20 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
     print(f"Wrote littlefs image: {args.output}")
 
     if sys.implementation.name == "pypy":
-        # os._exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
+        # _os_exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
         # can get finalized out of order during interpreter shutdown - even after an explicit
         # lfs.unmount() and gc.collect() - crashing the process with "lfs_file_sync: Assertion
         # `lfs_mlist_isopen(...)` failed" (SIGABRT) despite the image already having been written
         # correctly. Confirmed with `uv tool install --python pypy-3.10 rp2040py[fs]`; not
         # reproducible under CPython, hence gating this rather than doing it unconditionally - an
-        # unconditional os._exit() here would also kill the whole process if _cmd_mklittlefs (or
+        # unconditional _os_exit() here would also kill the whole process if _cmd_mklittlefs (or
         # main()) is ever called in-process rather than as the actual entry point, e.g. from a test
         # suite. The image on disk is already complete and correct at this point, so skipping the
         # rest of shutdown is safe for the *pypy CLI* case specifically - it doesn't help a
         # long-running PyPy program that calls build_littlefs_image() as a library and keeps
         # running afterwards, which is a real upstream littlefs-python/PyPy limitation, not
         # something rp2040py can fully paper over.
-        os._exit(0)
+        _os_exit(0)
 
 
 def main(argv: "list[str] | None" = None) -> None:
@@ -434,10 +390,12 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser = subparsers.add_parser(
             "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
         )
-        mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
         mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
+        )
+        mklittlefs_parser.add_argument(
+            "-o", "--output", default="littlefs.img", help="output image path (updated in place if it already exists)"
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
