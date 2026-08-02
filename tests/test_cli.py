@@ -59,7 +59,7 @@ def _isolated_cwd(tmp_path, monkeypatch):
 def fake_device(monkeypatch):
     _FakeMicroPythonDevice.last_kwargs = None
     monkeypatch.setattr(cli, "MicroPythonDevice", _FakeMicroPythonDevice)
-    monkeypatch.setattr(cli, "retrieve_micropython", lambda image, is_circuitpython=False: "fixed-image.uf2")
+    monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: "fixed-image.uf2")
     return _FakeMicroPythonDevice
 
 
@@ -121,7 +121,7 @@ def test_circuitpython_mode_skips_missing_fat12_image(fake_device):
 def test_missing_image_prints_the_requested_identifier_not_none(capsys, monkeypatch):
     # Regression test: this used to print the literal string "None" (the *result* of the failed
     # lookup) instead of what the user actually asked for.
-    monkeypatch.setattr(cli, "retrieve_micropython", lambda image, is_circuitpython=False: None)
+    monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: None)
 
     with pytest.raises(SystemExit) as exc_info:
         cli._cmd_micropython(_mp_args(image="totally-bogus-version"))
@@ -221,7 +221,7 @@ def fake_kaluma_device(monkeypatch):
     _FakeKalumaDevice.last_kwargs = None
     _FakeKalumaDevice.last_instance = None
     monkeypatch.setattr(cli, "KalumaDevice", _FakeKalumaDevice)
-    monkeypatch.setattr(cli, "retrieve_kaluma", lambda image: "fixed-kaluma-image.uf2")
+    monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: "fixed-kaluma-image.uf2")
     monkeypatch.setattr(cli, "StdioInteractiveRepl", _FakeStdioInteractiveRepl)
     monkeypatch.setattr(cli, "_wait_for_simulator", lambda simulator, on_interrupt=None: None)
     return _FakeKalumaDevice
@@ -249,7 +249,7 @@ def test_kaluma_sends_nudge_bytes_after_start(fake_kaluma_device):
 
 
 def test_kaluma_missing_image_prints_the_requested_identifier(capsys, monkeypatch):
-    monkeypatch.setattr(cli, "retrieve_kaluma", lambda image: None)
+    monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: None)
 
     with pytest.raises(SystemExit) as exc_info:
         cli._cmd_kaluma(_kaluma_args(image="totally-bogus-version"))

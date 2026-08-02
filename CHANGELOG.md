@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `kaluma` subcommand: runs [Kaluma](https://kaluma.io/) (a JavaScript runtime for RP2040)
   UF2 images, interactive REPL only - Kaluma has no raw-REPL-equivalent protocol, so unlike
   `micropython` there's no `-c`/`-m`/`<filename>`. Missing firmware is downloaded automatically
-  (`rp2040py.cli.kaluma_retrieve`, defaulting to `1.2.1` - the newest release still shipping a
+  (`rp2040py.cli.firmware_retrieve`, defaulting to `1.2.1` - the newest release still shipping a
   plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
   (`--image` is now optional there too), matching `demo/micropython_run.py`.
 - Kaluma littlefs filesystem support: `--littlefs` on the `kaluma` subcommand
@@ -30,12 +30,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rp2040py mklittlefs your_main.py --main your_main.py` work without also having to spell out
   `littlefs.img` explicitly, since that's the same default `micropython` already looks for.
 
+### Fixed
+- `micropython --circuitpython --image v8.0.2` (a `v`-prefixed version tag) silently 404'd instead
+  of downloading - CircuitPython's resolution path never stripped the `v`, unlike MicroPython's
+  (dead code: `mp_retrieve.py`'s `is_circuitpython` branch skipped the very function that did the
+  stripping). Fixed as part of unifying firmware retrieval below, which no longer has a
+  CircuitPython-specific code path to skip it.
+
 ### Internal
 - `RawReplRunner`'s FIFO-backpressure/threading plumbing (`pump()`/queueing, `cdc.on_serial_data`
   wiring) is now shared with the CLI's interactive stdin forwarding and `demo/kaluma_run.py`
   through a new `BaseReplRunner`/`InteractiveRepl` base (`device/repl_runner.py`) and
   `StdioInteractiveRepl` (`cli/stdio_repl.py`), instead of three separate hand-rolled copies of the
   same backpressure loop. No behavior change for CLI users.
+- `cli/mp_retrieve.py` and `cli/kaluma_retrieve.py` merged into `cli/firmware_retrieve.py`: one
+  declarative `FirmwareSpec` per firmware (filename/URL templates, default tag, optional
+  known-version-tag table), loaded from `cli/firmware_specs.json`, plus a single generic
+  `retrieve(spec, image)` instead of three near-duplicate implementations. Per-firmware data now
+  lives in JSON rather than mixed into the retrieval logic as Python literals - adding a new
+  MicroPython release to `known_versions` or bumping a default tag is a plain data edit. No
+  behavior change for CLI users beyond the CircuitPython fix above.
 
 ## [0.1.0b5] - 2026-07-31
 

@@ -11,11 +11,11 @@ Subcommands:
   ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
   instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
   known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
-  missing firmware is downloaded automatically (see ``rp2040py.cli.mp_retrieve``).
+  missing firmware is downloaded automatically (see ``rp2040py.cli.firmware_retrieve``).
 - ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
   only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
   ``-c``/``-m``/``<filename>``. ``--image`` accepts a version tag, a local file path, or is
-  omitted entirely to download the default (see ``rp2040py.cli.kaluma_retrieve``).
+  omitted entirely to download the default (see ``rp2040py.cli.firmware_retrieve``).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
 - ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
@@ -31,10 +31,9 @@ import time
 from collections.abc import Callable
 from importlib.metadata import version
 
+from rp2040py.cli.firmware_retrieve import CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
-from rp2040py.cli.kaluma_retrieve import retrieve_kaluma
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
-from rp2040py.cli.mp_retrieve import retrieve_micropython
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.cli.stdio_repl import os_exit as _os_exit
@@ -128,7 +127,7 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
 
 
 def _cmd_micropython(args: argparse.Namespace) -> None:
-    image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
+    image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
         print(f"Could not find micropython image: {args.image}")
         sys.exit(1)
@@ -206,7 +205,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
 
 def _cmd_kaluma(args: argparse.Namespace) -> None:
-    image_name = retrieve_kaluma(args.image)
+    image_name = retrieve(KALUMA, args.image)
     if image_name is None:
         print(f"Could not find kaluma image: {args.image}")
         sys.exit(1)
