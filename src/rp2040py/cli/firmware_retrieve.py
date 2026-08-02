@@ -1,0 +1,87 @@
+"""Declarative, centralized firmware retrieval: one `FirmwareSpec` per supported firmware
+(filename/URL templates, default tag, optional known-version-tag table), loaded from
+`firmware_specs.json` next to this module, plus a single generic `retrieve()` that resolves a
+version tag/local path/omitted `image` argument into an on-disk UF2, downloading it if necessary.
+
+Keeping the per-firmware data in JSON (not Python literals) means bumping a default tag or adding
+a new MicroPython release to `known_versions` is a plain data edit, not a code change - and rules
+out the kind of `is_circuitpython: bool`-flag special-casing this replaces, where CircuitPython's
+resolution silently skipped the same `v`-prefix stripping MicroPython's got (see CHANGELOG).
+"""
+
+import json
+import os
+from dataclasses import dataclass
+from importlib.resources import files
+
+__all__ = ("CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
+
+
+@dataclass(frozen=True)
+class FirmwareSpec:
+    filename_template: str  # "{version}" placeholder
+    url_template: str  # "{filename}" placeholder, optionally also "{version}"
+    default_tag: str
+    # short tag -> filename-version (e.g. MicroPython's dated slug), prefix-matched; None for
+    # firmware whose tag *is* the filename version (CircuitPython, Kaluma).
+    known_versions: "dict[str, str] | None" = None
+
+
+def _load_specs() -> "dict[str, FirmwareSpec]":
+    raw = json.loads(files(__package__).joinpath("firmware_specs.json").read_text())
+    return {name: FirmwareSpec(**spec) for name, spec in raw.items()}
+
+
+_SPECS = _load_specs()
+MICROPYTHON = _SPECS["micropython"]
+CIRCUITPYTHON = _SPECS["circuitpython"]
+KALUMA = _SPECS["kaluma"]
+
+
+def _resolve_version(spec: FirmwareSpec, tag: str) -> str:
+    tag = tag.removeprefix("v")
+    if spec.known_versions is not None:
+        if tag in spec.known_versions:
+            return spec.known_versions[tag]
+        for known_tag, version in spec.known_versions.items():
+            if known_tag.startswith(tag):
+                return version
+    return tag
+
+
+def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
+    """
+    Args:
+        spec: which firmware to resolve (MICROPYTHON/CIRCUITPYTHON/KALUMA).
+        image: a version tag (defaults to `spec.default_tag`) or a local file path.
+    """
+    if image is None:
+        image = spec.default_tag
+
+    if os.path.exists(image):
+        print(f"Found local image: {image}")
+        return image
+
+    version = _resolve_version(spec, image)
+    filename = spec.filename_template.format(version=version)
+    url = spec.url_template.format(version=version, filename=filename)
+
+    if os.path.exists(filename):
+        print(f"Found local image: {filename}")
+        return filename
+
+    from urllib.error import HTTPError
+    from urllib.request import urlretrieve
+
+    def report_hook(chunk: int, chunk_size: int, size: int) -> object:
+        if chunk == 0:
+            print(f"Download: {filename} from {url}")
+        elif chunk * chunk_size >= size:
+            print(f"Download complete: file saved to: {filename}")
+        return None
+
+    try:
+        urlretrieve(url, filename, reporthook=report_hook)
+    except HTTPError:
+        return None
+    return filename

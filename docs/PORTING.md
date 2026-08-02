@@ -94,9 +94,10 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `demo/load-flash.ts` → `src/rp2040py/device/load_flash.py` (UF2 decoder implemented directly, no external `uf2` package - keeps zero runtime deps)
 - [x] `demo/emulator-run.ts` → `demo/emulator_run.py` (generic hex/uf2 runner + GDB server; thin wrapper around `rp2040py.cli`'s `run` subcommand - see "CLI packaging" below)
 - [x] `demo/micropython-run.ts` → `demo/micropython_run.py` (MicroPython/CircuitPython UF2 runner + USB CDC console; thin wrapper around `rp2040py.cli`'s `micropython` subcommand)
-- [x] `demo/kaluma_run.py` (no rp2040js equivalent) - generic USB-CDC REPL runner for non-MicroPython
-  firmware, talking to `USBCDC` directly rather than wrapping a `rp2040py.cli` subcommand (unlike
-  the two above); verified against [Kaluma](https://kaluma.io/) 1.2.1 - see "CLI packaging" below
+- [x] `demo/kaluma_run.py` (no rp2040js equivalent) - thin wrapper around `rp2040py.cli`'s `kaluma`
+  subcommand, same as `demo/micropython_run.py` (originally talked to `USBCDC` directly before the
+  `kaluma` subcommand existed - see "CLI packaging" below); verified against
+  [Kaluma](https://kaluma.io/) 1.2.1
 - [ ] `debug/gdbdiff.ts` → `debug/gdbdiff.py` (deferred - needs real-hardware GDB client (`test-utils/gdbclient.ts`), out of scope for running firmware in the emulator)
 
 ### MicroPython CI test fixtures (`test/` in rp2040js)
@@ -109,6 +110,10 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `ci-test.yml` → covered by the existing `pre-commit.yml` (mypy + ruff + pytest, equivalent lint/test gate)
 - [x] `ci-micropython.yml` → `ci-micropython.yml` (uv-based)
 - [x] `ci-pico-sdk.yml` → `ci-pico-sdk.yml` (uv-based)
+- [x] `ci-kaluma.yml` (no rp2040js equivalent) - boots real Kaluma firmware end to end, same shape
+  as `ci-micropython.yml` but a boot-only smoke test (`--expect-text` against the unconditional
+  startup banner) rather than an `mklittlefs`-staged code-execution test - see "CLI packaging"
+  below for why Kaluma can't do the latter.
 
 ## Backlog
 
@@ -140,15 +145,21 @@ into the zero-runtime-dependency default install; the `dev` dependency group dep
 demo/*.py` commands keep working unchanged for anyone working from a checkout rather than a
 pip/uv install.
 
-`cli/mp_retrieve.py` (also no rp2040js equivalent) resolves the `micropython --image`/`--circuitpython`
-argument: a known version tag (`MICROPYTHON_KNOWN_FW_VERSIONS`/`CIRCUITPYTHON_DEFAULT_TAG`) or an
-existing local path, downloading the matching UF2 from micropython.org/Adafruit's S3 bucket into the
-current directory on first use and reusing it thereafter. This replaces the previous "download it
-yourself and drop it next to the CLI" instructions in the README; `ci-micropython.yml`'s separate
-`curl` download step was removed accordingly, since `--image <tag>` now does the same job on demand.
+`cli/firmware_retrieve.py` (also no rp2040js equivalent; originally split across `cli/mp_retrieve.py`
+and `cli/kaluma_retrieve.py`, merged once the duplication between them - and a real `v`-prefix bug
+in the CircuitPython path only one of them had - became annoying enough to fix properly) resolves
+`micropython --image`/`--circuitpython` and `kaluma --image`: a known version tag, or an existing
+local path, downloading the matching UF2 into the current directory on first use and reusing it
+thereafter. Each firmware is a declarative `FirmwareSpec` (filename/URL templates, default tag,
+optional known-version-tag table) loaded from `cli/firmware_specs.json` - kept as plain JSON
+data rather than Python literals so bumping a default tag or adding a new MicroPython release is a
+data edit, not a code change - plus one generic `retrieve(spec, image)` instead of three
+near-duplicate implementations. This replaces the previous "download it yourself and drop it next
+to the CLI" instructions in the README; `ci-micropython.yml`'s separate `curl` download step was
+removed accordingly, since `--image <tag>` now does the same job on demand.
 
 `bootrom.py`'s `BOOTROM_B1` (a ~4,100-element constant list) is imported lazily inside the functions
-that need it (`_cmd_run`, `MicroPythonDevice.__init__`, etc.) rather than at module import time, so
+that need it (`_cmd_run`, `BaseDevice.__init__`, etc.) rather than at module import time, so
 commands that don't boot a device - `--version`, `mklittlefs`, `--help` - aren't paying to parse it.
 
 `bootrom.py`/`load_flash.py` (moved there from `demo/`) and `raw_repl.py` deliberately live under
@@ -163,6 +174,30 @@ not a separate implementation. This split exists because `rp2040py.cli` (needing
 latter stayed nested under `cli/` - `device/` has no dependency on `cli/` in either direction.
 `tests/micropython_spi_run.py` (test-only SPI harness, not part of the general CLI) imports
 `rp2040py.device.bootrom`/`load_flash` directly rather than duplicating them.
+
+`device/base_device.py`'s `BaseDevice` (also no rp2040js equivalent) factors out the UF2-boot
+lifecycle `MicroPythonDevice` and the newer `KalumaDevice` (`device/kaluma_device.py`) both need -
+load the image, create the `USBCDC` console, block `start()`/`stop()` around actually running the
+emulator - which used to be duplicated between `MicroPythonDevice.__init__` and
+`demo/kaluma_run.py`'s hand-rolled boot sequence before the `kaluma` subcommand existed.
+`MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `ThreadPoolExecutor` on
+top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
+"CLI packaging" above), so there's no `exec()` to add, just optional `littlefs`/`program` loading.
+
+`KalumaDevice(program=...)`/`load_kaluma_program()` (`device/load_flash.py`) stage a local `.js`
+file into Kaluma's "user program" flash region (offset `0x100000`, 512K, `KALUMA_PROG_SECTOR_BASE=4`
+in `board.h`) - the same region `kaluma flash <file>` writes to on real hardware via YMODEM, which
+`km_runtime_load()` (`src/runtime.c`) auto-executes on every boot. Confirmed by reading
+kaluma-project/kaluma's `src/prog.c` directly that the on-flash format needs no ELF/YMODEM framing
+at all - just the raw source bytes plus a single `\0` terminator (`km_prog_end()`'s
+`page_buffer_push(0)`), unlike the bootrom/UF2 formats elsewhere in this codebase that do need real
+parsing. The write itself is correct and unit-tested, but end-to-end auto-run isn't verified
+working yet - see the CHANGELOG's `kaluma <script.js>` entry for the current diagnosis (ruled out
+the littlefs-mount failure as the cause - `run_board_module()` in `global.c` catches and prints
+that error without aborting the boot sequence; current best theory is this emulator's GPIO model
+not resolving pull-up/pull-down state into an actual reading for undriven pins, which would make
+`km_running_script_check()`'s GP22 read always come back "skip loading" here - not yet fixed or
+confirmed).
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
@@ -302,6 +337,18 @@ no longer bundles by default).
 unconditionally, still defaulting to `2.0` for the reasons above. The `fs` extra's floor was also
 raised to `littlefs-python>=0.18.0` (from `>=0.4.0`) - the version the byte-for-byte comparison
 above was actually run against - while still leaving the upper bound open.
+
+### `mklittlefs` used to silently corrupt images when reusing an output path with different block params
+
+`build_littlefs_image()` originally "updated in place" when `--output` already existed: read the
+existing file's bytes into `UserContext`, then mounted it with *this run's* `block_size`/
+`block_count`. When those didn't match whatever built the file previously (e.g. rebuilding
+`littlefs.img` first at MicroPython's default block count, then again at Kaluma's), littlefs-python
+either silently ignored the new values (image stayed the old size) or reformatted and dropped
+existing files - both with no error or warning, reproducible even against a validly-built image,
+not just a stale/foreign one. Fixed by always building fresh from an empty buffer and requiring
+`-f`/`--force` to overwrite an existing path (raising `ValueError` otherwise) - see the CHANGELOG's
+`mklittlefs -f`/`--force` entry.
 
 ### `mklittlefs` crashes at exit under PyPy (littlefs-python, not a port bug)
 

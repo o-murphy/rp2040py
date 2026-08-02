@@ -1,4 +1,4 @@
-"""Build or update a littlefs image for MicroPython's filesystem support.
+"""Build a littlefs image for MicroPython's filesystem support.
 
 Requires the optional ``littlefs-python`` dependency (``pip install rp2040py[fs]``), imported
 lazily here so the rest of the CLI stays usable without it.
@@ -30,15 +30,22 @@ def build_littlefs_image(
     block_count: int = MICROPYTHON_FS_BLOCKCOUNT,
     disk_version: str = LITTLEFS_DEFAULT_DISK_VERSION,
     main: "str | None" = None,
+    force: bool = False,
 ) -> None:
-    """Write ``files`` into a littlefs image at ``output``, each keeping its own basename.
+    """Write ``files`` into a fresh littlefs image at ``output``, each keeping its own basename.
 
     ``main``, if given, must match the *basename* of one of ``files`` (e.g. ``"app.py"``, not
     ``"src/app.py"``) - that file is written as ``main.py`` (MicroPython's auto-run entry point)
     instead of its own basename. Pass nothing for filesystems that don't need one, e.g. staging
-    modules for a raw-REPL-driven test.
+    modules for a raw-REPL-driven test. ``files`` may be empty, producing a freshly formatted
+    empty image.
 
-    If ``output`` already exists, it's opened and updated in place rather than reformatted.
+    Always builds from scratch - never merges with any existing content at ``output``, since a
+    previous image there may have used a different ``block_size``/``block_count`` (mounting it
+    with today's values would otherwise silently ignore them, or reformat and drop files without
+    warning). Raises ``ValueError`` if ``output`` already exists and ``force`` is not set, instead
+    of overwriting it by surprise.
+
     ``disk_version`` selects the littlefs on-disk format, one of ``LITTLEFS_DISK_VERSIONS``
     (``"2.0"`` or ``"2.1"``).
     """
@@ -51,6 +58,9 @@ def build_littlefs_image(
 
     if disk_version not in LITTLEFS_DISK_VERSIONS:
         raise ValueError(f"unknown disk_version {disk_version!r}; expected one of {tuple(LITTLEFS_DISK_VERSIONS)}")
+
+    if os.path.exists(output) and not force:
+        raise ValueError(f"{output!r} already exists - pass --force to overwrite it")
 
     basenames = [os.path.basename(f) for f in files]
     if main is not None and main not in basenames:
@@ -66,14 +76,7 @@ def build_littlefs_image(
             raise ValueError(f"{filename!r} and {dest_names[dest_name]!r} would both be written as {dest_name!r}")
         dest_names[dest_name] = filename
 
-    if os.path.exists(output):
-        with open(output, "rb") as fh:
-            context = UserContext(buffer=bytearray(fh.read()))
-    else:
-        context = UserContext(buffsize=block_size * block_count)
-
-    # mount=True (the default) mounts the existing filesystem if the buffer holds one, and falls
-    # back to formatting it otherwise - giving us "create or open if it exists" for free.
+    context = UserContext(buffsize=block_size * block_count)
     lfs = LittleFS(
         context=context,
         block_size=block_size,

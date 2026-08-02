@@ -1,0 +1,60 @@
+name: Test Kaluma Releases
+
+on:
+  push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+    paths-ignore: *non-code-paths
+
+concurrency:
+  group: ci-kaluma-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-kaluma:
+    name: Kaluma ${{ matrix.kaluma_version }} / ${{ matrix.python_runtime }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Only the one version manually verified end-to-end (see demo/kaluma_run.py's docstring).
+        # 1.0.0/1.1.0/1.2.0 also ship a plain (non-`-w`) RP2040 `pico` build and could be added,
+        # but their exact boot-banner wording (matched below via --expect-text) wasn't checked
+        # against this older firmware, unlike 1.2.1 - 1.3.0+ dropped the plain `pico` build
+        # entirely (see rp2040py.cli.firmware_specs.json's "kaluma" entry).
+        kaluma_version:
+          - "1.2.1"
+        python_runtime:
+          - pypy-3.10
+          - cpython-3.10
+          - cpython-3.14
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Setup Python ${{ matrix.python_runtime }}
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: ${{ matrix.python_runtime }}
+
+      # Boot-only smoke test: the "Welcome to Kaluma" banner prints unconditionally via
+      # km_repl_init(true) in targets/rp2/src/main.c, before board.js (Kaluma's own startup
+      # script) runs - so this passes regardless of the littlefs-mount bug below, unlike a real
+      # code-execution test staged via the `kaluma <script.js>` "user program" flash region (see
+      # CHANGELOG - known issue, not yet verified end to end because of that bug).
+      - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --expect-text "Welcome to Kaluma"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

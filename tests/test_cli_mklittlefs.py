@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 littlefs = pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra (littlefs-python)")
@@ -112,21 +114,44 @@ def test_binary_content_is_preserved_byte_for_byte(tmp_path):
     assert _read_back(image, "app.py") == b"\r\n\x00\xff\xfe binary garbage \r\n"
 
 
-def test_existing_image_is_updated_in_place_not_reformatted(tmp_path):
+def test_existing_output_without_force_raises_value_error(tmp_path):
+    app_src = tmp_path / "app.py"
+    app_src.write_bytes(b"pass\n")
+    image = str(tmp_path / "littlefs.img")
+
+    build_littlefs_image(image, [str(app_src)])
+
+    with pytest.raises(ValueError, match="already exists"):
+        build_littlefs_image(image, [str(app_src)])
+
+
+def test_force_rebuilds_from_scratch_dropping_files_not_in_the_new_list(tmp_path):
+    # Regression test: build_littlefs_image() used to "update in place" against any existing
+    # output, mounting its old content regardless of whether today's block_size/block_count match
+    # what built it - silently ignoring the new values (or reformatting and dropping files) with
+    # no warning either way. force=True now always rebuilds cleanly instead.
     first_src = tmp_path / "first.py"
     first_src.write_bytes(b"first\n")
     second_src = tmp_path / "second.py"
     second_src.write_bytes(b"second\n")
-    other_src = tmp_path / "other.py"
-    other_src.write_bytes(b"other\n")
     image = str(tmp_path / "littlefs.img")
 
-    build_littlefs_image(image, [str(first_src), str(other_src)], main=first_src.name)
-    build_littlefs_image(image, [str(second_src), str(other_src)], main=second_src.name)
+    build_littlefs_image(image, [str(first_src)])
+    build_littlefs_image(image, [str(second_src)], force=True)
 
-    # main.py now comes from the second build, but other.py survives untouched from the first.
-    assert _read_back(image, "main.py") == b"second\n"
-    assert _read_back(image, "other.py") == b"other\n"
+    assert _read_back(image, "second.py") == b"second\n"
+    with pytest.raises(OSError):
+        _read_back(image, "first.py")  # dropped - not merged from the first build
+
+
+def test_empty_files_list_produces_a_freshly_formatted_image(tmp_path):
+    image = str(tmp_path / "littlefs.img")
+
+    build_littlefs_image(image, [])
+
+    assert os.path.exists(image)
+    with pytest.raises(OSError):
+        _read_back(image, "anything.py")
 
 
 def test_unknown_disk_version_raises_value_error_instead_of_crashing_in_littlefs_python(tmp_path):

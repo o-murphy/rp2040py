@@ -7,12 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `kaluma` subcommand: runs [Kaluma](https://kaluma.io/) (a JavaScript runtime for RP2040)
+  UF2 images, interactive REPL only - Kaluma has no raw-REPL-equivalent protocol, so unlike
+  `micropython` there's no `-c`/`-m`/`<filename>`. Missing firmware is downloaded automatically
+  (`rp2040py.cli.firmware_retrieve`, defaulting to `1.2.1` - the newest release still shipping a
+  plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
+  (`--image` is now optional there too), matching `demo/micropython_run.py`. `--expect-text` works
+  the same way it does for `micropython` (watches serial output for a substring, exits 0 once
+  found). After connecting, `kaluma` sends `.hi\r\n` (a REPL command, not just a blank line) to
+  deterministically reprint the "Welcome to Kaluma" banner - the one Kaluma prints once at actual
+  boot is racy and gets lost before the emulated USB-CDC connection is up (confirmed empirically:
+  a bare `\r\n` nudge never reproduced it, `.hi` did every time), same as real hardware racing a
+  host terminal that isn't already attached (Kaluma's own docs: "if you cannot see the prompt,
+  press Enter several times").
+- `ci-kaluma.yml`: boots real Kaluma 1.2.1 firmware end to end (across the same
+  `python_runtime` matrix as `ci-micropython.yml`) and checks for the (`.hi`-reprinted) boot
+  banner via `--expect-text`. Kaluma has no MicroPython-`main.py`-equivalent auto-run-from-filesystem
+  mechanism (confirmed by reading kaluma-project/kaluma's boot sequence directly - the "user
+  program" auto-run path is a separate flash region written via `.flash -w`/YMODEM, not the
+  littlefs `fs` mount), so this is a boot-only smoke test, not an `mklittlefs`-staged code-execution
+  test like `micropython`'s CI.
+- Kaluma littlefs filesystem support: `--littlefs` on the `kaluma` subcommand
+  (`rp2040py.device.load_flash.load_kaluma_flash_image`), mounted at the same flash region
+  (`0x180000`, 4096-byte blocks, 128 blocks) Kaluma's own `pico`/`pico-w` `board.js` uses
+  (`new Flash(132, 128)`) - confirmed by reading kaluma-project/kaluma's source directly. Build a
+  compatible image with `rp2040py mklittlefs --block-size 4096 --block-count 128`.
+- `rp2040py.device.base_device.BaseDevice`: the UF2-boot lifecycle (load image, create the
+  USB-CDC console, block `start()`/`stop()` around actually running the emulator) shared by
+  `MicroPythonDevice` and the new `KalumaDevice`, instead of each hand-rolling it.
+- `kaluma <script.js>`: stages a local `.js` file into Kaluma's "user program" flash region
+  (`rp2040py.device.load_flash.load_kaluma_program`, `KalumaDevice(program=...)`) before boot -
+  the same flash region (offset `0x100000`, 512K, raw source + a `\0` terminator - no ELF/YMODEM
+  framing) `kaluma flash <file>` writes to on real hardware, confirmed by reading
+  kaluma-project/kaluma's `src/prog.c`/`src/runtime.c` directly. The write itself is correct and
+  covered by unit tests (confirmed the staged bytes land at the right flash offset before boot even
+  starts), but **auto-run isn't verified working end to end yet**: the staged program's output was
+  never observed in manual testing, and `board.js`'s littlefs-mount failure (see `--littlefs` below)
+  turned out *not* to be the cause - `run_board_module()` (`src/global.c`) catches and prints that
+  error without aborting, so `km_runtime_load()` (`src/runtime.c`) still runs afterward regardless.
+  Current best theory: `km_running_script_check()` (`src/system.c`) gates auto-run on reading GP22
+  with a pull-up enabled, and this emulator's GPIO model (`gpio_pin.py`) tracks
+  `pullup_enabled`/`pulldown_enabled` as metadata without resolving them into the actual bit a bus
+  read sees for a pin nothing drives (`_raw_input_value` stays `False`, i.e. reads low, regardless
+  of the pull-up) - which would make `km_running_script_check()` always read "skip loading" in this
+  emulator, matching the observed symptom exactly. Not yet fixed or confirmed; `mklittlefs`/CLI
+  wiring for this ships as-is since the write path is correct in isolation, but treat
+  `kaluma <script.js>` as unverified until the GPIO pull-resolution question is resolved -
+  `ci-kaluma.yml` deliberately stays on the boot-only smoke test above rather than asserting on
+  this.
+- `mklittlefs -f`/`--force`: required to overwrite an existing `--output` path, and `files` may
+  now be empty (producing a freshly formatted, empty image) - see below.
+
 ### Changed
 - **Breaking:** `mklittlefs`'s output image path is now `-o`/`--output <path>` (defaults to
   `littlefs.img`, matching `micropython --littlefs`'s own default) instead of a required
   positional argument - `files` is now the first positional instead of the second. Lets
   `rp2040py mklittlefs your_main.py --main your_main.py` work without also having to spell out
   `littlefs.img` explicitly, since that's the same default `micropython` already looks for.
+- **Breaking:** `mklittlefs` no longer opens an existing `--output` and updates it in place -
+  it now always builds a fresh image from scratch, and refuses to overwrite an existing file
+  unless `-f`/`--force` is given (raising a clear error instead). The old "update in place"
+  behavior silently trusted whatever `--block-size`/`--block-count` built the existing file,
+  regardless of what was passed on this run - reusing an output path with different values (e.g.
+  MicroPython's default block count vs Kaluma's) produced a corrupted or wrong-sized image with no
+  warning; confirmed reproducible even against a validly-built image, not just a stale/foreign
+  one. There's no way to recover the previous "merge new files into an existing image" behavior -
+  rebuild from the full file list instead.
+
+### Fixed
+- `micropython --circuitpython --image v8.0.2` (a `v`-prefixed version tag) silently 404'd instead
+  of downloading - CircuitPython's resolution path never stripped the `v`, unlike MicroPython's
+  (dead code: `mp_retrieve.py`'s `is_circuitpython` branch skipped the very function that did the
+  stripping). Fixed as part of unifying firmware retrieval below, which no longer has a
+  CircuitPython-specific code path to skip it.
 
 ### Internal
 - `RawReplRunner`'s FIFO-backpressure/threading plumbing (`pump()`/queueing, `cdc.on_serial_data`
@@ -20,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a new `BaseReplRunner`/`InteractiveRepl` base (`device/repl_runner.py`) and
   `StdioInteractiveRepl` (`cli/stdio_repl.py`), instead of three separate hand-rolled copies of the
   same backpressure loop. No behavior change for CLI users.
+- `cli/mp_retrieve.py` and `cli/kaluma_retrieve.py` merged into `cli/firmware_retrieve.py`: one
+  declarative `FirmwareSpec` per firmware (filename/URL templates, default tag, optional
+  known-version-tag table), loaded from `cli/firmware_specs.json`, plus a single generic
+  `retrieve(spec, image)` instead of three near-duplicate implementations. Per-firmware data now
+  lives in JSON rather than mixed into the retrieval logic as Python literals - adding a new
+  MicroPython release to `known_versions` or bumping a default tag is a plain data edit. No
+  behavior change for CLI users beyond the CircuitPython fix above.
 
 ## [0.1.0b5] - 2026-07-31
 

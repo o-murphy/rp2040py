@@ -41,6 +41,7 @@ same [src/rp2040py/cli](src/rp2040py/cli) code):
 |---|---|
 | `rp2040py run ...` | `uv run python demo/emulator_run.py ...` |
 | `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
+| `rp2040py kaluma ...` | `uv run python demo/kaluma_run.py ...` |
 | `rp2040py bench ...` | `uv run python demo/benchmark.py ...` |
 
 ### Native code
@@ -135,11 +136,13 @@ With MicroPython, you can use the filesystem on the Pico. This becomes useful as
 The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
 rp2040py[fs]` / `uv sync --extra fs`). Every file keeps its own basename; pass `--main` to mark one
 of them as `main.py` (auto-run on boot) - omit it entirely for a filesystem with no auto-run
-script, e.g. modules staged for a raw-REPL-driven test. If the output image already exists, it's
-opened and updated in place rather than reformatted:
+script, e.g. modules staged for a raw-REPL-driven test, or omit `files` entirely for an empty
+formatted image. Always builds fresh - pass `-f`/`--force` to overwrite an existing `--output`
+(there's no "add these files to the existing image" mode; rebuild from the full file list):
 
 ```sh
 rp2040py mklittlefs -o littlefs.img your_main.py your.py files.py here.py --main your_main.py
+rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # to overwrite it later
 ```
 
 `--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
@@ -182,22 +185,64 @@ sudo umount fat12/  # unmount the filesystem
 
 While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
 
-### Other USB-CDC firmware (not MicroPython/CircuitPython)
+### Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)
 
-The `micropython` subcommand's interactive mode assumes MicroPython/CircuitPython's own REPL
-conventions, but rp2040py's USB/CDC emulation itself isn't MicroPython-specific - any firmware
-presenting a CDC-ACM serial console works the same way underneath. [demo/kaluma_run.py](demo/kaluma_run.py)
-is a generic USB-CDC REPL runner built directly on the same `USBCDC` building block, verified
-against [Kaluma](https://kaluma.io/) (a JavaScript runtime for RP2040) 1.2.1 - it boots, USB
-enumerates, and evaluates real JS at its REPL prompt:
+rp2040py's USB/CDC emulation isn't MicroPython-specific - any firmware presenting a CDC-ACM serial
+console works the same way underneath. The `kaluma` subcommand runs [Kaluma](https://kaluma.io/)
+(a JavaScript runtime for RP2040), verified against 1.2.1 - it boots, USB enumerates, and evaluates
+real JS at its REPL prompt (e.g. sending `1+1` gets back `2`):
 
 ```sh
-python demo/kaluma_run.py --image kaluma-rp2-pico-1.2.1.uf2
+rp2040py kaluma
+# or, without installing:
+uvx rp2040py kaluma
+rp2040py kaluma --image 1.2.1
+rp2040py kaluma --image my_kaluma_image.uf2
 ```
 
-Ctrl+X to exit, same as the MicroPython demo. Not installed as an `rp2040py` console subcommand
-(unlike `run`/`micropython`/`bench`/`mklittlefs`) since it isn't part of the CLI's
-MicroPython/CircuitPython-focused scope - run it from a checkout.
+As with `micropython`, missing firmware is downloaded automatically (**1.2.1** by default - the
+newest release still shipping a plain, non-`-w`, RP2040 `pico` build; 1.3.0+ only ships
+`pico2`/`pico2-w`). Ctrl+X to exit, same as the MicroPython demo. Unlike `micropython`, `kaluma` is
+interactive-only - Kaluma has no raw-REPL-equivalent protocol, so there's no `-c`/`-m`/`<filename>`.
+
+An optional `<script.js>` positional stages a local file into Kaluma's "user program" flash
+region before boot - the same one `kaluma flash <file>` writes to on real hardware, which Kaluma
+auto-executes on every boot:
+
+```sh
+rp2040py kaluma your_script.js
+```
+
+> [!WARNING]
+> This isn't verified working end to end yet. The flash write itself is correct (unit-tested), but
+> the staged program's output was never observed in manual testing. The littlefs-mount failure
+> below turned out *not* to be the cause - Kaluma catches and prints that error without aborting,
+> so auto-run still runs afterward regardless. Current best guess: Kaluma gates auto-run on reading
+> a GPIO pin (GP22) with a pull-up enabled, and this emulator doesn't resolve pull-up/pull-down
+> state into an actual bus reading for pins nothing drives - likely always reading "skip loading"
+> here. Not yet fixed or confirmed. `--expect-text` against the program's own output can't be
+> relied on here; `ci-kaluma.yml` deliberately only checks the boot banner, not this.
+
+Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
+[its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
+4096-byte blocks - a *different* flash region than the user-program one above, with no auto-run
+semantics of its own (plain storage, accessible from JS via `require('fs')`). Build a compatible
+image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_littlefs.img` - a
+different default than MicroPython's `littlefs.img`, since the block size/count differ):
+
+```sh
+rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 your_script.js
+rp2040py kaluma --littlefs kaluma_littlefs.img
+```
+
+This is also where the boot-time littlefs-mount failure above comes from: Kaluma's own `board.js`
+tries to mount this filesystem unconditionally at startup and currently fails in this emulator -
+logging `Bad block at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on
+device` - reproduced even against a validly-built `mklittlefs` image, not just blank flash.
+`--expect-text` (same as `micropython`'s, watching serial output for a substring) still works for
+a plain boot-smoke-test regardless: Kaluma prints its "Welcome to Kaluma" banner unconditionally
+*before* `board.js` runs, so it's unaffected by this (see
+[the Kaluma CI test](./.github/workflows/ci-kaluma.yml)).
 
 ### Library API
 

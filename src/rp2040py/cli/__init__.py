@@ -11,11 +11,22 @@ Subcommands:
   ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
   instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
   known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
-  missing firmware is downloaded automatically (see ``rp2040py.cli.mp_retrieve``).
+  missing firmware is downloaded automatically (see ``rp2040py.cli.firmware_retrieve``).
+- ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
+  only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
+  ``-c``/``-m``/``<filename>`` exec mode. ``--image`` accepts a version tag, a local file path, or
+  is omitted entirely to download the default (see ``rp2040py.cli.firmware_retrieve``). An
+  optional ``<filename>`` positional stages a local ``.js`` file into Kaluma's "user program"
+  flash region before boot, matching ``kaluma flash <file>`` on real hardware - Kaluma
+  auto-executes it on every boot, unlike its ``--littlefs`` filesystem (plain storage, no
+  auto-run of its own).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
-- ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
-  the optional ``fs`` extra: ``pip install rp2040py[fs]``). ``--disk-version`` selects the
+- ``mklittlefs``: build a littlefs image for ``micropython``'s filesystem support (needs
+  the optional ``fs`` extra: ``pip install rp2040py[fs]``); ``-f``/``--force`` to overwrite an
+  existing ``--output`` (always builds fresh - never merges with existing content, since a
+  mismatched ``--block-size``/``--block-count`` against a stale image would otherwise silently
+  produce a corrupted one). ``--disk-version`` selects the
   littlefs on-disk format (defaults to ``2.0``, for compatibility with MicroPython <=1.21).
 """
 
@@ -27,12 +38,13 @@ import time
 from collections.abc import Callable
 from importlib.metadata import version
 
+from rp2040py.cli.firmware_retrieve import CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
-from rp2040py.cli.mp_retrieve import retrieve_micropython
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.cli.stdio_repl import os_exit as _os_exit
+from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
@@ -121,8 +133,34 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
     return None
 
 
+def _make_expect_text_watcher(expect_text: "str | None") -> "Callable[[bytes | bytearray], None]":
+    """Returns an `on_data` callback for `StdioInteractiveRepl` that scans serial output for
+    `expect_text` and exits the process once found - the `--expect-text` CI-test-harness hook
+    shared by `micropython` and `kaluma`."""
+    current_line = ""
+
+    def _watch(value: bytes | bytearray) -> None:
+        nonlocal current_line
+        for byte in value:
+            char = chr(byte)
+            if char == "\n":
+                if expect_text and expect_text in current_line:
+                    print(f'Expected text found: "{expect_text}"')
+                    print("TEST PASSED.")
+                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
+                    # (threading.Timer), and sys.exit() there only terminates that thread, not the
+                    # whole process (unlike Node's process.exit(), which the upstream JS relies on
+                    # here).
+                    _os_exit(0)
+                current_line = ""
+            else:
+                current_line += char
+
+    return _watch
+
+
 def _cmd_micropython(args: argparse.Namespace) -> None:
-    image_name = retrieve_micropython(args.image, is_circuitpython=args.circuitpython)
+    image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
         print(f"Could not find micropython image: {args.image}")
         sys.exit(1)
@@ -164,28 +202,10 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         sys.exit(1 if stderr else 0)
 
     cdc = device.cdc
-    current_line = ""
-
-    def _watch_expect_text(value: bytes | bytearray) -> None:
-        nonlocal current_line
-        for byte in value:
-            char = chr(byte)
-            if char == "\n":
-                if args.expect_text and args.expect_text in current_line:
-                    print(f'Expected text found: "{args.expect_text}"')
-                    print("TEST PASSED.")
-                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
-                    # (threading.Timer), and sys.exit() there only terminates that thread, not the
-                    # whole process (unlike Node's process.exit(), which the upstream JS relies on
-                    # here).
-                    _os_exit(0)
-                current_line = ""
-            else:
-                current_line += char
 
     # Constructed (and its on_serial_data wired) before start() so nothing the device prints
     # while enumerating is dropped.
-    repl = StdioInteractiveRepl(cdc, on_data=_watch_expect_text)
+    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
     repl.start()
 
     device.start(timeout=None)
@@ -195,6 +215,48 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         cdc.send_serial_byte(ord("\n"))
     else:
         cdc.send_serial_byte(3)
+
+    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
+
+
+def _cmd_kaluma(args: argparse.Namespace) -> None:
+    image_name = retrieve(KALUMA, args.image)
+    if image_name is None:
+        print(f"Could not find kaluma image: {args.image}")
+        sys.exit(1)
+
+    print(f"Loading uf2 image: {image_name}")
+    littlefs = args.littlefs if os.path.exists(args.littlefs) else None
+    if littlefs is not None:
+        print(f"Loading littlefs image: {littlefs}")
+
+    if args.filename is not None:
+        print(f"Loading program: {args.filename}")
+
+    device = KalumaDevice(image_name, littlefs=littlefs, program=args.filename)
+
+    if args.gdb:
+        gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+        print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
+
+    cdc = device.cdc
+
+    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+    # while enumerating is dropped.
+    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
+    repl.start()
+
+    device.start(timeout=None)
+    # Kaluma prints its "Welcome to Kaluma" banner exactly once, at boot, before its USB-CDC
+    # connection to the host is actually established - those bytes are gone by the time
+    # device.start() returns (on_device_connected), same as real hardware racing a host terminal
+    # that isn't already attached (Kaluma's own docs: "if you cannot see the prompt, press Enter
+    # several times"). `.hi` (a REPL command, not just a blank line) deterministically reprints
+    # that same banner on demand, now that the connection is guaranteed up - confirmed empirically
+    # against real firmware: a bare "\r\n" nudge alone never reproduced the banner text, `.hi` did
+    # every time. Needed for --expect-text to ever match on it (see ci-kaluma.yml).
+    for byte in b".hi\r\n":
+        cdc.send_serial_byte(byte)
 
     _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 
@@ -323,6 +385,7 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
             block_count=args.block_count,
             disk_version=args.disk_version,
             main=args.main,
+            force=args.force,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -377,6 +440,17 @@ def main(argv: "list[str] | None" = None) -> None:
     mp_source_group.add_argument("filename", nargs="?", help="run the given local script file on the device, then exit")
     mp_parser.set_defaults(func=_cmd_micropython)
 
+    kaluma_parser = subparsers.add_parser("kaluma", help="run a Kaluma UF2 image (interactive REPL only)")
+    kaluma_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
+    kaluma_parser.add_argument("--expect-text")
+    kaluma_parser.add_argument("--gdb", action="store_true")
+    kaluma_parser.add_argument("--gdb-port", type=int, default=3333)
+    kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")
+    kaluma_parser.add_argument(
+        "filename", nargs="?", help="local .js file to stage as the auto-run user program, then boot"
+    )
+    kaluma_parser.set_defaults(func=_cmd_kaluma)
+
     bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")
     bench_parser.add_argument("--block-size", type=int, default=1000, help="synthetic mode: instructions per block")
@@ -388,14 +462,15 @@ def main(argv: "list[str] | None" = None) -> None:
 
     if _HAS_LITTLEFS:
         mklittlefs_parser = subparsers.add_parser(
-            "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
+            "mklittlefs", help="build a littlefs image for `micropython`'s filesystem support"
         )
-        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
+        mklittlefs_parser.add_argument("files", nargs="*", help="source files to add, keeping their own basename")
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
         )
+        mklittlefs_parser.add_argument("-o", "--output", default="littlefs.img", help="output image path")
         mklittlefs_parser.add_argument(
-            "-o", "--output", default="littlefs.img", help="output image path (updated in place if it already exists)"
+            "-f", "--force", action="store_true", help="overwrite `--output` if it already exists"
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
