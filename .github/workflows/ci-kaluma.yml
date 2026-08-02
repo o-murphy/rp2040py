@@ -49,11 +49,11 @@ jobs:
         with:
           python-version: ${{ matrix.python_runtime }}
 
-      # Boot-only smoke test: unlike MicroPython, Kaluma has no auto-run-from-littlefs mechanism
-      # (its startup banner - "Welcome to Kaluma vX.X.X" - prints unconditionally on boot via
-      # km_repl_init(true) in targets/rp2/src/main.c, regardless of any filesystem/user code), so
-      # there's nothing to stage via mklittlefs here - --expect-text just confirms the emulator
-      # boots the real firmware and reaches its REPL.
+      # Boot-only smoke test: the "Welcome to Kaluma" banner prints unconditionally via
+      # km_repl_init(true) in targets/rp2/src/main.c, before board.js (Kaluma's own startup
+      # script) runs - so this passes regardless of the littlefs-mount bug below, unlike a real
+      # code-execution test staged via the `kaluma <script.js>` "user program" flash region (see
+      # CHANGELOG - known issue, not yet verified end to end because of that bug).
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
         run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --expect-text "Welcome to Kaluma"
         env:

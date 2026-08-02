@@ -182,7 +182,20 @@ emulator - which used to be duplicated between `MicroPythonDevice.__init__` and
 `demo/kaluma_run.py`'s hand-rolled boot sequence before the `kaluma` subcommand existed.
 `MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `ThreadPoolExecutor` on
 top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
-"CLI packaging" above), so there's no `exec()` to add, just optional littlefs loading.
+"CLI packaging" above), so there's no `exec()` to add, just optional `littlefs`/`program` loading.
+
+`KalumaDevice(program=...)`/`load_kaluma_program()` (`device/load_flash.py`) stage a local `.js`
+file into Kaluma's "user program" flash region (offset `0x100000`, 512K, `KALUMA_PROG_SECTOR_BASE=4`
+in `board.h`) - the same region `kaluma flash <file>` writes to on real hardware via YMODEM, which
+`km_runtime_load()` (`src/runtime.c`) auto-executes on every boot. Confirmed by reading
+kaluma-project/kaluma's `src/prog.c` directly that the on-flash format needs no ELF/YMODEM framing
+at all - just the raw source bytes plus a single `\0` terminator (`km_prog_end()`'s
+`page_buffer_push(0)`), unlike the bootrom/UF2 formats elsewhere in this codebase that do need real
+parsing. The write itself is correct and unit-tested, but end-to-end auto-run isn't verified
+working yet - see the CHANGELOG's `kaluma <script.js>` entry for the littlefs-mount bug blocking
+manual verification (Kaluma's `board.js` fails to mount littlefs unconditionally on every boot in
+this emulator, reproduced even against a valid `mklittlefs` image, and the staged program's output
+was never observed afterward - root cause not yet identified).
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
@@ -322,6 +335,18 @@ no longer bundles by default).
 unconditionally, still defaulting to `2.0` for the reasons above. The `fs` extra's floor was also
 raised to `littlefs-python>=0.18.0` (from `>=0.4.0`) - the version the byte-for-byte comparison
 above was actually run against - while still leaving the upper bound open.
+
+### `mklittlefs` used to silently corrupt images when reusing an output path with different block params
+
+`build_littlefs_image()` originally "updated in place" when `--output` already existed: read the
+existing file's bytes into `UserContext`, then mounted it with *this run's* `block_size`/
+`block_count`. When those didn't match whatever built the file previously (e.g. rebuilding
+`littlefs.img` first at MicroPython's default block count, then again at Kaluma's), littlefs-python
+either silently ignored the new values (image stayed the old size) or reformatted and dropped
+existing files - both with no error or warning, reproducible even against a validly-built image,
+not just a stale/foreign one. Fixed by always building fresh from an empty buffer and requiring
+`-f`/`--force` to overwrite an existing path (raising `ValueError` otherwise) - see the CHANGELOG's
+`mklittlefs -f`/`--force` entry.
 
 ### `mklittlefs` crashes at exit under PyPy (littlefs-python, not a port bug)
 

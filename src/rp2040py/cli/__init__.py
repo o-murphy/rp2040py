@@ -14,12 +14,19 @@ Subcommands:
   missing firmware is downloaded automatically (see ``rp2040py.cli.firmware_retrieve``).
 - ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
   only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
-  ``-c``/``-m``/``<filename>``. ``--image`` accepts a version tag, a local file path, or is
-  omitted entirely to download the default (see ``rp2040py.cli.firmware_retrieve``).
+  ``-c``/``-m``/``<filename>`` exec mode. ``--image`` accepts a version tag, a local file path, or
+  is omitted entirely to download the default (see ``rp2040py.cli.firmware_retrieve``). An
+  optional ``<filename>`` positional stages a local ``.js`` file into Kaluma's "user program"
+  flash region before boot, matching ``kaluma flash <file>`` on real hardware - Kaluma
+  auto-executes it on every boot, unlike its ``--littlefs`` filesystem (plain storage, no
+  auto-run of its own).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
-- ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
-  the optional ``fs`` extra: ``pip install rp2040py[fs]``). ``--disk-version`` selects the
+- ``mklittlefs``: build a littlefs image for ``micropython``'s filesystem support (needs
+  the optional ``fs`` extra: ``pip install rp2040py[fs]``); ``-f``/``--force`` to overwrite an
+  existing ``--output`` (always builds fresh - never merges with existing content, since a
+  mismatched ``--block-size``/``--block-count`` against a stale image would otherwise silently
+  produce a corrupted one). ``--disk-version`` selects the
   littlefs on-disk format (defaults to ``2.0``, for compatibility with MicroPython <=1.21).
 """
 
@@ -223,7 +230,10 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     if littlefs is not None:
         print(f"Loading littlefs image: {littlefs}")
 
-    device = KalumaDevice(image_name, littlefs=littlefs)
+    if args.filename is not None:
+        print(f"Loading program: {args.filename}")
+
+    device = KalumaDevice(image_name, littlefs=littlefs, program=args.filename)
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -370,6 +380,7 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
             block_count=args.block_count,
             disk_version=args.disk_version,
             main=args.main,
+            force=args.force,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -430,6 +441,9 @@ def main(argv: "list[str] | None" = None) -> None:
     kaluma_parser.add_argument("--gdb", action="store_true")
     kaluma_parser.add_argument("--gdb-port", type=int, default=3333)
     kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")
+    kaluma_parser.add_argument(
+        "filename", nargs="?", help="local .js file to stage as the auto-run user program, then boot"
+    )
     kaluma_parser.set_defaults(func=_cmd_kaluma)
 
     bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")
@@ -443,14 +457,15 @@ def main(argv: "list[str] | None" = None) -> None:
 
     if _HAS_LITTLEFS:
         mklittlefs_parser = subparsers.add_parser(
-            "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
+            "mklittlefs", help="build a littlefs image for `micropython`'s filesystem support"
         )
-        mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
+        mklittlefs_parser.add_argument("files", nargs="*", help="source files to add, keeping their own basename")
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
         )
+        mklittlefs_parser.add_argument("-o", "--output", default="littlefs.img", help="output image path")
         mklittlefs_parser.add_argument(
-            "-o", "--output", default="littlefs.img", help="output image path (updated in place if it already exists)"
+            "-f", "--force", action="store_true", help="overwrite `--output` if it already exists"
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)

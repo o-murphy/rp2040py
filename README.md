@@ -136,11 +136,13 @@ With MicroPython, you can use the filesystem on the Pico. This becomes useful as
 The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
 rp2040py[fs]` / `uv sync --extra fs`). Every file keeps its own basename; pass `--main` to mark one
 of them as `main.py` (auto-run on boot) - omit it entirely for a filesystem with no auto-run
-script, e.g. modules staged for a raw-REPL-driven test. If the output image already exists, it's
-opened and updated in place rather than reformatted:
+script, e.g. modules staged for a raw-REPL-driven test, or omit `files` entirely for an empty
+formatted image. Always builds fresh - pass `-f`/`--force` to overwrite an existing `--output`
+(there's no "add these files to the existing image" mode; rebuild from the full file list):
 
 ```sh
 rp2040py mklittlefs -o littlefs.img your_main.py your.py files.py here.py --main your_main.py
+rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # to overwrite it later
 ```
 
 `--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
@@ -203,24 +205,42 @@ newest release still shipping a plain, non-`-w`, RP2040 `pico` build; 1.3.0+ onl
 `pico2`/`pico2-w`). Ctrl+X to exit, same as the MicroPython demo. Unlike `micropython`, `kaluma` is
 interactive-only - Kaluma has no raw-REPL-equivalent protocol, so there's no `-c`/`-m`/`<filename>`.
 
-Kaluma has its own pluggable littlefs-backed filesystem (see
+An optional `<script.js>` positional stages a local file into Kaluma's "user program" flash
+region before boot - the same one `kaluma flash <file>` writes to on real hardware, which Kaluma
+auto-executes on every boot:
+
+```sh
+rp2040py kaluma your_script.js
+```
+
+> [!WARNING]
+> This isn't verified working end to end yet. The flash write itself is correct (unit-tested), but
+> Kaluma's own `board.js` unconditionally tries to mount a littlefs filesystem on every boot in
+> this emulator and fails (see below) - in manual testing the REPL still comes up fine afterward,
+> but the staged program's output was never observed. Root cause not yet identified. `--expect-text`
+> against the program's own output can't be relied on here; `ci-kaluma.yml` deliberately only
+> checks the boot banner, not this.
+
+Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
 [its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
-4096-byte blocks. Build a compatible image with `mklittlefs` and pass it via `--littlefs`
-(defaults to `kaluma_littlefs.img` - a different default than MicroPython's `littlefs.img`, since
-the block size/count differ):
+4096-byte blocks - a *different* flash region than the user-program one above, with no auto-run
+semantics of its own (plain storage, accessible from JS via `require('fs')`). Build a compatible
+image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_littlefs.img` - a
+different default than MicroPython's `littlefs.img`, since the block size/count differ):
 
 ```sh
 rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 your_script.js
 rp2040py kaluma --littlefs kaluma_littlefs.img
 ```
 
-Note this filesystem is plain storage (accessible from JS via `require('fs')`) - unlike
-MicroPython's `main.py`, Kaluma has no mechanism to auto-run a file from it on boot, so
-`--littlefs` alone won't execute any of your code without evaluating it at the REPL yourself
-(interactively, or by piping it into stdin). `--expect-text` (same as `micropython`'s, watching
-serial output for a substring) is still useful for scripting/CI: Kaluma always prints its "Welcome
-to Kaluma" banner unconditionally on boot, so it works as a plain boot-smoke-test even without
-staging any code (see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml)).
+This is also where the boot-time littlefs-mount failure above comes from: Kaluma's own `board.js`
+tries to mount this filesystem unconditionally at startup and currently fails in this emulator -
+logging `Bad block at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on
+device` - reproduced even against a validly-built `mklittlefs` image, not just blank flash.
+`--expect-text` (same as `micropython`'s, watching serial output for a substring) still works for
+a plain boot-smoke-test regardless: Kaluma prints its "Welcome to Kaluma" banner unconditionally
+*before* `board.js` runs, so it's unaffected by this (see
+[the Kaluma CI test](./.github/workflows/ci-kaluma.yml)).
 
 ### Library API
 

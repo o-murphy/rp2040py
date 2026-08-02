@@ -32,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rp2040py.device.base_device.BaseDevice`: the UF2-boot lifecycle (load image, create the
   USB-CDC console, block `start()`/`stop()` around actually running the emulator) shared by
   `MicroPythonDevice` and the new `KalumaDevice`, instead of each hand-rolling it.
+- `kaluma <script.js>`: stages a local `.js` file into Kaluma's "user program" flash region
+  (`rp2040py.device.load_flash.load_kaluma_program`, `KalumaDevice(program=...)`) before boot -
+  the same flash region (offset `0x100000`, 512K, raw source + a `\0` terminator - no ELF/YMODEM
+  framing) `kaluma flash <file>` writes to on real hardware, confirmed by reading
+  kaluma-project/kaluma's `src/prog.c`/`src/runtime.c` directly. The write itself is correct and
+  covered by unit tests, but **auto-run isn't verified working end to end yet**: Kaluma's own
+  `board.js` unconditionally tries (and fails) to mount littlefs on every boot in this emulator -
+  reproduced even against a valid `mklittlefs`-built image, not just blank flash as previously
+  assumed - and the staged program's output was never observed afterward in manual testing (the
+  REPL itself stays responsive, so this isn't a hang, just an apparent silent no-op past that
+  point). Root cause not yet identified; `mklittlefs`/CLI wiring for this ships as-is since the
+  code is correct in isolation, but treat `kaluma <script.js>` as unverified until this is
+  resolved - `ci-kaluma.yml` deliberately stays on the boot-only smoke test above rather than
+  asserting on this.
+- `mklittlefs -f`/`--force`: required to overwrite an existing `--output` path, and `files` may
+  now be empty (producing a freshly formatted, empty image) - see below.
 
 ### Changed
 - **Breaking:** `mklittlefs`'s output image path is now `-o`/`--output <path>` (defaults to
@@ -39,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positional argument - `files` is now the first positional instead of the second. Lets
   `rp2040py mklittlefs your_main.py --main your_main.py` work without also having to spell out
   `littlefs.img` explicitly, since that's the same default `micropython` already looks for.
+- **Breaking:** `mklittlefs` no longer opens an existing `--output` and updates it in place -
+  it now always builds a fresh image from scratch, and refuses to overwrite an existing file
+  unless `-f`/`--force` is given (raising a clear error instead). The old "update in place"
+  behavior silently trusted whatever `--block-size`/`--block-count` built the existing file,
+  regardless of what was passed on this run - reusing an output path with different values (e.g.
+  MicroPython's default block count vs Kaluma's) produced a corrupted or wrong-sized image with no
+  warning; confirmed reproducible even against a validly-built image, not just a stale/foreign
+  one. There's no way to recover the previous "merge new files into an existing image" behavior -
+  rebuild from the full file list instead.
 
 ### Fixed
 - `micropython --circuitpython --image v8.0.2` (a `v`-prefixed version tag) silently 404'd instead

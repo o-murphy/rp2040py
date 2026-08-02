@@ -166,6 +166,7 @@ def _kaluma_args(**overrides):
         "gdb": False,
         "gdb_port": 3333,
         "littlefs": "kaluma_littlefs.img",
+        "filename": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -189,8 +190,8 @@ class _FakeKalumaDevice:
     last_kwargs: "dict | None" = None
     last_instance: "_FakeKalumaDevice | None" = None
 
-    def __init__(self, image, littlefs=None):
-        _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs}
+    def __init__(self, image, littlefs=None, program=None):
+        _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs, "program": program}
         _FakeKalumaDevice.last_instance = self
         self.simulator = None
         self.cdc = _FakeKalumaCdc()
@@ -233,13 +234,27 @@ def test_kaluma_mode_loads_littlefs_image_when_present(tmp_path, fake_kaluma_dev
 
     cli._cmd_kaluma(_kaluma_args())
 
-    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": "kaluma_littlefs.img"}
+    assert fake_kaluma_device.last_kwargs == {
+        "image": "fixed-kaluma-image.uf2",
+        "littlefs": "kaluma_littlefs.img",
+        "program": None,
+    }
 
 
 def test_kaluma_mode_skips_missing_littlefs_image(fake_kaluma_device):
     cli._cmd_kaluma(_kaluma_args())
 
-    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None}
+    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None, "program": None}
+
+
+def test_kaluma_mode_stages_program_when_filename_given(fake_kaluma_device):
+    cli._cmd_kaluma(_kaluma_args(filename="index.js"))
+
+    assert fake_kaluma_device.last_kwargs == {
+        "image": "fixed-kaluma-image.uf2",
+        "littlefs": None,
+        "program": "index.js",
+    }
 
 
 def test_kaluma_sends_nudge_bytes_after_start(fake_kaluma_device):
@@ -262,7 +277,7 @@ def test_kaluma_missing_image_prints_the_requested_identifier(capsys, monkeypatc
 def test_kaluma_end_to_end_through_argparse(fake_kaluma_device):
     cli.main(["kaluma", "--image", "1.2.1"])
 
-    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None}
+    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None, "program": None}
 
 
 class TestRawReplSource:
@@ -329,3 +344,39 @@ def test_mklittlefs_rejects_main_not_in_files_cleanly(capsys, tmp_path):
 
     assert exc_info.value.code == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_mklittlefs_rejects_existing_output_without_force(capsys, tmp_path):
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    app_src = tmp_path / "app.py"
+    app_src.write_text("pass\n")
+    image = tmp_path / "out.img"
+
+    cli.main(["mklittlefs", "-o", str(image), str(app_src)])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["mklittlefs", "-o", str(image), str(app_src)])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_mklittlefs_force_overwrites_existing_output(tmp_path):
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    app_src = tmp_path / "app.py"
+    app_src.write_text("pass\n")
+    image = tmp_path / "out.img"
+
+    cli.main(["mklittlefs", "-o", str(image), str(app_src)])
+    cli.main(["mklittlefs", "-o", str(image), "--force", str(app_src)])
+
+    assert image.exists()
+
+
+def test_mklittlefs_allows_no_files(tmp_path):
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    image = tmp_path / "out.img"
+
+    cli.main(["mklittlefs", "-o", str(image)])
+
+    assert image.exists()

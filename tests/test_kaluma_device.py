@@ -4,6 +4,8 @@ import time
 import pytest
 
 from rp2040py.device.kaluma_device import KalumaDevice
+from rp2040py.device.load_flash import KALUMA_PROG_FLASH_START, KALUMA_PROG_MAX_SIZE, load_kaluma_program
+from rp2040py.rp2040 import RP2040
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -80,3 +82,47 @@ def test_no_littlefs_image_by_default(garbage_image, monkeypatch):
     KalumaDevice(garbage_image)
 
     assert calls == []
+
+
+def test_program_loaded_via_load_kaluma_program(garbage_image, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "rp2040py.device.kaluma_device.load_kaluma_program",
+        lambda filename, rp2040: calls.append((filename, rp2040)),
+    )
+
+    device = KalumaDevice(garbage_image, program="index.js")
+
+    assert calls == [("index.js", device.mcu)]
+
+
+def test_no_program_by_default(garbage_image, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "rp2040py.device.kaluma_device.load_kaluma_program",
+        lambda filename, rp2040: calls.append((filename, rp2040)),
+    )
+
+    KalumaDevice(garbage_image)
+
+    assert calls == []
+
+
+def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_region(tmp_path):
+    script = tmp_path / "index.js"
+    script.write_text('console.log("hi");')
+    rp2040 = RP2040()
+
+    load_kaluma_program(str(script), rp2040)
+
+    written = rp2040.flash[KALUMA_PROG_FLASH_START : KALUMA_PROG_FLASH_START + len(b'console.log("hi");') + 1]
+    assert written == b'console.log("hi");\x00'
+
+
+def test_load_kaluma_program_rejects_a_source_too_large_for_the_prog_region(tmp_path):
+    script = tmp_path / "huge.js"
+    script.write_bytes(b"x" * KALUMA_PROG_MAX_SIZE)  # +1 for the NUL terminator tips it over
+    rp2040 = RP2040()
+
+    with pytest.raises(ValueError, match="exceeds Kaluma's"):
+        load_kaluma_program(str(script), rp2040)
