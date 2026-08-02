@@ -159,6 +159,111 @@ def test_exec_mode_exits_nonzero_when_device_writes_to_stderr(fake_device, monke
     assert exc_info.value.code == 1
 
 
+def _kaluma_args(**overrides):
+    defaults = {
+        "image": None,
+        "gdb": False,
+        "gdb_port": 3333,
+        "littlefs": "kaluma_littlefs.img",
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+class _FakeKalumaCdc:
+    def __init__(self):
+        self.sent = bytearray()
+        self.on_serial_data = None
+        self.on_device_connected = None
+
+    def send_serial_byte(self, byte):
+        self.sent.append(byte)
+
+
+class _FakeKalumaDevice:
+    """Stands in for KalumaDevice so _cmd_kaluma can be driven end-to-end without booting a real
+    emulator or touching the network - only the littlefs wiring passed into the constructor and
+    the nudge bytes sent to `.cdc` matter for these tests."""
+
+    last_kwargs: "dict | None" = None
+    last_instance: "_FakeKalumaDevice | None" = None
+
+    def __init__(self, image, littlefs=None):
+        _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs}
+        _FakeKalumaDevice.last_instance = self
+        self.simulator = None
+        self.cdc = _FakeKalumaCdc()
+
+    def start(self, timeout=None):
+        pass
+
+    def stop(self):
+        pass
+
+
+class _FakeStdioInteractiveRepl:
+    """Stands in for StdioInteractiveRepl - _cmd_kaluma has no non-interactive escape hatch (no
+    -c/-m/<filename> like _cmd_micropython), so the real class (raw termios, a stdin-reading
+    thread, _wait_for_simulator's loop) would otherwise block these tests."""
+
+    def __init__(self, cdc, on_data=None):
+        self.cdc = cdc
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+@pytest.fixture
+def fake_kaluma_device(monkeypatch):
+    _FakeKalumaDevice.last_kwargs = None
+    _FakeKalumaDevice.last_instance = None
+    monkeypatch.setattr(cli, "KalumaDevice", _FakeKalumaDevice)
+    monkeypatch.setattr(cli, "retrieve_kaluma", lambda image: "fixed-kaluma-image.uf2")
+    monkeypatch.setattr(cli, "StdioInteractiveRepl", _FakeStdioInteractiveRepl)
+    monkeypatch.setattr(cli, "_wait_for_simulator", lambda simulator, on_interrupt=None: None)
+    return _FakeKalumaDevice
+
+
+def test_kaluma_mode_loads_littlefs_image_when_present(tmp_path, fake_kaluma_device):
+    (tmp_path / "kaluma_littlefs.img").write_bytes(b"")
+
+    cli._cmd_kaluma(_kaluma_args())
+
+    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": "kaluma_littlefs.img"}
+
+
+def test_kaluma_mode_skips_missing_littlefs_image(fake_kaluma_device):
+    cli._cmd_kaluma(_kaluma_args())
+
+    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None}
+
+
+def test_kaluma_sends_nudge_bytes_after_start(fake_kaluma_device):
+    cli._cmd_kaluma(_kaluma_args())
+
+    assert fake_kaluma_device.last_instance is not None
+    assert bytes(fake_kaluma_device.last_instance.cdc.sent) == b"\r\n"
+
+
+def test_kaluma_missing_image_prints_the_requested_identifier(capsys, monkeypatch):
+    monkeypatch.setattr(cli, "retrieve_kaluma", lambda image: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_kaluma(_kaluma_args(image="totally-bogus-version"))
+
+    assert exc_info.value.code == 1
+    assert "totally-bogus-version" in capsys.readouterr().out
+
+
+def test_kaluma_end_to_end_through_argparse(fake_kaluma_device):
+    cli.main(["kaluma", "--image", "1.2.1"])
+
+    assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None}
+
+
 class TestRawReplSource:
     def test_command_takes_priority(self):
         args = _mp_args(command="1 + 1", module="sys", filename="script.py")

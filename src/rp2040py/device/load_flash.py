@@ -15,6 +15,7 @@ __all__ = (
     "UF2Block",
     "decode_block",
     "load_circuitpython_flash_image",
+    "load_kaluma_flash_image",
     "load_micropython_flash_image",
     "load_uf2",
 )
@@ -26,6 +27,13 @@ MICROPYTHON_FS_BLOCKCOUNT = 352
 CIRCUITPYTHON_FS_FLASH_START = 0x100000
 CIRCUITPYTHON_FS_BLOCKSIZE = 4096
 CIRCUITPYTHON_FS_BLOCKCOUNT = 512
+
+# Kaluma's `pico`/`pico-w` board.js mounts littlefs via `new Flash(132, 128)` - sector 132,
+# 128 sectors - on top of a 1008K (0xFC000) firmware region with 4096-byte sectors:
+# 0xFC000 + 132*4096 = 0x180000. See targets/rp2/boards/pico/board.h in kaluma-project/kaluma.
+KALUMA_FS_FLASH_START = 0x180000
+KALUMA_FS_BLOCKSIZE = 4096
+KALUMA_FS_BLOCKCOUNT = 128
 
 UF2_BLOCK_SIZE = 512
 UF2_MAGIC_START0 = 0x0A324655
@@ -73,6 +81,10 @@ def load_micropython_flash_image(filename: str, rp2040: RP2040) -> None:
 
 def load_circuitpython_flash_image(filename: str, rp2040: RP2040) -> None:
     _load_flash_image(filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE)
+
+
+def load_kaluma_flash_image(filename: str, rp2040: RP2040) -> None:
+    _load_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE)
 
 
 def load_uf2(filename: str, rp2040: RP2040) -> None:

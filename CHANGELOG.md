@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `kaluma` subcommand: runs [Kaluma](https://kaluma.io/) (a JavaScript runtime for RP2040)
+  UF2 images, interactive REPL only - Kaluma has no raw-REPL-equivalent protocol, so unlike
+  `micropython` there's no `-c`/`-m`/`<filename>`. Missing firmware is downloaded automatically
+  (`rp2040py.cli.kaluma_retrieve`, defaulting to `1.2.1` - the newest release still shipping a
+  plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
+  (`--image` is now optional there too), matching `demo/micropython_run.py`.
+- Kaluma littlefs filesystem support: `--littlefs` on the `kaluma` subcommand
+  (`rp2040py.device.load_flash.load_kaluma_flash_image`), mounted at the same flash region
+  (`0x180000`, 4096-byte blocks, 128 blocks) Kaluma's own `pico`/`pico-w` `board.js` uses
+  (`new Flash(132, 128)`) - confirmed by reading kaluma-project/kaluma's source directly. Build a
+  compatible image with `rp2040py mklittlefs --block-size 4096 --block-count 128`.
+- `rp2040py.device.base_device.BaseDevice`: the UF2-boot lifecycle (load image, create the
+  USB-CDC console, block `start()`/`stop()` around actually running the emulator) shared by
+  `MicroPythonDevice` and the new `KalumaDevice`, instead of each hand-rolling it.
+
 ### Changed
 - **Breaking:** `mklittlefs`'s output image path is now `-o`/`--output <path>` (defaults to
   `littlefs.img`, matching `micropython --littlefs`'s own default) instead of a required

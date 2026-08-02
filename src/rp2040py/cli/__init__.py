@@ -12,6 +12,10 @@ Subcommands:
   instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
   known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
   missing firmware is downloaded automatically (see ``rp2040py.cli.mp_retrieve``).
+- ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
+  only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
+  ``-c``/``-m``/``<filename>``. ``--image`` accepts a version tag, a local file path, or is
+  omitted entirely to download the default (see ``rp2040py.cli.kaluma_retrieve``).
 - ``bench``: synthetic and real-firmware-boot throughput benchmark for
   ``CortexM0Core.execute_instruction()``.
 - ``mklittlefs``: build/update a littlefs image for ``micropython``'s filesystem support (needs
@@ -28,11 +32,13 @@ from collections.abc import Callable
 from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
+from rp2040py.cli.kaluma_retrieve import retrieve_kaluma
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.mp_retrieve import retrieve_micropython
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.cli.stdio_repl import os_exit as _os_exit
+from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
@@ -195,6 +201,40 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         cdc.send_serial_byte(ord("\n"))
     else:
         cdc.send_serial_byte(3)
+
+    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
+
+
+def _cmd_kaluma(args: argparse.Namespace) -> None:
+    image_name = retrieve_kaluma(args.image)
+    if image_name is None:
+        print(f"Could not find kaluma image: {args.image}")
+        sys.exit(1)
+
+    print(f"Loading uf2 image: {image_name}")
+    littlefs = args.littlefs if os.path.exists(args.littlefs) else None
+    if littlefs is not None:
+        print(f"Loading littlefs image: {littlefs}")
+
+    device = KalumaDevice(image_name, littlefs=littlefs)
+
+    if args.gdb:
+        gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+        print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
+
+    cdc = device.cdc
+
+    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+    # while enumerating is dropped.
+    repl = StdioInteractiveRepl(cdc)
+    repl.start()
+
+    device.start(timeout=None)
+    # A blank line nudges Kaluma's REPL into printing its prompt (its own docs: "if you cannot see
+    # the prompt, press Enter several times") - no raw-REPL-equivalent nudge byte to send instead,
+    # unlike micropython's --circuitpython branch.
+    cdc.send_serial_byte(ord("\r"))
+    cdc.send_serial_byte(ord("\n"))
 
     _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 
@@ -376,6 +416,13 @@ def main(argv: "list[str] | None" = None) -> None:
     )
     mp_source_group.add_argument("filename", nargs="?", help="run the given local script file on the device, then exit")
     mp_parser.set_defaults(func=_cmd_micropython)
+
+    kaluma_parser = subparsers.add_parser("kaluma", help="run a Kaluma UF2 image (interactive REPL only)")
+    kaluma_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
+    kaluma_parser.add_argument("--gdb", action="store_true")
+    kaluma_parser.add_argument("--gdb-port", type=int, default=3333)
+    kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")
+    kaluma_parser.set_defaults(func=_cmd_kaluma)
 
     bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")

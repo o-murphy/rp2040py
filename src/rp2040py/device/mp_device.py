@@ -33,13 +33,10 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TypeVar
 
 from rp2040py.clock.clock import IClock
-from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image, load_uf2
+from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice, connect_blocking
+from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
-from rp2040py.memory_map import FLASH_START_ADDRESS
-from rp2040py.rp2040 import RP2040
-from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
-from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 _T = TypeVar("_T")
 
@@ -47,8 +44,6 @@ __all__ = (
     "DEFAULT_TIMEOUT",
     "MicroPythonDevice",
 )
-
-DEFAULT_TIMEOUT = 30.0
 
 
 def _result(future: "Future[_T]", timeout: "float | None") -> _T:
@@ -67,15 +62,6 @@ async def _await(future: "Future[_T]", timeout: "float | None") -> _T:
         return await asyncio.wait_for(asyncio.wrap_future(future), timeout)
     except (FutureTimeoutError, asyncio.TimeoutError) as exc:
         raise TimeoutError(f"did not complete within {timeout}s") from exc
-
-
-def _connect_blocking(cdc: USBCDC, simulator: Simulator, mcu: RP2040, timeout: "float | None") -> None:
-    connected = threading.Event()
-    cdc.on_device_connected = connected.set
-    mcu.core.pc = FLASH_START_ADDRESS
-    threading.Thread(target=simulator.execute, daemon=True).start()
-    if not connected.wait(timeout):
-        raise TimeoutError(f"device did not enumerate over USB within {timeout}s")
 
 
 def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
@@ -130,7 +116,7 @@ def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float 
     return runner.result
 
 
-class MicroPythonDevice:
+class MicroPythonDevice(BaseDevice):
     """Boots a MicroPython/CircuitPython UF2 image and lets you run code on it programmatically
     via the raw-REPL protocol (the same one `mpremote run`/`pyboard.py` and Thonny's "Run" use
     over a real serial port).
@@ -147,24 +133,18 @@ class MicroPythonDevice:
         fat12: "str | None" = None,
         circuitpython: bool = False,
     ) -> None:
-        self.simulator = Simulator()
-        self.mcu: RP2040 = self.simulator.rp2040
-
-        from rp2040py.device.bootrom import BOOTROM_B1
-
-        self.mcu.load_bootrom(BOOTROM_B1)
-        self.mcu.logger = ConsoleLogger(LogLevel.ERROR)
-        load_uf2(image, self.mcu)
+        super().__init__(image)
         if littlefs is not None:
             load_micropython_flash_image(littlefs, self.mcu)
         if fat12 is not None:
             load_circuitpython_flash_image(fat12, self.mcu)
         self.circuitpython = circuitpython
-        self.cdc = USBCDC(self.mcu.usb_ctrl)
         self._executor = ThreadPoolExecutor(max_workers=1)
-        self._started = False
 
     # -- start -----------------------------------------------------------------------------
+    # Overridden (rather than inheriting BaseDevice.start()/stop() as-is) to route through
+    # self._executor - the same single-worker queue exec_async() uses, so start_async()/
+    # exec_async() calls made back-to-back queue behind each other instead of racing.
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails
@@ -172,7 +152,7 @@ class MicroPythonDevice:
         if self._started:
             raise RuntimeError("start()/start_async() already called")
         self._started = True
-        return self._executor.submit(_connect_blocking, self.cdc, self.simulator, self.mcu, timeout)
+        return self._executor.submit(connect_blocking, self.cdc, self.simulator, self.mcu, timeout)
 
     def start(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
         """Blocking version of `start_async()`."""
@@ -182,14 +162,10 @@ class MicroPythonDevice:
         """asyncio version of `start_async()`."""
         await _await(self.start_async(timeout), timeout)
 
-    def stop(self) -> None:
-        """Halt the emulator. Safe to call even if `start()` was never called.
-
-        Note: this does not resolve any Futures from an `exec_async()`/`start_async()` call still
-        in flight - if you called those with `timeout=None`, stopping mid-exec leaves that Future
-        pending forever, since the device will never send the response it was waiting for.
-        """
-        self.simulator.stop()
+    # stop() inherited from BaseDevice unchanged. Note: it does not resolve any Futures from an
+    # exec_async()/start_async() call still in flight - if you called those with timeout=None,
+    # stopping mid-exec leaves that Future pending forever, since the device will never send the
+    # response it was waiting for.
 
     # -- exec ------------------------------------------------------------------------------
 
@@ -234,13 +210,8 @@ class MicroPythonDevice:
         return await _await(self.exec_file_async(path, timeout=timeout), timeout)
 
     # -- context managers --------------------------------------------------------------------
-
-    def __enter__(self) -> "MicroPythonDevice":  # noqa: PYI034 (Self needs Python 3.11+)
-        self.start()
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.stop()
+    # sync __enter__/__exit__ inherited from BaseDevice - self.start()/self.stop() there resolve
+    # to this class's own overrides via normal polymorphism.
 
     async def __aenter__(self) -> "MicroPythonDevice":  # noqa: PYI034 (Self needs Python 3.11+)
         await self.astart()
