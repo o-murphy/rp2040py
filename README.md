@@ -215,11 +215,13 @@ rp2040py kaluma your_script.js
 
 > [!WARNING]
 > This isn't verified working end to end yet. The flash write itself is correct (unit-tested), but
-> Kaluma's own `board.js` unconditionally tries to mount a littlefs filesystem on every boot in
-> this emulator and fails (see below) - in manual testing the REPL still comes up fine afterward,
-> but the staged program's output was never observed. Root cause not yet identified. `--expect-text`
-> against the program's own output can't be relied on here; `ci-kaluma.yml` deliberately only
-> checks the boot banner, not this.
+> the staged program's output was never observed in manual testing. The littlefs-mount failure
+> below turned out *not* to be the cause - Kaluma catches and prints that error without aborting,
+> so auto-run still runs afterward regardless. Current best guess: Kaluma gates auto-run on reading
+> a GPIO pin (GP22) with a pull-up enabled, and this emulator doesn't resolve pull-up/pull-down
+> state into an actual bus reading for pins nothing drives - likely always reading "skip loading"
+> here. Not yet fixed or confirmed. `--expect-text` against the program's own output can't be
+> relied on here; `ci-kaluma.yml` deliberately only checks the boot banner, not this.
 
 Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
 [its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with

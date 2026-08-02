@@ -247,11 +247,16 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     repl.start()
 
     device.start(timeout=None)
-    # A blank line nudges Kaluma's REPL into printing its prompt (its own docs: "if you cannot see
-    # the prompt, press Enter several times") - no raw-REPL-equivalent nudge byte to send instead,
-    # unlike micropython's --circuitpython branch.
-    cdc.send_serial_byte(ord("\r"))
-    cdc.send_serial_byte(ord("\n"))
+    # Kaluma prints its "Welcome to Kaluma" banner exactly once, at boot, before its USB-CDC
+    # connection to the host is actually established - those bytes are gone by the time
+    # device.start() returns (on_device_connected), same as real hardware racing a host terminal
+    # that isn't already attached (Kaluma's own docs: "if you cannot see the prompt, press Enter
+    # several times"). `.hi` (a REPL command, not just a blank line) deterministically reprints
+    # that same banner on demand, now that the connection is guaranteed up - confirmed empirically
+    # against real firmware: a bare "\r\n" nudge alone never reproduced the banner text, `.hi` did
+    # every time. Needed for --expect-text to ever match on it (see ci-kaluma.yml).
+    for byte in b".hi\r\n":
+        cdc.send_serial_byte(byte)
 
     _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 

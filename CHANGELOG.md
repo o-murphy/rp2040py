@@ -15,11 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
   (`--image` is now optional there too), matching `demo/micropython_run.py`. `--expect-text` works
   the same way it does for `micropython` (watches serial output for a substring, exits 0 once
-  found) - useful here since Kaluma always prints its "Welcome to Kaluma" banner unconditionally on
-  boot, unlike MicroPython's `main.py`-driven output which needs a littlefs image staged first.
+  found). After connecting, `kaluma` sends `.hi\r\n` (a REPL command, not just a blank line) to
+  deterministically reprint the "Welcome to Kaluma" banner - the one Kaluma prints once at actual
+  boot is racy and gets lost before the emulated USB-CDC connection is up (confirmed empirically:
+  a bare `\r\n` nudge never reproduced it, `.hi` did every time), same as real hardware racing a
+  host terminal that isn't already attached (Kaluma's own docs: "if you cannot see the prompt,
+  press Enter several times").
 - `ci-kaluma.yml`: boots real Kaluma 1.2.1 firmware end to end (across the same
-  `python_runtime` matrix as `ci-micropython.yml`) and checks for the boot banner via
-  `--expect-text`. Kaluma has no MicroPython-`main.py`-equivalent auto-run-from-filesystem
+  `python_runtime` matrix as `ci-micropython.yml`) and checks for the (`.hi`-reprinted) boot
+  banner via `--expect-text`. Kaluma has no MicroPython-`main.py`-equivalent auto-run-from-filesystem
   mechanism (confirmed by reading kaluma-project/kaluma's boot sequence directly - the "user
   program" auto-run path is a separate flash region written via `.flash -w`/YMODEM, not the
   littlefs `fs` mount), so this is a boot-only smoke test, not an `mklittlefs`-staged code-execution
@@ -37,15 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same flash region (offset `0x100000`, 512K, raw source + a `\0` terminator - no ELF/YMODEM
   framing) `kaluma flash <file>` writes to on real hardware, confirmed by reading
   kaluma-project/kaluma's `src/prog.c`/`src/runtime.c` directly. The write itself is correct and
-  covered by unit tests, but **auto-run isn't verified working end to end yet**: Kaluma's own
-  `board.js` unconditionally tries (and fails) to mount littlefs on every boot in this emulator -
-  reproduced even against a valid `mklittlefs`-built image, not just blank flash as previously
-  assumed - and the staged program's output was never observed afterward in manual testing (the
-  REPL itself stays responsive, so this isn't a hang, just an apparent silent no-op past that
-  point). Root cause not yet identified; `mklittlefs`/CLI wiring for this ships as-is since the
-  code is correct in isolation, but treat `kaluma <script.js>` as unverified until this is
-  resolved - `ci-kaluma.yml` deliberately stays on the boot-only smoke test above rather than
-  asserting on this.
+  covered by unit tests (confirmed the staged bytes land at the right flash offset before boot even
+  starts), but **auto-run isn't verified working end to end yet**: the staged program's output was
+  never observed in manual testing, and `board.js`'s littlefs-mount failure (see `--littlefs` below)
+  turned out *not* to be the cause - `run_board_module()` (`src/global.c`) catches and prints that
+  error without aborting, so `km_runtime_load()` (`src/runtime.c`) still runs afterward regardless.
+  Current best theory: `km_running_script_check()` (`src/system.c`) gates auto-run on reading GP22
+  with a pull-up enabled, and this emulator's GPIO model (`gpio_pin.py`) tracks
+  `pullup_enabled`/`pulldown_enabled` as metadata without resolving them into the actual bit a bus
+  read sees for a pin nothing drives (`_raw_input_value` stays `False`, i.e. reads low, regardless
+  of the pull-up) - which would make `km_running_script_check()` always read "skip loading" in this
+  emulator, matching the observed symptom exactly. Not yet fixed or confirmed; `mklittlefs`/CLI
+  wiring for this ships as-is since the write path is correct in isolation, but treat
+  `kaluma <script.js>` as unverified until the GPIO pull-resolution question is resolved -
+  `ci-kaluma.yml` deliberately stays on the boot-only smoke test above rather than asserting on
+  this.
 - `mklittlefs -f`/`--force`: required to overwrite an existing `--output` path, and `files` may
   now be empty (producing a freshly formatted, empty image) - see below.
 

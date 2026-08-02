@@ -261,7 +261,10 @@ def test_kaluma_sends_nudge_bytes_after_start(fake_kaluma_device):
     cli._cmd_kaluma(_kaluma_args())
 
     assert fake_kaluma_device.last_instance is not None
-    assert bytes(fake_kaluma_device.last_instance.cdc.sent) == b"\r\n"
+    # .hi (not just a blank line) is needed to deterministically reprint the "Welcome to Kaluma"
+    # banner - the one printed at boot is racy and gets lost before the CDC connection is up
+    # (confirmed against real firmware).
+    assert bytes(fake_kaluma_device.last_instance.cdc.sent) == b".hi\r\n"
 
 
 def test_kaluma_missing_image_prints_the_requested_identifier(capsys, monkeypatch):

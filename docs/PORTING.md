@@ -192,10 +192,12 @@ kaluma-project/kaluma's `src/prog.c` directly that the on-flash format needs no 
 at all - just the raw source bytes plus a single `\0` terminator (`km_prog_end()`'s
 `page_buffer_push(0)`), unlike the bootrom/UF2 formats elsewhere in this codebase that do need real
 parsing. The write itself is correct and unit-tested, but end-to-end auto-run isn't verified
-working yet - see the CHANGELOG's `kaluma <script.js>` entry for the littlefs-mount bug blocking
-manual verification (Kaluma's `board.js` fails to mount littlefs unconditionally on every boot in
-this emulator, reproduced even against a valid `mklittlefs` image, and the staged program's output
-was never observed afterward - root cause not yet identified).
+working yet - see the CHANGELOG's `kaluma <script.js>` entry for the current diagnosis (ruled out
+the littlefs-mount failure as the cause - `run_board_module()` in `global.c` catches and prints
+that error without aborting the boot sequence; current best theory is this emulator's GPIO model
+not resolving pull-up/pull-down state into an actual reading for undriven pins, which would make
+`km_running_script_check()`'s GP22 read always come back "skip loading" here - not yet fixed or
+confirmed).
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
