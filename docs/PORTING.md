@@ -191,13 +191,37 @@ in `board.h`) - the same region `kaluma flash <file>` writes to on real hardware
 kaluma-project/kaluma's `src/prog.c` directly that the on-flash format needs no ELF/YMODEM framing
 at all - just the raw source bytes plus a single `\0` terminator (`km_prog_end()`'s
 `page_buffer_push(0)`), unlike the bootrom/UF2 formats elsewhere in this codebase that do need real
-parsing. The write itself is correct and unit-tested, but end-to-end auto-run isn't verified
-working yet - see the CHANGELOG's `kaluma <script.js>` entry for the current diagnosis (ruled out
-the littlefs-mount failure as the cause - `run_board_module()` in `global.c` catches and prints
-that error without aborting the boot sequence; current best theory is this emulator's GPIO model
-not resolving pull-up/pull-down state into an actual reading for undriven pins, which would make
-`km_running_script_check()`'s GP22 read always come back "skip loading" here - not yet fixed or
-confirmed).
+parsing. Getting this to actually auto-execute needed the GPIO pull-up/pull-down resolution fix
+below - see there for the diagnosis (`km_running_script_check()` in `src/system.c` gates auto-run
+on reading GP22 with a pull-up enabled; ruled out the littlefs-mount failure discussed above as an
+alternate cause first - `run_board_module()` in `global.c` catches and prints that error without
+aborting the boot sequence, so it was never actually blocking anything).
+
+### GPIO pull-up/pull-down wasn't resolved into an actual bus reading for undriven pins
+
+Found while debugging why `KalumaDevice(program=...)` never auto-executed even though the write to
+flash was confirmably correct: `gpio_pin.py`'s `GPIOPin` (matching upstream rp2040js's `GPIOPin`
+closely enough that this is very likely present there too - worth filing upstream) tracked
+`pullup_enabled`/`pulldown_enabled` purely as pad-control-register metadata, never resolving them
+into the actual bit `input_value`/`status` (and therefore firmware's `gpio_get()`) reads for a pin
+nothing actively drives - `_raw_input_value` just stayed at its default `False` regardless of which
+pull was configured, i.e. every undriven pin silently read low no matter what. Real hardware
+resolves a floating, pulled-up pin to high.
+
+This directly explained the Kaluma symptom: `km_running_script_check()` enables GP22's pull-up and
+reads it to decide whether to skip auto-run (GP22 wired to GND is the documented "recovery mode"
+signal) - an always-low reading is indistinguishable from "wired to GND," so auto-run silently
+never ran, regardless of anything staged in the "user program" flash region.
+
+Fixed by adding a `_driven` flag (set only by `set_input_value()`, the actual external-drive API -
+button harnesses, other simulated peripherals) and a `_effective_raw_input_value` property that
+falls back to resolving the enabled pull direction when the pin has never been driven, used in
+`input_value`/`status` instead of the raw flag directly. `refresh_input()` (called whenever
+`input_enable` toggles, e.g. from a normal `gpio_init()` config write - unrelated to anything
+actually driving the pin) had to stop routing through `set_input_value()` for this to work - it
+used to, and would otherwise have permanently marked every reconfigured pin as "driven" with its
+stale default value the moment `input_enable` was toggled, defeating pull resolution immediately
+for exactly the GP22 case this fixes. See `tests/test_gpio_pin.py`.
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus

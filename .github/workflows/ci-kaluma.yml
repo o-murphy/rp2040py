@@ -49,12 +49,14 @@ jobs:
         with:
           python-version: ${{ matrix.python_runtime }}
 
-      # Boot-only smoke test: the "Welcome to Kaluma" banner prints unconditionally via
-      # km_repl_init(true) in targets/rp2/src/main.c, before board.js (Kaluma's own startup
-      # script) runs - so this passes regardless of the littlefs-mount bug below, unlike a real
-      # code-execution test staged via the `kaluma <script.js>` "user program" flash region (see
-      # CHANGELOG - known issue, not yet verified end to end because of that bug).
+      # Real code-execution test: stages tests/kaluma/index.js into Kaluma's "user program" flash
+      # region (same one `kaluma flash index.js` writes to on real hardware), which Kaluma
+      # auto-executes on every boot. This needed the GPIO pull-up/pull-down resolution fix in
+      # gpio_pin.py to actually work (km_running_script_check() in Kaluma's system.c reads GP22
+      # with a pull-up enabled to decide whether to skip auto-run - an undriven pin used to always
+      # read low regardless of the pull, which looked identical to GP22 being pulled to GND, i.e.
+      # "skip loading"). No mklittlefs step needed - the program stages directly from the file.
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --expect-text "Welcome to Kaluma"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

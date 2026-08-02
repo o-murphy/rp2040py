@@ -213,15 +213,10 @@ auto-executes on every boot:
 rp2040py kaluma your_script.js
 ```
 
-> [!WARNING]
-> This isn't verified working end to end yet. The flash write itself is correct (unit-tested), but
-> the staged program's output was never observed in manual testing. The littlefs-mount failure
-> below turned out *not* to be the cause - Kaluma catches and prints that error without aborting,
-> so auto-run still runs afterward regardless. Current best guess: Kaluma gates auto-run on reading
-> a GPIO pin (GP22) with a pull-up enabled, and this emulator doesn't resolve pull-up/pull-down
-> state into an actual bus reading for pins nothing drives - likely always reading "skip loading"
-> here. Not yet fixed or confirmed. `--expect-text` against the program's own output can't be
-> relied on here; `ci-kaluma.yml` deliberately only checks the boot banner, not this.
+Give it a few real seconds after connecting before expecting output - like MicroPython, booting
+real firmware through an interpreted emulator takes actual wall-clock time (JerryScript engine
+init, then running your script), not something `--expect-text` needs to work around, just something
+to expect if driving this non-interactively.
 
 Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
 [its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
@@ -235,14 +230,22 @@ rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 y
 rp2040py kaluma --littlefs kaluma_littlefs.img
 ```
 
-This is also where the boot-time littlefs-mount failure above comes from: Kaluma's own `board.js`
-tries to mount this filesystem unconditionally at startup and currently fails in this emulator -
-logging `Bad block at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on
-device` - reproduced even against a validly-built `mklittlefs` image, not just blank flash.
-`--expect-text` (same as `micropython`'s, watching serial output for a substring) still works for
-a plain boot-smoke-test regardless: Kaluma prints its "Welcome to Kaluma" banner unconditionally
-*before* `board.js` runs, so it's unaffected by this (see
-[the Kaluma CI test](./.github/workflows/ci-kaluma.yml)).
+> [!NOTE]
+> Kaluma's own `board.js` tries to mount this filesystem unconditionally at startup and currently
+> fails in this emulator regardless of whether `--littlefs` is given - logging `Bad block at 0x0`/
+> `Superblock 0x0 has become unwritable`/`Error: No space left on device` (reproduced even against
+> a validly-built `mklittlefs` image, not just blank flash) - root cause not yet identified. Purely
+> cosmetic so far: Kaluma catches and prints the error without aborting, so boot and `<script.js>`
+> auto-run both continue normally past it.
+
+Kaluma prints its "Welcome to Kaluma" banner exactly once, right at boot - but that's before the
+emulated USB-CDC connection to the host is actually up, so (same as real hardware racing a host
+terminal that isn't already attached - Kaluma's own docs: "if you cannot see the prompt, press
+Enter several times") those bytes are typically gone by the time anything's listening. `kaluma`
+doesn't send anything to work around this - type `.hi` yourself at the prompt to reprint the same
+banner on demand if you need to see it; if you're scripting against a device's output instead of
+typing at it interactively, stage a `<script.js>` and match against *its* output, which isn't racy
+(see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml), which does exactly that).
 
 ### Library API
 
