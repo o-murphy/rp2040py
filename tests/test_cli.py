@@ -162,6 +162,7 @@ def test_exec_mode_exits_nonzero_when_device_writes_to_stderr(fake_device, monke
 def _kaluma_args(**overrides):
     defaults = {
         "image": None,
+        "expect_text": None,
         "gdb": False,
         "gdb_port": 3333,
         "littlefs": "kaluma_littlefs.img",

@@ -13,7 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `micropython` there's no `-c`/`-m`/`<filename>`. Missing firmware is downloaded automatically
   (`rp2040py.cli.firmware_retrieve`, defaulting to `1.2.1` - the newest release still shipping a
   plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
-  (`--image` is now optional there too), matching `demo/micropython_run.py`.
+  (`--image` is now optional there too), matching `demo/micropython_run.py`. `--expect-text` works
+  the same way it does for `micropython` (watches serial output for a substring, exits 0 once
+  found) - useful here since Kaluma always prints its "Welcome to Kaluma" banner unconditionally on
+  boot, unlike MicroPython's `main.py`-driven output which needs a littlefs image staged first.
+- `ci-kaluma.yml`: boots real Kaluma 1.2.1 firmware end to end (across the same
+  `python_runtime` matrix as `ci-micropython.yml`) and checks for the boot banner via
+  `--expect-text`. Kaluma has no MicroPython-`main.py`-equivalent auto-run-from-filesystem
+  mechanism (confirmed by reading kaluma-project/kaluma's boot sequence directly - the "user
+  program" auto-run path is a separate flash region written via `.flash -w`/YMODEM, not the
+  littlefs `fs` mount), so this is a boot-only smoke test, not an `mklittlefs`-staged code-execution
+  test like `micropython`'s CI.
 - Kaluma littlefs filesystem support: `--littlefs` on the `kaluma` subcommand
   (`rp2040py.device.load_flash.load_kaluma_flash_image`), mounted at the same flash region
   (`0x180000`, 4096-byte blocks, 128 blocks) Kaluma's own `pico`/`pico-w` `board.js` uses

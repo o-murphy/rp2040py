@@ -126,6 +126,32 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
     return None
 
 
+def _make_expect_text_watcher(expect_text: "str | None") -> "Callable[[bytes | bytearray], None]":
+    """Returns an `on_data` callback for `StdioInteractiveRepl` that scans serial output for
+    `expect_text` and exits the process once found - the `--expect-text` CI-test-harness hook
+    shared by `micropython` and `kaluma`."""
+    current_line = ""
+
+    def _watch(value: bytes | bytearray) -> None:
+        nonlocal current_line
+        for byte in value:
+            char = chr(byte)
+            if char == "\n":
+                if expect_text and expect_text in current_line:
+                    print(f'Expected text found: "{expect_text}"')
+                    print("TEST PASSED.")
+                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
+                    # (threading.Timer), and sys.exit() there only terminates that thread, not the
+                    # whole process (unlike Node's process.exit(), which the upstream JS relies on
+                    # here).
+                    _os_exit(0)
+                current_line = ""
+            else:
+                current_line += char
+
+    return _watch
+
+
 def _cmd_micropython(args: argparse.Namespace) -> None:
     image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
@@ -169,28 +195,10 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         sys.exit(1 if stderr else 0)
 
     cdc = device.cdc
-    current_line = ""
-
-    def _watch_expect_text(value: bytes | bytearray) -> None:
-        nonlocal current_line
-        for byte in value:
-            char = chr(byte)
-            if char == "\n":
-                if args.expect_text and args.expect_text in current_line:
-                    print(f'Expected text found: "{args.expect_text}"')
-                    print("TEST PASSED.")
-                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
-                    # (threading.Timer), and sys.exit() there only terminates that thread, not the
-                    # whole process (unlike Node's process.exit(), which the upstream JS relies on
-                    # here).
-                    _os_exit(0)
-                current_line = ""
-            else:
-                current_line += char
 
     # Constructed (and its on_serial_data wired) before start() so nothing the device prints
     # while enumerating is dropped.
-    repl = StdioInteractiveRepl(cdc, on_data=_watch_expect_text)
+    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
     repl.start()
 
     device.start(timeout=None)
@@ -225,7 +233,7 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
 
     # Constructed (and its on_serial_data wired) before start() so nothing the device prints
     # while enumerating is dropped.
-    repl = StdioInteractiveRepl(cdc)
+    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
     repl.start()
 
     device.start(timeout=None)
@@ -418,6 +426,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     kaluma_parser = subparsers.add_parser("kaluma", help="run a Kaluma UF2 image (interactive REPL only)")
     kaluma_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
+    kaluma_parser.add_argument("--expect-text")
     kaluma_parser.add_argument("--gdb", action="store_true")
     kaluma_parser.add_argument("--gdb-port", type=int, default=3333)
     kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")

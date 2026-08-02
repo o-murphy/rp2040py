@@ -214,6 +214,14 @@ rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 y
 rp2040py kaluma --littlefs kaluma_littlefs.img
 ```
 
+Note this filesystem is plain storage (accessible from JS via `require('fs')`) - unlike
+MicroPython's `main.py`, Kaluma has no mechanism to auto-run a file from it on boot, so
+`--littlefs` alone won't execute any of your code without evaluating it at the REPL yourself
+(interactively, or by piping it into stdin). `--expect-text` (same as `micropython`'s, watching
+serial output for a substring) is still useful for scripting/CI: Kaluma always prints its "Welcome
+to Kaluma" banner unconditionally on boot, so it works as a plain boot-smoke-test even without
+staging any code (see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml)).
+
 ### Library API
 
 Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
