@@ -15,19 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain, non-`-w`, RP2040 `pico` build). `demo/kaluma_run.py` is now a thin wrapper around it
   (`--image` is now optional there too), matching `demo/micropython_run.py`. `--expect-text` works
   the same way it does for `micropython` (watches serial output for a substring, exits 0 once
-  found). After connecting, `kaluma` sends `.hi\r\n` (a REPL command, not just a blank line) to
-  deterministically reprint the "Welcome to Kaluma" banner - the one Kaluma prints once at actual
-  boot is racy and gets lost before the emulated USB-CDC connection is up (confirmed empirically:
-  a bare `\r\n` nudge never reproduced it, `.hi` did every time), same as real hardware racing a
-  host terminal that isn't already attached (Kaluma's own docs: "if you cannot see the prompt,
-  press Enter several times").
-- `ci-kaluma.yml`: boots real Kaluma 1.2.1 firmware end to end (across the same
-  `python_runtime` matrix as `ci-micropython.yml`) and checks for the (`.hi`-reprinted) boot
-  banner via `--expect-text`. Kaluma has no MicroPython-`main.py`-equivalent auto-run-from-filesystem
-  mechanism (confirmed by reading kaluma-project/kaluma's boot sequence directly - the "user
-  program" auto-run path is a separate flash region written via `.flash -w`/YMODEM, not the
-  littlefs `fs` mount), so this is a boot-only smoke test, not an `mklittlefs`-staged code-execution
-  test like `micropython`'s CI.
+  found). Unlike `micropython`, `kaluma` sends nothing proactively after connecting - Kaluma's own
+  one-time boot banner is racy regardless (gone by the time the emulated USB-CDC connection is
+  actually up, same as real hardware racing a host terminal that isn't already attached yet -
+  Kaluma's own docs: "if you cannot see the prompt, press Enter several times"; `.hi` reliably
+  reprints it on demand if you need to see it), while a staged `<script.js>`'s own output isn't
+  racy and needs no nudge at all (see below).
+- `ci-kaluma.yml`: boots real Kaluma 1.2.1 firmware end to end (across the same `python_runtime`
+  matrix as `ci-micropython.yml`), stages `tests/kaluma/index.js` into the "user program" flash
+  region (see `kaluma <script.js>` below) and checks for its `console.log()` output via
+  `--expect-text` - a genuine code-execution test, not just a boot check, now that auto-run is
+  confirmed working end to end.
 - Kaluma littlefs filesystem support: `--littlefs` on the `kaluma` subcommand
   (`rp2040py.device.load_flash.load_kaluma_flash_image`), mounted at the same flash region
   (`0x180000`, 4096-byte blocks, 128 blocks) Kaluma's own `pico`/`pico-w` `board.js` uses
@@ -40,22 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`rp2040py.device.load_flash.load_kaluma_program`, `KalumaDevice(program=...)`) before boot -
   the same flash region (offset `0x100000`, 512K, raw source + a `\0` terminator - no ELF/YMODEM
   framing) `kaluma flash <file>` writes to on real hardware, confirmed by reading
-  kaluma-project/kaluma's `src/prog.c`/`src/runtime.c` directly. The write itself is correct and
-  covered by unit tests (confirmed the staged bytes land at the right flash offset before boot even
-  starts), but **auto-run isn't verified working end to end yet**: the staged program's output was
-  never observed in manual testing, and `board.js`'s littlefs-mount failure (see `--littlefs` below)
-  turned out *not* to be the cause - `run_board_module()` (`src/global.c`) catches and prints that
-  error without aborting, so `km_runtime_load()` (`src/runtime.c`) still runs afterward regardless.
-  Current best theory: `km_running_script_check()` (`src/system.c`) gates auto-run on reading GP22
-  with a pull-up enabled, and this emulator's GPIO model (`gpio_pin.py`) tracks
-  `pullup_enabled`/`pulldown_enabled` as metadata without resolving them into the actual bit a bus
-  read sees for a pin nothing drives (`_raw_input_value` stays `False`, i.e. reads low, regardless
-  of the pull-up) - which would make `km_running_script_check()` always read "skip loading" in this
-  emulator, matching the observed symptom exactly. Not yet fixed or confirmed; `mklittlefs`/CLI
-  wiring for this ships as-is since the write path is correct in isolation, but treat
-  `kaluma <script.js>` as unverified until the GPIO pull-resolution question is resolved -
-  `ci-kaluma.yml` deliberately stays on the boot-only smoke test above rather than asserting on
-  this.
+  kaluma-project/kaluma's `src/prog.c`/`src/runtime.c` directly, and auto-executed on every boot
+  (see the GPIO pull-up/pull-down fix below - needed for this to actually run). Verified end to end
+  manually and via `ci-kaluma.yml`. Unlike the one-time boot banner above, the auto-run program's
+  own output isn't racy - it arrives on its own without needing a nudge, just takes a few real
+  seconds after connecting (JerryScript engine init + running the script, same "real firmware boot
+  takes real wall-clock time under an interpreted emulator" story as MicroPython's own boot time).
 - `mklittlefs -f`/`--force`: required to overwrite an existing `--output` path, and `files` may
   now be empty (producing a freshly formatted, empty image) - see below.
 

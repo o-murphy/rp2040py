@@ -247,16 +247,11 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     repl.start()
 
     device.start(timeout=None)
-    # Kaluma prints its "Welcome to Kaluma" banner exactly once, at boot, before its USB-CDC
-    # connection to the host is actually established - those bytes are gone by the time
-    # device.start() returns (on_device_connected), same as real hardware racing a host terminal
-    # that isn't already attached (Kaluma's own docs: "if you cannot see the prompt, press Enter
-    # several times"). `.hi` (a REPL command, not just a blank line) deterministically reprints
-    # that same banner on demand, now that the connection is guaranteed up - confirmed empirically
-    # against real firmware: a bare "\r\n" nudge alone never reproduced the banner text, `.hi` did
-    # every time. Needed for --expect-text to ever match on it (see ci-kaluma.yml).
-    for byte in b".hi\r\n":
-        cdc.send_serial_byte(byte)
+    # No nudge sent: Kaluma's own boot-time "Welcome to Kaluma" banner is racy (gone by the time
+    # the USB-CDC connection is actually up, same as real hardware racing a host terminal that
+    # isn't attached yet - Kaluma's own docs: "if you cannot see the prompt, press Enter several
+    # times"), but a staged <script.js>'s own auto-run output isn't - it arrives on its own a few
+    # real seconds after connecting, no nudge needed (unlike the banner, confirmed empirically).
 
     _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 

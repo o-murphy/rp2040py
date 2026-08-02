@@ -62,6 +62,13 @@ class GPIOPin:
         self.name = name if name is not None else str(index)
 
         self._raw_input_value = False
+        # Whether something has ever actively driven this pin via set_input_value() (a button/
+        # peripheral/test harness wired to it) - as opposed to it just floating. Real hardware
+        # resolves a floating pin's read to whichever pull resistor is enabled instead of a fixed
+        # low; _raw_input_value alone can't distinguish "actively driven low" from "never driven"
+        # (both start/stay False), so firmware reading an undriven, pulled-up pin (e.g. Kaluma's
+        # GP22 "skip auto-run" check) would otherwise always see it as low regardless of the pull.
+        self._driven = False
 
         # NOTE: matches upstream rp2040js field-initializer ordering, where `lastValue = this.value`
         # is evaluated before `ctrl`/`padValue` receive their real initial values below - the
@@ -171,8 +178,22 @@ class GPIOPin:
         return False
 
     @property
+    def _effective_raw_input_value(self) -> bool:
+        """The pad's actual electrical reading: whatever last actively drove it, or - if nothing
+        ever has - resolved from whichever pull resistor is enabled (matching real hardware; a
+        floating pin isn't guaranteed low). Bus-keeper mode (both pulls enabled) and no-pulls both
+        fall back to the plain _raw_input_value default, same as before this resolution existed."""
+        if self._driven:
+            return self._raw_input_value
+        if self.pullup_enabled and not self.pulldown_enabled:
+            return True
+        if self.pulldown_enabled and not self.pullup_enabled:
+            return False
+        return self._raw_input_value
+
+    @property
     def input_value(self) -> bool:
-        return _apply_override(self._raw_input_value and self.input_enable, self.input_override)
+        return _apply_override(self._effective_raw_input_value and self.input_enable, self.input_override)
 
     @property
     def irq_value(self) -> bool:
@@ -192,7 +213,7 @@ class GPIOPin:
         irq_to_proc = 1 << 26 if self.irq_value else 0
         irq_from_pad = 1 << 24 if self.raw_interrupt else 0
         in_to_peri = 1 << 19 if self.input_value else 0
-        in_from_pad = 1 << 17 if self._raw_input_value else 0
+        in_from_pad = 1 << 17 if self._effective_raw_input_value else 0
         oe_to_pad = 1 << 13 if self.output_enable else 0
         oe_from_peri = 1 << 12 if self.raw_output_enable else 0
         out_to_pad = 1 << 9 if self.output_value else 0
@@ -224,6 +245,13 @@ class GPIOPin:
         return GPIOPinState.INPUT
 
     def set_input_value(self, value: bool) -> None:
+        self._driven = True
+        self._apply_input_value(value)
+
+    def _apply_input_value(self, value: bool) -> None:
+        # Shared by set_input_value() (an actual external drive) and refresh_input() (just
+        # re-evaluating IRQ/PWM/PIO wait state after e.g. input_enable toggled) - only the former
+        # should mark the pin as driven, so _driven is set in set_input_value() itself, not here.
         self._raw_input_value = value
         prev_irq_value = self.irq_value
         if value and self.input_enable:
@@ -254,7 +282,7 @@ class GPIOPin:
                 listener(value, last_value)
 
     def refresh_input(self) -> None:
-        self.set_input_value(self._raw_input_value)
+        self._apply_input_value(self._raw_input_value)
 
     def update_irq_value(self, value: int) -> None:
         if value & IRQ_EDGE_LOW and self.irq_status & IRQ_EDGE_LOW:
