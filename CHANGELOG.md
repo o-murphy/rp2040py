@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `mklittlefs`'s output image path is now `-o`/`--output <path>` (defaults to
+  `littlefs.img`, matching `micropython --littlefs`'s own default) instead of a required
+  positional argument - `files` is now the first positional instead of the second. Lets
+  `rp2040py mklittlefs your_main.py --main your_main.py` work without also having to spell out
+  `littlefs.img` explicitly, since that's the same default `micropython` already looks for.
+
+### Internal
+- `RawReplRunner`'s FIFO-backpressure/threading plumbing (`pump()`/queueing, `cdc.on_serial_data`
+  wiring) is now shared with the CLI's interactive stdin forwarding and `demo/kaluma_run.py`
+  through a new `BaseReplRunner`/`InteractiveRepl` base (`device/repl_runner.py`) and
+  `StdioInteractiveRepl` (`cli/stdio_repl.py`), instead of three separate hand-rolled copies of the
+  same backpressure loop. No behavior change for CLI users.
+
 ## [0.1.0b5] - 2026-07-31
 
 ### Added

@@ -21,12 +21,9 @@ Quit with Ctrl+X, same as `micropython`'s interactive mode.
 
 import argparse
 import os
-import sys
-import termios
-import threading
 import time
-import tty
 
+from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.load_flash import load_uf2
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
@@ -56,52 +53,12 @@ def main() -> None:
 
     cdc = USBCDC(mcu.usb_ctrl)
 
-    def _on_serial_data(value: "bytes | bytearray") -> None:
-        sys.stdout.buffer.write(value)
-        sys.stdout.flush()
-
-    # Registered before start so nothing the device prints while enumerating is dropped.
-    cdc.on_serial_data = _on_serial_data
-
-    stdin_fd = sys.stdin.fileno()
-    old_termios = None
-    if sys.stdin.isatty():
-        old_termios = termios.tcgetattr(stdin_fd)
-        tty.setraw(stdin_fd)
-
-    def _restore_termios() -> None:
-        if old_termios is not None:
-            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
-
-    def _read_stdin_loop() -> None:
-        try:
-            while True:
-                chunk = os.read(stdin_fd, 4096)
-                if not chunk:
-                    break
-                # 24 is Ctrl+X
-                if chunk[0] == 24:
-                    # os._exit(), not sys.exit(): this runs on the dedicated stdin reader thread,
-                    # not the main thread, so sys.exit() would only terminate that thread instead
-                    # of the whole process.
-                    _restore_termios()
-                    os._exit(0)
-                for byte in chunk:
-                    # Backpressure, not a plain send_serial_byte() loop: cdc.tx_fifo is a bounded
-                    # 512-byte buffer that silently drops pushes once full instead of raising or
-                    # blocking (see RawReplRunner.pump()'s docstring for the full story - same
-                    # underlying issue, found there first). A single large paste into the terminal
-                    # can easily arrive as one >512-byte os.read() chunk, so this waits for room
-                    # rather than assuming send_serial_byte() always has some. Blocking this
-                    # dedicated stdin thread is fine - unlike in the raw-REPL upload path, nothing
-                    # else needs it to keep running.
-                    while cdc.tx_fifo.item_count >= cdc.tx_fifo.size:
-                        time.sleep(0.001)
-                    cdc.send_serial_byte(byte)
-        finally:
-            _restore_termios()
-
-    threading.Thread(target=_read_stdin_loop, daemon=True).start()
+    # Constructed (and its on_serial_data wired) before start so nothing the device prints while
+    # enumerating is dropped. Handles raw termios mode, stdin forwarding with FIFO backpressure,
+    # and Ctrl+X to quit - the same building block `rp2040py micropython`'s interactive mode uses,
+    # since none of that is MicroPython-specific.
+    repl = StdioInteractiveRepl(cdc)
+    repl.start()
 
     def _on_device_connected() -> None:
         # A blank line nudges most CDC REPLs (Kaluma's own docs: "if you cannot see the prompt,
@@ -124,7 +81,7 @@ def main() -> None:
         while simulator.executing:
             time.sleep(0.1)
     except KeyboardInterrupt:
-        _restore_termios()
+        repl.stop()
         simulator.stop()
         os._exit(130)
 

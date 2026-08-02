@@ -23,16 +23,16 @@ import argparse
 import importlib.util
 import os
 import sys
-import termios
-import threading
 import time
-import tty
 from collections.abc import Callable
 from importlib.metadata import version
 
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.mp_retrieve import retrieve_micropython
+from rp2040py.cli.stdio_repl import StdioInteractiveRepl
+from rp2040py.cli.stdio_repl import buf_write as _buf_write
+from rp2040py.cli.stdio_repl import os_exit as _os_exit
 from rp2040py.device.load_flash import (
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
@@ -55,32 +55,6 @@ __all__ = ("main",)
 # runtime dependency - only register the subcommand (and thus advertise it in --help) when it's
 # actually installed, instead of adding it unconditionally and failing lazily once invoked.
 _HAS_LITTLEFS = importlib.util.find_spec("littlefs") is not None
-
-_FIFO_TIMEOUT = 0.001
-
-
-def _os_exit(status):
-    if "Pythonista3.app" in sys.executable or "Python IDE.app" in sys.executable:
-        sys.exit(status)
-    os._exit(status)
-
-
-def _ensure_fifo_space(cdc: USBCDC):
-    while cdc.tx_fifo.item_count >= cdc.tx_fifo.size:
-        time.sleep(_FIFO_TIMEOUT)
-
-
-def _buf_write(buf, data: int | bytes | bytearray):
-    b: bytearray | bytes
-    if isinstance(data, int):
-        b = bytes([data])
-    else:
-        b = data
-    if hasattr(buf, "buffer"):
-        buf.buffer.write(b)
-    else:
-        buf.write(b.decode("utf-8", errors="replace"))
-    buf.flush()
 
 
 def _load_image(image_name: str, rp2040: RP2040) -> None:
@@ -192,10 +166,8 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     cdc = device.cdc
     current_line = ""
 
-    def _on_serial_data(value: bytes | bytearray) -> None:
+    def _watch_expect_text(value: bytes | bytearray) -> None:
         nonlocal current_line
-        _buf_write(sys.stdout, value)
-
         for byte in value:
             char = chr(byte)
             if char == "\n":
@@ -211,70 +183,10 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
             else:
                 current_line += char
 
-    # Registered before start() so nothing the device prints while enumerating is dropped.
-    cdc.on_serial_data = _on_serial_data
-
-    stdin_fd, old_termios = None, None
-
-    try:
-        stdin_fd = sys.stdin.fileno()
-        if sys.stdin.isatty():
-            old_termios = termios.tcgetattr(stdin_fd)
-            tty.setraw(stdin_fd)
-    except AttributeError:
-        pass
-
-    def _restore_termios() -> None:
-        if stdin_fd is not None and old_termios is not None:
-            try:
-                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
-            except OSError:
-                pass
-
-    def _read_stdin_loop() -> None:
-        try:
-            if stdin_fd is not None:
-                while True:
-                    chunk = os.read(stdin_fd, 4096)
-                    if not chunk:
-                        break
-                    # 24 is Ctrl+X
-                    if chunk[0] == 24:
-                        # _os_exit(), not sys.exit(): this runs on the dedicated stdin reader thread,
-                        # not the main thread, so sys.exit() would only terminate that thread instead
-                        # of the whole process.
-                        _restore_termios()
-                        _os_exit(0)
-                    for byte in chunk:
-                        # Backpressure, not a plain send_serial_byte() loop: cdc.tx_fifo is a bounded
-                        # 512-byte buffer that silently drops pushes once full instead of raising or
-                        # blocking (see RawReplRunner.pump()'s docstring for the full story - same
-                        # underlying issue, found there first). A single large paste into the terminal
-                        # can easily arrive as one >512-byte os.read() chunk, so this waits for room
-                        # rather than assuming send_serial_byte() always has some. Blocking this
-                        # dedicated stdin thread is fine - unlike in the raw-REPL upload path, nothing
-                        # else needs it to keep running.
-                        _ensure_fifo_space(cdc)
-                        cdc.send_serial_byte(byte)
-            else:
-                while True:
-                    data = sys.stdin.read()
-                    if not data:
-                        break
-                    if isinstance(data, str):
-                        byte_data = data.encode("utf-8", errors="replace")
-                    else:
-                        byte_data = data
-                    for byte in byte_data:
-                        if byte == 24:
-                            _os_exit(0)
-                        _ensure_fifo_space(cdc)
-                        cdc.send_serial_byte(byte)
-                    cdc.send_serial_byte(13)
-        finally:
-            _restore_termios()
-
-    threading.Thread(target=_read_stdin_loop, daemon=True).start()
+    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+    # while enumerating is dropped.
+    repl = StdioInteractiveRepl(cdc, on_data=_watch_expect_text)
+    repl.start()
 
     device.start(timeout=None)
     if not args.circuitpython:
@@ -284,7 +196,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     else:
         cdc.send_serial_byte(3)
 
-    _wait_for_simulator(device.simulator, on_interrupt=_restore_termios)
+    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
 
 
 def _interpreter_label() -> str:
@@ -478,10 +390,12 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser = subparsers.add_parser(
             "mklittlefs", help="build/update a littlefs image for `micropython`'s filesystem support"
         )
-        mklittlefs_parser.add_argument("output", help="output image path (updated in place if it already exists)")
         mklittlefs_parser.add_argument("files", nargs="+", help="source files to add, keeping their own basename")
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
+        )
+        mklittlefs_parser.add_argument(
+            "-o", "--output", default="littlefs.img", help="output image path (updated in place if it already exists)"
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
         mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)

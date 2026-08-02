@@ -139,7 +139,7 @@ script, e.g. modules staged for a raw-REPL-driven test. If the output image alre
 opened and updated in place rather than reformatted:
 
 ```sh
-rp2040py mklittlefs littlefs.img your_main.py your.py files.py here.py --main your_main.py
+rp2040py mklittlefs -o littlefs.img your_main.py your.py files.py here.py --main your_main.py
 ```
 
 `--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
