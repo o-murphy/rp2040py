@@ -2,7 +2,69 @@ from pathlib import Path
 
 import pytest
 
-from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
+from rp2040py.cli.firmware_retrieve import (
+    BOOTROM,
+    CIRCUITPYTHON,
+    KALUMA,
+    MICROPYTHON,
+    FirmwareSpec,
+    _resolve_version,
+    retrieve,
+)
+
+# A synthetic spec, not MICROPYTHON's real known_versions table - keeps these tests independent of
+# that table's actual contents changing over time, while deliberately including the exact shape
+# that broke the old `known_tag.startswith(tag)` string-prefix matching: "1.20.0"/"1.21.0"/
+# "1.28.0" all share the raw string prefix "1.2" despite being semantically unrelated (1.2.x)
+# versions, plus a prerelease tag to confirm real semver precedence (not just numeric splitting)
+# is what decides ties.
+_SYNTHETIC_SPEC = FirmwareSpec(
+    filename_template="fw-{version}.bin",
+    url_template="https://example.invalid/{filename}",
+    default_tag="1.21.0",
+    known_versions={
+        "1.16": "dated-1.16",
+        "1.19.1": "dated-1.19.1",
+        "1.20.0": "dated-1.20.0",
+        "1.21.0": "dated-1.21.0",
+        "1.28.0": "dated-1.28.0",
+        "1.29.0-preview": "dated-1.29.0-preview",
+    },
+)
+
+
+class TestResolveVersion:
+    """Regression coverage for the `known_tag.startswith(tag)` bug: a short tag like "1.2" used to
+    string-prefix-match "1.20.0"/"1.21.0"/"1.28.0" alike (wrong - "1.2" means version 1.2.x, which
+    none of them are), and picked whichever came first in known_versions' key order rather than
+    the actual highest match."""
+
+    def test_exact_key_match_short_circuits_everything_else(self):
+        assert _resolve_version(_SYNTHETIC_SPEC, "1.16") == "dated-1.16"
+
+    def test_two_component_tag_matches_only_its_own_minor_family(self):
+        # Not "dated-1.20.0"/"dated-1.28.0" - "1.19" and "1.19.1" share (major, minor) = (1, 19),
+        # which none of the others do despite the raw string "1.2" being a substring of "1.20"/
+        # "1.21"/"1.28" too.
+        assert _resolve_version(_SYNTHETIC_SPEC, "1.19") == "dated-1.19.1"
+
+    def test_ambiguous_string_prefix_with_no_real_minor_match_falls_back_unchanged(self):
+        # "1.2" as a *version* is 1.2.x - disjoint from 1.20.x/1.21.x/1.28.x despite the string
+        # "1.2" being a literal prefix of all three. No known version has (major, minor) = (1, 2),
+        # so this must NOT silently resolve to any of them.
+        assert _resolve_version(_SYNTHETIC_SPEC, "1.2") == "1.2"
+
+    def test_bare_major_tag_resolves_to_the_highest_matching_version_not_key_order(self):
+        # "1.29.0-preview" is listed *before* none of the others in insertion order tie-breaking
+        # terms - it's simply the highest real version by semver precedence (1.29.0 > 1.28.0 etc.
+        # regardless of the prerelease suffix, since precedence compares major.minor.patch first).
+        assert _resolve_version(_SYNTHETIC_SPEC, "1") == "dated-1.29.0-preview"
+
+    def test_v_prefix_is_stripped_before_matching(self):
+        assert _resolve_version(_SYNTHETIC_SPEC, "v1.21.0") == "dated-1.21.0"
+
+    def test_unparseable_tag_falls_back_to_itself(self):
+        assert _resolve_version(_SYNTHETIC_SPEC, "not-a-version-at-all") == "not-a-version-at-all"
 
 
 @pytest.fixture(autouse=True)
