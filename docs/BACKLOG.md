@@ -90,39 +90,59 @@ accounting stays consistent either way. Nothing about `_apply_command()`/flash-c
 changed - only bytes clocked in while actually chip-selected affect flash state.
 
 **Verified:**
-- `tests/test_ssi.py`: 17/17 passing (was 9 failing before bug 1's fix), plus 2 new regression
-  tests added for these exact bugs (`test_chip_select_already_asserted_at_reset_is_not_silently_missed`,
-  `test_dr0_writes_while_chip_select_deasserted_still_advance_the_fifo`) - 19/19.
-- Full suite: 431/431 passing, no regressions.
+- `tests/test_ssi.py`: 19/19 passing (was 9 failing before bug 1's fix; added 2 regression tests
+  for these exact bugs, `test_chip_select_already_asserted_at_reset_is_not_silently_missed` /
+  `test_dr0_writes_while_chip_select_deasserted_still_advance_the_fifo`). Full suite: 435/435, no
+  regressions.
 - Real boot, instruction-level: before both fixes, a Kaluma 1.2.1 boot froze at PC `0x1794`/`0x1798`
   (the `flash_put_get()` loop) with zero forward progress across a 3M-instruction budget. After
-  both fixes, the same boot advances through tens of millions of instructions across many
-  different PCs in flash-resident code (`0x1000xxxx`-`0x1003xxxx`) with no repeated/stuck PC -
-  i.e. genuinely unstuck, not just "still frozen but slower."
-- Real boot, end-to-end (reaching the actual "Welcome" REPL banner): **in progress as of this
-  writing, not yet confirmed** - this pure-Python emulator does roughly 300K instructions/sec on
-  CPython in this sandbox (no PyPy available here - `downloads.python.org` isn't reachable from
-  this session's network policy), and Kaluma's full boot appears to need tens of millions of
-  instructions past the point these fixes unstuck, so it takes several minutes of wall-clock per
-  attempt. Whoever picks this up next: check whether a `--expect-text "Welcome"` run of
-  `rp2040py kaluma --image <Kaluma 1.2.1 uf2>` completes (give it 5-10 minutes) before doing
-  anything else here - if it doesn't reach REPL, there may be a third issue past where these two
-  fixes reach.
+  both fixes, the same boot advances through tens of millions of instructions with no repeated/
+  stuck PC.
+- **Real end-to-end flash read/write, confirmed for both MicroPython and Kaluma:**
+  - MicroPython: user-supplied real firmware (1.21.0 and 1.28.0 UF2s - `micropython.org` itself is
+    blocked by this sandbox's network policy, `gateway answered 403 to CONNECT`, so these were
+    provided directly rather than auto-downloaded) booted to REPL and ran
+    `tests/micropython/main-flash-rw.py` (writes a file to the auto-mounted littlefs filesystem,
+    reads it back) - printed `FLASH RW OK`. Also green across the *entire* `ci-micropython.yml`
+    matrix (8 versions × 3 Python runtimes, including the new flash-rw step).
+  - Kaluma 1.2.1 (UF2 fetched from its GitHub release, reachable from this sandbox unlike
+    micropython.org): booted with a `--target kaluma`-sized littlefs image and
+    `tests/kaluma/index-flash-rw.js` staged as the user program (writes/reads a file via Kaluma's
+    own `require("fs")`, a different flash region/filesystem than MicroPython's) - printed
+    `FLASH RW OK`. Needed a real second bug fix in the *test script itself* along the way: Kaluma's
+    `fs` module has no `writeFileSync`/`readFileSync` (unlike Node) - just synchronous
+    `writeFile(path, data)`/`readFile(path)` taking/returning a `Uint8Array`, confirmed against
+    `kaluma-project/kaluma`'s actual source (`src/modules/fs/fs.js`, `tests/fs.test.js`). Also
+    caught (and fixed) a CI-assertion weakness in the same commit chain: `--expect-text "FLASH RW"`
+    matched both the `... OK` and `... FAILED: ...` outcomes, so the buggy script's CI run
+    "passed" despite the test failing at runtime - tightened to `"FLASH RW OK"` everywhere
+    (matches `ci-micropython.yml`'s equivalent step, which already used the tighter string).
+  - Separately noticed and *not* a regression from this work: Kaluma's boot banner ("Welcome to
+    Kaluma") prints before its emulated USB-CDC connection is actually up, so `--expect-text
+    "Welcome"` is inherently racy (this is already documented in README's Kaluma section) -
+    matching a script's own printed output instead (as the flash-rw test above does) is the
+    reliable way to check Kaluma results, not the boot banner.
+- `mklittlefs --target {micropython,circuitpython,kaluma}` added (mutually exclusive with
+  `--block-size`/`--block-count`) to make building a correctly-sized image for each firmware less
+  error-prone - this is what the Kaluma flash-rw test above uses instead of spelling out
+  `--block-size 4096 --block-count 128` by hand.
+- README's "filesystem is not writeable" caveat removed; CHANGELOG updated.
 
 ### Not started yet
 
-- Confirm the above end-to-end REPL boot (Kaluma first, since its UF2 is reachable via GitHub
-  releases from a sandboxed session without extra firmware-download plumbing). MicroPython
-  couldn't be tried in this session at all - confirmed (not just untried) that `micropython.org`
-  is blocked by this sandbox's network policy (`gateway answered 403 to CONNECT`, same for
-  `downloads.python.org` when trying to get PyPy for a faster re-run) - whoever picks this up next
-  needs either a session with broader network access, or a pre-cached
-  `~/.cache/rp2040py/RPI_PICO-20231005-v1.21.0.uf2` staged in some other way. `mklittlefs` itself
-  (needs no network) was verified working fine for a MicroPython-shaped image
-  (`--block-size 4096 --block-count 352`) while investigating this.
-- Real end-to-end validation: format + write + read-back via littlefs at a live REPL.
-- README/CHANGELOG/PORTING.md: remove the "filesystem is not writeable" caveat once confirmed
-  working.
+- Nothing blocking remains for the original goal (real MicroPython + Kaluma flash read/write,
+  confirmed end to end above). Possible future follow-ups, not required for this to be considered
+  done:
+  - Investigate why plain-boot wall-clock time (waiting on `--expect-text` over the emulated
+    USB-CDC REPL) varies noticeably run to run in this sandbox (tens of seconds to several
+    minutes) even for the same firmware/image - not yet root-caused, but tests that don't need to
+    wait on USB-CDC at all (e.g. `tests/micropython_spi_run.py`, which watches SPI0 hardware pins
+    directly) consistently finish in seconds regardless, so USB enumeration timing/variance is the
+    leading suspect over anything littlefs/SSI-related.
+  - CircuitPython's flash-write path uses the same SSI peripheral but hasn't been separately
+    exercised with a dedicated test (CircuitPython doesn't typically write its own filesystem at
+    runtime the way MicroPython's `os`/`rp2.Flash` does, so there's less of a natural test to write
+    - not treated as blocking).
 
 ## Bootrom B0/B2 support (issue #11) — DONE
 
