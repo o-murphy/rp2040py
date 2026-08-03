@@ -278,6 +278,20 @@ write new ones against `Simulator`:
     `Clock.tick()` on whichever thread is already driving the simulator. See the next section for
     a real bug this exact mistake caused.
 
+Each `threading.Timer` handoff above is a real OS-thread creation, so how many of them a boot
+needs matters, not just their existence. `execute()`'s inner loop bounds a batch to ~1,000,000
+"units" before yielding via that handoff; an idle (`WFI`'d) core jumping straight to the next
+clock alarm costs essentially nothing in real time no matter how far away that alarm is, so an
+earlier version of this loop weighting that jump by the simulated nanoseconds it covered (instead
+of counting it as ~1 unit, same as a real instruction) was a real bug, not just a style choice -
+see `docs/BACKLOG.md`'s CDC performance investigation for the full writeup. USB SOF's 1ms recurring
+alarm alone was enough to exhaust a whole batch after ~8 firings while idle, and a booted device is
+idle almost all the time, so this turned "connected and waiting" into a thread handoff roughly
+every 8ms of simulated idle time - the actual driver behind wildly variable `--expect-text`
+wall-clock times, not anything USB-specific. Fixed by counting an idle jump as ~1 unit like
+everything else, matching what `_bench_firmware`'s independent hand-rolled loop in
+`cli/__init__.py` (which doesn't go through `Simulator.execute()`) already did.
+
 ### Raw-REPL uploads and cross-thread `USBCDC.tx_fifo` access (a real, previously undiscovered bug)
 
 `device/raw_repl.py`'s `RawReplRunner.feed()` originally pushed an entire raw-REPL upload (the

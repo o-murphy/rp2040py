@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in that exact state (real SSI FIFO hardware doesn't gate on the `QSPI_SS` GPIO pin). Either one
   alone starved the bootrom's flash-command FIFO-drain loop of bytes it was waiting for, hanging it
   forever. See `docs/BACKLOG.md` for the full root-cause writeup.
+- `Simulator.execute()` weighting an idle (`WFI`'d) core's jump-to-next-alarm by the simulated
+  nanoseconds it covered, instead of its actual (near-zero) real cost - USB SOF's 1ms recurring
+  alarm alone was enough to exhaust a whole execution batch (forcing a real `threading.Timer`
+  OS-thread handoff) after only ~8 firings, turning "device connected and idle" into thousands of
+  avoidable thread handoffs - each exposed to real OS-scheduler jitter - over a typical boot-to-REPL
+  wait. This was the main driver behind the wildly variable `--expect-text` wall-clock times noted
+  in `docs/BACKLOG.md`'s CDC investigation. See `docs/PORTING.md`'s "Threading model" section and
+  `tests/test_simulator.py` for the fix and a regression test.
 
 ## [0.1.0rc1] - 2026-08-03
 

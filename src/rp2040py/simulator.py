@@ -23,9 +23,17 @@ class Simulator:
         i: float = 0
         while i < 1000000 and not self.stopped:
             if rp2040.core.waiting:
-                nanos_to_next_alarm = clock.nanos_to_next_alarm
-                clock.tick(nanos_to_next_alarm)
-                i += nanos_to_next_alarm / cycle_nanos
+                # Jumping straight to the next alarm costs ~nothing in real time no matter how far
+                # away it is (no instructions execute), so it must not be weighted by the simulated
+                # nanoseconds it covers - that previously counted a single 1ms USB SOF-driven idle
+                # tick as ~125,000 "instructions" against the budget below, exhausting a whole batch
+                # in ~8 idle ticks and forcing a real OS-thread handoff (see `execute()`'s NOTE)
+                # roughly every 8ms of simulated idle time. A real WFI'd device sits idle almost all
+                # the time once booted, so that turned "wait for USB-CDC output" into thousands of
+                # avoidable thread handoffs - each one exposed to real OS-scheduler jitter - which is
+                # what actually produced the wildly variable wall-clock times noted in
+                # docs/BACKLOG.md's CDC investigation, not anything USB-specific.
+                clock.tick(clock.nanos_to_next_alarm)
             else:
                 cycles = rp2040.core.execute_instruction()
                 clock.tick(cycles * cycle_nanos)
