@@ -204,6 +204,42 @@ reaches its CPU-bound resident-script loop, so it's simply exposed to far fewer 
 (and far less of root cause #2's noise) than a `--expect-text` test waiting for banner/resident-
 script text after full boot.
 
+## littlefs persistence to the host `--littlefs` image file — not started
+
+**Goal:** let changes MicroPython makes to its filesystem during a session actually persist back
+to the `--littlefs` image file on disk, instead of only existing in the emulated flash's in-memory
+buffer for the lifetime of that one process. Right now `load_micropython_flash_image()`
+(`src/rp2040py/device/load_flash.py`) only ever reads the image file *into* `rp2040.flash` once at
+boot; nothing ever writes that flash region back out to the file, at exit or otherwise - so the
+real JEDEC flash-write support landed in the SSI work above (`RPSSI`, see the first section of this
+file) lets `os`/`rp2.Flash` write/erase/program the emulated flash correctly *within* a run, but
+every one of those writes is silently discarded the moment the process exits. `--image`'s own UF2
+firmware is separate and already read-only by design; this is specifically about the `--littlefs`
+region.
+
+**Rough shape, not designed yet:**
+- Simplest version: on clean shutdown (`BaseDevice.stop()`/CLI exit path), dump
+  `rp2040.flash[MICROPYTHON_FS_FLASH_START : MICROPYTHON_FS_FLASH_START + block_size*block_count]`
+  back to the `--littlefs` file path. Needs a decision on *when* - only on graceful exit (misses
+  power-loss/Ctrl+C/crash cases, arguably the most realistic to test since that's when real
+  flash-persistence bugs matter) vs. periodically/on every completed flash command
+  (`_apply_command()` in `ssi.py` already knows exactly when an erase/program actually commits -
+  could hook a write-back there instead, closer to "real flash," but far more I/O if unbuffered).
+- CircuitPython's `--fat12` path and Kaluma's `--littlefs`/user-program region
+  (`KALUMA_FS_FLASH_START`/`KALUMA_PROG_FLASH_START`) are the same shape of problem, not just
+  MicroPython's - whatever mechanism gets built should probably cover all of them rather than being
+  MicroPython-specific, though MicroPython is the natural one to prototype against first since it's
+  the one with an existing flash-rw test (`tests/micropython/main-flash-rw.py`).
+- Worth deciding whether this should be opt-in (a new flag, e.g. `--littlefs-persist`/similar) or
+  the default once it exists - persisting by default changes today's implicit "every run starts
+  from the same clean image" behavior, which some existing tests/CI usage may be relying on
+  (worth auditing `ci-micropython.yml` and `tests/test_device.py` for that assumption before
+  deciding).
+- No investigation done yet into partial-write safety (process killed mid-write-back corrupting the
+  image file worse than the crash itself would have) - a real flash chip's own power-loss semantics
+  probably aren't yet worth modeling here, but at minimum a write-to-temp-file-then-rename would
+  avoid this tool being the thing that corrupts an otherwise-fine image.
+
 ## PTY / real serial port passthrough for external tools — not started
 
 **Goal:** something like `rp2040py micropython --pty` / `rp2040py kaluma --pty` (exact flag name
