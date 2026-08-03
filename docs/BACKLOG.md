@@ -133,16 +133,63 @@ changed - only bytes clocked in while actually chip-selected affect flash state.
 - Nothing blocking remains for the original goal (real MicroPython + Kaluma flash read/write,
   confirmed end to end above). Possible future follow-ups, not required for this to be considered
   done:
-  - Investigate why plain-boot wall-clock time (waiting on `--expect-text` over the emulated
-    USB-CDC REPL) varies noticeably run to run in this sandbox (tens of seconds to several
-    minutes) even for the same firmware/image - not yet root-caused, but tests that don't need to
-    wait on USB-CDC at all (e.g. `tests/micropython_spi_run.py`, which watches SPI0 hardware pins
-    directly) consistently finish in seconds regardless, so USB enumeration timing/variance is the
-    leading suspect over anything littlefs/SSI-related.
+  - CDC wall-clock variance - see its own section below, promoted out of this bullet since it
+    warrants real profiling work, not just a footnote.
   - CircuitPython's flash-write path uses the same SSI peripheral but hasn't been separately
     exercised with a dedicated test (CircuitPython doesn't typically write its own filesystem at
     runtime the way MicroPython's `os`/`rp2.Flash` does, so there's less of a natural test to write
     - not treated as blocking).
+
+## CDC (USB serial) performance investigation — not started
+
+**Goal:** figure out why waiting for text over the emulated USB-CDC REPL (`--expect-text` on
+`micropython`/`kaluma`) takes wildly variable wall-clock time run to run - anywhere from well under
+a minute to several minutes - even for the *same* firmware/image with nothing else changed.
+Noticed while verifying the SSI flash-write fixes above; **not** caused by them - the variance
+shows up on plain boots with no flash/littlefs activity at all, so it's a distinct, separate
+problem from that work, not a regression from it.
+
+**Why this matters / where to start:** tests that never wait on USB-CDC at all -
+`tests/micropython_spi_run.py`, which watches SPI0 hardware-pin callbacks (`on_transmit`, chip-
+select edges) directly instead of reading printed serial text - consistently finish in seconds,
+regardless of firmware version. That's a strong signal the variance lives specifically in the
+USB-CDC enumeration/connection path, not in instruction-execution cost generally. Worth profiling:
+- `src/rp2040py/usb/cdc.py` (`USBCDC`) and whatever drives its enumeration handshake.
+- `connect_blocking()` in `src/rp2040py/device/base_device.py` - it just does
+  `connected.wait(timeout)`; worth checking whether the *emulated device side* of enumeration has
+  retry/backoff logic, or waits on some timer/polling interval that could be tightened.
+- `StdioInteractiveRepl`/`cli/stdio_repl.py`'s own read loop - rule out host-side polling overhead
+  as a separate contributor from the emulated enumeration itself.
+
+No repro script exists yet for this specifically - start by timing repeated identical
+`rp2040py micropython --image <same file> --expect-text "Hello, MicroPython!"` runs back to back
+and see whether the variance is truly run-to-run noise (sandbox CPU scheduling) or correlates with
+something reproducible (a specific instruction count, a specific retry path) that can be
+instrumented and fixed.
+
+## PTY / real serial port passthrough for external tools — not started
+
+**Goal:** something like `rp2040py micropython --pty` / `rp2040py kaluma --pty` (exact flag name
+not decided - "ttyrepl" was also floated) that exposes the emulated device's USB-CDC console as a
+real host-side pseudo-terminal, instead of only being reachable through this project's own
+`StdioInteractiveRepl`/raw-REPL API. The point is letting *external* tools that expect a real
+serial port - Thonny IDE, `mpremote`, `screen`, `minicom`, etc. - connect to the emulator exactly
+like they would to a real Pico over USB, with no rp2040py-specific client needed.
+
+**Rough shape, not designed yet:**
+- `pty.openpty()`/`os.openpty()` gives a master/slave fd pair; bridge `USBCDC`'s existing
+  read/write path to the master fd instead of (or in addition to) stdio, and print the slave side's
+  path (`/dev/pts/N` on Linux) for the user to point their tool at - similar in spirit to `socat`'s
+  `PTY,link=<path>` convention, so it's discoverable without guessing.
+- Decide whether this is a flag on the existing `micropython`/`kaluma` subcommands (probably
+  simpler, reuses all existing boot/littlefs/bootrom plumbing) or a distinct mode.
+  `demo/kaluma_run.py`'s door already models "boot + hand off a serial-shaped interface to
+  something else" fairly closely, since that's what its own `StdioInteractiveRepl` does today -
+  a PTY-backed swap-in for the stdio side is probably the smallest change, but hasn't been
+  scoped out.
+- No investigation done yet into interactions with the raw-REPL machinery (`device/raw_repl.py`)
+  used by `-c`/`-m`/`<filename>` - those likely need to keep working independently of whether `--pty`
+  is also active, or be explicitly mutually exclusive with it; not yet decided which.
 
 ## Bootrom B0/B2 support (issue #11) — DONE
 

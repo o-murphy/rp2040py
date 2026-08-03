@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a known firmware's own filesystem layout instead of spelling them out by hand (mutually
   exclusive with passing them explicitly - errors if both are given). Omitting both keeps today's
   default (MicroPython's `4096`/`352`).
+- `tests/kaluma/index-flash-rw.js` + a new `ci-kaluma.yml` step exercising it: mounts a
+  `--target kaluma`-sized littlefs image and writes/reads a file through Kaluma's own
+  `require("fs")` (a different flash region/filesystem than MicroPython's), confirming the same
+  flash-write path from Kaluma's side too.
 
 ### Fixed
 - Two bugs in `RPSSI` that hung real boots before reaching the REPL, both surfaced while building

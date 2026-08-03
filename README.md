@@ -252,12 +252,14 @@ firmware's filesystem layout (mutually exclusive with passing them explicitly) -
 MicroPython's own defaults.
 
 > [!NOTE]
-> Kaluma's own `board.js` tries to mount this filesystem unconditionally at startup and currently
-> fails in this emulator regardless of whether `--littlefs` is given - logging `Bad block at 0x0`/
-> `Superblock 0x0 has become unwritable`/`Error: No space left on device` (reproduced even against
-> a validly-built `mklittlefs` image, not just blank flash) - root cause not yet identified. Purely
-> cosmetic so far: Kaluma catches and prints the error without aborting, so boot and `<script.js>`
-> auto-run both continue normally past it.
+> Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
+> at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on device` against the
+> unformatted flash region - purely cosmetic, Kaluma catches and prints the error without aborting,
+> so boot and `<script.js>` auto-run both continue normally past it. This used to reproduce even
+> against a validly-built `mklittlefs` image, not just blank flash - no longer reproduced after the
+> SSI flash-read/write fixes in `docs/BACKLOG.md` (a real `--target kaluma` image now mounts and
+> reads/writes cleanly, verified via `tests/kaluma/index-flash-rw.js`), though that wasn't a
+> deliberate target of those fixes and hasn't been separately root-caused - flag it if it resurfaces.
 
 Kaluma prints its "Welcome to Kaluma" banner exactly once, right at boot - but that's before the
 emulated USB-CDC connection to the host is actually up, so (same as real hardware racing a host
