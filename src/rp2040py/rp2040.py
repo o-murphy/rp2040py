@@ -271,6 +271,10 @@ class RP2040:
             self.hle_memcpy_entries = _find_hle_memcpy_entries(self.bootrom)
         else:
             self.hle_memcpy_entries = frozenset()
+        # Same lifecycle as the HLE scan above: a bootrom-wide pattern scan done once here, never
+        # on the per-instruction path - see JITEngine.load() in jit/engine.py.
+        if self.jit is not None:
+            self.jit.load(self.read_uint16, len(self.bootrom))
         self.reset()
 
     def reset(self) -> None:

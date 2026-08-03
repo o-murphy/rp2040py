@@ -1429,7 +1429,7 @@ class CortexM0Core:
             return self._hle_memcpy()
 
         assert self.rp2040.jit is not None
-        jit_result = self.rp2040.jit.try_execute(opcode_pc)
+        jit_result = self.rp2040.jit.try_execute(self, opcode_pc)
         if jit_result is not None:
             return jit_result
 

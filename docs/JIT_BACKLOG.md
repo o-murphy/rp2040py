@@ -2,8 +2,11 @@
 
 Dedicated backlog for this one feature, split out of `docs/BACKLOG.md` because of its size (a
 real, multi-session undertaking, not a follow-up fix) - see that file for this project's other
-working notes. Status as of this writing: **isolated test only, validated the idea, nothing
-integrated into the real emulator yet.**
+working notes. Status as of this writing: **Phases 0-1 done and integrated
+(`RP2040PY_ENABLE_JIT=1`, default off); Phase 1's real, fully-integrated result was net negative
+on the actual target workload, so Phases 2-3 are not being pursued as originally scoped - see
+Phase 1's writeup below for why, and "what would actually be needed to reopen this" for what could
+change that.**
 
 ## Goal
 
@@ -147,15 +150,61 @@ structural argument for why Phase 0 can't miscompute anything (`try_execute()` a
 the write-invalidation hook (`on_write()`) is the one new thing that runs on real writes in this
 phase, and it's a no-op, so there's nothing for it to get wrong yet either.
 
-**Phase 1 - one known, fixed loop (proof of concept).**
-Implement codegen for exactly one pattern - `__memcpy_slow_lp`'s exact instruction sequence,
-already validated in isolation above - but now fully integrated: real hot-loop detection (not a
-hardcoded PC), real cache, real write-invalidation, real clock accounting, running inside an actual
-MicroPython/Kaluma boot rather than a standalone script. Validates the *entire* pipeline
-end-to-end on the simplest possible case before generalizing. Success criteria: correct output on
-real boots (byte-identical to non-JIT runs), full test suite green, and a measured, positive
-wall-clock effect on a real boot-and-run benchmark (not just the isolated microbenchmark above) -
-if this phase doesn't show a real win once fully integrated, that's a legitimate stopping point.
+**Phase 1 - one known, fixed loop (proof of concept). DONE - net negative, stopping here.**
+Implemented codegen for exactly one pattern - `__memcpy_slow_lp`'s exact instruction sequence,
+already validated in isolation above - fully integrated: real hot-loop detection (decodes the
+actual instruction bits at candidate addresses rather than matching a hardcoded PC, so it finds
+the pattern under any register assignment or bootrom location - `jit/engine.py`'s
+`_decode_memcpy_slow_lp`), a real per-`load_bootrom()` cache (`JITEngine._blocks`, populated by
+`JITEngine.load()`, mirroring `_find_hle_memcpy_entries`'s own lifecycle), real write-invalidation
+(`JITEngine.on_write()` evicts any cached block whose own instruction bytes were overwritten), and
+real cycle accounting (`_MemcpySlowLpBlock.run()` computes the exact same total cycle count the
+interpreter would have accumulated across all four instructions × N iterations, not an estimate -
+verified below).
+
+Correctness: a new `tests/test_jit.py` asserts the compiled block produces *identical* registers,
+flags, memory contents, and total cycle count to plain per-instruction interpretation of the exact
+same instruction bytes (parametrized over two different register assignments, to confirm detection
+isn't hardcoded to r0-r3) - this is a stronger, permanent check than the ad-hoc real-boot
+comparisons Phase 0 relied on. Full test suite (444/444) green both with the flag unset and with
+it enabled end-to-end against real MicroPython 1.21 boots: the plain boot-to-print test, the
+flash-read/write test (littlefs through the SSI/DMA path), and the SPI+DMA+DPRAM test all produced
+identical pass/fail output and identical printed results, flag off vs. on.
+
+Wall-clock result on the actual target workload - a full MicroPython 1.28 boot (TinyUSB-heavy,
+the same one the HLE hook's own negative result was measured against) - is a **net negative**,
+same shape as the HLE hook: ~130s disabled vs. ~141s enabled (~8-9% slower, `cpython-3.14`,
+consistent across repeated runs). Instrumenting `JITEngine.try_execute()` explains why: out of
+**61,295,704** total instructions executed during that boot, the compiled block matched and fired
+only **71,262** times (0.12%), copying 855,300 bytes total. `__memcpy_slow_lp` is bootrom
+`__memcpy`'s *byte-at-a-time tail handler* - real memcpy calls route the bulk of their bytes
+through a separate word-aligned fast path (`ldmia`/`stmia`, 4 words at a time - not a pattern this
+phase targets at all) and only fall into this loop for the ≤3 leftover unaligned bytes at the
+start/end of a copy. So the per-instruction cache-lookup cost (`try_execute()`'s `dict.get()`,
+paid by all 61M instructions in the boot, not just the loop's own) can never be paid back by a
+loop that only ever accounts for ~0.1% of total execution - the *same* fundamental problem the HLE
+hook's negative result already demonstrated (hooking a per-instruction check at a granularity far
+finer than the actual hot code doesn't pay for itself), just reached by a different, more
+"legitimate-looking" mechanism (real per-block codegen, not a bulk-copy shortcut).
+
+This is exactly the stopping condition the plan called out in advance ("if this phase doesn't show
+a real win once fully integrated, that's a legitimate stopping point"). Phases 2-3 (below) assumed
+Phase 1 would justify generalizing this same fusion technique to more instruction patterns; since
+the technique's own integration overhead outweighs the benefit at this granularity, extending it to
+more patterns would only add more code paying the same cost for the same reason, not fix the root
+cause. Not pursuing Phases 2-3 as originally scoped - see "what would actually be needed" below.
+
+**What would actually be needed to reopen this.** The dominant cost, per this phase's own
+measurement, is the *per-instruction* try_execute() dispatch, not the codegen technique itself
+(which the isolated test still shows is genuinely ~13-17x faster once inside a hot loop). Two ways
+to close that gap, neither attempted here: (1) target the *actual* bulk-copy loop
+(`ldmia`/`stmia`-based, word-aligned) instead of the byte tail handler - that's where the real
+instruction volume is, per the original 1.21-vs-1.28 investigation in `docs/BACKLOG.md` - though
+detecting and compiling a multi-word unrolled loop is meaningfully harder than this phase's
+4-instruction pattern; (2) move detection off the per-instruction path entirely, e.g. by hooking
+*branch* instructions only (loop bodies are reached via backward branches, which are already a
+small minority of all instructions) rather than checking every single fetched instruction - a
+structural change to the integration point, not just this one pattern's codegen.
 
 **Phase 2 - a small, common subset of instruction patterns.**
 Expand codegen to the patterns that show up most often in hot loops per already-gathered profiling
@@ -171,6 +220,14 @@ whatever else Phase 1/2 turned up as open questions. Only worth reaching if Phas
 off.
 
 ## Exact integration points for the eventual full implementation
+
+**Not currently being built** - kept here for reference, since it's still the accurate shape of
+what generalizing past Phase 1 would take *if* one of the "what would actually be needed to reopen
+this" changes above first fixes the per-instruction dispatch cost that made Phase 1 net negative.
+Written before Phase 1 ran; the actual Phase 1 code (`src/rp2040py/jit/engine.py`) ended up
+simpler than this sketch (no separate `codegen.py`/`block_compiler.py`/`block_cache.py` modules -
+one file was enough for one hardcoded pattern), but the concerns below (interrupt latency, clock
+accounting, an equivalence test suite) are real and would still apply to any broader attempt.
 
 - **Code generator** (new, e.g. `src/rp2040py/jit/codegen.py`) - the single largest piece. Each
   instruction pattern in `_DISPATCH_PATTERNS` (`cortex_m0_core.py:1462`, matched via the loop at

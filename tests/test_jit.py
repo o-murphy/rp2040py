@@ -1,0 +1,186 @@
+"""Phase 1 mini-JIT tests (see docs/JIT_BACKLOG.md): pattern detection and the compiled
+`__memcpy_slow_lp` block, checked against plain interpretation of the exact same instruction bytes
+for equivalence (registers, flags, memory, and cycle count all must match exactly).
+"""
+
+import pytest
+
+from rp2040py.jit.engine import JITEngine
+from rp2040py.memory_map import RAM_START_ADDRESS
+from rp2040py.rp2040 import RP2040
+from rp2040py.utils.assembler import opcode_b_t1, opcode_ldrb_reg, opcode_strb_reg, opcode_subs2
+
+BOOTROM_WORD_COUNT = 4 * 1024
+
+
+def _pack_word(low16: int, high16: int) -> int:
+    return (low16 & 0xFFFF) | ((high16 & 0xFFFF) << 16)
+
+
+def _memcpy_slow_lp_words(dst_reg: int, src_reg: int, count_reg: int, scratch_reg: int) -> list[int]:
+    subs = opcode_subs2(count_reg, 1)
+    ldrb = opcode_ldrb_reg(scratch_reg, src_reg, count_reg)
+    strb = opcode_strb_reg(scratch_reg, dst_reg, count_reg)
+    bne = opcode_b_t1(1, -10)  # NE, branch back 10 bytes (to the subs)
+    return [_pack_word(subs, ldrb), _pack_word(strb, bne)]
+
+
+def _bootrom_with_pattern_at(
+    word_offset: int, dst_reg: int, src_reg: int, count_reg: int, scratch_reg: int
+) -> list[int]:
+    words = [0] * BOOTROM_WORD_COUNT
+    pattern = _memcpy_slow_lp_words(dst_reg, src_reg, count_reg, scratch_reg)
+    words[word_offset : word_offset + len(pattern)] = pattern
+    return words
+
+
+@pytest.fixture
+def jit_rp2040(monkeypatch):
+    monkeypatch.setenv("RP2040PY_ENABLE_JIT", "1")
+    return RP2040()
+
+
+def _run_interpreted(monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data):
+    monkeypatch.delenv("RP2040PY_ENABLE_JIT", raising=False)
+    rp2040 = RP2040()
+    entry_pc = 0x100
+    rp2040.load_bootrom(_bootrom_with_pattern_at(entry_pc // 4, dst_reg, src_reg, count_reg, scratch_reg))
+    for i, byte in enumerate(data):
+        rp2040.write_uint8(src_base + i, byte)
+
+    core = rp2040.core
+    core.registers[dst_reg] = dst_base
+    core.registers[src_reg] = src_base
+    core.registers[count_reg] = count
+    core.pc = entry_pc
+    core.cycles = 0
+
+    exit_pc = entry_pc + 8
+    steps = 0
+    while core.pc != exit_pc:
+        rp2040.step()
+        steps += 1
+        if steps > count * 8 + 8:
+            raise AssertionError("interpreted loop did not terminate as expected")
+
+    return rp2040, core, steps
+
+
+def _run_jit(monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data):
+    monkeypatch.setenv("RP2040PY_ENABLE_JIT", "1")
+    rp2040 = RP2040()
+    entry_pc = 0x100
+    rp2040.load_bootrom(_bootrom_with_pattern_at(entry_pc // 4, dst_reg, src_reg, count_reg, scratch_reg))
+    for i, byte in enumerate(data):
+        rp2040.write_uint8(src_base + i, byte)
+
+    core = rp2040.core
+    core.registers[dst_reg] = dst_base
+    core.registers[src_reg] = src_base
+    core.registers[count_reg] = count
+    core.pc = entry_pc
+    core.cycles = 0
+
+    rp2040.step()  # the whole loop collapses into exactly one step
+
+    return rp2040, core
+
+
+@pytest.mark.parametrize(
+    ("dst_reg", "src_reg", "count_reg", "scratch_reg"),
+    [
+        (0, 1, 2, 3),  # the real bootrom's own register assignment
+        (4, 5, 6, 7),  # different registers - proves detection isn't hardcoded to r0-r3
+    ],
+)
+def test_jit_memcpy_slow_lp_matches_interpretation(monkeypatch, dst_reg, src_reg, count_reg, scratch_reg):
+    src_base = RAM_START_ADDRESS + 0x1000
+    dst_base = RAM_START_ADDRESS + 0x2000
+    count = 37
+    data = bytes((i * 7 + 3) & 0xFF for i in range(count))
+
+    ref_rp2040, ref_core, steps = _run_interpreted(
+        monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data
+    )
+    jit_rp2040, jit_core = _run_jit(
+        monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data
+    )
+
+    assert steps > 1  # sanity: the interpreted reference really did loop multiple times
+
+    for i in range(count):
+        assert ref_rp2040.read_uint8(dst_base + i) == data[i]
+        assert jit_rp2040.read_uint8(dst_base + i) == data[i]
+
+    assert jit_core.registers == ref_core.registers
+    assert jit_core.n == ref_core.n
+    assert jit_core.z == ref_core.z
+    assert jit_core.c == ref_core.c
+    assert jit_core.v == ref_core.v
+    assert jit_core.cycles == ref_core.cycles
+
+
+def test_jit_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("RP2040PY_ENABLE_JIT", raising=False)
+    rp2040 = RP2040()
+    assert rp2040.jit is None
+    # No instance-level override bound - execute_instruction resolves to the plain, unmodified
+    # class method (see CortexM0Core.__init__'s method-swap, only applied when JIT is enabled).
+    assert "execute_instruction" not in vars(rp2040.core)
+
+
+def test_jit_enabled_binds_instruction_hook(jit_rp2040):
+    assert jit_rp2040.jit is not None
+    assert "execute_instruction" in vars(jit_rp2040.core)
+
+
+def test_jit_ignores_non_matching_code(jit_rp2040):
+    # A superficially similar loop that decrements by 2 instead of 1 - must not be detected, since
+    # the compiled block only replicates the exact `subs #1` semantics.
+    entry_pc = 0x100
+    words = [0] * BOOTROM_WORD_COUNT
+    subs = opcode_subs2(2, 2)  # subs r2, #2 - NOT the pattern
+    ldrb = opcode_ldrb_reg(3, 1, 2)
+    strb = opcode_strb_reg(3, 0, 2)
+    bne = opcode_b_t1(1, -10)
+    words[entry_pc // 4 : entry_pc // 4 + 2] = [_pack_word(subs, ldrb), _pack_word(strb, bne)]
+    jit_rp2040.load_bootrom(words)
+
+    assert jit_rp2040.jit is not None
+    assert entry_pc not in jit_rp2040.jit._blocks
+
+
+def test_jit_declines_on_zero_count(jit_rp2040):
+    entry_pc = 0x100
+    jit_rp2040.load_bootrom(_bootrom_with_pattern_at(entry_pc // 4, 0, 1, 2, 3))
+    core = jit_rp2040.core
+    core.registers[0] = RAM_START_ADDRESS
+    core.registers[1] = RAM_START_ADDRESS + 0x100
+    core.registers[2] = 0  # n == 0 - real hardware would underflow, so this must decline, not crash
+    core.pc = entry_pc
+
+    block = jit_rp2040.jit._blocks[entry_pc]
+    assert block.run(core) is None
+
+
+def test_jit_write_invalidates_cached_block(jit_rp2040):
+    entry_pc = 0x100
+    jit_rp2040.load_bootrom(_bootrom_with_pattern_at(entry_pc // 4, 0, 1, 2, 3))
+    assert entry_pc in jit_rp2040.jit._blocks
+
+    jit_rp2040.write_uint32(entry_pc, 0)  # clobber one of the loop's own instructions
+
+    assert entry_pc not in jit_rp2040.jit._blocks
+
+
+def test_jit_engine_scan_finds_all_patterns_once():
+    words = [0] * BOOTROM_WORD_COUNT
+    pattern_a = _memcpy_slow_lp_words(0, 1, 2, 3)
+    pattern_b = _memcpy_slow_lp_words(4, 5, 6, 7)
+    words[0x40:0x42] = pattern_a
+    words[0x80:0x82] = pattern_b
+
+    engine = JITEngine()
+    engine.load(lambda pc: (words[pc // 4] >> (16 if pc % 4 else 0)) & 0xFFFF, len(words))
+
+    assert set(engine._blocks) == {0x40 * 4, 0x80 * 4}
