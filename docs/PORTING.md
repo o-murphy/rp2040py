@@ -136,10 +136,14 @@ as a library (e.g. embedded in Wokwi). rp2040py adds one: `src/rp2040py/cli/` is
 (`intelhex.py`, `mklittlefs.py` - moved there from `tests/`, plus the argparse dispatch in
 `cli/__init__.py`) that ships in the wheel, exposed as the `rp2040py` console script
 (`[project.scripts]` in `pyproject.toml`) and via `python -m rp2040py` (`src/rp2040py/__main__.py`
-is a two-line shim). `mklittlefs` is the one subcommand with a dependency (`littlefs-python`), so
-it's gated behind the optional `fs` extra (`[project.optional-dependencies]`) rather than pulled
-into the zero-runtime-dependency default install; the `dev` dependency group depends on
-`rp2040py[fs]` so it's still there for `uv sync` in CI and local dev. `demo/emulator_run.py`,
+is a two-line shim). `mklittlefs` needs `littlefs-python`, which ships platform-specific compiled wheels - gated behind
+the optional `fs` extra (`[project.optional-dependencies]`) rather than pulled into the default
+install, so a plain `pip install rp2040py` never needs a wheel that might not exist for some
+platform; the `dev` dependency group depends on `rp2040py[fs]` so it's still there for `uv sync` in
+CI and local dev. `pyelftools` (`--bootrom` ELF parsing - see
+[README](../README.md#bootrom-revisions)) is a normal, always-installed dependency instead - it's
+a pure-Python wheel with no platform-specific build, so there's no packaging reason to keep it
+optional the way `fs` is. `demo/emulator_run.py`,
 `demo/micropython_run.py`, and `demo/benchmark.py` are now thin wrappers around the same
 `rp2040py.cli` subcommands (`run`, `micropython`, `bench`), kept so the documented `uv run python
 demo/*.py` commands keep working unchanged for anyone working from a checkout rather than a
@@ -148,9 +152,12 @@ pip/uv install.
 `cli/firmware_retrieve.py` (also no rp2040js equivalent; originally split across `cli/mp_retrieve.py`
 and `cli/kaluma_retrieve.py`, merged once the duplication between them - and a real `v`-prefix bug
 in the CircuitPython path only one of them had - became annoying enough to fix properly) resolves
-`micropython --image`/`--circuitpython` and `kaluma --image`: a known version tag, or an existing
-local path, downloading the matching UF2 into the current directory on first use and reusing it
-thereafter. Each firmware is a declarative `FirmwareSpec` (filename/URL templates, default tag,
+`micropython --image`/`--circuitpython`, `kaluma --image`, and `--bootrom` (see
+[README](../README.md#bootrom-revisions)) on all four subcommands: a known version tag, or an
+existing local path, downloading the matching file into `~/.cache/rp2040py` on first use and
+reusing it thereafter (falls back to the current directory, today's original behavior, if the
+cache directory isn't writable for any reason). Each firmware is a declarative `FirmwareSpec`
+(filename/URL templates, default tag,
 optional known-version-tag table) loaded from `cli/firmware_specs.json` - kept as plain JSON
 data rather than Python literals so bumping a default tag or adding a new MicroPython release is a
 data edit, not a code change - plus one generic `retrieve(spec, image)` instead of three
@@ -460,8 +467,9 @@ Two mitigations, worth combining:
   littlefs boot in well under a minute. Note `--no-dev` (or a separate PyPy-only sync): the `dev`
   dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
   ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
-  mypy/ruff/pytest tooling, not for running the emulator itself, which has zero runtime
-  dependencies. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a
+  mypy/ruff/pytest tooling, not for running the emulator itself, whose only runtime dependency
+  (`pyelftools`, for `--bootrom` ELF parsing) is a pure-Python wheel with no PyPy-specific build
+  issues of its own. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a
   `python_runtime` matrix - `pypy-3.10`, `cpython-3.10`, and `cpython-3.14` (with `PYTHON_JIT=1`)
   - each with a 10-minute timeout, so a regression specific to any one interpreter can't slip
   through even though PyPy is the realistic day-to-day way to run this.

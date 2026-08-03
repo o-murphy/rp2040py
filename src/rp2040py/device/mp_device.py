@@ -132,8 +132,9 @@ class MicroPythonDevice(BaseDevice):
         littlefs: "str | None" = None,
         fat12: "str | None" = None,
         circuitpython: bool = False,
+        bootrom_words: "list[int] | None" = None,
     ) -> None:
-        super().__init__(image)
+        super().__init__(image, bootrom_words=bootrom_words)
         if littlefs is not None:
             load_micropython_flash_image(littlefs, self.mcu)
         if fat12 is not None:

@@ -1,7 +1,8 @@
 """Declarative, centralized firmware retrieval: one `FirmwareSpec` per supported firmware
 (filename/URL templates, default tag, optional known-version-tag table), loaded from
 `firmware_specs.json` next to this module, plus a single generic `retrieve()` that resolves a
-version tag/local path/omitted `image` argument into an on-disk UF2, downloading it if necessary.
+version tag/local path/omitted `image` argument into an on-disk file (a UF2 for
+MICROPYTHON/CIRCUITPYTHON/KALUMA, an ELF for BOOTROM), downloading it if necessary.
 
 Keeping the per-firmware data in JSON (not Python literals) means bumping a default tag or adding
 a new MicroPython release to `known_versions` is a plain data edit, not a code change - and rules
@@ -10,11 +11,12 @@ resolution silently skipped the same `v`-prefix stripping MicroPython's got (see
 """
 
 import json
-import os
+import sys
 from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 
-__all__ = ("CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
+__all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,26 @@ _SPECS = _load_specs()
 MICROPYTHON = _SPECS["micropython"]
 CIRCUITPYTHON = _SPECS["circuitpython"]
 KALUMA = _SPECS["kaluma"]
+BOOTROM = _SPECS["bootrom"]
+
+
+def _cache_dir() -> Path:
+    """Where downloaded firmware/bootrom files are cached across runs and projects -
+    `~/.cache/rp2040py` - rather than the current directory, so e.g. `--image 1.21.0` doesn't
+    re-download the same UF2 into every project checkout separately. Falls back to `Path(".")`
+    (today's original behavior, download into the current directory) if the cache directory can't
+    be created for any reason (no `HOME`, a read-only filesystem, a sandboxed environment, ...) -
+    caching is a nice-to-have, not something that should ever turn into a hard failure."""
+    cache_dir = Path.home() / ".cache" / "rp2040py"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(
+            f"warning: could not create cache directory {cache_dir} ({exc}); caching in the current directory instead",
+            file=sys.stderr,
+        )
+        return Path()
+    return cache_dir
 
 
 def _resolve_version(spec: FirmwareSpec, tag: str) -> str:
@@ -52,23 +74,25 @@ def _resolve_version(spec: FirmwareSpec, tag: str) -> str:
 def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
     """
     Args:
-        spec: which firmware to resolve (MICROPYTHON/CIRCUITPYTHON/KALUMA).
+        spec: which firmware to resolve (MICROPYTHON/CIRCUITPYTHON/KALUMA/BOOTROM).
         image: a version tag (defaults to `spec.default_tag`) or a local file path.
     """
     if image is None:
         image = spec.default_tag
 
-    if os.path.exists(image):
-        print(f"Found local image: {image}")
-        return image
+    local_image = Path(image)
+    if local_image.exists():
+        print(f"Found local image: {local_image}")
+        return str(local_image)
 
     version = _resolve_version(spec, image)
     filename = spec.filename_template.format(version=version)
     url = spec.url_template.format(version=version, filename=filename)
+    cached_path = _cache_dir() / filename
 
-    if os.path.exists(filename):
-        print(f"Found local image: {filename}")
-        return filename
+    if cached_path.exists():
+        print(f"Found local image: {cached_path}")
+        return str(cached_path)
 
     from urllib.error import HTTPError
     from urllib.request import urlretrieve
@@ -77,11 +101,11 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
         if chunk == 0:
             print(f"Download: {filename} from {url}")
         elif chunk * chunk_size >= size:
-            print(f"Download complete: file saved to: {filename}")
+            print(f"Download complete: file saved to: {cached_path}")
         return None
 
     try:
-        urlretrieve(url, filename, reporthook=report_hook)
+        urlretrieve(url, cached_path, reporthook=report_hook)
     except HTTPError:
         return None
-    return filename
+    return str(cached_path)

@@ -20,8 +20,15 @@ class KalumaDevice(BaseDevice):
     auto-run semantics of its own).
     """
 
-    def __init__(self, image: str, *, littlefs: "str | None" = None, program: "str | None" = None) -> None:
-        super().__init__(image)
+    def __init__(
+        self,
+        image: str,
+        *,
+        littlefs: "str | None" = None,
+        program: "str | None" = None,
+        bootrom_words: "list[int] | None" = None,
+    ) -> None:
+        super().__init__(image, bootrom_words=bootrom_words)
         if littlefs is not None:
             load_kaluma_flash_image(littlefs, self.mcu)
         if program is not None:

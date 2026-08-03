@@ -1,16 +1,29 @@
+from pathlib import Path
+
 import pytest
 
-from rp2040py.cli.firmware_retrieve import CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
+from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 
 
 @pytest.fixture(autouse=True)
 def _isolated_cwd(tmp_path, monkeypatch):
-    # retrieve() checks/writes relative filenames in the current directory - run each test from a
-    # throwaway directory so tests can't see each other's "downloaded" files.
+    # retrieve() checks the current directory for a local-path passthrough, and its cache
+    # directory (~/.cache/rp2040py, i.e. HOME-relative) for anything resolved by tag - isolate
+    # both so tests can't see each other's "downloaded" files or the real user's actual cache.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
 
 
-@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA])
+def _cache_path(filename: str) -> str:
+    """Where `retrieve()` would look for/write `filename` once resolved by tag, given the
+    isolated `HOME` above - pre-creating a file here (rather than in the cwd) is what makes a test
+    exercise the "already cached, don't re-download" path."""
+    path = Path.home() / ".cache" / "rp2040py" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_returns_existing_local_path_without_touching_the_network(spec, monkeypatch):
     local = "my_image.uf2"
     with open(local, "wb") as f:
@@ -24,32 +37,33 @@ def test_returns_existing_local_path_without_touching_the_network(spec, monkeypa
     assert retrieve(spec, local) == local
 
 
-@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA])
+@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_no_image_argument_defaults_to_the_spec_default_tag(spec):
     # The default tag is itself resolved through known_versions (MicroPython's dated-slug table),
     # same as any other tag - not assumed to already be the filename version.
     version = (spec.known_versions or {}).get(spec.default_tag, spec.default_tag)
     filename = spec.filename_template.format(version=version)
-    with open(filename, "wb") as f:
+    cached = _cache_path(filename)
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(spec) == filename
+    assert retrieve(spec) == cached
 
 
 def test_known_version_tag_resolves_to_the_dated_filename():
-    filename = "RPI_PICO-20231005-v1.21.0.uf2"
-    with open(filename, "wb") as f:
+    cached = _cache_path("RPI_PICO-20231005-v1.21.0.uf2")
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(MICROPYTHON, "1.21.0") == filename
+    assert retrieve(MICROPYTHON, "1.21.0") == cached
 
 
 def test_unknown_tag_falls_back_to_using_it_as_the_raw_version_suffix():
-    filename = "RPI_PICO-not-a-known-tag.uf2"
-    with open(filename, "wb") as f:
+    cached = _cache_path("RPI_PICO-not-a-known-tag.uf2")
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(MICROPYTHON, "not-a-known-tag") == filename
+    assert retrieve(MICROPYTHON, "not-a-known-tag") == cached
 
 
 @pytest.mark.parametrize(
@@ -64,33 +78,34 @@ def test_unknown_tag_falls_back_to_using_it_as_the_raw_version_suffix():
     ],
 )
 def test_v_prefixed_tag_is_normalized_the_same_as_bare_tag(spec, tag, filename):
-    with open(filename, "wb") as f:
+    cached = _cache_path(filename)
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(spec, tag) == filename
+    assert retrieve(spec, tag) == cached
 
 
 def test_circuitpython_version_maps_to_adafruit_filename():
-    filename = "adafruit-circuitpython-raspberry_pi_pico-en_US-10.2.1.uf2"
-    with open(filename, "wb") as f:
+    cached = _cache_path("adafruit-circuitpython-raspberry_pi_pico-en_US-10.2.1.uf2")
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(CIRCUITPYTHON, "10.2.1") == filename
+    assert retrieve(CIRCUITPYTHON, "10.2.1") == cached
 
 
 def test_kaluma_version_tag_resolves_to_the_release_filename():
-    filename = "kaluma-rp2-pico-1.2.1.uf2"
-    with open(filename, "wb") as f:
+    cached = _cache_path("kaluma-rp2-pico-1.2.1.uf2")
+    with open(cached, "wb") as f:
         f.write(b"fake")
 
-    assert retrieve(KALUMA, "1.2.1") == filename
+    assert retrieve(KALUMA, "1.2.1") == cached
 
 
 def test_downloads_when_no_local_file_matches(monkeypatch):
     calls = []
 
     def _fake_urlretrieve(url, filename, reporthook=None):
-        calls.append((url, filename))
+        calls.append((url, str(filename)))
         with open(filename, "wb") as f:
             f.write(b"downloaded")
         if reporthook is not None:
@@ -102,10 +117,10 @@ def test_downloads_when_no_local_file_matches(monkeypatch):
 
     result = retrieve(MICROPYTHON, "1.21.0")
 
-    expected_filename = "RPI_PICO-20231005-v1.21.0.uf2"
-    assert result == expected_filename
-    assert calls == [(f"https://micropython.org/resources/firmware/{expected_filename}", expected_filename)]
-    with open(expected_filename, "rb") as f:
+    expected_path = _cache_path("RPI_PICO-20231005-v1.21.0.uf2")
+    assert result == expected_path
+    assert calls == [("https://micropython.org/resources/firmware/RPI_PICO-20231005-v1.21.0.uf2", expected_path)]
+    with open(expected_path, "rb") as f:
         assert f.read() == b"downloaded"
 
 
@@ -113,7 +128,7 @@ def test_kaluma_download_url_includes_the_version_path_segment(monkeypatch):
     calls = []
 
     def _fake_urlretrieve(url, filename, reporthook=None):
-        calls.append((url, filename))
+        calls.append((url, str(filename)))
         with open(filename, "wb") as f:
             f.write(b"downloaded")
 
@@ -121,16 +136,39 @@ def test_kaluma_download_url_includes_the_version_path_segment(monkeypatch):
 
     result = retrieve(KALUMA, "1.2.1")
 
-    assert result == "kaluma-rp2-pico-1.2.1.uf2"
+    expected_path = _cache_path("kaluma-rp2-pico-1.2.1.uf2")
+    assert result == expected_path
     assert calls == [
         (
             "https://github.com/kaluma-project/kaluma/releases/download/1.2.1/kaluma-rp2-pico-1.2.1.uf2",
-            "kaluma-rp2-pico-1.2.1.uf2",
+            expected_path,
         )
     ]
 
 
-@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA])
+def test_bootrom_download_url_includes_the_version_path_segment(monkeypatch):
+    calls = []
+
+    def _fake_urlretrieve(url, filename, reporthook=None):
+        calls.append((url, str(filename)))
+        with open(filename, "wb") as f:
+            f.write(b"downloaded")
+
+    monkeypatch.setattr("urllib.request.urlretrieve", _fake_urlretrieve)
+
+    result = retrieve(BOOTROM, "b2")
+
+    expected_path = _cache_path("b2.elf")
+    assert result == expected_path
+    assert calls == [
+        (
+            "https://github.com/raspberrypi/pico-bootrom-rp2040/releases/download/b2/b2.elf",
+            expected_path,
+        )
+    ]
+
+
+@pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_returns_none_on_http_error_instead_of_raising(spec, monkeypatch):
     from urllib.error import HTTPError
 

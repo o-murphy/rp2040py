@@ -29,6 +29,7 @@ jobs:
           - "1.20.0"
           - "1.21.0"
           - "1.28.0"
+          - "1.29.0-preview"
         python_runtime:
           - pypy-3.10
           - cpython-3.10

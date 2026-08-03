@@ -25,7 +25,9 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = []
+dependencies = [
+    "pyelftools>=0.33",
+]
 dynamic = ["version"]
 
 [project.optional-dependencies]

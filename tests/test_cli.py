@@ -11,6 +11,7 @@ def _mp_args(**overrides):
         "expect_text": None,
         "gdb": False,
         "gdb_port": 3333,
+        "bootrom": None,
         "circuitpython": False,
         "littlefs": "littlefs.img",
         "fat12": "fat12.img",
@@ -30,14 +31,16 @@ class _FakeMicroPythonDevice:
     wiring passed into the constructor and the raw-REPL exec() result matter for these tests."""
 
     last_kwargs: "dict | None" = None
+    last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, fat12=None, circuitpython=False):
+    def __init__(self, image, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None):
         _FakeMicroPythonDevice.last_kwargs = {
             "image": image,
             "littlefs": littlefs,
             "fat12": fat12,
             "circuitpython": circuitpython,
         }
+        _FakeMicroPythonDevice.last_bootrom_words = bootrom_words
         self.simulator = None
 
     def start(self, timeout=None):
@@ -165,6 +168,7 @@ def _kaluma_args(**overrides):
         "expect_text": None,
         "gdb": False,
         "gdb_port": 3333,
+        "bootrom": None,
         "littlefs": "kaluma_littlefs.img",
         "filename": None,
     }
@@ -189,9 +193,11 @@ class _FakeKalumaDevice:
 
     last_kwargs: "dict | None" = None
     last_instance: "_FakeKalumaDevice | None" = None
+    last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, program=None):
+    def __init__(self, image, littlefs=None, program=None, bootrom_words=None):
         _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs, "program": program}
+        _FakeKalumaDevice.last_bootrom_words = bootrom_words
         _FakeKalumaDevice.last_instance = self
         self.simulator = None
         self.cdc = _FakeKalumaCdc()
@@ -283,6 +289,34 @@ def test_kaluma_end_to_end_through_argparse(fake_kaluma_device):
     cli.main(["kaluma", "--image", "1.2.1"])
 
     assert fake_kaluma_device.last_kwargs == {"image": "fixed-kaluma-image.uf2", "littlefs": None, "program": None}
+
+
+def test_micropython_omitted_bootrom_uses_the_bundled_default(fake_device):
+    from rp2040py.device.bootrom import BOOTROM_B1
+
+    with pytest.raises(SystemExit):
+        cli.main(["micropython", "--image", "1.2.1", "-c", "1"])
+
+    assert fake_device.last_bootrom_words is BOOTROM_B1
+
+
+def test_micropython_bootrom_flag_reaches_the_device(fake_device, tmp_path, monkeypatch):
+    words = [0xAAAAAAAA, 0xBBBBBBBB]
+    monkeypatch.setattr(cli, "_resolve_bootrom_words", lambda source: words if source == "b2" else None)
+
+    with pytest.raises(SystemExit):
+        cli.main(["micropython", "--image", "1.2.1", "--bootrom", "b2", "-c", "1"])
+
+    assert fake_device.last_bootrom_words == words
+
+
+def test_kaluma_bootrom_flag_reaches_the_device(fake_kaluma_device, monkeypatch):
+    words = [0xCCCCCCCC]
+    monkeypatch.setattr(cli, "_resolve_bootrom_words", lambda source: words if source == "b0" else None)
+
+    cli.main(["kaluma", "--image", "1.2.1", "--bootrom", "b0"])
+
+    assert fake_kaluma_device.last_bootrom_words == words
 
 
 class TestRawReplSource:

@@ -33,12 +33,14 @@ Subcommands:
 import argparse
 import importlib.util
 import os
+import struct
 import sys
 import time
 from collections.abc import Callable
 from importlib.metadata import version
+from typing import Any
 
-from rp2040py.cli.firmware_retrieve import CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
+from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
@@ -83,6 +85,44 @@ def _load_image(image_name: str, rp2040: RP2040) -> None:
         sys.exit(1)
 
 
+def _resolve_bootrom_words(source: "str | None") -> "list[int]":
+    """Resolves `--bootrom` (a `b0`/`b1`/`b2` version tag, or a local `.elf`/`.bin` path) into the
+    4096-word list `RP2040.load_bootrom()` expects. `None` (the flag omitted) keeps today's exact
+    behavior - the hardcoded `BOOTROM_B1` - so every existing caller is unaffected."""
+    if source is None:
+        from rp2040py.device.bootrom import BOOTROM_B1
+
+        return BOOTROM_B1
+
+    path = retrieve(BOOTROM, source)
+    if path is None:
+        print(f"Could not find bootrom: {source}")
+        sys.exit(1)
+
+    extension = path.rsplit(".", 1)[-1].lower()
+    if extension == "elf":
+        from elftools.elf.elffile import ELFFile
+
+        print(f"Loading bootrom elf: {path}")
+        with open(path, "rb") as f:
+            elffile = ELFFile(f)
+            segment = next(
+                (seg for seg in elffile.iter_segments() if seg["p_type"] == "PT_LOAD" and seg["p_paddr"] == 0),
+                None,
+            )
+            if segment is None:
+                print(f"No PT_LOAD segment at address 0 found in {path}")
+                sys.exit(1)
+            data = segment.data()
+    else:
+        print(f"Loading bootrom binary: {path}")
+        with open(path, "rb") as f:
+            data = f.read()
+
+    word_count = len(data) // 4
+    return list(struct.unpack(f"<{word_count}I", data[: word_count * 4]))
+
+
 def _wait_for_simulator(simulator: Simulator, on_interrupt: "Callable[[], None] | None" = None) -> None:
     # simulator.execute() only runs the first burst synchronously and then reschedules itself via
     # threading.Timer, so the caller would otherwise return immediately and leave the process
@@ -110,9 +150,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     simulator = Simulator()
     mcu = simulator.rp2040
 
-    from rp2040py.device.bootrom import BOOTROM_B1
-
-    mcu.load_bootrom(BOOTROM_B1)
+    mcu.load_bootrom(_resolve_bootrom_words(args.bootrom))
 
     _load_image(args.image, mcu)
 
@@ -182,7 +220,13 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     if fat12 is not None:
         print(f"Loading fat12 image: {fat12}")
 
-    device = MicroPythonDevice(image_name, littlefs=littlefs, fat12=fat12, circuitpython=args.circuitpython)
+    device = MicroPythonDevice(
+        image_name,
+        littlefs=littlefs,
+        fat12=fat12,
+        circuitpython=args.circuitpython,
+        bootrom_words=_resolve_bootrom_words(args.bootrom),
+    )
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -240,7 +284,9 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     if args.filename is not None:
         print(f"Loading program: {args.filename}")
 
-    device = KalumaDevice(image_name, littlefs=littlefs, program=args.filename)
+    device = KalumaDevice(
+        image_name, littlefs=littlefs, program=args.filename, bootrom_words=_resolve_bootrom_words(args.bootrom)
+    )
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -301,7 +347,9 @@ def _bench_synthetic(instruction_count: int, block_size: int) -> None:
     print(f"Executed {executed:,} instructions in {elapsed:.2f}s -> {executed / elapsed:,.0f} instructions/sec")
 
 
-def _bench_firmware(image: str, littlefs: str | None, expect_text: str | None, timeout: float) -> None:
+def _bench_firmware(
+    image: str, littlefs: str | None, expect_text: str | None, timeout: float, bootrom: str | None = None
+) -> None:
     # Uses Simulator (not a bare RP2040) so the clock actually advances: real firmware relies on
     # timer-based busy-waits during boot (e.g. hardware_timer's timer_busy_wait_until()), and those
     # spin forever if TIMERAWL/TIMERAWH never move - core.execute_instruction() alone does not tick
@@ -310,9 +358,7 @@ def _bench_firmware(image: str, littlefs: str | None, expect_text: str | None, t
     rp2040 = simulator.rp2040
     clock = simulator.clock
 
-    from rp2040py.device.bootrom import BOOTROM_B1
-
-    rp2040.load_bootrom(BOOTROM_B1)
+    rp2040.load_bootrom(_resolve_bootrom_words(bootrom))
     rp2040.logger = ConsoleLogger(LogLevel.ERROR)
 
     _load_image(image, rp2040)
@@ -373,7 +419,7 @@ def _bench_firmware(image: str, littlefs: str | None, expect_text: str | None, t
 
 def _cmd_bench(args: argparse.Namespace) -> None:
     if args.image:
-        _bench_firmware(args.image, args.littlefs, args.expect_text, args.timeout)
+        _bench_firmware(args.image, args.littlefs, args.expect_text, args.timeout, args.bootrom)
     else:
         _bench_synthetic(args.instructions, args.block_size)
 
@@ -411,21 +457,48 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
         _os_exit(0)
 
 
+_IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"
+_BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the default (B1, bundled - no download)"
+
+
+def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
+    """Builds an `add_help=False` parent parser carrying just the named shared arguments, for
+    `subparsers.add_parser(..., parents=[...])` - argparse's own mechanism for reusing identical
+    argument definitions across subcommands instead of repeating `add_argument(...)` calls with
+    the same flags/kwargs in each. Each subcommand still opts in explicitly (via which parents it
+    passes), so the fact that e.g. `run` has no `--gdb` toggle (it always starts one) stays
+    visible at the call site rather than hidden behind a single shared "boot args" bundle."""
+    definitions: dict[str, dict[str, Any]] = {
+        "gdb-port": {"type": int, "default": 3333},
+        "gdb": {"action": "store_true"},
+        "bootrom": {"help": _BOOTROM_HELP},
+    }
+    shared = argparse.ArgumentParser(add_help=False)
+    for name in names:
+        shared.add_argument(f"--{name}", **definitions[name])
+    return shared
+
+
 def main(argv: "list[str] | None" = None) -> None:
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser("run", help="run a native .hex/.uf2 image with a GDB server")
+    run_parser = subparsers.add_parser(
+        "run",
+        parents=[_shared_arg_parser("gdb-port", "bootrom")],
+        help="run a native .hex/.uf2 image with a GDB server",
+    )
     run_parser.add_argument("--image", default="hello_uart.hex")
-    run_parser.add_argument("--gdb-port", type=int, default=3333)
     run_parser.set_defaults(func=_cmd_run)
 
-    mp_parser = subparsers.add_parser("micropython", help="run a MicroPython/CircuitPython UF2 image")
-    mp_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
+    mp_parser = subparsers.add_parser(
+        "micropython",
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom")],
+        help="run a MicroPython/CircuitPython UF2 image",
+    )
+    mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     mp_parser.add_argument("--expect-text")
-    mp_parser.add_argument("--gdb", action="store_true")
-    mp_parser.add_argument("--gdb-port", type=int, default=3333)
     mp_parser.add_argument("--circuitpython", action="store_true")
     mp_parser.add_argument("--littlefs", help="firmware mode: optional littlefs.img to load", default="littlefs.img")
     mp_parser.add_argument("--fat12", help="firmware mode: optional fat12.img to load", default="fat12.img")
@@ -442,18 +515,22 @@ def main(argv: "list[str] | None" = None) -> None:
     mp_source_group.add_argument("filename", nargs="?", help="run the given local script file on the device, then exit")
     mp_parser.set_defaults(func=_cmd_micropython)
 
-    kaluma_parser = subparsers.add_parser("kaluma", help="run a Kaluma UF2 image (interactive REPL only)")
-    kaluma_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
+    kaluma_parser = subparsers.add_parser(
+        "kaluma",
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom")],
+        help="run a Kaluma UF2 image (interactive REPL only)",
+    )
+    kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     kaluma_parser.add_argument("--expect-text")
-    kaluma_parser.add_argument("--gdb", action="store_true")
-    kaluma_parser.add_argument("--gdb-port", type=int, default=3333)
     kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")
     kaluma_parser.add_argument(
         "filename", nargs="?", help="local .js file to stage as the auto-run user program, then boot"
     )
     kaluma_parser.set_defaults(func=_cmd_kaluma)
 
-    bench_parser = subparsers.add_parser("bench", help="benchmark instruction-dispatch throughput")
+    bench_parser = subparsers.add_parser(
+        "bench", parents=[_shared_arg_parser("bootrom")], help="benchmark instruction-dispatch throughput"
+    )
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")
     bench_parser.add_argument("--block-size", type=int, default=1000, help="synthetic mode: instructions per block")
     bench_parser.add_argument("--image", help="firmware mode: path to a .hex or .uf2 image")
