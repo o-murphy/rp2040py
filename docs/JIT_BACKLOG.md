@@ -1,0 +1,192 @@
+# JIT / basic-block fusion — implementation plan
+
+Dedicated backlog for this one feature, split out of `docs/BACKLOG.md` because of its size (a
+real, multi-session undertaking, not a follow-up fix) - see that file for this project's other
+working notes. Status as of this writing: **isolated test only, validated the idea, nothing
+integrated into the real emulator yet.**
+
+## Goal
+
+Confirm whether *basic-block fusion* - compiling a hot loop's instruction sequence into one
+native Python function instead of interpreting it one emulated Thumb instruction at a time - is a
+real, worthwhile performance lever for this emulator, and if so, build it as a genuinely optional,
+decoupled component rather than something woven into the core interpreter.
+
+## Motivation
+
+The HLE hook for bootrom `__memcpy`/`__memcpy_44` (see `docs/BACKLOG.md`) confirmed that
+per-instruction dispatch overhead (`read_uint16()` fetch, dispatch-table lookup, a full Python
+method call per instruction, flag bookkeeping) is real and costly - but that hooking it at the
+*per-instruction check* granularity (one `frozenset` membership test added to every single
+instruction) doesn't pay for itself: the check's own fixed cost is paid by the ~99%+ of
+instructions that never hit it, and it measured **net negative** (~1.8% slower) on a full
+MicroPython 1.28 boot. The natural follow-up question: is the *underlying idea* (skip repeated
+instruction-by-instruction interpretation for known-hot code) still worth pursuing at a coarser
+granularity - fusing a whole hot loop into one compiled unit, rather than hooking one specific
+known routine?
+
+## Isolated test (already done, results validated the idea)
+
+Built a standalone script (`ast_jit_test.py`, kept only in a scratchpad during investigation - not
+part of the repo, and not run against it here) that compares, for the exact same semantic work:
+
+- **"Real interpretation"**: point a real `RP2040`/`CortexM0Core` at the actual bootrom
+  `__memcpy_slow_lp` loop (`0x2632` in `BOOTROM_B1` - confirmed hot in `docs/BACKLOG.md`'s
+  1.21-vs-1.28 investigation: `subs r2,#1; ldrb r3,[r1,r2]; strb r3,[r0,r2]; bne`) and let
+  `execute_instruction()` run it for real, byte by byte, exactly as production code does today.
+- **"ast-compiled"**: a Python function built via `ast.parse()`/`compile()`/`exec()` (genuinely
+  constructed as an AST and compiled, not a plain hand-written function, to test the actual
+  technique) that performs the *same* semantic operation - a `while` loop calling the *same*
+  `rp2040.read_uint8()`/`rp2040.write_uint8()` bus methods per byte - but as a single fused Python
+  function instead of four separately-dispatched Thumb instructions per byte. Deliberately **not**
+  a bulk `bytearray` slice copy (that would be re-testing the already-measured-negative HLE idea,
+  not this one) - the only thing being removed is per-instruction interpretation overhead; the
+  actual bus-level work stays identical and was verified byte-for-byte equal after every run.
+
+**Results (50,000 bytes, 3 runs each, correctness-verified every run):**
+
+- **CPython 3.10**: real interpretation ~480ms (~104K bytes/sec) vs. ast-compiled ~37ms (~1.35M
+  bytes/sec) - **~13x faster**.
+- **PyPy (7.3.15/3.9, installed via `apt-get install pypy3` - `uv python install pypy-3.10` isn't
+  obtainable in this sandbox, `downloads.python.org` is 403'd same as noted in `docs/BACKLOG.md`,
+  but PyPy 3.9 via apt was enough for this test; had to run against a throwaway copy of
+  `src/rp2040py` with `from __future__ import annotations` prepended to every file, since PyPy
+  3.9's runtime doesn't support PEP 604 `X | Y` annotation syntax the way 3.10+ does - the real
+  package/repo was never touched)**: real interpretation ~6ms steady-state after JIT warm-up
+  (~8.3M bytes/sec) vs. ast-compiled ~0.35ms steady-state (~145M bytes/sec) - **~17x faster at
+  steady state** (~9.7x if averaged including the JIT-warmup-skewed first run of each).
+- **Key finding: PyPy's own JIT does not eliminate this advantage - the relative gap is at least
+  as large under PyPy as under CPython, if not larger at steady state.** PyPy's JIT optimizes each
+  function it sees hot, but "real interpretation" still pays the *generic* dispatch structure
+  (fetch, table lookup, method call, flag bookkeeping) once per Thumb instruction regardless of how
+  fast each individual step gets - four such round-trips per byte here - while the fused version is
+  one tight, trivially-JIT-specializable loop with two bus calls per byte. The technique's benefit
+  is orthogonal to, not redundant with, PyPy - real additional headroom even for users already on
+  PyPy, not just a CPython-only win.
+
+## Architecture: decoupled, opt-in, minimal-touch
+
+Explicit design goal (not yet built): the JIT should be a self-contained component the core
+interpreter *calls into* through a couple of trivial, cheap integration points - not logic woven
+directly into `cortex_m0_core.py`/`rp2040.py`. Two integration points are structurally unavoidable
+(the feature needs *some* way to intercept execution and *some* way to hear about writes), but each
+should cost close to nothing when the feature is off, with all real complexity living in its own
+module(s):
+
+- **Execution hook, `CortexM0Core.execute_instruction()` (`cortex_m0_core.py:1398`).** A single
+  cheap check before the normal fetch/decode/dispatch path - same attachment point as the existing
+  HLE hook (`cortex_m0_core.py:1404`), literally right next to it:
+  ```python
+  if self._jit is not None:
+      result = self._jit.try_execute(opcode_pc)
+      if result is not None:
+          return result
+  ```
+  `self._jit` defaults to `None` (a plain identity check - cheaper than the HLE hook's `frozenset`
+  membership test, and *that* one's fixed per-instruction cost is exactly why the HLE hook measured
+  net negative, so this default-off path needs to be at least that cheap, ideally cheaper). Only
+  becomes a real `JITEngine` instance when `RP2040PY_ENABLE_JIT=1` is set (mirroring the existing
+  `RP2040PY_ENABLE_HLE_MEMCPY` flag's naming/shape).
+- **Write-invalidation hook.** A single optional callback registered on `RP2040`, called from each
+  write path (`write_uint8` at `rp2040.py:358`, `write_uint16` at `rp2040.py:380`, `write_uint32`
+  at `rp2040.py:327`, `bus_copy()` at `rp2040.py:401`) only if set - not the invalidation *logic*
+  itself living in `rp2040.py`, just a call-out.
+- **Everything else** - hot-loop detection, per-instruction codegen, the compiled-block cache, the
+  invalidation logic behind that callback - lives entirely under a new `src/rp2040py/jit/` package,
+  imported and instantiated only when `RP2040PY_ENABLE_JIT=1`. With the flag off, that package
+  should ideally never even be imported (keeps startup cost and import-time surface at zero for the
+  overwhelming majority of users who won't use this).
+
+## Phased implementation plan
+
+Each phase should be independently measured (clean A/B, same methodology as the HLE hook and
+`write_uint32` fix in `docs/BACKLOG.md`) and independently justify moving to the next - stopping
+after any phase if the numbers don't hold up is a legitimate outcome, not a failure.
+
+**Phase 0 - scaffolding only, no real codegen.**
+Add both integration points (execution hook, write-invalidation callback) wired up to a stub
+`JITEngine` that never actually compiles anything (`try_execute()` always returns `None`). Goal:
+prove the interface itself is genuinely non-invasive - full test suite (436/436) unchanged, and a
+clean A/B confirming the disabled-by-default path costs nothing measurable, *and* that even the
+enabled-but-stub path costs nothing measurable (isolating "interface overhead" from "codegen
+correctness/benefit," which the later phases will need to reason about separately). No risk to
+emulation correctness at this stage - nothing new is ever executed.
+
+**Phase 1 - one known, fixed loop (proof of concept).**
+Implement codegen for exactly one pattern - `__memcpy_slow_lp`'s exact instruction sequence,
+already validated in isolation above - but now fully integrated: real hot-loop detection (not a
+hardcoded PC), real cache, real write-invalidation, real clock accounting, running inside an actual
+MicroPython/Kaluma boot rather than a standalone script. Validates the *entire* pipeline
+end-to-end on the simplest possible case before generalizing. Success criteria: correct output on
+real boots (byte-identical to non-JIT runs), full test suite green, and a measured, positive
+wall-clock effect on a real boot-and-run benchmark (not just the isolated microbenchmark above) -
+if this phase doesn't show a real win once fully integrated, that's a legitimate stopping point.
+
+**Phase 2 - a small, common subset of instruction patterns.**
+Expand codegen to the patterns that show up most often in hot loops per already-gathered profiling
+data (`docs/PORTING.md`'s perf log) - likely load/store variants, ADDS/SUBS, CMP, conditional
+branches - not all ~90 patterns at once. Any block containing an unsupported pattern simply doesn't
+get compiled (falls back to normal interpretation) - partial coverage is an acceptable, safe
+intermediate state, not a blocker. Each added pattern goes through the equivalence test suite
+(below) before being trusted.
+
+**Phase 3 - full coverage and refinement.**
+Remaining instruction patterns, interrupt-latency handling, clock-accounting refinement, and
+whatever else Phase 1/2 turned up as open questions. Only worth reaching if Phases 1-2 clearly paid
+off.
+
+## Exact integration points for the eventual full implementation
+
+- **Code generator** (new, e.g. `src/rp2040py/jit/codegen.py`) - the single largest piece. Each
+  instruction pattern in `_DISPATCH_PATTERNS` (`cortex_m0_core.py:1462`, matched via the loop at
+  `cortex_m0_core.py:1548`, plus the `_resolve_wide()` special case for the seven wide-encoding
+  patterns noted in that table's own comment) needs a *second* implementation alongside its
+  existing `_op_*` method: not "execute this instruction" but "emit AST/source that, when compiled,
+  has the same effect." Real risk of the two forms drifting out of sync, which would be a
+  silent-wrong-emulation bug, the worst kind to debug - this is exactly what the equivalence test
+  suite below exists to catch.
+- **Hot-loop detection + block compilation** (new, e.g. `src/rp2040py/jit/block_compiler.py`) - a
+  per-PC visit counter to decide what's "hot" enough to compile, decoding a basic block's
+  instruction sequence (from a loop head to its back-edge) via the same fetch logic
+  `RP2040.read_uint16()`/`read_uint32()` (`rp2040.py`) already use, driving the codegen above, and
+  `compile()`-ing the result.
+- **Compiled-block cache with write-invalidation** (new, e.g. `src/rp2040py/jit/block_cache.py`) -
+  keyed by PC; invalidates any cached block whose address range overlaps a write, via the
+  write-invalidation callback above, so self-modifying code (real firmware does write to flash it
+  may later execute from, via the SSI path - see `docs/BACKLOG.md`'s "SSI flash-write support"
+  section) can't run stale compiled code.
+- **`Simulator.execute()` (`simulator.py:17`)'s clock/cycle accounting** - currently ticks the
+  clock once per single instruction; a compiled block executing many instructions per Python-level
+  call needs this reworked, in the same spirit as (but a bigger version of) the idle-tick-accounting
+  fix in `docs/BACKLOG.md`'s CDC investigation section (also a `Simulator.execute()` accounting
+  bug).
+- **Interrupt-latency interaction** - real hardware can take an interrupt between *any* two
+  instructions; `CortexM0Core.check_for_interrupts()` (`cortex_m0_core.py:393`), called at the top
+  of `execute_instruction()` before every single instruction today, is the relevant existing check.
+  A fused block executing multiple instructions as one atomic Python call either needs to prove
+  that doesn't matter for the specific blocks it fuses, or add calls to this same check at explicit
+  points inside the generated code (which cuts into the benefit) - not investigated yet; likely a
+  Phase 3 concern.
+- **Exhaustive codegen-vs-interpretation equivalence test suite** (new, alongside the existing
+  `tests/test_dispatch_table.py`, which only checks the dispatch table's own structure/coverage,
+  not codegen output) - for every instruction pattern added, run both the real `_op_*` handler and
+  the generated-and-compiled equivalent from identical starting register/flag state and assert
+  identical resulting state. This is what makes it safe to add patterns incrementally across
+  Phase 2 without correctness regressing as coverage grows.
+
+## Relationship to the existing HLE memcpy hook
+
+A general JIT, once it reaches `__memcpy_slow_lp`-shaped loops in Phase 1, would naturally
+subsume what the HLE hook (`RP2040PY_ENABLE_HLE_MEMCPY`, see `docs/BACKLOG.md`) does today, likely
+better (compiled-and-cached beats a per-instruction `frozenset` check). Not removing the HLE hook
+now - it's an independent, already-shipped (if net-negative and off-by-default) piece - but worth
+revisiting once Phase 1 lands, since the two may end up redundant.
+
+## Scope estimate
+
+Roughly comparable in scope to (arguably larger than) the dispatch-table work described in
+`docs/PORTING.md`'s perf log (that project's own "single biggest lever" of its session) - doubled,
+since every instruction pattern eventually needs both an interpreter form and a codegen form kept
+in sync. A real, multi-session undertaking. The phased plan above exists specifically so it can be
+picked up, measured, and stopped at any phase boundary without the whole thing needing to land at
+once.

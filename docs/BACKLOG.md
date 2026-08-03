@@ -1,7 +1,8 @@
 # Backlog / in-progress work notes
 
 Working notes for tasks that span multiple sessions. Not user-facing docs — see README.md /
-PORTING.md / CHANGELOG.md for those.
+PORTING.md / CHANGELOG.md for those. One item large enough to need its own file:
+[docs/JIT_BACKLOG.md](JIT_BACKLOG.md) (basic-block fusion / mini-JIT).
 
 ## SSI flash-write support (branch `feat/ssi-rw-support`)
 
@@ -491,6 +492,14 @@ anything else):**
   only after a cheap pre-filter (like a bloom filter or address-range check) - might change this
   calculus, but hasn't been explored; not worth it without evidence the underlying idea is worth
   saving, given the current measurement.
+
+## Basic-block fusion / mini-JIT via `ast`-generated code — moved to docs/JIT_BACKLOG.md
+
+Split into its own dedicated backlog file, **[docs/JIT_BACKLOG.md](JIT_BACKLOG.md)**, given its
+size (a real, multi-session undertaking, not a follow-up fix - see that file for the full
+motivation, isolated-test results (~13x CPython / ~17x PyPy steady-state on the same
+`__memcpy_slow_lp` loop from the investigation above), decoupled/opt-in architecture, phased
+implementation plan, and exact file:line integration points).
 
 ## littlefs persistence to the host `--littlefs` image file — not started
 
