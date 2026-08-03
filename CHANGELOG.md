@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc2] - 2026-08-03
+
 ### Added
 - Real JEDEC SPI-NOR flash command emulation in `RPSSI` (`WREN`/`WRDI`, `RDSR1`/`RDSR2`, `WRSR`,
   `PAGE_PROGRAM`, `SECTOR_ERASE`, `BLOCK_ERASE`, `READ_DATA`, `READ_JEDEC_ID`), so the filesystem
@@ -341,7 +343,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc2...HEAD
+[0.1.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc1...v0.1.0rc2
 [0.1.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b6...v0.1.0rc1
 [0.1.0b6]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b4...v0.1.0b5
