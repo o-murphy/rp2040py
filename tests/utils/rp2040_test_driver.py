@@ -32,37 +32,37 @@ class RP2040TestDriver:
         core = self.rp2040.core
         for key, value in registers.items():
             if key == "r0":
-                core.registers[0] = value
+                core.registers[0] = value & 0xFFFFFFFF
             elif key == "r1":
-                core.registers[1] = value
+                core.registers[1] = value & 0xFFFFFFFF
             elif key == "r2":
-                core.registers[2] = value
+                core.registers[2] = value & 0xFFFFFFFF
             elif key == "r3":
-                core.registers[3] = value
+                core.registers[3] = value & 0xFFFFFFFF
             elif key == "r4":
-                core.registers[4] = value
+                core.registers[4] = value & 0xFFFFFFFF
             elif key == "r5":
-                core.registers[5] = value
+                core.registers[5] = value & 0xFFFFFFFF
             elif key == "r6":
-                core.registers[6] = value
+                core.registers[6] = value & 0xFFFFFFFF
             elif key == "r7":
-                core.registers[7] = value
+                core.registers[7] = value & 0xFFFFFFFF
             elif key == "r8":
-                core.registers[8] = value
+                core.registers[8] = value & 0xFFFFFFFF
             elif key == "r9":
-                core.registers[9] = value
+                core.registers[9] = value & 0xFFFFFFFF
             elif key == "r10":
-                core.registers[10] = value
+                core.registers[10] = value & 0xFFFFFFFF
             elif key == "r11":
-                core.registers[11] = value
+                core.registers[11] = value & 0xFFFFFFFF
             elif key == "r12":
-                core.registers[12] = value
+                core.registers[12] = value & 0xFFFFFFFF
             elif key == "sp":
-                core.registers[13] = value
+                core.registers[13] = value & 0xFFFFFFFF
             elif key == "lr":
-                core.registers[14] = value
+                core.registers[14] = value & 0xFFFFFFFF
             elif key == "pc":
-                core.registers[15] = value
+                core.registers[15] = value & 0xFFFFFFFF
             elif key == "x_psr":
                 core.x_psr = value
             elif key == "msp":

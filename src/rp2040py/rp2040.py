@@ -39,7 +39,6 @@ from rp2040py.peripherals.watchdog import RPWatchdog
 from rp2040py.peripherals.xosc import RPXOSC
 from rp2040py.sio import RPSIO
 from rp2040py.utils.bit import (
-    Uint32Array,
     read_uint16_le,
     read_uint32_le,
     u32,
@@ -72,10 +71,17 @@ class RP2040:
         # self.clock.create_alarm(...) from their own __init__.
         self.clock = clock if clock is not None else SimulationClock()
 
-        self.bootrom = Uint32Array(4 * KB)
+        # A plain list, not Uint32Array (same rationale as CortexM0Core.registers - see
+        # docs/PORTING.md's performance section): bootrom is on the hot read_uint32 path (real
+        # ROM routines like the bootrom's own memcpy helper get called frequently during flash/USB
+        # operations), and a raw list index is a C-level bytecode op versus Uint32Array's
+        # Python-level __getitem__/__setitem__. The two write sites (load_bootrom() below,
+        # write_uint32()'s bootrom branch) mask explicitly with `& 0xFFFFFFFF` instead of relying
+        # on the wrapper for it.
+        self.bootrom: list[int] = [0] * (4 * KB)
         # Cached rather than recomputed via len(self.bootrom) on every bus access: bootrom size
-        # never changes after construction, and len() on a Uint32Array is a Python-level call
-        # (unlike len() on a bytearray), so this matters on the hot read_uint32/write_uint32 path.
+        # never changes after construction, and this matters on the hot read_uint32/write_uint32
+        # path regardless of container type.
         self.bootrom_byte_size = len(self.bootrom) * 4
         self.sram = bytearray(264 * KB)
         self.flash = bytearray(16 * MB)
@@ -171,7 +177,7 @@ class RP2040:
         pass
 
     def load_bootrom(self, bootrom_data: list[int]) -> None:
-        self.bootrom.set(bootrom_data)
+        self.bootrom[: len(bootrom_data)] = (value & 0xFFFFFFFF for value in bootrom_data)
         self.reset()
 
     def reset(self) -> None:
@@ -246,7 +252,7 @@ class RP2040:
             offset = address & 0xFFF
             peripheral.write_uint32_atomic(offset, value, atomic_type)
         elif address < self.bootrom_byte_size:
-            bootrom[address // 4] = value
+            bootrom[address // 4] = value & 0xFFFFFFFF
         elif FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + len(self.flash):
             write_uint32_le(self.flash, address - FLASH_START_ADDRESS, value)
         elif RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):

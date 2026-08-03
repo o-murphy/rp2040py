@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `rp2040py micropython`/`kaluma`'s interactive REPL could leave the real terminal stuck in raw
+  mode (no echo, no line buffering - looks like "the keyboard stopped working") if the process
+  exited any way other than a clean `stop()`: `os._exit()` (used by both the Ctrl+X quit path and
+  `--expect-text` matching) skips atexit callbacks entirely, and an external kill (a hung boot,
+  `timeout`, SIGTERM) skipped the restore path too. Now restored via a module-level "active raw
+  terminal" registry `os_exit()` itself checks, plus an `atexit` handler for exits that don't go
+  through `os_exit()` at all.
+
+### Performance
+- `CortexM0Core.registers` and `RP2040.bootrom` are now plain `list[int]` instead of
+  `Uint32Array` - see
+  [docs/PORTING.md](docs/PORTING.md#performance-pure-python-interpretation-is-much-slower-than-v8)
+  for the full writeup. Combined, ~16% faster real MicroPython 1.28 + littlefs boot-and-run under
+  CPython 3.10 (224.79s -> 188.98s), ~16% higher synthetic instructions/sec; PyPy unaffected (its
+  JIT already optimized the old indirection away). `Uint32Array` itself (`utils/bit.py`) had no
+  remaining callers after both changes and was removed.
+
 ## [0.1.0b6] - 2026-08-03
 
 ### Added
