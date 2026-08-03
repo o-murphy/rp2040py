@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/micropython/main-flash-rw.py` + a new `ci-micropython.yml` step exercising it: writes a
   file to the auto-mounted littlefs filesystem and reads it back, confirming the flash-write path
   above end to end (alongside the existing plain-boot and SPI0 tests).
+- `mklittlefs --target {micropython,circuitpython,kaluma}`: presets `--block-size`/`--block-count`
+  to a known firmware's own filesystem layout instead of spelling them out by hand (mutually
+  exclusive with passing them explicitly - errors if both are given). Omitting both keeps today's
+  default (MicroPython's `4096`/`352`).
 
 ### Fixed
 - Two bugs in `RPSSI` that hung real boots before reaching the REPL, both surfaced while building

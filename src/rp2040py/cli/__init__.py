@@ -48,6 +48,10 @@ from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.cli.stdio_repl import os_exit as _os_exit
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
+    CIRCUITPYTHON_FS_BLOCKCOUNT,
+    CIRCUITPYTHON_FS_BLOCKSIZE,
+    KALUMA_FS_BLOCKCOUNT,
+    KALUMA_FS_BLOCKSIZE,
     MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
     load_micropython_flash_image,
@@ -424,13 +428,30 @@ def _cmd_bench(args: argparse.Namespace) -> None:
         _bench_synthetic(args.instructions, args.block_size)
 
 
+_TARGET_FS_LAYOUTS = {
+    "micropython": (MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT),
+    "circuitpython": (CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT),
+    "kaluma": (KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT),
+}
+
+
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
+    if args.target is not None and (args.block_size is not None or args.block_count is not None):
+        print("error: --target is mutually exclusive with --block-size/--block-count", file=sys.stderr)
+        sys.exit(1)
+
+    if args.target is not None:
+        block_size, block_count = _TARGET_FS_LAYOUTS[args.target]
+    else:
+        block_size = args.block_size if args.block_size is not None else MICROPYTHON_FS_BLOCKSIZE
+        block_count = args.block_count if args.block_count is not None else MICROPYTHON_FS_BLOCKCOUNT
+
     try:
         build_littlefs_image(
             args.output,
             args.files,
-            block_size=args.block_size,
-            block_count=args.block_count,
+            block_size=block_size,
+            block_count=block_count,
             disk_version=args.disk_version,
             main=args.main,
             force=args.force,
@@ -551,8 +572,19 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.add_argument(
             "-f", "--force", action="store_true", help="overwrite `--output` if it already exists"
         )
-        mklittlefs_parser.add_argument("--block-size", type=int, default=MICROPYTHON_FS_BLOCKSIZE)
-        mklittlefs_parser.add_argument("--block-count", type=int, default=MICROPYTHON_FS_BLOCKCOUNT)
+        mklittlefs_parser.add_argument(
+            "--target",
+            choices=tuple(_TARGET_FS_LAYOUTS.keys()),
+            default=None,
+            help=(
+                "preset --block-size/--block-count for a known firmware's filesystem layout - "
+                "mutually exclusive with passing them explicitly "
+                f"(defaults to micropython's {MICROPYTHON_FS_BLOCKSIZE}/{MICROPYTHON_FS_BLOCKCOUNT} "
+                "if neither --target nor --block-size/--block-count is given)"
+            ),
+        )
+        mklittlefs_parser.add_argument("--block-size", type=int, default=None)
+        mklittlefs_parser.add_argument("--block-count", type=int, default=None)
         mklittlefs_parser.add_argument(
             "--disk-version",
             type=str,

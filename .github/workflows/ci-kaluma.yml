@@ -44,6 +44,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # Kaluma's littlefs filesystem has no auto-run semantics of its own (unlike MicroPython's
+      # main.py) - it's plain storage the staged script below writes into at runtime, so this just
+      # needs a freshly formatted, empty image sized to Kaluma's own board.js block layout.
+      - name: Create flash read/write test filesystem
+        run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
+
       - name: Setup Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
@@ -58,5 +64,16 @@ jobs:
       # "skip loading"). No mklittlefs step needed - the program stages directly from the file.
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
         run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+      # Exercises the SSI flash-write path (see docs/BACKLOG.md) from Kaluma's side: mounts a
+      # littlefs image sized to Kaluma's own board.js layout (--target kaluma - a different
+      # block-size/count than MicroPython's), stages tests/kaluma/index-flash-rw.js as the
+      # auto-run user program (a separate flash region from the littlefs filesystem itself - see
+      # README's Kaluma section), and matches its own printed result rather than the racy
+      # boot-time "Welcome to Kaluma" banner.
+      - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

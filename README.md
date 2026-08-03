@@ -158,6 +158,11 @@ rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # 
 [docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
 for why.
 
+`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` to a known
+firmware's own filesystem layout instead of spelling them out by hand (mutually exclusive with
+passing them explicitly) - see the Kaluma section below for why its layout differs from
+MicroPython/CircuitPython's.
+
 The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
 SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
 hardware uses to erase/program flash.
@@ -238,9 +243,13 @@ image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_little
 different default than MicroPython's `littlefs.img`, since the block size/count differ):
 
 ```sh
-rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 your_script.js
+rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
 rp2040py kaluma --littlefs kaluma_littlefs.img
 ```
+
+`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` for a known
+firmware's filesystem layout (mutually exclusive with passing them explicitly) - omit both for
+MicroPython's own defaults.
 
 > [!NOTE]
 > Kaluma's own `board.js` tries to mount this filesystem unconditionally at startup and currently
