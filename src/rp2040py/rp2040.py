@@ -1,6 +1,7 @@
 import os
 import struct
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from rp2040py.clock.clock import IClock
 from rp2040py.clock.simulation_clock import SimulationClock
@@ -48,6 +49,9 @@ from rp2040py.utils.bit import (
     write_uint32_le,
 )
 from rp2040py.utils.logging import ConsoleLogger, Logger, LogLevel
+
+if TYPE_CHECKING:
+    from rp2040py.jit import JITEngine
 
 __all__ = (
     "APB_START_ADDRESS",
@@ -147,6 +151,14 @@ class RP2040:
         # Empty until load_bootrom() confirms (by signature) this bootrom actually has __memcpy/
         # __memcpy_44 at the expected offsets - see _HLE_MEMCPY_SIGNATURES above.
         self.hle_memcpy_entries: frozenset[int] = frozenset()
+        # Basic-block-fusion mini-JIT (Phase 0: scaffolding only, see docs/JIT_BACKLOG.md) - None
+        # by default, so CortexM0Core.execute_instruction()'s hook is a single cheap identity
+        # check with the src/rp2040py/jit package never even imported, unless explicitly enabled.
+        self.jit: "JITEngine | None" = None  # noqa: UP037 - real name only bound in the branch below
+        if os.environ.get("RP2040PY_ENABLE_JIT"):
+            from rp2040py.jit import JITEngine
+
+            self.jit = JITEngine()
         self.sram = bytearray(264 * KB)
         # Same reasoning as bootrom_byte_size above: sram/usb_dpram sizes never change after
         # construction, and read_uint16()/read_uint8()/write_uint8()/write_uint16() are all on the
@@ -355,9 +367,14 @@ class RP2040:
             else:
                 self.logger.warning(LOG_NAME, f"Write to undefined address: {address:x}")
 
+        if self.jit is not None:
+            self.jit.on_write(address, 4)
+
     def write_uint8(self, address: int, value: int) -> None:
         if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             self.sram[address - RAM_START_ADDRESS] = value & 0xFF
+            if self.jit is not None:
+                self.jit.on_write(address, 1)
             return
 
         aligned_address = u32(address & 0xFFFFFFFC)
@@ -371,6 +388,8 @@ class RP2040:
                 (value & 0xFF) | ((value & 0xFF) << 8) | ((value & 0xFF) << 16) | ((value & 0xFF) << 24),
                 atomic_type,
             )
+            if self.jit is not None:
+                self.jit.on_write(aligned_address, 4)
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray(u32(original_value).to_bytes(4, "little"))
@@ -383,6 +402,8 @@ class RP2040:
 
         if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             write_uint16_le(self.sram, address - RAM_START_ADDRESS, value)
+            if self.jit is not None:
+                self.jit.on_write(address, 2)
             return
 
         aligned_address = u32(address & 0xFFFFFFFC)
@@ -392,6 +413,8 @@ class RP2040:
             atomic_type = (aligned_address & 0x3000) >> 12
             peripheral_offset = aligned_address & 0xFFF
             peripheral.write_uint32_atomic(peripheral_offset, (value & 0xFFFF) | ((value & 0xFFFF) << 16), atomic_type)
+            if self.jit is not None:
+                self.jit.on_write(aligned_address, 4)
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray(u32(original_value).to_bytes(4, "little"))
@@ -424,6 +447,8 @@ class RP2040:
         src_buf, src_off = self._ram_or_flash(src)
         if dst_buf is not None and src_buf is not None and dst_off + n <= len(dst_buf) and src_off + n <= len(src_buf):
             dst_buf[dst_off : dst_off + n] = src_buf[src_off : src_off + n]
+            if self.jit is not None:
+                self.jit.on_write(dst, n)
             return
 
         data = bytes(self.read_uint8(src + i) for i in range(n))

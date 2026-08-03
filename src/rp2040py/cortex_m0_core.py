@@ -131,6 +131,12 @@ class CortexM0Core:
         self.sp = 0xFFFFFFFC
         self.banked_sp = 0xFFFFFFFC
 
+        # See _execute_instruction_jit's docstring: shadowing execute_instruction with an instance
+        # attribute only when JIT is enabled means the disabled (default) path always resolves to
+        # the plain class method above, with no added per-instruction branch at all.
+        if rp2040.jit is not None:
+            self.execute_instruction = self._execute_instruction_jit  # type: ignore[method-assign]
+
     @property
     def logger(self):
         return self.rp2040.logger
@@ -1404,6 +1410,32 @@ class CortexM0Core:
         if opcode_pc in self.rp2040.hle_memcpy_entries:
             return self._hle_memcpy()
 
+        return self._fetch_decode_execute(opcode_pc)
+
+    def _execute_instruction_jit(self) -> int:
+        """Same as execute_instruction(), plus the basic-block-fusion mini-JIT hook (see
+        docs/JIT_BACKLOG.md). Bound over execute_instruction *only* when RP2040.jit is not None
+        (see __init__ below) - the default (disabled) path calls the plain execute_instruction()
+        above unchanged, so it pays zero cost for a feature it never uses: an `is not None` check
+        on every single instruction was measured to cost ~3% even when the JIT is off (an extra
+        LOAD_ATTR/COMPARE_OP/POP_JUMP on the hottest loop in the emulator adds up over tens of
+        millions of instructions), so it's not acceptable to leave in the always-executed path.
+        """
+        if self.interrupts_updated and self.check_for_interrupts():
+            self.waiting = False
+        opcode_pc = self.registers[PC_REGISTER] & ~1
+
+        if opcode_pc in self.rp2040.hle_memcpy_entries:
+            return self._hle_memcpy()
+
+        assert self.rp2040.jit is not None
+        jit_result = self.rp2040.jit.try_execute(opcode_pc)
+        if jit_result is not None:
+            return jit_result
+
+        return self._fetch_decode_execute(opcode_pc)
+
+    def _fetch_decode_execute(self, opcode_pc: int) -> int:
         opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
         opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0

@@ -73,24 +73,25 @@ directly into `cortex_m0_core.py`/`rp2040.py`. Two integration points are struct
 should cost close to nothing when the feature is off, with all real complexity living in its own
 module(s):
 
-- **Execution hook, `CortexM0Core.execute_instruction()` (`cortex_m0_core.py:1398`).** A single
-  cheap check before the normal fetch/decode/dispatch path - same attachment point as the existing
-  HLE hook (`cortex_m0_core.py:1404`), literally right next to it:
-  ```python
-  if self._jit is not None:
-      result = self._jit.try_execute(opcode_pc)
-      if result is not None:
-          return result
-  ```
-  `self._jit` defaults to `None` (a plain identity check - cheaper than the HLE hook's `frozenset`
-  membership test, and *that* one's fixed per-instruction cost is exactly why the HLE hook measured
-  net negative, so this default-off path needs to be at least that cheap, ideally cheaper). Only
-  becomes a real `JITEngine` instance when `RP2040PY_ENABLE_JIT=1` is set (mirroring the existing
-  `RP2040PY_ENABLE_HLE_MEMCPY` flag's naming/shape).
+- **Execution hook, `CortexM0Core.execute_instruction()` (`cortex_m0_core.py:1398`).** Revised
+  after Phase 0's own measurement (see below) disproved the original plan of a plain
+  `if self._jit is not None: ...` check inlined into the always-executed path: even that "cheap"
+  check cost ~3.4% on every instruction, disabled or not. What's actually implemented instead:
+  `execute_instruction()` stays exactly what it was before this feature existed (no check, no
+  cost), and a second method, `_execute_instruction_jit()`, carries the same body plus the hook
+  next to the existing HLE check (`cortex_m0_core.py:1404`) - `CortexM0Core.__init__` binds
+  `self.execute_instruction = self._execute_instruction_jit` as an instance attribute *only* when
+  `rp2040.jit is not None`, so the disabled path never even evaluates the check, and the enabled
+  path pays for it once per instance construction, not once per instruction. `RP2040.jit` itself
+  defaults to `None`, only becoming a real `JITEngine` instance when `RP2040PY_ENABLE_JIT=1` is set
+  (mirroring the existing `RP2040PY_ENABLE_HLE_MEMCPY` flag's naming/shape).
 - **Write-invalidation hook.** A single optional callback registered on `RP2040`, called from each
-  write path (`write_uint8` at `rp2040.py:358`, `write_uint16` at `rp2040.py:380`, `write_uint32`
-  at `rp2040.py:327`, `bus_copy()` at `rp2040.py:401`) only if set - not the invalidation *logic*
-  itself living in `rp2040.py`, just a call-out.
+  write path (`write_uint8`, `write_uint16`, `write_uint32`, `bus_copy()` in `rp2040.py`) only if
+  `self.jit is not None` - not the invalidation *logic* itself living in `rp2040.py`, just a
+  call-out. Unlike the execution hook, this check was *not* moved out of the always-executed path:
+  writes are far less frequent per instruction than fetch/dispatch (most instructions don't write
+  at all), so the same measurement concern doesn't apply here - confirmed by the Phase 0 A/B below,
+  which found no measurable cost from the write-path checks.
 - **Everything else** - hot-loop detection, per-instruction codegen, the compiled-block cache, the
   invalidation logic behind that callback - lives entirely under a new `src/rp2040py/jit/` package,
   imported and instantiated only when `RP2040PY_ENABLE_JIT=1`. With the flag off, that package
@@ -103,14 +104,48 @@ Each phase should be independently measured (clean A/B, same methodology as the 
 `write_uint32` fix in `docs/BACKLOG.md`) and independently justify moving to the next - stopping
 after any phase if the numbers don't hold up is a legitimate outcome, not a failure.
 
-**Phase 0 - scaffolding only, no real codegen.**
-Add both integration points (execution hook, write-invalidation callback) wired up to a stub
+**Phase 0 - scaffolding only, no real codegen. DONE.**
+Added both integration points (execution hook, write-invalidation callback) wired up to a stub
 `JITEngine` that never actually compiles anything (`try_execute()` always returns `None`). Goal:
 prove the interface itself is genuinely non-invasive - full test suite (436/436) unchanged, and a
 clean A/B confirming the disabled-by-default path costs nothing measurable, *and* that even the
 enabled-but-stub path costs nothing measurable (isolating "interface overhead" from "codegen
 correctness/benefit," which the later phases will need to reason about separately). No risk to
 emulation correctness at this stage - nothing new is ever executed.
+
+Results: the first attempt at the execution hook - a plain
+`if self.rp2040.jit is not None: ...` check inlined into `execute_instruction()`, always
+evaluated regardless of the flag - measured ~3.4% *slower* even disabled (17.43s baseline vs.
+18.02s, 8 runs each, `RPI_PICO-20231005-v1.21.0.uf2` running `-c "x=0\nfor i in range(5000):
+x+=i\nprint(x)"`): the doc text above called this risk out in advance ("this default-off path
+needs to be at least that cheap, ideally cheaper" than the HLE hook's frozenset check), and it
+wasn't cheap enough - one extra `LOAD_ATTR`/`COMPARE_OP`/`POP_JUMP_IF_FALSE` on the single hottest
+loop in the emulator, executed on every instruction regardless of whether the flag is set, adds up
+over tens of millions of instructions.
+
+Fixed by moving the check out of the always-executed path entirely instead of trying to make it
+cheaper: `CortexM0Core.execute_instruction()` stays byte-for-byte what it was before this phase,
+and a separate `_execute_instruction_jit()` variant (same body, plus the JIT hook) is bound over
+it as an instance attribute in `__init__()`, but *only* when `rp2040.jit is not None` - see
+`cortex_m0_core.py`. The disabled (default) path is then not "a cheap check that's skipped," it's
+"the exact same code that ran before this phase existed," so its cost is definitionally zero.
+Re-measured after the fix: 17.59s (6 runs) vs. the same 17.43s baseline - within run-to-run noise
+(individual runs in both groups ranged over ~0.6s), i.e. no measurable overhead. The enabled-but-
+stub path measured ~19.24s (4 runs, +10.4% vs. baseline) - the real cost of the per-instruction
+`try_execute()` call plus the `on_write()` calls on every RAM/flash write, paid only by whoever
+opts in. Full test suite (436/436) green both with the flag unset and with it set to the stub.
+
+Correctness, beyond the simple arithmetic-loop benchmark above: the loop only exercises
+ADD/CMP/branch and RAM writes, so it doesn't say much about the write-invalidation hook on its
+own - real firmware boots exercising flash/littlefs/DMA/peripheral writes are a better test of
+that. Ran both `tests/micropython/main-flash-rw.py` (real internal-flash writes through littlefs,
+via the SSI/DMA path) and `tests/micropython_spi_run.py`'s SPI test (SPI0 peripheral + DMA + USB
+DPRAM traffic) against `RPI_PICO-20231005-v1.21.0.uf2`, flag unset and flag set to the stub -
+identical pass/fail output and identical printed results in all four runs. Consistent with the
+structural argument for why Phase 0 can't miscompute anything (`try_execute()` always returns
+`None`, so no new code path is ever actually *executed*, only *called into and returned from*) -
+the write-invalidation hook (`on_write()`) is the one new thing that runs on real writes in this
+phase, and it's a no-op, so there's nothing for it to get wrong yet either.
 
 **Phase 1 - one known, fixed loop (proof of concept).**
 Implement codegen for exactly one pattern - `__memcpy_slow_lp`'s exact instruction sequence,
