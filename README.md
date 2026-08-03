@@ -115,6 +115,13 @@ file already on disk:
 > being interpreted, not something hanging. 1.28 still boots and mounts a `mklittlefs`-built
 > littlefs image correctly (that's exactly the version pinned `disk_version` fixed compatibility
 > for, see below); it's simply much more expensive to actually *run* typical resident scripts on.
+>
+> Core-level per-instruction throughput work continues independently of this version gap (most
+> recently: `RP2040.write_uint32()` was checking a peripheral dict lookup before cheap RAM/flash
+> range comparisons - see [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for
+> the running log). These are general wins, not something that closes the 1.21-vs-1.28 gap itself -
+> that gap is real work MicroPython 1.28's own compiled firmware does per loop iteration, not
+> something this project's emulator code controls.
 
 ```sh
 rp2040py micropython --image 1.28.0

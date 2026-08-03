@@ -204,6 +204,185 @@ reaches its CPU-bound resident-script loop, so it's simply exposed to far fewer 
 (and far less of root cause #2's noise) than a `--expect-text` test waiting for banner/resident-
 script text after full boot.
 
+## MicroPython 1.21-vs-1.28 instruction-count gap — one real fix landed, root cause still not isolated
+
+**Goal:** actually root-cause README/PORTING.md's documented ~45x instruction-count gap (1.21:
+1,418,835 steps vs. 1.28: 64,679,599 steps to reach the same script's first `print()`), rather than
+leave it at "not isolated further" indefinitely. User supplied both real UF2s
+(`RPI_PICO-20231005-v1.21.0.uf2`, `RPI_PICO-20260406-v1.28.0.uf2`) plus a `tests/micropython/
+main.py`-based littlefs image (`mklittlefs --target micropython`) to make this reproducible.
+
+**Method:** instrumented `RP2040.core.execute_instruction()` directly (bypassing `Simulator` only
+in the sense of driving the same step loop `_bench_firmware` uses, with a `collections.Counter`
+keyed on `core.pc` added around it) to get a PC-hit histogram for both versions' full boot-to-
+first-`print()` run, then cross-referenced hot PCs against real source: cloned
+`raspberrypi/pico-bootrom-rp2040` (public, reachable from this sandbox same as in the SSI
+investigation) and disassembled around hot bootrom/flash/RAM addresses with `capstone`
+(`pip install capstone` - not a project dependency, installed ad hoc for this investigation only).
+
+**Sanity check confirmed, not contradicted, the existing "boot-to-REPL is fast on both versions"
+claim.** Worth recording since the first attempt at checking it was itself wrong: booting both
+versions with a *mounted but empty* littlefs (no `main.py`) via `--expect-text ">>>"` made 1.21
+appear to hang (timed out at 10M instructions) while 1.28 "found" it almost instantly - looked like
+a real, dramatic difference. It wasn't: `--expect-text`'s matcher only checks accumulated output
+against a trailing `\n`, and a REPL prompt (`>>> `) is deliberately printed *without* one (it's
+waiting for input, not ending a line) - 1.28 only "matched" because its startup happens to print
+the prompt twice with a `\r\n` in between (`...\r\n>>> \r\n>>> `), giving the matcher's newline
+trigger something to fire on, while 1.21 prints it once (`\r\n>>> `) and never gives the matcher a
+second chance. Dumping raw serial output directly (`dump_output.py`, no expect-text matching)
+instead of relying on that matcher confirmed both versions reach `>>> ` well within the first
+1,000,000 instructions regardless - the documented claim holds fine, this was a test-harness
+blind spot (relying on a trailing newline that a REPL prompt doesn't produce), not a real finding
+about the firmware.
+
+**Hypothesis 1 (tested, disproved) - 1.28 writes something to flash during boot.** A cluster of hot
+PCs sat in RAM (`0x2000xxxx`), which is where `pico-sdk`'s `__not_in_flash_func`-marked flash
+erase/program routines normally get copied to run from (real flash can't be read via XIP while
+being erased/programmed). Directly falsified: dumped `rp2040.flash`'s littlefs region before and
+after a 20M-instruction 1.28 run and diffed byte-for-byte - **zero bytes differ**. Whatever the RAM
+code is, it isn't touching flash.
+
+**What the RAM code actually is:** read the PC-relative literal a nearby `ldr r3, [pc, #0x60]`
+loads (`0x50110000`) - that's `USBCTRL_REGS`' base address. The loop scans that peripheral's
+interrupt-status register bit-by-bit (32 iterations, `tst`/`lsls`-doubling mask, `bl` to a handler
+per set bit) - a USB IRQ dispatcher, RAM-placed for latency per normal `pico-sdk` practice, not
+flash-related at all.
+
+**Hypothesis 2 (tested, disproved) - 1.28's USB IRQ handling is disproportionately heavier than
+1.21's.** Measured each version's total RAM-region instruction share from the same PC histograms:
+**1.21: 22.94% of all instructions; 1.28: 28.02%.** Close enough that USB-IRQ-adjacent work scales
+roughly *with* the overall ~32x-in-this-sample blowup, not independently ahead of it - so it isn't
+the differentiator either. (Both hypotheses being wrong is a normal, useful outcome, not wasted
+effort - it narrows down what the real cause *isn't*.)
+
+**Root cause: narrowed down substantially further, still not fully isolated.** Extended the method
+above: hooked `execute_instruction()` to record `core.registers[14]` (`lr`) every time `core.pc`
+lands on bootrom's `__memcpy` entry (`0x2640`), for both versions' full boot-to-first-`print()` run
+(`trace_callers.py`, kept alongside `trace.py`/`disasm.py`/`disasm_bootrom.py` in the scratchpad).
+`lr - 4` gives the actual call site, since a 32-bit Thumb `bl` is 4 bytes.
+
+- **1.21: 3,948 total `__memcpy` calls, dominated by one caller (71%, 2,820 calls).** Disassembled
+  it (`0x100205ae`) and matched it, field offset for field offset, against the real source: cloned
+  `micropython/micropython` at tag `v1.21.0` and confirmed this is `lfs2_bd_read()`'s pcache-hit
+  branch in `lib/littlefs/lfs2.c` (`memcpy(data, &pcache->buffer[off-pcache->off], diff)`) - the
+  `lfs2_cache_t` struct's `block`/`off`/`size`/`buffer` fields (offsets `0`/`4`/`8`/`0xc` in
+  `lfs2.h`) line up exactly with the disassembled register offsets. In other words: 1.21's memcpy
+  load is almost entirely normal, expected littlefs block-cache reads (mounting the filesystem,
+  reading `main.py`) - nothing surprising.
+
+- **1.28: 72,208 total `__memcpy` calls - ~18x more than 1.21, not just proportionally more (the
+  overall instruction count only grew ~32x in this same sample) - and `lfs2_bd_read()` isn't even
+  in the top 15 callers anymore.** Two *different*, near-identical-count callers now dominate
+  (35,803 and 35,802 calls - suspiciously exact parity, suggesting two sides of one algorithm, e.g.
+  a read-then-write pair executed once per element): `0x1003cb44` and `0x1003c8ec`, both calling
+  through a second bootrom-`memcpy` trampoline at `0x1003b5d8` (same shape as 1.21's
+  `0x100326dc` - `ldr r3,[pc,#4]; ldr r3,[r3,#4]; bx r3`, a tail-call through the bootrom function
+  table, not a real call - confirmed this doesn't disturb `lr`, so the captured caller addresses
+  are accurate). `diff /tmp/.../mp121_src/lib/littlefs/lfs2.c mp128_src/lib/littlefs/lfs2.c`
+  (cloned both tags) shows only a trivial, behavior-preserving condition reordering between
+  versions - so littlefs's own code isn't what changed; **1.28 is calling `memcpy` from somewhere
+  else entirely, far more often, not just calling the same littlefs path harder.**
+
+- **Identified with certainty: TinyUSB's `tu_fifo_t` ring buffer (`tu_fifo_read`/`tu_fifo_write`),
+  not littlefs, GC, or qstr.** `apt-get install gcc-arm-none-eabi` (plus `cmake`/`ninja`, already
+  present) turned out to work fine in this sandbox despite `micropython.org`/`downloads.python.org`
+  being blocked - apt's own mirrors aren't on the same blocklist, and `github.com` (needed for
+  `lib/pico-sdk`/`lib/tinyusb`/`lib/mbedtls` submodules) already was reachable. Built MicroPython
+  `v1.28.0` from the cloned source for `BOARD=RPI_PICO` (`make -C ports/rp2 submodules && make -C
+  mpy-cross && make -C ports/rp2 BOARD=RPI_PICO`) - not a byte-identical rebuild of the official
+  release (different host toolchain version shifts addresses slightly), but close enough that the
+  same distinctive instruction pattern (`lsls rX,rX,#17` / `lsrs rX,rX,#17` back to back - the
+  15-bit field mask noted below) shows up a few hundred bytes away from where it was in the real
+  UF2, squarely inside a cluster of symbols `arm-none-eabi-objdump -d --syms` still had names for:
+  `tu_fifo_config`/`tu_fifo_count`/`tu_fifo_empty`/`tu_fifo_full`/`tu_fifo_read`/`tu_fifo_read_n`/
+  `tu_fifo_write`/`tu_fifo_write_n` (`lib/tinyusb/src/common/tusb_fifo.c`). The struct offsets match
+  exactly, field for field, against `tu_fifo_t` in `tusb_fifo.h`: `buffer` (offset `0`, matches the
+  data pointer), `depth` (offset `4`, matches the count field), a packed `item_size:15 /
+  overwritable:1` bitfield (offset `6`, matches the 15-bit-masked field exactly), `wr_idx`/`rd_idx`
+  (offsets `8`/`0xa`). So the two dominant 1.28 call sites are TinyUSB's own FIFO read/write
+  routines - USB endpoint ring-buffer traffic, not application/GC/filesystem code at all.
+
+  Checked whether this is "1.28 uses TinyUSB and 1.21 doesn't" (which would've been a much bigger,
+  simpler story): it isn't - `mp121_src/.gitmodules` and `ports/rp2/main.c`/`mphalport.c` both
+  reference TinyUSB (`tud_cdc` calls) too. What *does* differ: the pinned TinyUSB submodule commit
+  itself (`1fdf2907...` for 1.21 vs. `aa0fc2e0...` for 1.28 - checked via `git ls-tree` on each
+  clone) - a real upstream TinyUSB upgrade sits between these two MicroPython releases, on top of
+  whatever changed in `ports/rp2/mphalport.c`'s own CDC read/write loop (`CFG_TUD_CDC_EP_BUFSIZE`-
+  bounded chunking logic is visible there in 1.21 - worth checking whether 1.28's equivalent chunks
+  differently, i.e. more, smaller `tu_fifo` calls per byte transferred).
+
+**Not chased further, and why:** even with the *exact* function identified, the underlying question
+("why does this TinyUSB version/config call `tu_fifo_read`/`write` ~18x more") is a difference
+inside vendored C dependencies MicroPython pins, not code this project can change - the payoff for
+going further than "identified: TinyUSB FIFO, not littlefs/GC/qstr, likely the CDC chunking config
+or the TinyUSB version bump" is lower than it was for the `write_uint32` fix below, which was
+actionable immediately. Left as a well-scoped, concrete lead for whoever wants to go further:
+`mp121_src`/`mp128_src` clones with submodules already fetched, a working from-source build of
+1.28 for `BOARD=RPI_PICO` (`arm-none-eabi-gcc`/`cmake`/`ninja` all install cleanly via `apt-get` in
+this kind of sandbox despite the firmware-download hosts being blocked), and `trace_callers.py` to
+re-run the trace from immediately, rather than re-deriving any of this.
+
+**One real, concrete result from this investigation: a genuine emulator-side perf bug, unrelated to
+the version gap itself.** `cProfile` on a real 1.21 boot showed `RP2040.find_peripheral()` (a dict
+lookup) called almost 1:1 with every `write_uint32()` call (159,443 vs. 158,989) - only explainable
+if it's unconditional rather than a fallback. It was: `write_uint32()` checked it *before* the
+cheap RAM/flash/bootrom range comparisons, unlike `read_uint32()`/`write_uint8()`/`write_uint16()`,
+which all check those ranges first. Every 32-bit RAM write (stack spills, GC, locals - the
+overwhelming majority of writes in any real firmware) paid for a `dict.get()` that could never
+succeed. Fixed in `19ccff8` (reordered to match the other three methods); documented in
+`docs/PORTING.md`'s running perf log and `CHANGELOG.md`. Measured effect: ~7-8% higher and less
+variable instructions/sec on a clean A/B, 3 runs each side, of the fast 1.21 boot-to-first-print
+benchmark. **Explicitly does not close the 1.21-vs-1.28 gap** - a single-sample A/B on the full
+1.28 boot-and-run workload (213.54s before vs. 214.14s after) showed no measurable difference,
+within this project's own already-documented run-to-run wall-clock noise (see the CDC section
+above) - the gap is dominated by whatever 1.28's own firmware does differently, not by this
+particular emulator-side inefficiency.
+
+**Follow-up mechanical caching (`dd61f14`, `a53dd34`) - honest non-result.** Re-profiling after the
+`write_uint32` fix still showed `len(self.sram)`/`len(self.usb_dpram)`/`len(self.flash)` called on
+essentially every RAM/flash bus access (`read_uint16()` alone runs on nearly every instruction
+fetch), unlike `bootrom_byte_size`, which was already cached at construction for the exact same
+reason. Cached all three the same way (`ram_byte_size`/`dpram_byte_size`/`flash_byte_size`). Clean
+A/B on the `sram`/`usb_dpram` change (3 runs each side, same 1.21 benchmark as above): **no
+measurable difference** (325,319 vs. 325,921 instructions/sec, both well inside run-to-run noise) -
+`bytearray.__len__()` is already O(1) in CPython (a struct field read), so unlike `find_peripheral`
+(a real `dict.get()` with hashing), there wasn't much to save here. Kept anyway for consistency
+with the established `bootrom_byte_size` pattern and because it cannot be a regression - flagged
+explicitly as *not* a proven win, unlike the `write_uint32` fix above, so it isn't mistaken for one
+later.
+
+**Possible correctness gap, found along the way - checked against real sources, resolved: not a
+porting bug, no fix needed.** `read_uint32()` treats flash as spanning `FLASH_START_ADDRESS` to
+`FLASH_END_ADDRESS` (`0x10000000`-`0x14000000`, all four XIP mirror regions - XIP/XIP_NOALLOC/
+XIP_NOCACHE/XIP_NOCACHE_NOALLOC - folded onto the same backing array via `address & 0x00FFFFFF`,
+per its own comment), while `read_uint16()`/`read_uint8()`/`write_uint32()`/`write_uint8()`/
+`write_uint16()` all only match the *base* 16MB region - no mirror handling. Before treating this
+as a bug to fix, checked both real sources this project cross-references elsewhere: grepped the
+already-cloned `raspberrypi/pico-bootrom-rp2040` for any mirror-address handling (`0x11000000`,
+`XIP_NOALLOC`, etc.) - no hits, the bootrom itself never references the mirrors directly. More
+decisively, cloned `wokwi/rp2040js` (this project's own JS reference implementation) and checked
+its `src/rp2040.ts`: **the exact same asymmetry exists there** - `readUint32()` (line 209) checks
+against `FLASH_END_ADDRESS`, but `readUint16()`/`readUint8()`/`writeUint32()` (lines 245, 256,
+277-278) all check only `FLASH_START_ADDRESS + this.flash.length`, byte-for-byte the same shape as
+this project's own methods. So this isn't a divergence introduced by the Python port - rp2040py
+faithfully reproduced an existing property of the reference implementation it's ported from. Per
+this project's own established porting philosophy (match rp2040js unless there's a documented
+reason to diverge - same reasoning already applied to the SSI flash-write gap earlier in this
+file), this is not something to fix locally: doing so would mean diverging from the reference for
+no documented hardware reason. Closed - no action needed.
+
+**Not started yet:**
+- Walking up the call stack from the hot `__memcpy_slow_lp` hits (via `lr`/stack contents at a
+  sampled PC hit) to find what in 1.28 calls into unaligned memcpy so much more than 1.21 - the one
+  remaining concrete, unexplained lead. Low priority given 1.28's firmware itself can't be changed
+  even once identified (see above) - worth doing only if it points at something *emulator*-side
+  again, the way the `write_uint32` find did.
+- PyPy 3.10 isn't obtainable in this sandbox for re-running any of this faster - `uv python
+  install pypy-3.10` needs `downloads.python.org`, which this sandbox's network policy 403s
+  (`gateway answered 403 to CONNECT`), same class of restriction as `micropython.org` elsewhere in
+  this file. Not blocking (CPython profiling was sufficient here), but would speed up any follow-up
+  tracing significantly if run somewhere unrestricted.
+
 ## littlefs persistence to the host `--littlefs` image file — not started
 
 **Goal:** let changes MicroPython makes to its filesystem during a session actually persist back
@@ -217,28 +396,132 @@ every one of those writes is silently discarded the moment the process exits. `-
 firmware is separate and already read-only by design; this is specifically about the `--littlefs`
 region.
 
-**Rough shape, not designed yet:**
-- Simplest version: on clean shutdown (`BaseDevice.stop()`/CLI exit path), dump
-  `rp2040.flash[MICROPYTHON_FS_FLASH_START : MICROPYTHON_FS_FLASH_START + block_size*block_count]`
-  back to the `--littlefs` file path. Needs a decision on *when* - only on graceful exit (misses
-  power-loss/Ctrl+C/crash cases, arguably the most realistic to test since that's when real
-  flash-persistence bugs matter) vs. periodically/on every completed flash command
-  (`_apply_command()` in `ssi.py` already knows exactly when an erase/program actually commits -
-  could hook a write-back there instead, closer to "real flash," but far more I/O if unbuffered).
-- CircuitPython's `--fat12` path and Kaluma's `--littlefs`/user-program region
-  (`KALUMA_FS_FLASH_START`/`KALUMA_PROG_FLASH_START`) are the same shape of problem, not just
-  MicroPython's - whatever mechanism gets built should probably cover all of them rather than being
-  MicroPython-specific, though MicroPython is the natural one to prototype against first since it's
-  the one with an existing flash-rw test (`tests/micropython/main-flash-rw.py`).
-- Worth deciding whether this should be opt-in (a new flag, e.g. `--littlefs-persist`/similar) or
-  the default once it exists - persisting by default changes today's implicit "every run starts
-  from the same clean image" behavior, which some existing tests/CI usage may be relying on
-  (worth auditing `ci-micropython.yml` and `tests/test_device.py` for that assumption before
-  deciding).
-- No investigation done yet into partial-write safety (process killed mid-write-back corrupting the
-  image file worse than the crash itself would have) - a real flash chip's own power-loss semantics
-  probably aren't yet worth modeling here, but at minimum a write-to-temp-file-then-rename would
-  avoid this tool being the thing that corrupts an otherwise-fine image.
+**Design sketch (ideas for organizing this work; still not implemented):**
+
+1. **Where the write-back function lives.** Add one helper next to the existing loaders in
+   `load_flash.py`, e.g. `flush_flash_region(filename, rp2040, flash_start, block_size,
+   block_count)` - the mirror image of `_load_flash_image()`, writing
+   `rp2040.flash[flash_start : flash_start + block_size*block_count]` out instead of in. One
+   generic function reused by MicroPython/CircuitPython/Kaluma's regions, rather than three
+   near-duplicates, since loading and flushing differ only in direction (see point 6 on scope).
+
+2. **Target file: a sidecar, never the original `--littlefs` path.** Write to
+   `<littlefs-path>.persistent.img` (exact suffix bikesheddable), not back onto the file the user
+   passed in. Reasons this beats overwriting in place:
+   - The original is often a deliberately-built template (via `mklittlefs`); overwriting it means
+     "start clean again" requires rebuilding it by hand instead of just deleting one sidecar file.
+   - This is a dev/test tool - a logic bug in the flash-emulation path could silently corrupt the
+     original fixture forever if written in place; with a sidecar, the original is always safe to
+     fall back to, and a bad sidecar is just deleted.
+   - Matches the base-image/overlay pattern used elsewhere for the same problem (qcow2 backing
+     files, VM differencing disks): base stays immutable, session state lives in a separate layer.
+   - **Loading logic changes accordingly:** at boot, prefer the sidecar if it already exists (it's
+     newer than the base), falling back to the original `--littlefs` path only if no sidecar is
+     present yet (first run). The original is thus read-only from this feature's point of view -
+     only ever a load source, never a write target.
+   - Note this is a *separate* decision from the write-safety mechanism below - writing to a
+     sidecar path vs. the original path doesn't change how the write itself needs to be done.
+
+3. **Write safety.** Write to `<sidecar-path>.tmp` then `os.replace()` onto the sidecar path -
+   atomic on POSIX, so a process killed mid-write-back can't corrupt a previously-good sidecar.
+   Closes the "no investigation done yet" gap noted before without needing to model real flash
+   power-loss semantics. (Considered and rejected: mmap-backing `rp2040.flash` itself instead of an
+   in-memory buffer + explicit flush - doesn't remove the "when to make it durable" question since
+   OS page-cache writeback timing isn't ours to control either, can let a torn/mid-command state
+   reach disk on its own schedule instead of only at a controlled commit point, and would require
+   splitting `rp2040.flash`'s single unified bytearray - which also covers the UF2 firmware region,
+   deliberately *not* persisted - into a composite structure. A plain in-memory buffer with an
+   explicit, controlled flush point mirrors real flash hardware's own model anyway: even a real
+   NOR chip buffers incoming bytes in an internal page register and only commits to persistent
+   cells when a program/erase command completes, which is exactly what `_apply_command()` in
+   `ssi.py` already emulates - so this isn't a compromise vs. "how real hardware does it," it's the
+   same shape.)
+
+4. **When to call it - the actual blocker, found by tracing the CLI's real exit paths.** Both
+   `micropython`'s interactive-REPL branch and `kaluma`'s only path funnel through
+   `_wait_for_simulator()` (`cli/__init__.py`), and *every intentional quit path calls `os_exit()`*
+   (`cli/stdio_repl.py`) instead of returning normally. There are four call sites today, three for
+   the same underlying reason: Ctrl+X (inside `StdioInteractiveRepl._read_stdin_loop`, its own
+   dedicated daemon thread), an `--expect-text` match (fired from `_make_expect_text_watcher`,
+   running on the simulator's `threading.Timer` reschedule chain - also a daemon thread, see
+   `simulator.py`), and Ctrl+C/`KeyboardInterrupt` (main thread, but still routed through the same
+   helper for consistency + guaranteed terminal restore). `os._exit()` is used for the first two
+   specifically because `sys.exit()` called from a *non-main* thread only raises `SystemExit`
+   inside that one thread - it doesn't end the process, so the main thread's own
+   `while simulator.executing` loop in `_wait_for_simulator` would just keep polling forever,
+   oblivious. (The fourth call site, in `_cmd_mklittlefs`, is unrelated - a PyPy-only workaround for
+   `littlefs-python`'s C objects finalizing out of order during interpreter shutdown.) All of this
+   skips ordinary Python shutdown (`atexit`, `finally`, context-manager `__exit__`) completely, so a
+   write-back hook placed only in `BaseDevice.stop()`/`__exit__` would **never fire on either of the
+   CLI's two real long-running exit paths** (Ctrl+X/`--expect-text` bypass `device.stop()`
+   entirely; `_wait_for_simulator`'s `KeyboardInterrupt` branch calls `simulator.stop()` directly,
+   not `device.stop()`). By contrast, the raw-REPL one-shot path (`-c`/`-m`/`<file>`) already calls
+   `device.stop()` on every exit via a plain `try`/`except` in `_cmd_micropython`, so a
+   `stop()`-based hook *would* cover that path for free.
+
+   **Two ways to actually wire the flush call in, both discussed, neither implemented:**
+   - **(a) One hook inside `os_exit()` itself (recommended first cut).** All four call sites
+     already funnel through this one shared function in `stdio_repl.py` (it already tracks
+     `_active_raw_repl` as module-level state to restore the terminal before exiting) - a
+     similar registration mechanism (e.g. "the currently-active device to persist, if any," set by
+     `_cmd_micropython`/`_cmd_kaluma` right after constructing `device`) lets `os_exit()` call
+     `persist_littlefs()` once, centrally, before it calls `os._exit()`. Small, surgical, doesn't
+     touch the threading/exit-timing model at all.
+   - **(b) Bigger alternative: replace `os._exit()` with a `threading.Event` + a main-thread-driven
+     `sys.exit()`.** Instead of the background thread (Ctrl+X handler, `--expect-text` watcher)
+     tearing the whole process down itself, it would just set an `Event`; `_wait_for_simulator`'s
+     loop (already polling every 100ms) would check that `Event` alongside `simulator.executing`
+     and, once set, perform the actual shutdown itself - `simulator.stop()`, `persist_littlefs()`,
+     then a normal `sys.exit()` - from the main thread, where it behaves correctly. Confirmed this
+     is technically sound: both background threads in question (`stdio_repl.py`'s stdin reader,
+     `simulator.py`'s `threading.Timer` chain) are already `daemon=True`, so a clean main-thread
+     exit wouldn't hang waiting on them - Python's normal shutdown abandons daemon threads
+     immediately regardless of what they're doing (including the stdin reader thread, permanently
+     parked in a blocking `os.read()` that nothing can interrupt short of killing the process,
+     which is fine since it's never waited on). This would make ordinary `atexit`/`finally` hooks
+     work again, which is architecturally nicer, but it's a real refactor of working, tested exit
+     machinery (`_wait_for_simulator`'s loop, `StdioInteractiveRepl`'s Ctrl+X handler,
+     `_make_expect_text_watcher`, and deciding who calls `simulator.stop()` in each case - notably,
+     the `--expect-text` path doesn't call it today at all, relying on `os._exit()` to make that
+     moot) - worth doing if a general graceful-shutdown mechanism is wanted for its own sake, but
+     more than persistence alone justifies. **(a) is the pragmatic choice for this feature
+     specifically; (b) is a legitimate but separate, larger piece of work.**
+
+5. **Flag surface: `--persistent PATH`, value required - not a boolean.** Both `micropython` and
+   `kaluma` subcommands already have a positional `filename` argument (`nargs="?"`, e.g.
+   `rp2040py micropython script.py`) - an optional-value flag (`nargs='?'` with a `const` for
+   "given with no value") is a real argparse footgun here: `--persistent script.py` would get
+   silently swallowed as `--persistent`'s own value instead of `filename`'s, depending on argument
+   order. Requiring a value sidesteps this entirely, and also means "write in place" isn't a
+   special case needing its own code path - it falls out for free: if the user passes
+   `--persistent` pointing at the same path as `--littlefs`, the write function just writes there,
+   no `if path == littlefs_path` branch needed anywhere. Not passing `--persistent` at all keeps
+   the feature off (today's default, opt-in), and no auto-derived filename magic (e.g. inventing
+   `.persistent.img` when no path is given) - simpler to keep the path fully explicit than to write
+   and maintain path-derivation logic for a rarely-used flag.
+   - Considered and rejected: dropping the flag entirely and always persisting in place by default,
+     documenting it as the user's responsibility to back up their own template. Rejected because
+     it's not hypothetical risk - it's already flagged below (see point 7's CI note) that
+     `ci-micropython.yml`/`tests/test_device.py` may rely on every run starting from the same clean
+     image; making persistence unconditional would silently violate that for existing CI, not just
+     for new opt-in users. Only reasonable if that assumption is first audited and found not to
+     hold - not done yet.
+
+6. **Programmatic API (`MicroPythonDevice`/`KalumaDevice`).** Expose this as an explicit
+   `persist_littlefs()` (or `flush()`) method rather than an implicit constructor flag or
+   `__exit__`-only behavior - callers embedding this as a library (per `mp_device.py`'s own stated
+   use cases: test runners, Thonny-style tools) are far more likely to want to control exactly
+   *when* a flush happens (e.g. right after one specific `exec()` completes) than to get one
+   silently attached to context-manager exit.
+
+7. **Scope for a first cut.** Prototype against MicroPython only (extending the existing
+   `tests/micropython/main-flash-rw.py`), matching the reasoning above, but keep the point-1
+   helper's signature generic over `(flash_start, block_size, block_count)` from the start so
+   wiring in CircuitPython's `--fat12` region and Kaluma's `--littlefs`/
+   `KALUMA_PROG_FLASH_START` afterward is a call-site addition, not a rewrite.
+
+This is a design sketch to make the work easier to pick up, not an implementation - none of the
+above is committed yet.
 
 ## PTY / real serial port passthrough for external tools — not started
 

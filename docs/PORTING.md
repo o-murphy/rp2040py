@@ -583,3 +583,19 @@ Two mitigations, worth combining:
   (195.19s -> 188.98s); negligible for CPython 3.14+JIT and PyPy (both already fast enough here
   that bootrom's smaller share of total instructions doesn't move the needle much, unlike
   `registers` which every single instruction touches).
+- **`RP2040.write_uint32()` checked `find_peripheral()` (a dict lookup) unconditionally, before any
+  of the cheap RAM/flash/bootrom range comparisons.** Found while profiling (`cProfile` on a real
+  MicroPython 1.21 boot-to-first-print run) why a large share of executed instructions - ~23-28% in
+  both 1.21 and 1.28, see the 1.21-vs-1.28 discussion above - go through USB-interrupt-adjacent
+  code: `find_peripheral()` showed up called almost 1:1 with every `write_uint32()` call
+  (159,443 vs. 158,989 in that trace), which only makes sense if it's being called unconditionally
+  rather than as a fallback. It was: unlike `read_uint32()`/`write_uint8()`/`write_uint16()`, which
+  all check RAM (and flash/bootrom) via plain integer comparisons *before* falling back to the
+  dict-based peripheral lookup, `write_uint32()` did the dict lookup first - so every 32-bit RAM
+  write (stack spills, GC, locals - the overwhelmingly common case for real firmware) paid for a
+  `dict.get()` that was always going to miss. Reordered to match the other three methods' range
+  order. This is a general throughput fix, not specific to the 1.21-vs-1.28 gap or to USB - it
+  just happened to surface while investigating that. Verified via the full test suite (436/436) and
+  a clean A/B (`rp2040py bench`) on a real MicroPython 1.21 boot-to-first-print run, three runs
+  each side: ~273K-313K instructions/sec before (noisy) vs. ~307K-312K after (tighter), roughly a
+  7-8% improvement on top of everything above.

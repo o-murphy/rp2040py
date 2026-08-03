@@ -84,8 +84,17 @@ class RP2040:
         # path regardless of container type.
         self.bootrom_byte_size = len(self.bootrom) * 4
         self.sram = bytearray(264 * KB)
+        # Same reasoning as bootrom_byte_size above: sram/usb_dpram sizes never change after
+        # construction, and read_uint16()/read_uint8()/write_uint8()/write_uint16() are all on the
+        # hot bus-access path (read_uint16() alone runs on essentially every instruction fetch).
+        self.ram_byte_size = len(self.sram)
         self.flash = bytearray(16 * MB)
+        # NOT the same as FLASH_END_ADDRESS - FLASH_START_ADDRESS (that spans all four XIP mirror
+        # regions read_uint32() folds back onto this same backing array; this is just the base
+        # region's own size, matching what read_uint16()/read_uint8()/write_uint32() already check).
+        self.flash_byte_size = len(self.flash)
         self.usb_dpram = bytearray(4 * KB)
+        self.dpram_byte_size = len(self.usb_dpram)
 
         self.core = CortexM0Core(self)
 
@@ -201,9 +210,9 @@ class RP2040:
             # - 0x13000000 XIP_NOCACHE_NOALLOC
             offset = address & 0x00FFFFFF
             return read_uint32_le(self.flash, offset)
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             return read_uint32_le(self.sram, address - RAM_START_ADDRESS)
-        if DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + len(self.usb_dpram):
+        if DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + self.dpram_byte_size:
             return read_uint32_le(self.usb_dpram, address - DPRAM_START_ADDRESS)
         if address >> 12 == 0xE000E:
             return self.ppb.read_uint32(address & 0xFFF)
@@ -226,18 +235,18 @@ class RP2040:
 
     def read_uint16(self, address: int) -> int:
         """We assume the address is 16-bit aligned."""
-        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + len(self.flash):
+        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size:
             return read_uint16_le(self.flash, address - FLASH_START_ADDRESS)
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             return read_uint16_le(self.sram, address - RAM_START_ADDRESS)
 
         value = self.read_uint32(address & 0xFFFFFFFC)
         return (value & 0xFFFF0000) >> 16 if address & 0x2 else value & 0xFFFF
 
     def read_uint8(self, address: int) -> int:
-        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + len(self.flash):
+        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size:
             return self.flash[address - FLASH_START_ADDRESS]
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             return self.sram[address - RAM_START_ADDRESS]
 
         value = self.read_uint16(address & 0xFFFFFFFE)
@@ -246,18 +255,18 @@ class RP2040:
     def write_uint32(self, address: int, value: int) -> None:
         address = u32(address)
         bootrom = self.bootrom
-        peripheral = self.find_peripheral(address)
-        if peripheral:
-            atomic_type = (address & 0x3000) >> 12
-            offset = address & 0xFFF
-            peripheral.write_uint32_atomic(offset, value, atomic_type)
-        elif address < self.bootrom_byte_size:
+        # Same range order as read_uint32() - RAM/flash/bootrom checked first via cheap integer
+        # comparisons, find_peripheral() (a dict lookup) only as the fallback for what's left.
+        # This branch used to check find_peripheral() unconditionally *first*, so every RAM write
+        # (the overwhelmingly common case - stack spills, GC, locals) paid for a dict .get() that
+        # was always going to miss; write_uint8()/write_uint16() never had this problem.
+        if address < self.bootrom_byte_size:
             bootrom[address // 4] = value & 0xFFFFFFFF
-        elif FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + len(self.flash):
+        elif FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size:
             write_uint32_le(self.flash, address - FLASH_START_ADDRESS, value)
-        elif RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        elif RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             write_uint32_le(self.sram, address - RAM_START_ADDRESS, value)
-        elif DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + len(self.usb_dpram):
+        elif DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + self.dpram_byte_size:
             offset = address - DPRAM_START_ADDRESS
             write_uint32_le(self.usb_dpram, offset, value)
             self.usb_ctrl.dpram_updated(offset, value)
@@ -266,10 +275,16 @@ class RP2040:
         elif address >> 12 == 0xE000E:
             self.ppb.write_uint32(address & 0xFFF, value)
         else:
-            self.logger.warning(LOG_NAME, f"Write to undefined address: {address:x}")
+            peripheral = self.find_peripheral(address)
+            if peripheral:
+                atomic_type = (address & 0x3000) >> 12
+                offset = address & 0xFFF
+                peripheral.write_uint32_atomic(offset, value, atomic_type)
+            else:
+                self.logger.warning(LOG_NAME, f"Write to undefined address: {address:x}")
 
     def write_uint8(self, address: int, value: int) -> None:
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             self.sram[address - RAM_START_ADDRESS] = value & 0xFF
             return
 
@@ -294,7 +309,7 @@ class RP2040:
         # we assume that address is 16-bit aligned.
         # Ideally we should generate a fault if not!
 
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + len(self.sram):
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             write_uint16_le(self.sram, address - RAM_START_ADDRESS, value)
             return
 

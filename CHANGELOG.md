@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `RP2040.write_uint32()` checked `find_peripheral()` (a dict lookup) unconditionally before any
+  other address range, unlike `read_uint32()`/`write_uint8()`/`write_uint16()`, which all check
+  cheap RAM/flash/bootrom range comparisons first. Every 32-bit write to RAM - the overwhelmingly
+  common case (stack spills, GC, locals) - paid for a peripheral-dict lookup that was always going
+  to miss. Reordered to match `read_uint32()`'s range order. Found while profiling why ~23-28% of
+  all instructions executed during a MicroPython boot go through USB-interrupt-adjacent code
+  (`cProfile` on a real boot showed `find_peripheral()` called on almost every `write_uint32()`
+  call, 1:1). Measured ~7-8% higher and less variable instructions/sec on a real MicroPython 1.21
+  boot-to-first-print benchmark; full test suite green, no behavior change for actual peripheral
+  writes.
+
 ## [0.1.0rc2] - 2026-08-03
 
 ### Added

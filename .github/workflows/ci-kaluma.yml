@@ -15,7 +15,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # This image doesn't depend on kaluma_version or python_runtime (always the same freshly
+  # formatted, empty image) - built once here and shared via artifact instead of rebuilt
+  # redundantly in every matrix job below.
+  build-littlefs:
+    name: Build littlefs test image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Kaluma's littlefs filesystem has no auto-run semantics of its own (unlike MicroPython's
+      # main.py) - it's plain storage the staged script below writes into at runtime, so this just
+      # needs a freshly formatted, empty image sized to Kaluma's own board.js block layout.
+      - name: Create flash read/write test filesystem
+        run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
+
+      - name: Upload littlefs image
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaluma-littlefs-image
+          path: kaluma-littlefs-flash-rw.img
+          retention-days: 1
+
   test-kaluma:
+    needs: build-littlefs
     name: Kaluma ${{ matrix.kaluma_version }} / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
@@ -44,16 +75,26 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      # Kaluma's littlefs filesystem has no auto-run semantics of its own (unlike MicroPython's
-      # main.py) - it's plain storage the staged script below writes into at runtime, so this just
-      # needs a freshly formatted, empty image sized to Kaluma's own board.js block layout.
-      - name: Create flash read/write test filesystem
-        run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
+      - name: Download littlefs image
+        uses: actions/download-artifact@v4
+        with:
+          name: kaluma-littlefs-image
 
       - name: Setup Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: ${{ matrix.python_runtime }}
+
+      # Downloads (and caches) this version's UF2 outside the timed test steps below, so a slow
+      # kaluma-project/kaluma GitHub-release fetch doesn't get counted as (or blow the budget of)
+      # actual boot/run time. Stages tests/kaluma/index.js (same as the real test step below) and
+      # matches its own console.log() output rather than Kaluma's boot banner - the banner is racy
+      # (see the Kaluma test step's comment below), a staged script's own output isn't.
+      # continue-on-error: a hiccup here shouldn't fail the job on its own - the real test step
+      # right after will fail with a clearer signal if genuinely broken.
+      - name: Warm up Kaluma ${{ matrix.kaluma_version }} download cache
+        continue-on-error: true
+        run: timeout 1m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
 
       # Real code-execution test: stages tests/kaluma/index.js into Kaluma's "user program" flash
       # region (same one `kaluma flash index.js` writes to on real hardware), which Kaluma
@@ -63,7 +104,7 @@ jobs:
       # read low regardless of the pull, which looked identical to GP22 being pulled to GND, i.e.
       # "skip loading"). No mklittlefs step needed - the program stages directly from the file.
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
@@ -74,6 +115,6 @@ jobs:
       # README's Kaluma section), and matches its own printed result rather than the racy
       # boot-time "Welcome to Kaluma" banner.
       - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
