@@ -35,61 +35,91 @@ yet"). Confirmed rp2040js has the same gap — this is a new feature, not a port
   (erase/program/status/JEDEC ID/read-data/write-enable-latch semantics) pass against the
   peripheral driven directly.
 
-### BLOCKING — real boot hangs before REPL (regression, not yet root-caused)
+### Root-caused and fixed — two independent bugs (both in `src/rp2040py/peripherals/ssi.py`)
 
-Reported by user: `rp2040py micropython` (and presumably `kaluma`) now hangs, never reaches REPL.
-Confirmed via `git worktree` A/B: baseline (pre-SSI-work, `12249b8`'s parent) reaches REPL in
-~349,615 instructions; current branch does not reach it within a 20M-instruction budget.
+The hang (`rp2040py micropython`/`kaluma` never reaching REPL) had **two separate root causes**,
+both found by tracing a real boot directly against `RP2040`/`CortexM0Core` (bypassing the CLI's
+firmware-download path, which can't reach micropython.org/adafruit's S3 bucket from a sandboxed
+session — `github.com` releases *are* reachable there, so Kaluma 1.2.1's UF2, from
+`kaluma-project/kaluma`'s GitHub release, is what was used to reproduce this) with
+`RPSSI.read_uint32`/`write_uint32` monkeypatched to log every call alongside `core.pc`, plus
+register snapshots (`core.registers`) at fixed PCs. Cross-checked against the actual bootrom
+*source* (`raspberrypi/pico-bootrom-rp2040`, `bootrom/program_flash_generic.c` — public, unlike the
+compiled `BOOTROM_B1` blob) rather than guessing from disassembly alone, since disassembly-only
+reverse-engineering (the previous session's approach, see below) was slow and inconclusive.
 
-**Symptom:** CPU spins forever inside the bootrom at PC `0x1784`–`0x17d6`. Disassembled (via
-`arm-none-eabi-objdump -D -b binary -m arm -M force-thumb --adjust-vma=0` on the extracted
-`BOOTROM_B1` bytes) and confirmed this is the compiled body of `flash_do_cmd_cs()` (pico-sdk
-`hardware_flash/flash.c`) — it reads `SSI_TXFLR` (`ldr r7,[r4,#32]`) and `SSI_RXFLR`
-(`ldr r6,[r4,#36]`) directly off `r4 = 0x18000000` (SSI's XIP-mapped base), sums them, and loops
-while there's "room" (`TXFLR+RXFLR <= 13`) to push more TX and/or still-outstanding RX to drain.
+**Bug 1 — `_cs_asserted` initialized to `False`, desynced from the pin's real reset value.**
+`rp2040.qspi[1]` (QSPI_SS)'s own `.value` resolves to `LOW` (i.e. *asserted*) immediately after
+construction — `always_output_enabled=True` pins with no function-select driving them yet still
+resolve through `GPIOPin.value`'s `output_enable` branch, landing on `LOW` (see `gpio_pin.py`).
+Hardcoding `RPSSI._cs_asserted = False` in `__init__` didn't match that, so the very first
+chip-select assertion ever performed (a plain "force low" with the pin already reading low - no
+edge, so `_on_cs_pin_changed` never fires) was invisible to this peripheral: every byte of that
+first command was silently dropped by `write_uint32`'s `self._cs_asserted` guard, starving the
+bootrom's `flash_do_cmd_cs()`-equivalent (`flash_put_get()`, see bug 2) of the RX bytes it was
+waiting for. Fix: `self._cs_asserted = rp2040.qspi[1].value == GPIOPinState.LOW` at construction,
+synced to the pin's actual resolved value instead of hardcoded.
 
-**Progress so far:**
-1. Fixed CS framing (SSIENR → QSPI_SS pin) — was wrong, confirmed via SDK source.
-2. Fixed `raw_output_enable` gap for QSPI pins (`always_output_enabled`) — confirmed via trace
-   that "CS pin: LOW -> HIGH" now fires correctly on `flash_cs_force()`'s writes.
-3. Both fixes *reduced* the spin (1,247,617 loop iterations in 20M instructions before the
-   `always_output_enabled` fix → 310,117 after) but did **not** eliminate it. Something else is
-   still wrong.
-4. Added live tracing (`RPSSI.write_uint32`/`read_uint32` monkeypatched) around one instance of
-   the loop. Captured a concrete register snapshot at loop entry (PC `0x1794`):
-   `r0=0x0 r1=0x0 r2=0x4 r3=0x0 r4=0x18000000 r5=0x4 r6=0x4 r7=0x20041f74`, i.e. `r2` (tx_remaining)
-   starts at `4`, decrementing over the next ~100 instructions (`r2`: 4→3→1→0) while `r6`/`r7`
-   (RXFLR/TXFLR) stay pinned at small values — consistent with the loop actually running a real
-   4-byte command, not spinning on a zero-length no-op. Need to confirm whether it ever terminates
-   normally (tx_remaining AND rx_remaining both hit 0) or whether RX never drains because DR0
-   reads aren't being issued/queued right.
-5. Earlier trace (`dr0_trace.py`, before the register-snapshot version above) showed long runs of
-   *only* `RXFLR read -> 0` / `TXFLR read -> 0` with **no interleaved DR0 write/read log lines at
-   all** — meaning at least part of the spin isn't even reaching the DR0 shift path. Not yet
-   reconciled with point 4's non-zero `r2` — may be a different call site / different point in the
-   same loop, or a bug in the trace instrumentation itself (needs re-verification).
+This alone fixed all 9 then-failing `tests/test_ssi.py` cases (every one of them drove a single
+command from a fresh `RP2040()` — exactly the "first-ever" case this bug broke) but, on its own,
+did **not** fix the real boot hang - confirmed via a Kaluma boot trace that still froze solid at
+the same PC range as before.
 
-**Suspicious but unconfirmed:** `SSI_TXFLR`'s `read_uint32` returns `self._txflr`, a field that is
-*only* ever set via a direct write to that offset and never dynamically reflects real pending-TX
-state (unlike `SSI_RXFLR`, correctly `len(self._rx_queue)`). Current belief (not yet proven): this
-is actually *correct* — real hardware treats TXFLR as read-only status and firmware never writes
-it, so it should just stay 0 — but this asymmetry was flagged mid-investigation and hasn't been
-fully ruled out as contributing to the loop's exit condition never being satisfied.
+**Bug 2 — DR0 writes while chip-select is deasserted were dropped entirely, but shouldn't be.**
+Tracing further after bug 1's fix showed the *specific* freeze point: `flash_exit_xip()`
+(`program_flash_generic.c`) calls `flash_init_spi()` (sets up SSI via `ssi->ser = 1`/`ssienr = 1` -
+a legitimate, separate CS-enable path this peripheral doesn't otherwise model) and then
+deliberately clocks dummy bytes through DR0 *while chip-select is forced high* (`flash_cs_force
+(OUTOVER_HIGH)`) - a real-flash Micron-compatibility dummy-clock sequence, per the source's own
+comment. Real SSI FIFO hardware (`TXFLR`/`RXFLR`/`DR0`) is wired independently of the QSPI_SS GPIO
+pin - it keeps shifting bytes regardless of chip-select state, since CS here is a purely
+software/GPIO-level concern bit-banged on top, not something the SSI shift register itself gates
+on. This peripheral's `write_uint32` instead made *all* DR0 FIFO activity conditional on
+`self._cs_asserted`, so this deliberate CS-high write vanished - `RXFLR` never incremented, and
+`flash_put_get()`'s TX/RX-FIFO-level flow-control loop (`bootrom`'s compiled equivalent of the
+loop below) spun forever waiting for bytes that would never arrive. Confirmed by disassembling the
+actual stuck PC range (`0x1794`-`0x17d8`) with `capstone` and matching it instruction-for-
+instruction against `flash_put_get()`'s compiled shape (the final `tst`/branch at `0x17d4` is
+`flash_was_aborted()` checking `IO_QSPI_GPIO_QSPI_SD1_CTRL`'s `INOVER` bits - a debugger-abort
+escape valve, not the normal exit path; the *real* exit is the `(tx_count|rx_skip|rx_count)==0`
+check at the loop top). Fix: DR0 writes now always advance the FIFO when `SSIENR=1`, regardless of
+`_cs_asserted` — chip-selected writes still go through `_shift_byte()`/real command interpretation
+as before, but deasserted writes now push a `0xFF` (idle-bus, matching `_shift_byte()`'s own
+unrecognized-opcode fallback) into `_rx_queue` instead of nothing, so the firmware-side FIFO
+accounting stays consistent either way. Nothing about `_apply_command()`/flash-content semantics
+changed - only bytes clocked in while actually chip-selected affect flash state.
 
-**Next step:** re-run the register-snapshot trace (`/tmp/.../scratchpad/dr0_trace2.py`, latest
-version) for a longer window past the first ~100 instructions to see whether the loop actually
-exits and re-enters repeatedly (i.e. `flash_do_cmd_cs` is being called over and over, each time
-completing fine — which would mean the *hang* is somewhere else entirely, not in this loop) or
-whether a single invocation truly never terminates. If it never terminates, trace exactly which
-DR0 read/write is expected next vs. what `RPSSI` actually does at that instant — likely need to
-add PC to the existing `dr0_trace.py` log lines to correlate reads/writes with loop position.
-Scratch scripts for this (`dr0_trace.py`, `dr0_trace2.py`, `qspi_trace3.py`, `loop_inspect.py`,
-`bootrom.bin`) were session-scratch only and not committed.
+**Verified:**
+- `tests/test_ssi.py`: 17/17 passing (was 9 failing before bug 1's fix), plus 2 new regression
+  tests added for these exact bugs (`test_chip_select_already_asserted_at_reset_is_not_silently_missed`,
+  `test_dr0_writes_while_chip_select_deasserted_still_advance_the_fifo`) - 19/19.
+- Full suite: 431/431 passing, no regressions.
+- Real boot, instruction-level: before both fixes, a Kaluma 1.2.1 boot froze at PC `0x1794`/`0x1798`
+  (the `flash_put_get()` loop) with zero forward progress across a 3M-instruction budget. After
+  both fixes, the same boot advances through tens of millions of instructions across many
+  different PCs in flash-resident code (`0x1000xxxx`-`0x1003xxxx`) with no repeated/stuck PC -
+  i.e. genuinely unstuck, not just "still frozen but slower."
+- Real boot, end-to-end (reaching the actual "Welcome" REPL banner): **in progress as of this
+  writing, not yet confirmed** - this pure-Python emulator does roughly 300K instructions/sec on
+  CPython in this sandbox (no PyPy available here - `downloads.python.org` isn't reachable from
+  this session's network policy), and Kaluma's full boot appears to need tens of millions of
+  instructions past the point these fixes unstuck, so it takes several minutes of wall-clock per
+  attempt. Whoever picks this up next: check whether a `--expect-text "Welcome"` run of
+  `rp2040py kaluma --image <Kaluma 1.2.1 uf2>` completes (give it 5-10 minutes) before doing
+  anything else here - if it doesn't reach REPL, there may be a third issue past where these two
+  fixes reach.
 
 ### Not started yet
 
-- Once the hang is fixed: re-run full `tests/test_ssi.py` + full suite (430 passing before this
-  branch) for regressions.
+- Confirm the above end-to-end REPL boot (Kaluma first, since its UF2 is reachable via GitHub
+  releases from a sandboxed session without extra firmware-download plumbing). MicroPython
+  couldn't be tried in this session at all - confirmed (not just untried) that `micropython.org`
+  is blocked by this sandbox's network policy (`gateway answered 403 to CONNECT`, same for
+  `downloads.python.org` when trying to get PyPy for a faster re-run) - whoever picks this up next
+  needs either a session with broader network access, or a pre-cached
+  `~/.cache/rp2040py/RPI_PICO-20231005-v1.21.0.uf2` staged in some other way. `mklittlefs` itself
+  (needs no network) was verified working fine for a MicroPython-shaped image
+  (`--block-size 4096 --block-count 352`) while investigating this.
 - Real end-to-end validation: format + write + read-back via littlefs at a live REPL.
 - README/CHANGELOG/PORTING.md: remove the "filesystem is not writeable" caveat once confirmed
   working.

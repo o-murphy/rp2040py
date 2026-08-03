@@ -11,6 +11,7 @@ command set once framed correctly.
 
 import pytest
 
+from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.peripherals import ssi as ssi_mod
 from rp2040py.rp2040 import RP2040
 
@@ -220,3 +221,46 @@ def test_ssi_disabled_ignores_dr0_writes_even_with_chip_select_asserted():
     ss_pin.ctrl = _CS_FORCE_HIGH
     ss_pin.check_for_updates()
     assert not (_read_status(rp2040, ssi) & STATUS_WEL_BIT)
+
+
+def test_chip_select_already_asserted_at_reset_is_not_silently_missed():
+    # QSPI_SS's own reset-state resolved `.value` is LOW (asserted) - see gpio_pin.py: an
+    # `always_output_enabled` pin with no function-select driving it yet resolves to LOW, same as a
+    # regular disabled GPIO would resolve to floating/INPUT if it weren't hardcoded always-driven.
+    # `RPSSI._cs_asserted` must start in sync with that, or the very first chip-select assertion
+    # ever performed (a plain "force low" with the pin already reading low, i.e. no rising/falling
+    # edge to fire `_on_cs_pin_changed`) is invisible to this peripheral, and every byte of that
+    # first command is silently dropped by `write_uint32`'s `self._cs_asserted` guard - this
+    # reproduces exactly the hang the bootrom's flash_do_cmd_cs()-equivalent loop suffered from
+    # (see docs/BACKLOG.md).
+    rp2040, ssi = _ssi()
+    assert rp2040.qspi[1].value == GPIOPinState.LOW
+    assert ssi._cs_asserted
+
+    received = _send(rp2040, ssi, ssi_mod.CMD_READ_JEDEC_ID, 0x00, 0x00, 0x00)
+
+    assert tuple(received[1:4]) == ssi_mod.JEDEC_ID
+
+
+def test_dr0_writes_while_chip_select_deasserted_still_advance_the_fifo():
+    # Real SSI FIFO hardware (TXFLR/RXFLR/DR0) is wired independently of the QSPI_SS GPIO pin - it
+    # keeps shifting bytes regardless of chip-select state (CS is a software-only bit-banged GPIO
+    # concern here, see ssi.py's chip-select docstring). Firmware relies on this: the bootrom's
+    # flash_exit_xip() deliberately clocks dummy bytes through DR0 *while chip-select is forced
+    # high* (pico-bootrom's program_flash_generic.c, the Micron-compatibility dummy-clock
+    # sequence) - if those writes were silently dropped instead of still populating the RX FIFO,
+    # firmware's TXFLR/RXFLR-driven flow-control loop spins forever waiting for bytes that will
+    # never arrive (this reproduced the real boot hang, see docs/BACKLOG.md). None of this should
+    # be interpreted as a real flash command, though - only bytes clocked in while actually
+    # chip-selected go through `_shift_byte()`/affect flash state.
+    rp2040, ssi = _ssi()
+    ss_pin = rp2040.qspi[1]
+    ssi.write_uint32(ssi_mod.SSI_SSIENR, 1)
+    ss_pin.ctrl = _CS_FORCE_HIGH  # deasserted
+    ss_pin.check_for_updates()
+
+    ssi.write_uint32(ssi_mod.SSI_DR0, ssi_mod.CMD_WRITE_ENABLE)
+
+    assert ssi.read_uint32(ssi_mod.SSI_RXFLR) == 1
+    assert ssi.read_uint32(ssi_mod.SSI_DR0) == 0xFF
+    assert not (_read_status(rp2040, ssi) & STATUS_WEL_BIT)  # not interpreted as a real command

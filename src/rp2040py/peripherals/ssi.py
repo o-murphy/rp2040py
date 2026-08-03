@@ -101,7 +101,16 @@ class RPSSI(BasePeripheral):
         # corresponding incoming one), and multi-byte responses (JEDEC ID, read-status, page reads)
         # need to come back in the right order across several DR0 reads.
         self._write_enabled = False
-        self._cs_asserted = False
+        # Synced to the pin's actual resolved value at construction time, not hardcoded False -
+        # QSPI_SS's own reset state (see gpio_pin.py: `always_output_enabled` pins with no
+        # function-select driving them yet resolve `.value` to LOW, i.e. *asserted*) can already be
+        # "asserted" before any real edge ever happens. Hardcoding False here desyncs this flag from
+        # the pin: the bootrom's first-ever `flash_cs_force(low)` is then a no-op (LOW -> LOW, no
+        # edge fires `_on_cs_pin_changed`), so `_cs_asserted` would stay wrongly False forever and
+        # every byte of that first command would be silently dropped by `write_uint32`'s
+        # `self._ssienr and self._cs_asserted` guard - starving the bootrom's flash_do_cmd_cs() TX/RX
+        # FIFO-drain loop of the RX bytes it's waiting for and hanging it forever.
+        self._cs_asserted = rp2040.qspi[1].value == GPIOPinState.LOW
         self._tx_buffer = bytearray()
         self._rx_queue: deque[int] = deque()
         rp2040.qspi[1].add_listener(self._on_cs_pin_changed)
@@ -156,8 +165,20 @@ class RPSSI(BasePeripheral):
         elif offset == SSI_SPI_CTRL_R0:
             self._spictlr0 = value
         elif offset == SSI_DR0:
-            if self._ssienr and self._cs_asserted:
-                self._rx_queue.append(self._shift_byte(value & 0xFF))
+            if self._ssienr:
+                if self._cs_asserted:
+                    self._rx_queue.append(self._shift_byte(value & 0xFF))
+                else:
+                    # SSI's shift register/FIFOs are wired independently of the QSPI_SS GPIO pin -
+                    # real hardware keeps shifting bytes through DR0 even while software has forced
+                    # chip-select high (e.g. flash_exit_xip()'s deliberate CS-high dummy-clock
+                    # compatibility sequence, pico-bootrom's program_flash_generic.c). The virtual
+                    # flash chip isn't "listening" in that state, so there's nothing meaningful to
+                    # shift back - 0xFF (idle bus), same fallback `_shift_byte()` uses for an
+                    # unrecognized opcode - but the RX FIFO must still gain an entry, or firmware's
+                    # TXFLR/RXFLR-driven flow-control loop (bootrom's flash_put_get()) spins forever
+                    # waiting for bytes that will never arrive.
+                    self._rx_queue.append(0xFF)
         else:
             super().write_uint32(offset, value)
 
