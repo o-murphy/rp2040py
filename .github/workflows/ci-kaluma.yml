@@ -74,6 +74,6 @@ jobs:
       # README's Kaluma section), and matches its own printed result rather than the racy
       # boot-time "Welcome to Kaluma" banner.
       - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/kaluma_run.py --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
