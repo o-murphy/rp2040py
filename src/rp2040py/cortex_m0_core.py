@@ -1400,6 +1400,10 @@ class CortexM0Core:
             self.waiting = False
         # ARM Thumb instruction encoding - 16 bits / 2 bytes
         opcode_pc = self.registers[PC_REGISTER] & ~1  # ensure no LSB set PC are executed
+
+        if opcode_pc in self.rp2040.hle_memcpy_entries:
+            return self._hle_memcpy()
+
         opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
         opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
@@ -1417,6 +1421,40 @@ class CortexM0Core:
             self.logger.warning(LOG_NAME, f"Warning: Instruction at {opcode_pc:x} is not implemented yet!")
             self.logger.warning(LOG_NAME, f"Opcode: 0x{opcode:x} (0x{opcode2:x})")
 
+        self.cycles += delta_cycles
+        return delta_cycles
+
+    def _hle_memcpy(self) -> int:
+        """HLE (high-level emulation) of bootrom's __memcpy/__memcpy_44 - see
+        RP2040.hle_memcpy_entries for the signature-gated detection that makes this safe to call
+        here. Confirmed via docs/BACKLOG.md's 1.21-vs-1.28 investigation that real firmware's own
+        memcpy() calls (TinyUSB's tu_fifo_read/write, littlefs's lfs2_bd_read()) route through
+        these two entry points, and that they dominate a meaningful share of total instructions on
+        a real boot - interpreting their per-byte/per-word copy loop one emulated Thumb instruction
+        at a time is pure overhead once the copy itself can be done as one Python-level bulk
+        operation (RP2040.bus_copy()) instead.
+
+        AAPCS contract: r0=dst, r1=src, r2=n, returns r0=dst unchanged (both bootrom entry points
+        preserve r0 across the call via their own `mov ip, r0` / `mov r0, ip` - just replicating
+        the end result here, not the mechanism). r1-r3/ip are undefined-after-call scratch
+        registers - real memcpy() is free to clobber them, so leaving them untouched here is a
+        stricter subset of that, not a divergence. r4+ are genuinely untouched (this method never
+        touches self.registers[4:]), matching the real routine's own push/pop of any it modifies.
+        """
+        dst = self.registers[0]
+        src = self.registers[1]
+        n = self.registers[2] & 0xFFFFFFFF
+        if n:
+            self.rp2040.bus_copy(dst, src, n)
+        self.registers[PC_REGISTER] = self.registers[14] & 0xFFFFFFFE
+
+        # Not cycle-accurate - a rough stand-in for the real loop's cost (so SOF-cadence/timing-
+        # sensitive code elsewhere isn't disturbed by treating this as free) rather than a
+        # measurement: __memcpy's word-aligned fast path (ldmia/stmia of 4 words at a time) is
+        # roughly 1 instruction per 8 bytes; its unaligned fallback (__memcpy_slow_lp) is exactly
+        # 4 instructions per byte (subs/ldrb/strb/bne), confirmed against bootrom_misc.S.
+        aligned = n >= 8 and ((dst - src) & 0x3) == 0
+        delta_cycles = max(1, n // 8) if aligned else max(1, n * 4)
         self.cycles += delta_cycles
         return delta_cycles
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Experimental, opt-in HLE (high-level emulation) hook for bootrom's `__memcpy`/`__memcpy_44`,
+  enabled via `RP2040PY_ENABLE_HLE_MEMCPY=1` (off by default, **not recommended to enable**).
+  Replaces the interpreted per-byte/per-word copy loop with a single native bulk copy when
+  firmware calls into these two bootrom routines (as TinyUSB's `tu_fifo_read`/`tu_fifo_write` and
+  littlefs's `lfs2_bd_read()` do). Detected via a whole-bootrom signature scan (not a hardcoded
+  address), confirmed working correctly against all three bootrom revisions this project supports
+  (B0/B1/B2 - see `--bootrom`). Measured net **negative**: no improvement on a fast MicroPython
+  1.21 boot, and ~1.8% *slower* wall-clock on a full MicroPython 1.28 boot-and-run - the
+  per-instruction check needed to detect the hook's entry points costs more than the copy-loop
+  interpretation it saves. Kept in the tree, opt-in and off by default, as a documented, verified
+  "measured this, doesn't pay off" result rather than reverted outright - see
+  `docs/PORTING.md`/`docs/BACKLOG.md` for the full numbers.
+
 ## [0.1.0] - 2026-08-04
 
 ### Fixed

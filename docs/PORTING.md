@@ -599,3 +599,50 @@ Two mitigations, worth combining:
   a clean A/B (`rp2040py bench`) on a real MicroPython 1.21 boot-to-first-print run, three runs
   each side: ~273K-313K instructions/sec before (noisy) vs. ~307K-312K after (tighter), roughly a
   7-8% improvement on top of everything above.
+- **`RP2040.bootrom_byte_size`'s caching pattern extended to `sram`/`usb_dpram`/`flash`
+  (`ram_byte_size`/`dpram_byte_size`/`flash_byte_size`)** - `read_uint16()`/`read_uint8()`/
+  `write_uint8()`/`write_uint16()` were still calling `len(self.sram)`/`len(self.flash)` on
+  essentially every RAM/flash bus access. Honest result, unlike the fix above: no measurable
+  difference on a clean A/B (3 runs each side, same 1.21 benchmark) -
+  `bytearray.__len__()` is already O(1) in CPython (a struct field read), so there wasn't
+  much to save here, unlike `find_peripheral()`'s real `dict.get()`. Kept for consistency with
+  the established pattern and because it cannot be a regression, not because it's a proven win.
+- **HLE (high-level emulation) hook for bootrom's `__memcpy`/`__memcpy_44`, opt-in via
+  `RP2040PY_ENABLE_HLE_MEMCPY=1` (off by default).** Found while tracing the 1.21-vs-1.28
+  instruction-count gap (see above) that real firmware's own `memcpy()` calls - TinyUSB's
+  `tu_fifo_read`/`tu_fifo_write`, littlefs's `lfs2_bd_read()` - route through these two bootrom
+  entry points, and that interpreting their per-byte/per-word copy loop one emulated Thumb
+  instruction at a time is pure overhead once the copy itself can be done as a single Python-level
+  bulk operation. `CortexM0Core.execute_instruction()` checks `core.pc` against
+  `RP2040.hle_memcpy_entries` (a `frozenset[int]`) before the normal fetch/decode/dispatch path; on
+  a hit, `_hle_memcpy()` performs the copy via `RP2040.bus_copy()` (a `bytearray` slice copy when
+  both ends land in RAM/flash - the common case - falling back to a plain byte-by-byte bus copy for
+  anything else, e.g. touching peripheral space) and jumps directly to the return address, still
+  advancing the clock by a rough (not cycle-accurate) cost estimate so SOF-cadence/timing-sensitive
+  code elsewhere isn't disturbed by treating the copy as free.
+
+  Detecting *where* these two routines live is a whole-bootrom byte-pattern scan (`bytes.find()`
+  over the 16KB bootrom, once per `load_bootrom()` call - nowhere near the hot per-instruction
+  path), not a hardcoded address: downloaded `b0.elf`/`b2.elf` via `--bootrom` and confirmed the
+  routines' own machine code is byte-for-byte identical across B0/B1/B2 (only their *position*
+  differs - B0: `0x2888`/`0x28a0`, B1: `0x2628`/`0x2640`, B2: `0x2604`/`0x261c` - presumably other
+  ROM code shifting around them, not the routines themselves changing), so a scan finds the right
+  offset for any of the three (or any future revision carrying the same unchanged routine)
+  automatically, rather than needing a manually-maintained per-revision offset table. A revision
+  where the signature genuinely isn't found anywhere leaves the hook inert for that image rather
+  than risking a misfire. Verified booting real MicroPython 1.21 + littlefs against all three
+  bootrom revisions with the hook enabled - identical, correct output (`Hello, MicroPython!
+  version: 1.21.0`) on each.
+
+  **Measured net negative on both benchmarks - off by default, not recommended to enable.** No
+  measurable improvement on the fast 1.21 boot-to-first-print benchmark (memcpy is only ~0.2% of
+  its instructions there). The real test - the full MicroPython 1.28 boot-and-run, where `memcpy`
+  traffic is ~18x higher - is now measured too: 213.86s baseline vs. 217.82s with the hook enabled,
+  **~1.8% *slower***, not faster (instructions/sec is misleading here and shouldn't be used - the
+  hook collapses many interpreted instructions into one counted step, so the two runs' step counts
+  aren't the same unit; wall-clock time is the only fair comparison). The per-instruction
+  `core.pc in self.rp2040.hle_memcpy_entries` check is paid by every single instruction in the run,
+  and even 18x more memcpy traffic isn't a large enough share of total execution to outweigh that
+  fixed tax. The mechanism itself is correct (verified against real boots on all three bootrom
+  revisions) - this is a clean "measured, doesn't pay off" result, not a bug. See
+  `docs/BACKLOG.md` for the full numbers and rationale.
