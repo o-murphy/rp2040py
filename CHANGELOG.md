@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current directory, exactly as before.
 
 ### Fixed
+- `firmware_retrieve._resolve_version()`'s short-tag matching (e.g. `--image 1.19` resolving to
+  MicroPython's `1.19.1` dated slug) used a raw string prefix (`known_tag.startswith(tag)`), which
+  silently matched semantically unrelated versions sharing a digit prefix - `"1.2"` matched
+  `"1.20.0"`/`"1.21.0"`/`"1.28.0"` alike (none of which are actually `1.2.x`), resolving to
+  whichever happened to come first in `known_versions`' key order rather than raising or picking
+  the intended one. Now uses `semver.Version.parse(..., optional_minor_and_patch=True)` (new
+  dependency) to compare real `(major, minor, patch)` components truncated to how many the tag
+  itself specified, so `"1.2"` correctly matches nothing (falls back to using it as the raw version
+  suffix) while `"1.19"` still resolves to `1.19.1`, and an ambiguous bare-major tag like `"1"`
+  picks the highest real match by semver precedence instead of key order.
 - `rp2040py micropython`/`kaluma`'s interactive REPL could leave the real terminal stuck in raw
   mode (no echo, no line buffering - looks like "the keyboard stopped working") if the process
   exited any way other than a clean `stop()`: `os._exit()` (used by both the Ctrl+X quit path and

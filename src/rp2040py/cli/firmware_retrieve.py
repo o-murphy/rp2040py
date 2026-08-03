@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
+import semver
+
 __all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
 
 
@@ -60,14 +62,41 @@ def _cache_dir() -> Path:
     return cache_dir
 
 
+def _parse_version(version: str) -> "semver.Version | None":
+    try:
+        return semver.Version.parse(version, optional_minor_and_patch=True)
+    except ValueError:
+        return None
+
+
 def _resolve_version(spec: FirmwareSpec, tag: str) -> str:
     tag = tag.removeprefix("v")
     if spec.known_versions is not None:
         if tag in spec.known_versions:
             return spec.known_versions[tag]
-        for known_tag, version in spec.known_versions.items():
-            if known_tag.startswith(tag):
-                return version
+        # A short tag means its dotted *components* as a prefix (e.g. "1.19" -> "1.19.1"), not a
+        # raw string prefix: the old `known_tag.startswith(tag)` would also match "1.20.0"/
+        # "1.21.0"/"1.28.0" for tag "1.2" purely from coincidental digit overlap - wrong, since
+        # "1.2" means version 1.2.x, disjoint from 1.20.x/1.21.x/1.28.x, not a string fragment of
+        # them. `semver.Version.parse(..., optional_minor_and_patch=True)` normalizes both sides
+        # to real (major, minor, patch) tuples for comparison instead of comparing raw strings,
+        # truncated to how many components the tag itself specified - so "1.19" only ever matches
+        # known versions whose (major, minor) is exactly (1, 19), never a same-string-prefix but
+        # numerically unrelated one. A short numeric-only tag like "1" still legitimately matches
+        # every 1.x release, so pick the highest of those (rather than whichever happened to come
+        # first in known_versions' key order, a silent footgun the moment a new version is
+        # inserted anywhere but the end).
+        precision = tag.count(".") + 1
+        tag_version = _parse_version(tag)
+        if tag_version is None:
+            return tag
+        matches = []
+        for known_tag, filename_version in spec.known_versions.items():
+            known_version = _parse_version(known_tag)
+            if known_version is not None and known_version.to_tuple()[:precision] == tag_version.to_tuple()[:precision]:
+                matches.append((known_version, filename_version))
+        if matches:
+            return max(matches)[1]
     return tag
 
 

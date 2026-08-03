@@ -310,6 +310,12 @@ async def main():
 
 All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(max_workers=1)` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start()`/`start_async()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
 
+## Used by
+
+- [ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc) — tests
+  its RP2040 `usermod`/`natmod` builds in CI by actually booting real firmware through this
+  emulator (`o-murphy/rp2040py/.github/actions/setup-rp2040py`), not just compiling it.
+
 ## Learn more
 
 - [rp2040js](https://github.com/wokwi/rp2040js) — the upstream TypeScript emulator this project is ported from.
