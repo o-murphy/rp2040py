@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from rp2040py.peripherals.peripheral import BasePeripheral
 
 if TYPE_CHECKING:
+    from rp2040py.gpio_pin import GPIOPin
     from rp2040py.rp2040 import RP2040
 
 __all__ = ("RPIO",)
@@ -16,12 +17,17 @@ PROC0_INTS3 = 0x12C
 
 
 class RPIO(BasePeripheral):
-    def __init__(self, rp2040: "RP2040", name: str):
+    """The CTRL/STATUS/INTR register block shared by IO_BANK0 (`rp2040.gpio`, the default, 30
+    general-purpose pins) and IO_QSPI (`rp2040.qspi`, 6 dedicated QSPI pins - same register
+    layout, just a different, smaller pin list) - pass `pins` explicitly for the latter."""
+
+    def __init__(self, rp2040: "RP2040", name: str, pins: "list[GPIOPin] | None" = None):
         super().__init__(rp2040, name)
+        self.pins = pins if pins is not None else rp2040.gpio
 
     def get_pin_from_offset(self, offset: int):
         gpio_index = offset >> 3
-        return self.rp2040.gpio[gpio_index], bool(offset & 0x4)
+        return self.pins[gpio_index], bool(offset & 0x4)
 
     def read_uint32(self, offset: int) -> int:
         if offset <= GPIO_CTRL_LAST:
@@ -30,7 +36,7 @@ class RPIO(BasePeripheral):
         if INTR0 <= offset <= PROC0_INTS3:
             start_index = (offset & 0xF) * 2
             register = offset & ~0xF
-            gpio = self.rp2040.gpio
+            gpio = self.pins
             result = 0
             for index in range(7, -1, -1):
                 pin = gpio[index + start_index] if index + start_index < len(gpio) else None
@@ -58,7 +64,7 @@ class RPIO(BasePeripheral):
         if INTR0 <= offset <= PROC0_INTS3:
             start_index = (offset & 0xF) * 2
             register = offset & ~0xF
-            gpio = self.rp2040.gpio
+            gpio = self.pins
             for index in range(8):
                 pin = gpio[index + start_index] if index + start_index < len(gpio) else None
                 if not pin:

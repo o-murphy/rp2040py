@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Real JEDEC SPI-NOR flash command emulation in `RPSSI` (`WREN`/`WRDI`, `RDSR1`/`RDSR2`, `WRSR`,
+  `PAGE_PROGRAM`, `SECTOR_ERASE`, `BLOCK_ERASE`, `READ_DATA`, `READ_JEDEC_ID`), so the filesystem
+  is now actually writeable - MicroPython's `os`/`rp2.Flash` can format, write, and read back files
+  through it, not just read a pre-built image. Verified end to end against real MicroPython
+  firmware (write a file, read it back, over a `--littlefs` image) as well as the existing
+  `ci-micropython.yml` matrix (8 versions × 3 Python runtimes, all green).
+- `tests/micropython/main-flash-rw.py` + a new `ci-micropython.yml` step exercising it: writes a
+  file to the auto-mounted littlefs filesystem and reads it back, confirming the flash-write path
+  above end to end (alongside the existing plain-boot and SPI0 tests).
+- `mklittlefs --target {micropython,circuitpython,kaluma}`: presets `--block-size`/`--block-count`
+  to a known firmware's own filesystem layout instead of spelling them out by hand (mutually
+  exclusive with passing them explicitly - errors if both are given). Omitting both keeps today's
+  default (MicroPython's `4096`/`352`).
+- `tests/kaluma/index-flash-rw.js` + a new `ci-kaluma.yml` step exercising it: mounts a
+  `--target kaluma`-sized littlefs image and writes/reads a file through Kaluma's own
+  `require("fs")` (a different flash region/filesystem than MicroPython's), confirming the same
+  flash-write path from Kaluma's side too.
+
+### Fixed
+- Two bugs in `RPSSI` that hung real boots before reaching the REPL, both surfaced while building
+  the flash-write support above: `_cs_asserted` desynced from `QSPI_SS`'s real reset-time value
+  (the first-ever chip-select assertion after reset went unnoticed, dropping every byte of that
+  command); and `DR0` writes made while chip-select was deasserted were dropped entirely, though
+  `flash_exit_xip()`'s dummy-clock compatibility sequence deliberately clocks bytes through `DR0`
+  in that exact state (real SSI FIFO hardware doesn't gate on the `QSPI_SS` GPIO pin). Either one
+  alone starved the bootrom's flash-command FIFO-drain loop of bytes it was waiting for, hanging it
+  forever. See `docs/BACKLOG.md` for the full root-cause writeup.
+
 ## [0.1.0rc1] - 2026-08-03
 
 ### Added

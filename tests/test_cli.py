@@ -419,3 +419,26 @@ def test_mklittlefs_allows_no_files(tmp_path):
     cli.main(["mklittlefs", "-o", str(image)])
 
     assert image.exists()
+
+
+def test_mklittlefs_target_presets_block_size_and_count(tmp_path):
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    from rp2040py.device.load_flash import KALUMA_FS_BLOCKCOUNT, KALUMA_FS_BLOCKSIZE
+
+    image = tmp_path / "out.img"
+
+    cli.main(["mklittlefs", "-o", str(image), "--target", "kaluma"])
+
+    assert image.stat().st_size == KALUMA_FS_BLOCKSIZE * KALUMA_FS_BLOCKCOUNT
+
+
+def test_mklittlefs_target_rejects_explicit_block_size_or_count(capsys, tmp_path):
+    pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
+    image = tmp_path / "out.img"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["mklittlefs", "-o", str(image), "--target", "kaluma", "--block-size", "4096"])
+
+    assert exc_info.value.code == 1
+    assert "mutually exclusive" in capsys.readouterr().err
+    assert not image.exists()

@@ -158,7 +158,14 @@ rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # 
 [docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
 for why.
 
-Currently, the filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented yet.
+`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` to a known
+firmware's own filesystem layout instead of spelling them out by hand (mutually exclusive with
+passing them explicitly) - see the Kaluma section below for why its layout differs from
+MicroPython/CircuitPython's.
+
+The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
+SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
+hardware uses to erase/program flash.
 
 ### CircuitPython code
 
@@ -191,7 +198,9 @@ sudo cp code.py fat12/  # copy code.py to the filesystem
 sudo umount fat12/  # unmount the filesystem
 ```
 
-While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
+CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython's
+`os`/`rp2.Flash` does, so this hasn't been separately exercised - but the underlying flash-write
+path (see the MicroPython filesystem support section) is the same SSI peripheral either way.
 
 ### Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)
 
@@ -234,17 +243,23 @@ image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_little
 different default than MicroPython's `littlefs.img`, since the block size/count differ):
 
 ```sh
-rp2040py mklittlefs -o kaluma_littlefs.img --block-size 4096 --block-count 128 your_script.js
+rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
 rp2040py kaluma --littlefs kaluma_littlefs.img
 ```
 
+`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` for a known
+firmware's filesystem layout (mutually exclusive with passing them explicitly) - omit both for
+MicroPython's own defaults.
+
 > [!NOTE]
-> Kaluma's own `board.js` tries to mount this filesystem unconditionally at startup and currently
-> fails in this emulator regardless of whether `--littlefs` is given - logging `Bad block at 0x0`/
-> `Superblock 0x0 has become unwritable`/`Error: No space left on device` (reproduced even against
-> a validly-built `mklittlefs` image, not just blank flash) - root cause not yet identified. Purely
-> cosmetic so far: Kaluma catches and prints the error without aborting, so boot and `<script.js>`
-> auto-run both continue normally past it.
+> Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
+> at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on device` against the
+> unformatted flash region - purely cosmetic, Kaluma catches and prints the error without aborting,
+> so boot and `<script.js>` auto-run both continue normally past it. This used to reproduce even
+> against a validly-built `mklittlefs` image, not just blank flash - no longer reproduced after the
+> SSI flash-read/write fixes in `docs/BACKLOG.md` (a real `--target kaluma` image now mounts and
+> reads/writes cleanly, verified via `tests/kaluma/index-flash-rw.js`), though that wasn't a
+> deliberate target of those fixes and hasn't been separately root-caused - flag it if it resurfaces.
 
 Kaluma prints its "Welcome to Kaluma" banner exactly once, right at boot - but that's before the
 emulated USB-CDC connection to the host is actually up, so (same as real hardware racing a host
