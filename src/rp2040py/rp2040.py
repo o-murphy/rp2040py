@@ -111,12 +111,12 @@ class RP2040:
         self.gpio = [GPIOPin(self, i) for i in range(30)]
 
         self.qspi = [
-            GPIOPin(self, 0, "SCLK"),
-            GPIOPin(self, 1, "SS"),
-            GPIOPin(self, 2, "SD0"),
-            GPIOPin(self, 3, "SD1"),
-            GPIOPin(self, 4, "SD2"),
-            GPIOPin(self, 5, "SD3"),
+            GPIOPin(self, 0, "SCLK", always_output_enabled=True),
+            GPIOPin(self, 1, "SS", always_output_enabled=True),
+            GPIOPin(self, 2, "SD0", always_output_enabled=True),
+            GPIOPin(self, 3, "SD1", always_output_enabled=True),
+            GPIOPin(self, 4, "SD2", always_output_enabled=True),
+            GPIOPin(self, 5, "SD3", always_output_enabled=True),
         ]
 
         self.dma = RPDMA(self, "DMA")
@@ -140,7 +140,7 @@ class RP2040:
             0x4000C: RPReset(self, "RESETS_BASE"),
             0x40010: RPPSM(self, "PSM_BASE"),
             0x40014: RPIO(self, "IO_BANK0_BASE"),
-            0x40018: UnimplementedPeripheral(self, "IO_QSPI_BASE"),
+            0x40018: RPIO(self, "IO_QSPI_BASE", pins=self.qspi),
             0x4001C: RPPADS(self, "PADS_BANK0_BASE", "bank0"),
             0x40020: RPPADS(self, "PADS_QSPI_BASE", "qspi"),
             0x40024: RPXOSC(self, "XOSC_BASE"),

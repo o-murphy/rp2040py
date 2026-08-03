@@ -1,6 +1,7 @@
 from collections import deque
 from typing import TYPE_CHECKING
 
+from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.peripherals.peripheral import BasePeripheral
 
 if TYPE_CHECKING:
@@ -88,17 +89,22 @@ class RPSSI(BasePeripheral):
         self._txddriveedge = 0
 
         # Software-driven SPI NOR flash command state (see the module docstring above): `_tx_buffer`
-        # accumulates the bytes shifted out via DR0 since SSIENR was last enabled (chip-select
-        # asserted, in real DW_apb_ssi terms) - real flash commands are framed by chip-select, not
-        # by anything visible in the byte stream itself, so SSIENR's 0->1/1->0 transitions are the
-        # only signal available for "a new command starts here"/"apply what was shifted". `_rx_queue`
-        # holds bytes shifted *in* (the flash chip's response) waiting to be read back via DR0 -
-        # necessary because a real SPI transfer is full-duplex (every outgoing byte has a
+        # accumulates the bytes shifted out via DR0 since chip-select was last asserted - real
+        # flash commands are framed by chip-select, not by anything visible in the byte stream
+        # itself. On RP2040, chip-select is *not* SSI's own SER/SSIENR - the Pico SDK's
+        # flash_cs_force() bit-bangs the QSPI_SS pin's IO_QSPI override directly instead ("in case
+        # RAM-resident IRQs are still running... the bootrom does the same", per its own comment
+        # in pico-sdk's flash.c), bypassing SSI's chip-select machinery entirely. So framing here
+        # keys off `rp2040.qspi[1]` (QSPI_SS, active-low) actually changing value, not SSIENR.
+        # `_rx_queue` holds bytes shifted *in* (the flash chip's response) waiting to be read back
+        # via DR0 - necessary because a real SPI transfer is full-duplex (every outgoing byte has a
         # corresponding incoming one), and multi-byte responses (JEDEC ID, read-status, page reads)
         # need to come back in the right order across several DR0 reads.
         self._write_enabled = False
+        self._cs_asserted = False
         self._tx_buffer = bytearray()
         self._rx_queue: deque[int] = deque()
+        rp2040.qspi[1].add_listener(self._on_cs_pin_changed)
 
     def read_uint32(self, offset: int) -> int:
         if offset == SSI_TXFLR:
@@ -140,7 +146,7 @@ class RPSSI(BasePeripheral):
         elif offset == SSI_CTRLR1:
             self._crtlr1 = value
         elif offset == SSI_SSIENR:
-            self._set_ssienr(value)
+            self._ssienr = value
         elif offset == SSI_BAUDR:
             self._baudr = value
         elif offset == SSI_RX_SAMPLE_DLY:
@@ -150,24 +156,24 @@ class RPSSI(BasePeripheral):
         elif offset == SSI_SPI_CTRL_R0:
             self._spictlr0 = value
         elif offset == SSI_DR0:
-            if self._ssienr:
+            if self._ssienr and self._cs_asserted:
                 self._rx_queue.append(self._shift_byte(value & 0xFF))
         else:
             super().write_uint32(offset, value)
 
-    def _set_ssienr(self, value: int) -> None:
-        was_enabled = bool(self._ssienr)
-        self._ssienr = value
-        now_enabled = bool(value)
-        if now_enabled and not was_enabled:
+    def _on_cs_pin_changed(self, value: GPIOPinState, _last_value: GPIOPinState) -> None:
+        # QSPI_SS is active-low: LOW means the flash chip is selected.
+        now_asserted = value == GPIOPinState.LOW
+        if now_asserted and not self._cs_asserted:
             # Chip-select asserting: start a fresh command.
             self._tx_buffer = bytearray()
             self._rx_queue = deque()
-        elif was_enabled and not now_enabled:
+        elif self._cs_asserted and not now_asserted:
             # Chip-select deasserting: the command (and, for PAGE_PROGRAM, however many data bytes
             # were shifted - not knowable in advance, only by where chip-select ends up deasserted)
             # is now complete - apply whatever it was to the actual flash bytes.
             self._apply_command()
+        self._cs_asserted = now_asserted
 
     def _shift_byte(self, byte_out: int) -> int:
         """One SPI clock's worth of full-duplex exchange: `byte_out` is being shifted into the

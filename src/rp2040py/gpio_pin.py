@@ -56,10 +56,19 @@ IRQ_LEVEL_LOW = 1 << 0
 
 
 class GPIOPin:
-    def __init__(self, rp2040: "RP2040", index: int, name: str | None = None):
+    def __init__(self, rp2040: "RP2040", index: int, name: str | None = None, always_output_enabled: bool = False):
         self.rp2040 = rp2040
         self.index = index
         self.name = name if name is not None else str(index)
+        # True only for the 6 dedicated QSPI pins (rp2040.qspi) - unlike general-purpose GPIOs,
+        # which need an explicit SIO/PWM/PIO function-select (or an output-enable override) before
+        # OUTOVER has any visible effect on .value, these are permanently wired to the XIP/SSI
+        # peripheral with no separate "not driving the bus" state to model. Real firmware (e.g.
+        # flash_cs_force() bit-banging QSPI_SS - "the bootrom does the same", per its own comment
+        # in pico-sdk's flash.c) only ever touches OUTOVER on these pins, relying on output-enable
+        # already effectively being on - which for a normal rp2040.gpio pin would require a
+        # separate, explicit output_enable_override write this real code never makes.
+        self._always_output_enabled = always_output_enabled
 
         self._raw_input_value = False
         # Whether something has ever actively driven this pin via set_input_value() (a button/
@@ -141,6 +150,9 @@ class GPIOPin:
 
     @property
     def raw_output_enable(self) -> bool:
+        if self._always_output_enabled:
+            return True
+
         index, rp2040, function_select = self.index, self.rp2040, self.function_select
         bitmask = 1 << index
 
