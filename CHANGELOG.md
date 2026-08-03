@@ -17,11 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through `os_exit()` at all.
 
 ### Performance
-- `CortexM0Core.registers` is now a plain `list[int]` instead of `Uint32Array` - see
+- `CortexM0Core.registers` and `RP2040.bootrom` are now plain `list[int]` instead of
+  `Uint32Array` - see
   [docs/PORTING.md](docs/PORTING.md#performance-pure-python-interpretation-is-much-slower-than-v8)
-  for the full writeup. ~13% faster real MicroPython 1.28 + littlefs boot-and-run under both
-  CPython 3.10 and 3.14+JIT, ~16% higher synthetic instructions/sec under CPython 3.10; PyPy
-  unaffected (its JIT already optimized the old indirection away).
+  for the full writeup. Combined, ~16% faster real MicroPython 1.28 + littlefs boot-and-run under
+  CPython 3.10 (224.79s -> 188.98s), ~16% higher synthetic instructions/sec; PyPy unaffected (its
+  JIT already optimized the old indirection away). `Uint32Array` itself (`utils/bit.py`) had no
+  remaining callers after both changes and was removed.
 
 ## [0.1.0b6] - 2026-08-03
 

@@ -422,9 +422,9 @@ Measured on this machine:
 
 | Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
 |---|---|---|
-| CPython 3.10 | 497,385 | 195.19s (331,376 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 968,532 (~1.9x) | 113.13s (~1.7x, 571,758 steps/sec) |
-| PyPy 3.10 | 36,857,335 (~74x) | 11.62s (~17x, 5,566,231 steps/sec) |
+| CPython 3.10 | 499,806 | 188.98s (342,244 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 961,218 (~1.9x) | 113.77s (~1.7x, 568,486 steps/sec) |
+| PyPy 3.10 | 37,989,746 (~76x) | 11.59s (~16x, 5,580,638 steps/sec) |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
@@ -439,7 +439,7 @@ second) and isn't what this table measures.
 **MicroPython 1.21 is the recommended version to boot in the emulator, not 1.28**: running that
 same script is dominated by how much work the firmware itself does per loop iteration, not just
 interpreter speed. On the same machine, under the same CPython 3.10, MicroPython 1.21 reaches that
-script's first `print()` in 3.96s (1,418,835 steps) versus 1.28's 195.19s (64,679,599 steps) - about
+script's first `print()` in 3.72s (1,418,835 steps) versus 1.28's 188.98s (64,679,599 steps) - about
 45x fewer steps for byte-identical script content, with the instruction count reproducing exactly
 run-to-run (deterministic - a property of the firmware's own control flow, not host-speed
 variance). Profiling shows the CPU core essentially never reaches `WFI`/idle during 1.28's run
@@ -545,3 +545,19 @@ Two mitigations, worth combining:
   essentially unchanged (within run-to-run noise) - its JIT already optimizes the old
   `Uint32Array` indirection away at this level, same pattern as the struct-based bit-ops change
   above.
+- **`RP2040.bootrom` got the same `list[int]` treatment as `registers` above, and `Uint32Array`
+  was deleted from `utils/bit.py` entirely** once that left it with zero remaining callers. Much
+  smaller surface than `registers` (`bootrom` is read heavily whenever execution is actually
+  inside bootrom - real ROM routines like its own memcpy helper get called repeatedly during
+  flash/USB operations - but read/written from just two call sites in `RP2040.read_uint32()`/
+  `write_uint32()`, plus one bulk-load site in `load_bootrom()`, versus `registers`' ~60): the
+  bulk-load site (`self.bootrom.set(bootrom_data)`) became an explicit masked slice-assignment
+  (`self.bootrom[: len(bootrom_data)] = (v & 0xFFFFFFFF for v in bootrom_data)` - `load_bootrom()`
+  is called with fewer than the full 4096 words in `tests/test_rp2040.py`, so a full-length
+  `self.bootrom[:] = ...` would've been wrong), and the single `write_uint32()` write site got the
+  same explicit `& 0xFFFFFFFF`. Verified the same way: full instruction suite, plus real 1.21/1.28
+  boots confirming identical instruction counts before/after. Measured effect on top of the
+  `registers` change above, under CPython 3.10: another ~3% off the real 1.28 boot-and-run
+  (195.19s -> 188.98s); negligible for CPython 3.14+JIT and PyPy (both already fast enough here
+  that bootrom's smaller share of total instructions doesn't move the needle much, unlike
+  `registers` which every single instruction touches).

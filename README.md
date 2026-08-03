@@ -93,9 +93,9 @@ file already on disk:
 >
 > | Interpreter | Time |
 > |---|---|
-> | CPython 3.10 | 195.19s |
-> | CPython 3.14 + `PYTHON_JIT=1` | 113.13s (~1.7x) |
-> | PyPy 3.10 | 11.62s (~17x) |
+> | CPython 3.10 | 188.98s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 113.77s (~1.7x) |
+> | PyPy 3.10 | 11.59s (~16x) |
 >
 > For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- rp2040py
 > micropython ...` (or `... -- python demo/micropython_run.py ...` from a checkout). See
@@ -106,8 +106,8 @@ file already on disk:
 > This is also why **1.21 is the recommended version**: reaching the bare REPL prompt is fast on
 > *both* 1.21 and 1.28 (well under a second, whether or not a littlefs `main.py` auto-runs first) -
 > the gap above is specifically about *running* a script shaped like the one above afterward. On
-> the same machine and CPython 3.10, that same script reaches its first `print()` in 3.96s
-> (1,418,835 steps) under 1.21 versus 195.19s (64,679,599 steps) under 1.28 - identical instruction
+> the same machine and CPython 3.10, that same script reaches its first `print()` in 3.72s
+> (1,418,835 steps) under 1.21 versus 188.98s (64,679,599 steps) under 1.28 - identical instruction
 > counts run-to-run (this is deterministic, not host-speed noise), so the ~45x gap is a real
 > difference in how much work 1.28 does per loop iteration, not an emulator bug: profiling shows
 > the core essentially never reaches `WFI`/idle during that time, so it's real Thumb instructions
