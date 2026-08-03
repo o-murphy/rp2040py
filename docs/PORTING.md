@@ -416,28 +416,41 @@ output, just at very different speeds.
 
 `demo/benchmark.py` is a reproducible benchmark for this (see its docstring for usage): a
 synthetic mode that isolates raw instruction-dispatch overhead (no bus/peripheral traffic beyond
-RAM fetches), and a firmware mode that boots a real image to a REPL/`--expect-text` match, the
-same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise. Measured on this machine:
+RAM fetches), and a firmware mode that boots a real image and runs a script to a
+REPL/`--expect-text` match, the same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise.
+Measured on this machine:
 
-| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs boot |
+| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
 |---|---|---|
-| CPython 3.10 | 426,854 | 221.11s (293,976 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 779,343 (~1.8x) | 121.74s (~1.8x, 533,917 steps/sec) |
-| PyPy 3.10 | 36,320,045 (~85x) | 9.59s (~23x, 6,778,518 steps/sec) |
+| CPython 3.10 | 497,385 | 195.19s (331,376 steps/sec) |
+| CPython 3.14 + `PYTHON_JIT=1` | 968,532 (~1.9x) | 113.13s (~1.7x, 571,758 steps/sec) |
+| PyPy 3.10 | 36,857,335 (~74x) | 11.62s (~17x, 5,566,231 steps/sec) |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
 interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
 biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
+The "MicroPython 1.28 + littlefs" column specifically times booting, mounting a littlefs image,
+and running a resident `while True: print(...); time.sleep(1)` script (`tests/micropython/main.py`,
+what `ci-micropython.yml` actually boots) to its first line of output - reaching the bare REPL
+prompt itself, with no such script auto-running, is fast on every version tested (well under a
+second) and isn't what this table measures.
 
-**MicroPython 1.21 is the recommended version to boot in the emulator, not 1.28**: the boot time
-above is dominated by how much work the firmware itself does before dropping to the REPL, not just
-interpreter speed. On the same machine, under the same CPython 3.10, MicroPython 1.21 reaches the
-REPL in 6.85s (2,000,000 steps) versus 1.28's 160.35s (65,000,000 steps) - over 20x fewer steps for
-an otherwise identical boot-to-prompt workload. 1.28 still boots and mounts a `mklittlefs`-built
+**MicroPython 1.21 is the recommended version to boot in the emulator, not 1.28**: running that
+same script is dominated by how much work the firmware itself does per loop iteration, not just
+interpreter speed. On the same machine, under the same CPython 3.10, MicroPython 1.21 reaches that
+script's first `print()` in 3.96s (1,418,835 steps) versus 1.28's 195.19s (64,679,599 steps) - about
+45x fewer steps for byte-identical script content, with the instruction count reproducing exactly
+run-to-run (deterministic - a property of the firmware's own control flow, not host-speed
+variance). Profiling shows the CPU core essentially never reaches `WFI`/idle during 1.28's run
+(waiting is near-zero even over tens of millions of steps), so this is real Thumb code being
+interpreted somewhere in 1.28's own compiled firmware, not an emulator hang - the exact upstream
+cause (compiler, GC, string formatting, or something else specific to what changed in 1.28's
+firmware between it and 1.21) hasn't been isolated further, since it lives in MicroPython's own
+compiled code rather than anything in this repo. 1.28 still boots and mounts a `mklittlefs`-built
 littlefs image correctly (that's exactly the version pinned `disk_version` fixed compatibility
-for, see below), it's simply much slower to reach interactively; use it only when you specifically
-need whatever changed between 1.21 and 1.28.
+for, see below), it's simply much more expensive to run typical resident scripts on; use it only
+when you specifically need whatever changed between 1.21 and 1.28.
 
 Two mitigations, worth combining:
 
@@ -493,3 +506,42 @@ Two mitigations, worth combining:
   text as a lambda rather than hand-deriving mask/value bit patterns) and verified via the full
   126-case instruction test suite plus real MicroPython + littlefs boots on both old (1.16) and
   new (1.28) firmware before and after.
+- **`CortexM0Core.registers` is now a plain `list[int]` instead of `Uint32Array`.** It's the
+  hottest bus in the whole emulator - every single instruction reads/writes several of its 16
+  slots - and every access went through `Uint32Array.__getitem__`/`__setitem__`, a Python-level
+  method call, versus a `list` subscript's C-level bytecode op. Compared against rp2040js (Node
+  v26/V8) booting the identical firmware+littlefs+script combination the table above measures:
+  rp2040js finishes in 4.11s versus CPython 3.10's pre-this-change 224.79s (~55x) and even PyPy's
+  11.51s (~2.8x) - `cProfile` on that run showed `Uint32Array.__getitem__`/`__setitem__` alone
+  accounting for over 1.8 million calls in a 356K-instruction sample (~3.3 reads + ~1.9 writes per
+  instruction), the same class of overhead the `PC_REGISTER` direct-indexing change above already
+  removed for one register, now extended to all 16.
+
+  The catch: `Uint32Array.__setitem__` did `int(value) & 0xFFFFFFFF` unconditionally on every
+  write, and roughly 60 call sites across `cortex_m0_core.py` (plus `tests/utils/
+  rp2040_test_driver.py`'s direct `core.registers[i] = ...` pokes) relied on that implicitly -
+  Python ints don't wrap at 32 bits on their own, so e.g. `_subtract_update_flags()` can return a
+  genuine negative int, `~register_value` (MVNS, BICS' operand) is always negative, and a left
+  shift (LSLS, ROR) can exceed 32 bits outright. Every one of those write sites now masks
+  explicitly with `& 0xFFFFFFFF` at the point of assignment instead of relying on the wrapper -
+  audited one by one against real ARM semantics rather than masking indiscriminately everywhere
+  (though a handful of sites that are simplest to reason about that way, e.g. the `sp`/`lr`/`pc`
+  property setters, do mask unconditionally to match the old wrapper's behavior exactly). Two
+  sites that looked masked already turned out not to be and only surfaced as real test failures
+  once the wrapper's safety net was gone (`test_should_execute_an_cmn_r5_r2_instruction`,
+  `test_should_execute_a_subs_r1_1_instruction_with_overflow` - both traced to the test driver's
+  `set_registers()` writing raw negative Python ints like `-2` to probe wraparound behavior, which
+  the wrapper used to silently fix up) - a reminder that "obviously safe" needs verifying by
+  running the full suite, not just reasoning about the production call sites in isolation.
+
+  Verified via the full instruction test suite (with the two fixed test-driver sites above) plus
+  real MicroPython + littlefs boots on 1.21 and 1.28 before/after, confirming byte-identical
+  instruction-count traces (64,679,598 either way for 1.28's run in the table above - purely a
+  dispatch-speed change, not a behavior change). Measured effect: ~13% faster under both CPython
+  3.10 and 3.14+JIT on the real 1.28 boot-and-run workload (224.79s -> 195.19s, 130.23s -> 113.13s)
+  and ~16% higher synthetic instructions/sec under CPython 3.10 (the synthetic benchmark is
+  ADD/SUB-heavy, i.e. almost entirely register reads/writes, so it's more sensitive to this
+  specific change than a real boot's mixed workload). PyPy's synthetic/real numbers were
+  essentially unchanged (within run-to-run noise) - its JIT already optimizes the old
+  `Uint32Array` indirection away at this level, same pattern as the struct-based bit-ops change
+  above.

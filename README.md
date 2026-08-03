@@ -87,14 +87,15 @@ file already on disk:
 > [!TIP]
 > Booting real firmware means executing millions of Thumb instructions through a pure-Python
 > interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js.
-> Measured with [demo/benchmark.py](demo/benchmark.py) booting MicroPython 1.28 + littlefs to the
-> REPL:
+> Measured with [demo/benchmark.py](demo/benchmark.py) booting MicroPython 1.28 + littlefs, then
+> running a typical resident script (`while True: print(...); time.sleep(1)`, same as
+> [ci-micropython.yml](.github/workflows/ci-micropython.yml)'s fixture) to its first output:
 >
 > | Interpreter | Time |
 > |---|---|
-> | CPython 3.10 | 221.11s |
-> | CPython 3.14 + `PYTHON_JIT=1` | 121.74s (~1.8x) |
-> | PyPy 3.10 | 9.59s (~23x) |
+> | CPython 3.10 | 195.19s |
+> | CPython 3.14 + `PYTHON_JIT=1` | 113.13s (~1.7x) |
+> | PyPy 3.10 | 11.62s (~17x) |
 >
 > For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- rp2040py
 > micropython ...` (or `... -- python demo/micropython_run.py ...` from a checkout). See
@@ -102,11 +103,17 @@ file already on disk:
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.
 >
-> This is also why **1.21 is the recommended version**: on the same machine and CPython 3.10,
-> 1.21 reaches the REPL in 6.85s (2,000,000 steps) versus 1.28's 160.35s (65,000,000 steps) - over
-> 20x fewer steps to boot the same emulator. 1.28 works fine too (as does the littlefs image
-> produced by `mklittlefs`, mounting correctly on both), it's just a much slower REPL to reach
-> interactively.
+> This is also why **1.21 is the recommended version**: reaching the bare REPL prompt is fast on
+> *both* 1.21 and 1.28 (well under a second, whether or not a littlefs `main.py` auto-runs first) -
+> the gap above is specifically about *running* a script shaped like the one above afterward. On
+> the same machine and CPython 3.10, that same script reaches its first `print()` in 3.96s
+> (1,418,835 steps) under 1.21 versus 195.19s (64,679,599 steps) under 1.28 - identical instruction
+> counts run-to-run (this is deterministic, not host-speed noise), so the ~45x gap is a real
+> difference in how much work 1.28 does per loop iteration, not an emulator bug: profiling shows
+> the core essentially never reaches `WFI`/idle during that time, so it's real Thumb instructions
+> being interpreted, not something hanging. 1.28 still boots and mounts a `mklittlefs`-built
+> littlefs image correctly (that's exactly the version pinned `disk_version` fixed compatibility
+> for, see below); it's simply much more expensive to actually *run* typical resident scripts on.
 
 ```sh
 rp2040py micropython --image 1.28.0
