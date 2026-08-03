@@ -109,12 +109,12 @@ class _MemcpySlowLpBlock:
         core.c = True
         core.v = False
 
-        delta_cycles = n * (5 + io_src_first + io_dst_first) - 1
-        # CortexM0Core._fetch_decode_execute() and _hle_memcpy() both fold their own delta_cycles
-        # into core.cycles themselves before returning - this needs to match, or SOF-cadence/timing
-        # sensitive code elsewhere would silently see fewer elapsed cycles than actually happened.
-        core.cycles += delta_cycles
-        return delta_cycles
+        # Unlike a standalone hook (e.g. CortexM0Core._hle_memcpy()), this is only ever invoked
+        # from CortexM0Core._op_b_with_cond_jit() - an ordinary dispatch-table handler - so its
+        # return value flows back through the normal handler contract: the caller
+        # (_fetch_decode_execute_jit) adds it to core.cycles itself. Adding it here too would
+        # double-count.
+        return n * (5 + io_src_first + io_dst_first) - 1
 
 
 def _decode_memcpy_slow_lp(read_uint16: ReadUint16, pc: int) -> _MemcpySlowLpBlock | None:
@@ -195,11 +195,12 @@ class JITEngine:
                 self._blocks[pc] = block
 
     def try_execute(self, core: CortexM0Core, pc: int) -> int | None:
-        """Called from CortexM0Core._execute_instruction_jit() before normal fetch/decode/dispatch
-        - see that method's docstring for why the disabled (default) path never reaches here at
-        all. Returns the elapsed cycle count on a compiled-block hit, or None to interpret `pc`
-        normally (no block cached for it, or the cached block itself declined - see
-        _MemcpySlowLpBlock.run above).
+        """Called from CortexM0Core._op_b_with_cond_jit() when a taken conditional branch's target
+        is `pc` - see that method's docstring for why the check lives on the branch path rather
+        than on every instruction (an earlier version did the latter and measured net negative -
+        see docs/JIT_BACKLOG.md). Returns the elapsed cycle count on a compiled-block hit, or None
+        to let the branch complete normally (no block cached for `pc`, or the cached block itself
+        declined - see _MemcpySlowLpBlock.run above).
         """
         block = self._blocks.get(pc)
         if block is None:

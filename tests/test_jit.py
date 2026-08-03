@@ -81,9 +81,15 @@ def _run_jit(monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, sr
     core.pc = entry_pc
     core.cycles = 0
 
-    rp2040.step()  # the whole loop collapses into exactly one step
+    exit_pc = entry_pc + 8
+    jit_steps = 0
+    while core.pc != exit_pc:
+        rp2040.step()
+        jit_steps += 1
+        if jit_steps > 4:
+            raise AssertionError("JIT-enabled loop took more than one interpreted iteration plus the compiled tail")
 
-    return rp2040, core
+    return rp2040, core, jit_steps
 
 
 @pytest.mark.parametrize(
@@ -102,11 +108,14 @@ def test_jit_memcpy_slow_lp_matches_interpretation(monkeypatch, dst_reg, src_reg
     ref_rp2040, ref_core, steps = _run_interpreted(
         monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data
     )
-    jit_rp2040, jit_core = _run_jit(
+    jit_rp2040, jit_core, jit_steps = _run_jit(
         monkeypatch, dst_reg, src_reg, count_reg, scratch_reg, dst_base, src_base, count, data
     )
 
     assert steps > 1  # sanity: the interpreted reference really did loop multiple times
+    # First iteration runs interpreted (subs, ldrb, strb), then the 4th step's bne hands the rest
+    # of the loop to the compiled block in one call - regardless of count, never more than 4 steps.
+    assert jit_steps == 4
 
     for i in range(count):
         assert ref_rp2040.read_uint8(dst_base + i) == data[i]
@@ -124,14 +133,17 @@ def test_jit_disabled_by_default(monkeypatch):
     monkeypatch.delenv("RP2040PY_ENABLE_JIT", raising=False)
     rp2040 = RP2040()
     assert rp2040.jit is None
-    # No instance-level override bound - execute_instruction resolves to the plain, unmodified
-    # class method (see CortexM0Core.__init__'s method-swap, only applied when JIT is enabled).
-    assert "execute_instruction" not in vars(rp2040.core)
+    # No instance-level override bound - _fetch_decode_execute resolves to the plain, unmodified
+    # class method, and dispatch uses the shared module-level table (see CortexM0Core.__init__'s
+    # branch-only method-swap, only applied when JIT is enabled).
+    assert "_fetch_decode_execute" not in vars(rp2040.core)
+    assert "_dispatch_table" not in vars(rp2040.core)
 
 
 def test_jit_enabled_binds_instruction_hook(jit_rp2040):
     assert jit_rp2040.jit is not None
-    assert "execute_instruction" in vars(jit_rp2040.core)
+    assert "_fetch_decode_execute" in vars(jit_rp2040.core)
+    assert "_dispatch_table" in vars(jit_rp2040.core)
 
 
 def test_jit_ignores_non_matching_code(jit_rp2040):

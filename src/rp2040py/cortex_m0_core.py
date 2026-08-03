@@ -131,11 +131,17 @@ class CortexM0Core:
         self.sp = 0xFFFFFFFC
         self.banked_sp = 0xFFFFFFFC
 
-        # See _execute_instruction_jit's docstring: shadowing execute_instruction with an instance
-        # attribute only when JIT is enabled means the disabled (default) path always resolves to
-        # the plain class method above, with no added per-instruction branch at all.
+        # See _fetch_decode_execute_jit's docstring for why this checks branches only, not every
+        # instruction (Phase 1's original per-instruction check measured net negative - see
+        # docs/JIT_BACKLOG.md). Shadowing _fetch_decode_execute with an instance attribute only
+        # when JIT is enabled means the disabled (default) path's execute_instruction() resolves
+        # straight to the plain, unmodified _fetch_decode_execute below, with no added cost at all.
         if rp2040.jit is not None:
-            self.execute_instruction = self._execute_instruction_jit  # type: ignore[method-assign]
+            self._dispatch_table = list(_DISPATCH_TABLE)
+            for opcode, handler in enumerate(_DISPATCH_TABLE):
+                if handler is CortexM0Core._op_b_with_cond:
+                    self._dispatch_table[opcode] = CortexM0Core._op_b_with_cond_jit
+            self._fetch_decode_execute = self._fetch_decode_execute_jit  # type: ignore[method-assign]
 
     @property
     def logger(self):
@@ -640,6 +646,37 @@ class CortexM0Core:
         if self.check_condition(cond):
             self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + imm8 + 2) & 0xFFFFFFFF
             delta_cycles += 1
+        return delta_cycles
+
+    def _op_b_with_cond_jit(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
+        """Same as _op_b_with_cond() above, plus the basic-block-fusion mini-JIT hook (see
+        docs/JIT_BACKLOG.md and _fetch_decode_execute_jit's docstring for why this lives here
+        rather than in the per-instruction dispatch path). Only ever installed into
+        self._dispatch_table in place of _op_b_with_cond when RP2040.jit is not None (see
+        __init__) - every other opcode's handler is untouched, identical to the disabled path.
+
+        Checking here rather than at the top of every instruction means a taken branch whose
+        target is a compiled block's entry point (i.e. the loop's own backward branch) hands
+        execution to the compiled block *before* the PC write that would otherwise re-enter the
+        interpreted loop body - a plain conditional branch everywhere else, at exactly this one
+        loop's own repeat point.
+        """
+        delta_cycles = 1
+        imm8 = (opcode & 0xFF) << 1
+        cond = (opcode >> 8) & 0xF
+        if imm8 & (1 << 8):
+            imm8 = (imm8 & 0x1FF) - 0x200
+        if self.check_condition(cond):
+            delta_cycles += 1
+            target_pc = (self.registers[PC_REGISTER] + imm8 + 2) & 0xFFFFFFFF
+            assert self.rp2040.jit is not None
+            jit_result = self.rp2040.jit.try_execute(self, target_pc)
+            if jit_result is not None:
+                # This branch's own dispatch cost (delta_cycles, computed above) genuinely
+                # happened - only the *rest* of the loop got replaced by the compiled block, so
+                # both costs need to be reflected, not just the block's.
+                return delta_cycles + jit_result
+            self.registers[PC_REGISTER] = target_pc
         return delta_cycles
 
     def _op_b(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1412,29 +1449,6 @@ class CortexM0Core:
 
         return self._fetch_decode_execute(opcode_pc)
 
-    def _execute_instruction_jit(self) -> int:
-        """Same as execute_instruction(), plus the basic-block-fusion mini-JIT hook (see
-        docs/JIT_BACKLOG.md). Bound over execute_instruction *only* when RP2040.jit is not None
-        (see __init__ below) - the default (disabled) path calls the plain execute_instruction()
-        above unchanged, so it pays zero cost for a feature it never uses: an `is not None` check
-        on every single instruction was measured to cost ~3% even when the JIT is off (an extra
-        LOAD_ATTR/COMPARE_OP/POP_JUMP on the hottest loop in the emulator adds up over tens of
-        millions of instructions), so it's not acceptable to leave in the always-executed path.
-        """
-        if self.interrupts_updated and self.check_for_interrupts():
-            self.waiting = False
-        opcode_pc = self.registers[PC_REGISTER] & ~1
-
-        if opcode_pc in self.rp2040.hle_memcpy_entries:
-            return self._hle_memcpy()
-
-        assert self.rp2040.jit is not None
-        jit_result = self.rp2040.jit.try_execute(self, opcode_pc)
-        if jit_result is not None:
-            return jit_result
-
-        return self._fetch_decode_execute(opcode_pc)
-
     def _fetch_decode_execute(self, opcode_pc: int) -> int:
         opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
@@ -1445,6 +1459,42 @@ class CortexM0Core:
             handler = self._resolve_wide(opcode, opcode2)
         else:
             handler = _DISPATCH_TABLE[opcode]
+
+        if handler is not None:
+            delta_cycles = handler(self, opcode, opcode2, opcode_pc)
+        else:
+            delta_cycles = 1
+            self.logger.warning(LOG_NAME, f"Warning: Instruction at {opcode_pc:x} is not implemented yet!")
+            self.logger.warning(LOG_NAME, f"Opcode: 0x{opcode:x} (0x{opcode2:x})")
+
+        self.cycles += delta_cycles
+        return delta_cycles
+
+    def _fetch_decode_execute_jit(self, opcode_pc: int) -> int:
+        """Same as _fetch_decode_execute(), but dispatches through `self._dispatch_table` (a
+        per-instance copy built in __init__ with B(cond) opcodes remapped to _op_b_with_cond_jit)
+        instead of the shared module-level _DISPATCH_TABLE. Bound over _fetch_decode_execute only
+        when JIT is enabled - see __init__ and docs/JIT_BACKLOG.md.
+
+        This replaces Phase 1's original design (a plain `is not None` check inlined into every
+        single instruction dispatch, checking a compiled-block cache directly) - measured net
+        negative (~8-9% slower on a full MicroPython 1.28 boot) because the loop it targets
+        (`__memcpy_slow_lp`) only ever accounts for ~0.1% of total instructions executed, so a
+        check paid by the other ~99.9% couldn't be repaid. Checking only on conditional branches
+        instead - the loop's own repeat mechanism - means every non-branch instruction (the
+        overwhelming majority) pays nothing extra at all, and a hit only needs to fire once per
+        loop occurrence (the compiled block consumes every remaining iteration in one call, so no
+        further branch dispatches happen for that occurrence).
+        """
+        opcode = self.rp2040.read_uint16(opcode_pc)
+        wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
+        opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
+
+        if WIDE_RANGE_START <= opcode < WIDE_RANGE_END:
+            handler = self._resolve_wide(opcode, opcode2)
+        else:
+            handler = self._dispatch_table[opcode]
 
         if handler is not None:
             delta_cycles = handler(self, opcode, opcode2, opcode_pc)

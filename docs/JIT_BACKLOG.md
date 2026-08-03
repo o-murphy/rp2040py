@@ -194,17 +194,46 @@ the technique's own integration overhead outweighs the benefit at this granulari
 more patterns would only add more code paying the same cost for the same reason, not fix the root
 cause. Not pursuing Phases 2-3 as originally scoped - see "what would actually be needed" below.
 
-**What would actually be needed to reopen this.** The dominant cost, per this phase's own
-measurement, is the *per-instruction* try_execute() dispatch, not the codegen technique itself
-(which the isolated test still shows is genuinely ~13-17x faster once inside a hot loop). Two ways
-to close that gap, neither attempted here: (1) target the *actual* bulk-copy loop
-(`ldmia`/`stmia`-based, word-aligned) instead of the byte tail handler - that's where the real
-instruction volume is, per the original 1.21-vs-1.28 investigation in `docs/BACKLOG.md` - though
-detecting and compiling a multi-word unrolled loop is meaningfully harder than this phase's
-4-instruction pattern; (2) move detection off the per-instruction path entirely, e.g. by hooking
-*branch* instructions only (loop bodies are reached via backward branches, which are already a
-small minority of all instructions) rather than checking every single fetched instruction - a
-structural change to the integration point, not just this one pattern's codegen.
+**Follow-up attempt: branch-only detection (also DONE - also net negative).** Tried option (2)
+above: moved the check off the per-instruction path entirely. `execute_instruction()` reverted to
+being byte-for-byte what it was before Phase 1 (the `_execute_instruction_jit` method-swap from
+the first attempt is gone); instead, `CortexM0Core.__init__` builds a per-instance copy of the
+opcode dispatch table (`self._dispatch_table`, only when JIT is enabled) with the B(cond) opcode
+range remapped to `_op_b_with_cond_jit` - the loop's own repeat instruction (`bne`) is the only
+place that now checks the block cache, and only when the branch is actually taken. Every other
+opcode's handler, and the disabled path entirely, are untouched. `_MemcpySlowLpBlock.run()` no
+longer self-accounts cycles (it's now invoked as an ordinary dispatch-handler return value, so the
+caller's existing `self.cycles += delta_cycles` already covers it - the first version double-risked
+this until caught by `tests/test_jit.py`'s cycle-count equivalence check).
+
+Result: check volume dropped **18.7x** (3,274,113 branch-taken checks vs. the original
+61,295,704 per-instruction checks - same 71,262 hits, confirmed via the same instrumentation
+approach). Despite that, wall-clock got **worse in relative terms**, not better - measured on real
+PyPy 3.10.16/7.3.19 (obtained directly from the user after `downloads.python.org`/`pypy.org` proved
+unreachable from this sandbox's network policy; confirmed to run this project's actual 3.10+ syntax
+natively, no `from __future__ import annotations` shim needed unlike the earlier PyPy 3.9 test):
+~13.8s disabled vs. ~16.5s enabled (~20% slower, 2 runs each side) on the same full 1.28 boot.
+
+Why fewer checks made things *worse* in relative terms: PyPy's own JIT is very good at
+specializing simple, uniform instruction-dispatch loops - `_op_b_with_cond` unmodified is exactly
+that kind of hot, tight, pure-integer function, and PyPy already made the *disabled* baseline
+dramatically faster than CPython (~13.8s vs. ~112-130s on CPython) by tracing and inlining it
+aggressively. Splicing a cross-module method call and dict lookup into that same hot path - even
+though it only fires on a fraction of calls - appears to disrupt how well PyPy can trace/inline the
+*surrounding* branch-dispatch code for every conditional branch in the program, not just the
+71,262 that matter. Fewer total checks didn't help because the problem was never purely
+"check-count × cost-per-check" - *where* the check sits in the hot path matters independently of
+how often it fires.
+
+**What would actually be needed to reopen this.** Both structural fixes suggested after the first
+attempt are now tried and both net negative. The one remaining lever, per the original
+1.21-vs-1.28 investigation in `docs/BACKLOG.md`: target the *actual* bulk-copy loop
+(`ldmia`/`stmia`-based, word-aligned), where the real instruction volume is - `__memcpy_slow_lp`
+was always just the ≤3-byte tail handler, never the dominant path. Detecting and compiling a
+multi-word unrolled loop is meaningfully harder than either of this phase's two attempts (more
+instruction variety, register-list handling for `ldmia`/`stmia` rather than three fixed registers),
+but it's the only remaining path to a check that fires often enough, on expensive-enough work, to
+plausibly pay for itself.
 
 **Phase 2 - a small, common subset of instruction patterns.**
 Expand codegen to the patterns that show up most often in hot loops per already-gathered profiling
