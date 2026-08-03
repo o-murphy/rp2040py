@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc1] - 2026-08-03
+
 ### Added
 - `--bootrom <tag|path>` on `run`/`micropython`/`kaluma`/`bench`: boot a `b0`/`b1`/`b2` revision
   from [Raspberry Pi's `pico-bootrom-rp2040`
@@ -302,7 +304,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b6...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc1...HEAD
+[0.1.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b6...v0.1.0rc1
 [0.1.0b6]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b3...v0.1.0b4
