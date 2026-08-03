@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--bootrom <tag|path>` on `run`/`micropython`/`kaluma`/`bench`: boot a `b0`/`b1`/`b2` revision
+  from [Raspberry Pi's `pico-bootrom-rp2040`
+  releases](https://github.com/raspberrypi/pico-bootrom-rp2040/releases) (downloaded and cached
+  the same way `--image` already resolves a firmware tag, via `firmware_retrieve.retrieve()`), or
+  a local `.elf`/`.bin` path - instead of only the bundled `BOOTROM_B1`. Closes #11. `pyelftools`
+  (parses the `PT_LOAD` segment real bootrom releases ship as `.elf`, no plain `.bin` published) is
+  now a normal dependency rather than dev-only - it's a pure-Python wheel with no
+  platform-specific build, unlike `littlefs-python`'s `fs` extra, so there's no packaging reason to
+  gate it. B0/B2 verified booting MicroPython 1.21 to the REPL cleanly before building this
+  (349,875 / 349,728 steps vs. B1's 349,642 - issue #11 flagged this as unconfirmed).
+
+### Changed
+- `firmware_retrieve.retrieve()` (used by `--image` on `micropython`/`circuitpython`/`kaluma` and
+  the new `--bootrom` above) now caches downloads in `~/.cache/rp2040py` instead of the current
+  directory, so e.g. `--image 1.21.0` doesn't re-download the same UF2 into every project checkout
+  separately. Falls back to the old cwd-based behavior (with a warning) if the cache directory
+  can't be created for any reason - no `HOME`, a read-only filesystem, a sandboxed environment.
+  A local path passed directly (not a tag) is unaffected either way - still resolved relative to
+  the current directory, exactly as before.
+
 ### Fixed
 - `rp2040py micropython`/`kaluma`'s interactive REPL could leave the real terminal stuck in raw
   mode (no echo, no line buffering - looks like "the keyboard stopped working") if the process

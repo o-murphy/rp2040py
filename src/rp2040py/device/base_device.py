@@ -31,13 +31,16 @@ class BaseDevice:
     """Boots a UF2 image and exposes its USB-CDC console (`.cdc`). Use as a context manager, or
     call `start()`/`stop()` directly for more control over the lifecycle."""
 
-    def __init__(self, image: str) -> None:
+    def __init__(self, image: str, *, bootrom_words: "list[int] | None" = None) -> None:
         self.simulator = Simulator()
         self.mcu: RP2040 = self.simulator.rp2040
 
-        from rp2040py.device.bootrom import BOOTROM_B1
+        if bootrom_words is None:
+            from rp2040py.device.bootrom import BOOTROM_B1
 
-        self.mcu.load_bootrom(BOOTROM_B1)
+            bootrom_words = BOOTROM_B1
+
+        self.mcu.load_bootrom(bootrom_words)
         self.mcu.logger = ConsoleLogger(LogLevel.ERROR)
         load_uf2(image, self.mcu)
         self.cdc = USBCDC(self.mcu.usb_ctrl)

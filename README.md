@@ -75,7 +75,8 @@ uvx rp2040py micropython
 
 and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. The first run fetches the recommended
 MicroPython build (**1.21.0**, currently) from [micropython.org](https://micropython.org/download/RPI_PICO/)
-into the current directory and reuses that local file afterwards. 1.21 is recommended: it does far
+into `~/.cache/rp2040py` and reuses that cached file afterwards (falls back to the current
+directory if the cache directory isn't writable). 1.21 is recommended: it does far
 less work before dropping to the REPL prompt than newer releases, so it boots dramatically faster in
 the emulator (see the benchmark below). Newer releases work too, just slower to reach the REPL -
 e.g. 1.28.0.
@@ -253,6 +254,24 @@ doesn't send anything to work around this - type `.hi` yourself at the prompt to
 banner on demand if you need to see it; if you're scripting against a device's output instead of
 typing at it interactively, stage a `<script.js>` and match against *its* output, which isn't racy
 (see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml), which does exactly that).
+
+### Bootrom revisions
+
+`run`, `micropython`, `kaluma`, and `bench` all boot a fixed bootrom (`B1`, bundled - no download
+needed) by default. `--bootrom` picks a different one: a `b0`/`b1`/`b2` version tag (downloaded
+automatically from [Raspberry Pi's `pico-bootrom-rp2040`
+releases](https://github.com/raspberrypi/pico-bootrom-rp2040/releases) and cached locally, same as
+`--image`), or a local `.elf`/`.bin` path:
+
+```sh
+rp2040py micropython --bootrom b2
+rp2040py micropython --bootrom path/to/custom.elf
+```
+
+Raspberry Pi only publishes `.elf` for each revision - `pyelftools` (a normal dependency, not an
+extra: it's a pure-Python wheel with no platform-specific build to justify gating it) parses out
+the ROM image on the fly, no separate conversion step needed. A local `.bin` (e.g. produced with
+`objcopy -O binary`) is loaded directly with no parsing at all.
 
 ### Library API
 
