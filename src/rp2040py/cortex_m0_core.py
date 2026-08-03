@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from rp2040py.irq import MAX_HARDWARE_IRQ
 from rp2040py.memory_map import APB_START_ADDRESS, SIO_START_ADDRESS
-from rp2040py.utils.bit import Uint32Array, s32, u32
+from rp2040py.utils.bit import s32, u32
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -80,7 +80,14 @@ WIDE_RANGE_END = 0xF800  # exclusive
 class CortexM0Core:
     def __init__(self, rp2040: "RP2040"):
         self.rp2040 = rp2040
-        self.registers = Uint32Array(16)
+        # A plain list, not Uint32Array: every write site below masks explicitly with
+        # `& 0xFFFFFFFF` instead (see docs/PORTING.md's performance section) - this is the
+        # single hottest bus in the whole emulator (every instruction reads/writes several
+        # registers), and a raw list index is a C-level bytecode op versus Uint32Array's
+        # Python-level __getitem__/__setitem__ method call. Correctness is unchanged: every path
+        # that used to rely on Uint32Array.__setitem__'s implicit `int(value) & 0xFFFFFFFF`
+        # masks explicitly at the point of assignment now instead.
+        self.registers: list[int] = [0] * 16
         self.banked_sp = 0
         self.cycles = 0
 
@@ -139,7 +146,7 @@ class CortexM0Core:
 
     @sp.setter
     def sp(self, value: int) -> None:
-        self.registers[13] = value & ~0x3
+        self.registers[13] = value & 0xFFFFFFFC
 
     @property
     def lr(self) -> int:
@@ -147,7 +154,7 @@ class CortexM0Core:
 
     @lr.setter
     def lr(self, value: int) -> None:
-        self.registers[14] = value
+        self.registers[14] = value & 0xFFFFFFFF
 
     @property
     def pc(self) -> int:
@@ -155,7 +162,7 @@ class CortexM0Core:
 
     @pc.setter
     def pc(self, value: int) -> None:
-        self.registers[15] = value
+        self.registers[15] = value & 0xFFFFFFFF
 
     @property
     def apsr(self) -> int:
@@ -513,7 +520,7 @@ class CortexM0Core:
         delta_cycles = 1
         imm8 = opcode & 0xFF
         rd = (opcode >> 8) & 0x7
-        self.registers[rd] = self.sp + (imm8 << 2)
+        self.registers[rd] = (self.sp + (imm8 << 2)) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_add_sp_plus_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -558,12 +565,12 @@ class CortexM0Core:
         right_value = self.registers[PC_REGISTER] + 2 if rm == PC_REGISTER else self.registers[rm]
         result = left_value + right_value
         if rdn != SP_REGISTER and rdn != PC_REGISTER:
-            self.registers[rdn] = result
+            self.registers[rdn] = result & 0xFFFFFFFF
         elif rdn == PC_REGISTER:
-            self.registers[rdn] = result & ~0x1
+            self.registers[rdn] = result & 0xFFFFFFFE
             delta_cycles += 1
         elif rdn == SP_REGISTER:
-            self.registers[rdn] = result & ~0x3
+            self.registers[rdn] = result & 0xFFFFFFFC
         return delta_cycles
 
     def _op_adr(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -571,7 +578,7 @@ class CortexM0Core:
         delta_cycles = 1
         imm8 = opcode & 0xFF
         rd = (opcode >> 8) & 0x7
-        self.registers[rd] = (opcode_pc & 0xFFFFFFFC) + 4 + (imm8 << 2)
+        self.registers[rd] = ((opcode_pc & 0xFFFFFFFC) + 4 + (imm8 << 2)) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_ands_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -594,7 +601,7 @@ class CortexM0Core:
         input_value = self.registers[rm]
         shift_n = imm5 if imm5 else 32
         result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
-        self.registers[rd] = result
+        self.registers[rd] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = (result & 0xFFFFFFFF) == 0
         self.c = bool(input_value & (1 << (shift_n - 1)))
@@ -608,7 +615,7 @@ class CortexM0Core:
         input_value = self.registers[rdn]
         shift_n = min(32, self.registers[rm] & 255)
         result = s32(input_value) >> shift_n if shift_n < 32 else (0xFFFFFFFF if input_value & 0x80000000 else 0)
-        self.registers[rdn] = result
+        self.registers[rdn] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = (result & 0xFFFFFFFF) == 0
         # NOTE: shift_n can be 0 here (unlike the immediate form above), and JS `1 << -1`
@@ -625,7 +632,7 @@ class CortexM0Core:
         if imm8 & (1 << 8):
             imm8 = (imm8 & 0x1FF) - 0x200
         if self.check_condition(cond):
-            self.registers[PC_REGISTER] += imm8 + 2
+            self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + imm8 + 2) & 0xFFFFFFFF
             delta_cycles += 1
         return delta_cycles
 
@@ -635,7 +642,7 @@ class CortexM0Core:
         imm11 = (opcode & 0x7FF) << 1
         if imm11 & (1 << 11):
             imm11 = (imm11 & 0x7FF) - 0x800
-        self.registers[PC_REGISTER] += imm11 + 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + imm11 + 2) & 0xFFFFFFFF
         delta_cycles += 1
         return delta_cycles
 
@@ -670,7 +677,7 @@ class CortexM0Core:
         i2 = 1 - (s ^ j2)
         imm32 = ((0b11111111 if s else 0) << 24) | ((i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1))
         self.lr = (self.registers[PC_REGISTER] + 2) | 0x1
-        self.registers[PC_REGISTER] += 2 + imm32
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2 + imm32) & 0xFFFFFFFF
         delta_cycles += 2
         self.bl_taken(self, False)
         return delta_cycles
@@ -741,14 +748,14 @@ class CortexM0Core:
     def _op_dmb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
         # DMB SY
         delta_cycles = 1
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         delta_cycles += 2
         return delta_cycles
 
     def _op_dsb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
         # DSB SY
         delta_cycles = 1
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         delta_cycles += 2
         return delta_cycles
 
@@ -766,7 +773,7 @@ class CortexM0Core:
     def _op_isb_sy(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
         # ISB SY
         delta_cycles = 1
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         delta_cycles += 2
         return delta_cycles
 
@@ -783,7 +790,7 @@ class CortexM0Core:
                 delta_cycles += 1
         # Write back
         if not (reg_list & (1 << rn)):
-            self.registers[rn] = address
+            self.registers[rn] = address & 0xFFFFFFFF
         return delta_cycles
 
     def _op_ldr_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -881,7 +888,7 @@ class CortexM0Core:
         rt = opcode & 0x7
         addr = self.registers[rm] + self.registers[rn]
         delta_cycles += self.cycles_io(addr)
-        self.registers[rt] = sign_extend8(self.rp2040.read_uint8(addr))
+        self.registers[rt] = sign_extend8(self.rp2040.read_uint8(addr)) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_ldrsh(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -892,7 +899,7 @@ class CortexM0Core:
         rt = opcode & 0x7
         addr = self.registers[rm] + self.registers[rn]
         delta_cycles += self.cycles_io(addr)
-        self.registers[rt] = sign_extend16(self.rp2040.read_uint16(addr))
+        self.registers[rt] = sign_extend16(self.rp2040.read_uint16(addr)) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_lsls_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -903,7 +910,7 @@ class CortexM0Core:
         rd = opcode & 0x7
         input_value = self.registers[rm]
         result = input_value << imm5
-        self.registers[rd] = result
+        self.registers[rd] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = u32(result) == 0
         self.c = bool(input_value & (1 << (32 - imm5))) if imm5 else self.c
@@ -917,7 +924,7 @@ class CortexM0Core:
         input_value = self.registers[rdn]
         shift_count = self.registers[rm] & 0xFF
         result = 0 if shift_count >= 32 else input_value << shift_count
-        self.registers[rdn] = result
+        self.registers[rdn] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = u32(result) == 0
         # NOTE: shift_count ranges 0-255 here (unlike the immediate form's 0-31 imm5), so
@@ -967,7 +974,7 @@ class CortexM0Core:
             value &= ~1
         elif rd == SP_REGISTER:
             value &= ~3
-        self.registers[rd] = value
+        self.registers[rd] = value & 0xFFFFFFFF
         return delta_cycles
 
     def _op_movs(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -986,7 +993,7 @@ class CortexM0Core:
         sysm = opcode2 & 0xFF
         rd = (opcode2 >> 8) & 0xF
         self.registers[rd] = self.read_special_register(sysm)
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         delta_cycles += 2
         return delta_cycles
 
@@ -996,7 +1003,7 @@ class CortexM0Core:
         sysm = opcode2 & 0xFF
         rn = opcode & 0xF
         self.write_special_register(sysm, self.registers[rn])
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         delta_cycles += 2
         return delta_cycles
 
@@ -1017,7 +1024,7 @@ class CortexM0Core:
         rm = (opcode >> 3) & 7
         rd = opcode & 7
         result = ~self.registers[rm]
-        self.registers[rd] = result
+        self.registers[rd] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = u32(result) == 0
         return delta_cycles
@@ -1103,7 +1110,7 @@ class CortexM0Core:
         rm = (opcode >> 3) & 0x7
         rd = opcode & 0x7
         input_value = self.registers[rm]
-        self.registers[rd] = sign_extend16(((input_value & 0xFF) << 8) | ((input_value >> 8) & 0xFF))
+        self.registers[rd] = sign_extend16(((input_value & 0xFF) << 8) | ((input_value >> 8) & 0xFF)) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_ror(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1114,7 +1121,7 @@ class CortexM0Core:
         input_value = self.registers[rdn]
         shift = (self.registers[rm] & 0xFF) % 32
         result = (input_value >> shift) | (input_value << (32 - shift))
-        self.registers[rdn] = result
+        self.registers[rdn] = result & 0xFFFFFFFF
         self.n = bool(result & 0x80000000)
         self.z = u32(result) == 0
         self.c = bool(result & 0x80000000)
@@ -1125,7 +1132,7 @@ class CortexM0Core:
         delta_cycles = 1
         rn = (opcode >> 3) & 0x7
         rd = opcode & 0x7
-        self.registers[rd] = self._subtract_update_flags(0, self.registers[rn])
+        self.registers[rd] = self._subtract_update_flags(0, self.registers[rn]) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_nop(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1139,8 +1146,9 @@ class CortexM0Core:
         delta_cycles = 1
         rm = (opcode >> 3) & 0x7
         rdn = opcode & 0x7
-        self.registers[rdn] = self._subtract_update_flags(
-            self.registers[rdn], self.registers[rm] + (1 - (1 if self.c else 0))
+        self.registers[rdn] = (
+            self._subtract_update_flags(self.registers[rdn], self.registers[rm] + (1 - (1 if self.c else 0)))
+            & 0xFFFFFFFF
         )
         return delta_cycles
 
@@ -1163,7 +1171,7 @@ class CortexM0Core:
                 delta_cycles += 1
         # Write back
         if not (reg_list & (1 << rn)):
-            self.registers[rn] = address
+            self.registers[rn] = address & 0xFFFFFFFF
         return delta_cycles
 
     def _op_str_immediate(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1255,7 +1263,7 @@ class CortexM0Core:
         imm3 = (opcode >> 6) & 0x7
         rn = (opcode >> 3) & 0x7
         rd = opcode & 0x7
-        self.registers[rd] = self._subtract_update_flags(self.registers[rn], imm3)
+        self.registers[rd] = self._subtract_update_flags(self.registers[rn], imm3) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_subs_encoding_t2(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1263,7 +1271,7 @@ class CortexM0Core:
         delta_cycles = 1
         imm8 = opcode & 0xFF
         rdn = (opcode >> 8) & 0x7
-        self.registers[rdn] = self._subtract_update_flags(self.registers[rdn], imm8)
+        self.registers[rdn] = self._subtract_update_flags(self.registers[rdn], imm8) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_subs_register(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1272,7 +1280,7 @@ class CortexM0Core:
         rm = (opcode >> 6) & 0x7
         rn = (opcode >> 3) & 0x7
         rd = opcode & 0x7
-        self.registers[rd] = self._subtract_update_flags(self.registers[rn], self.registers[rm])
+        self.registers[rd] = self._subtract_update_flags(self.registers[rn], self.registers[rm]) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_svc(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1287,7 +1295,7 @@ class CortexM0Core:
         delta_cycles = 1
         rm = (opcode >> 3) & 0x7
         rd = opcode & 0x7
-        self.registers[rd] = sign_extend8(self.registers[rm])
+        self.registers[rd] = sign_extend8(self.registers[rm]) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_sxth(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1295,7 +1303,7 @@ class CortexM0Core:
         delta_cycles = 1
         rm = (opcode >> 3) & 0x7
         rd = opcode & 0x7
-        self.registers[rd] = sign_extend16(self.registers[rm])
+        self.registers[rd] = sign_extend16(self.registers[rm]) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_tst(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1323,7 +1331,7 @@ class CortexM0Core:
         imm12 = opcode2 & 0xFFF
         self.break_rewind = 4
         self.rp2040.on_break((imm4 << 12) | imm12)
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
         return delta_cycles
 
     def _op_uxtb(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
@@ -1395,7 +1403,7 @@ class CortexM0Core:
         opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = opcode >> 12 == 0b1111 or opcode >> 11 == 0b11101
         opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
-        self.registers[PC_REGISTER] += 2
+        self.registers[PC_REGISTER] = (self.registers[PC_REGISTER] + 2) & 0xFFFFFFFF
 
         if WIDE_RANGE_START <= opcode < WIDE_RANGE_END:
             handler = self._resolve_wide(opcode, opcode2)
