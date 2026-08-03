@@ -89,6 +89,13 @@ def _wait_for_simulator(simulator: Simulator, on_interrupt: "Callable[[], None] 
     # hanging in interpreter shutdown, joining that non-daemon timer chain forever - and
     # unresponsive to Ctrl+C there. Waiting here on the main thread keeps KeyboardInterrupt
     # handling clean.
+    #
+    # TODO: boot can take anywhere from under a second to several minutes depending on firmware
+    # (see README's MicroPython 1.28 benchmark) with nothing on stdout meanwhile, indistinguishable
+    # from a genuine hang - a heartbeat here would help, but a naive stderr print stepped on the
+    # REPL's own output (cursor movement/redraw racing the device's echoed bytes). Revisit via
+    # `rp2040.logger`/Logger instead of a raw print, so it composes with whatever the device itself
+    # is writing rather than fighting it.
     try:
         while simulator.executing:
             time.sleep(0.1)
@@ -415,7 +422,7 @@ def main(argv: "list[str] | None" = None) -> None:
     run_parser.set_defaults(func=_cmd_run)
 
     mp_parser = subparsers.add_parser("micropython", help="run a MicroPython/CircuitPython UF2 image")
-    mp_parser.add_argument("--image")
+    mp_parser.add_argument("--image", help="version tag, local file path, or omitted to download the default")
     mp_parser.add_argument("--expect-text")
     mp_parser.add_argument("--gdb", action="store_true")
     mp_parser.add_argument("--gdb-port", type=int, default=3333)

@@ -5,6 +5,7 @@ CLI subcommand and demo/kaluma_run.py (any USB-CDC-console firmware, not just Mi
 CircuitPython).
 """
 
+import atexit
 import os
 import sys
 import termios
@@ -20,8 +21,19 @@ __all__ = ("StdioInteractiveRepl", "buf_write", "os_exit")
 
 _CTRL_X = 24
 
+# The terminal-owning StdioInteractiveRepl currently in raw mode, if any - so os_exit() can put
+# the terminal back before it tears down the process. os._exit() (below) skips atexit callbacks,
+# object finalizers, and every other normal cleanup hook by design, and every quit path in this
+# module (Ctrl+X, --expect-text matching in cli/__init__.py) goes through it rather than a plain
+# sys.exit()/return, so atexit.register() alone (see StdioInteractiveRepl._on_start()) only
+# catches the *other* ways this process can end (an uncaught exception, an external SIGTERM) -
+# not this one.
+_active_raw_repl: "StdioInteractiveRepl | None" = None
+
 
 def os_exit(status: int) -> None:
+    if _active_raw_repl is not None:
+        _active_raw_repl._restore_termios()
     if "Pythonista3.app" in sys.executable or "Python IDE.app" in sys.executable:
         sys.exit(status)
     os._exit(status)
@@ -63,11 +75,25 @@ class StdioInteractiveRepl(InteractiveRepl):
             self._extra_on_data(data)
 
     def _on_start(self) -> None:
+        global _active_raw_repl
         try:
             self._stdin_fd = sys.stdin.fileno()
             if sys.stdin.isatty():
                 self._old_termios = termios.tcgetattr(self._stdin_fd)
                 tty.setraw(self._stdin_fd)
+                # tty.setraw() disables ISIG, so a real Ctrl+C no longer generates SIGINT at all -
+                # it's just forwarded to the device instead (deliberate: matches screen/mpremote,
+                # letting Ctrl+C interrupt whatever's running on the emulated device rather than
+                # this process). That means the normal `except KeyboardInterrupt` path in
+                # `_wait_for_simulator` can never fire from the keyboard while raw mode is active,
+                # so it's no longer a reliable place to restore the terminal. Cover the two ways
+                # this process actually ends: os_exit() (Ctrl+X, --expect-text match - see
+                # `_active_raw_repl` above) and anything else (an uncaught exception, an external
+                # SIGTERM from e.g. `timeout`), via atexit here - otherwise the real terminal is
+                # left raw (no echo/line-buffering) after exit, which looks like "the keyboard
+                # stopped working" until `stty sane`.
+                _active_raw_repl = self
+                atexit.register(self._restore_termios)
         except AttributeError:
             self._stdin_fd = None
 
@@ -77,11 +103,14 @@ class StdioInteractiveRepl(InteractiveRepl):
         self._restore_termios()
 
     def _restore_termios(self) -> None:
+        global _active_raw_repl
         if self._stdin_fd is not None and self._old_termios is not None:
             try:
                 termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._old_termios)
             except OSError:
                 pass
+        if _active_raw_repl is self:
+            _active_raw_repl = None
 
     def _read_stdin_loop(self) -> None:
         try:
