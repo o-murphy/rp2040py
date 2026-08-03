@@ -1,3 +1,4 @@
+from collections import deque
 from typing import TYPE_CHECKING
 
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -41,15 +42,43 @@ SSI_RX_SAMPLE_DLY = 0x000000F0
 SSI_SPI_CTRL_R0 = 0x000000F4
 SSI_TXD_DRIVE_EDGE = 0x000000F8
 
-CMD_READ_STATUS = 0x05
+# JEDEC-standard SPI NOR flash commands - the subset the RP2040 bootrom's ROM_FUNC_FLASH_*
+# helpers (called by the Pico SDK's flash_range_erase()/flash_range_program(), themselves called
+# by MicroPython's rp2.Flash) actually issue over this peripheral. XIP reads never reach here -
+# RP2040.read_uint32()/read_uint16() serve those directly from the `flash` bytearray - so this
+# only needs to cover what real flash-*writing* software drives.
+CMD_WRITE_ENABLE = 0x06
+CMD_WRITE_DISABLE = 0x04
+CMD_READ_STATUS_1 = 0x05
+CMD_READ_STATUS_2 = 0x35
+CMD_WRITE_STATUS = 0x01
+CMD_PAGE_PROGRAM = 0x02
+CMD_SECTOR_ERASE = 0x20  # 4 KB
+CMD_BLOCK_ERASE = 0xD8  # 64 KB
+CMD_READ_DATA = 0x03
+CMD_READ_JEDEC_ID = 0x9F
+
+FLASH_PAGE_SIZE = 256
+FLASH_SECTOR_SIZE = 4096
+FLASH_BLOCK_SIZE = 65536
+
+STATUS_WEL_BIT = 0x02  # write-enable-latch (status register 1)
+STATUS2_QE_BIT = 0x02  # quad-enable (status register 2) - reported permanently set (see
+# CMD_READ_STATUS_2 below): connect_internal_flash() reads this before deciding whether it needs
+# to issue CMD_WRITE_STATUS to turn quad mode on - reporting it already enabled lets that check
+# succeed immediately rather than retrying a WRSR sequence this peripheral doesn't need to act on
+# (nothing here actually depends on quad vs standard SPI framing either way).
+
+# Arbitrary but plausible Winbond-shaped ID (manufacturer, memory type, capacity) - nothing in the
+# boot/flash path is known to hard-require a specific real chip's exact ID, just *a* consistent
+# 3-byte response to CMD_READ_JEDEC_ID.
+JEDEC_ID = (0xEF, 0x40, 0x15)
 
 
 class RPSSI(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str):
         super().__init__(rp2040, name)
-        self._dr0 = 0
         self._txflr = 0
-        self._rxflr = 0
         self._baudr = 0
         self._crtlr0 = 0
         self._crtlr1 = 0
@@ -58,11 +87,24 @@ class RPSSI(BasePeripheral):
         self._rxsampldly = 0
         self._txddriveedge = 0
 
+        # Software-driven SPI NOR flash command state (see the module docstring above): `_tx_buffer`
+        # accumulates the bytes shifted out via DR0 since SSIENR was last enabled (chip-select
+        # asserted, in real DW_apb_ssi terms) - real flash commands are framed by chip-select, not
+        # by anything visible in the byte stream itself, so SSIENR's 0->1/1->0 transitions are the
+        # only signal available for "a new command starts here"/"apply what was shifted". `_rx_queue`
+        # holds bytes shifted *in* (the flash chip's response) waiting to be read back via DR0 -
+        # necessary because a real SPI transfer is full-duplex (every outgoing byte has a
+        # corresponding incoming one), and multi-byte responses (JEDEC ID, read-status, page reads)
+        # need to come back in the right order across several DR0 reads.
+        self._write_enabled = False
+        self._tx_buffer = bytearray()
+        self._rx_queue: deque[int] = deque()
+
     def read_uint32(self, offset: int) -> int:
         if offset == SSI_TXFLR:
             return self._txflr
         if offset == SSI_RXFLR:
-            return self._rxflr
+            return len(self._rx_queue)
         if offset == SSI_CTRLR0:
             return self._crtlr0  # & 0x017FFFFF = b23,b25..31 reserved
         if offset == SSI_CTRLR1:
@@ -72,7 +114,8 @@ class RPSSI(BasePeripheral):
         if offset == SSI_BAUDR:
             return self._baudr
         if offset == SSI_SR:
-            return SSI_SR_TFE_BITS | SSI_SR_RFNE_BITS | SSI_SR_TFNF_BITS
+            rfne = SSI_SR_RFNE_BITS if self._rx_queue else 0
+            return SSI_SR_TFE_BITS | SSI_SR_TFNF_BITS | rfne
         if offset == SSI_IDR:
             return 0x51535049
         if offset == SSI_VERSION_ID:
@@ -84,20 +127,20 @@ class RPSSI(BasePeripheral):
         if offset == SSI_SPI_CTRL_R0:
             return self._spictlr0  # b6,7,10,19..23 reserved
         if offset == SSI_DR0:
-            return self._dr0
+            return self._rx_queue.popleft() if self._rx_queue else 0
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == SSI_TXFLR:
             self._txflr = value
         elif offset == SSI_RXFLR:
-            self._rxflr = value
+            pass  # real hardware: read-only FIFO-level status, write is a no-op
         elif offset == SSI_CTRLR0:
             self._crtlr0 = value  # & 0x017FFFFF = b23,b25..31 reserved
         elif offset == SSI_CTRLR1:
             self._crtlr1 = value
         elif offset == SSI_SSIENR:
-            self._ssienr = value
+            self._set_ssienr(value)
         elif offset == SSI_BAUDR:
             self._baudr = value
         elif offset == SSI_RX_SAMPLE_DLY:
@@ -107,7 +150,100 @@ class RPSSI(BasePeripheral):
         elif offset == SSI_SPI_CTRL_R0:
             self._spictlr0 = value
         elif offset == SSI_DR0:
-            if value == CMD_READ_STATUS:
-                self._dr0 = 0  # tell stage2 that we completed a write
+            if self._ssienr:
+                self._rx_queue.append(self._shift_byte(value & 0xFF))
         else:
             super().write_uint32(offset, value)
+
+    def _set_ssienr(self, value: int) -> None:
+        was_enabled = bool(self._ssienr)
+        self._ssienr = value
+        now_enabled = bool(value)
+        if now_enabled and not was_enabled:
+            # Chip-select asserting: start a fresh command.
+            self._tx_buffer = bytearray()
+            self._rx_queue = deque()
+        elif was_enabled and not now_enabled:
+            # Chip-select deasserting: the command (and, for PAGE_PROGRAM, however many data bytes
+            # were shifted - not knowable in advance, only by where chip-select ends up deasserted)
+            # is now complete - apply whatever it was to the actual flash bytes.
+            self._apply_command()
+
+    def _shift_byte(self, byte_out: int) -> int:
+        """One SPI clock's worth of full-duplex exchange: `byte_out` is being shifted into the
+        (virtual) flash chip, and this returns whatever it shifts back out in response. Only
+        WRITE_ENABLE/WRITE_DISABLE take effect immediately (single-byte commands, nothing to wait
+        for); erase/program are deferred to `_apply_command()` at chip-select deassert, since real
+        flash chips apply them atomically once the whole command+address+data has been clocked in,
+        not byte-by-byte as they arrive.
+        """
+        self._tx_buffer.append(byte_out)
+        pos = len(self._tx_buffer) - 1
+        opcode = self._tx_buffer[0]
+
+        if pos == 0:
+            if opcode == CMD_WRITE_ENABLE:
+                self._write_enabled = True
+            elif opcode == CMD_WRITE_DISABLE:
+                self._write_enabled = False
+            return 0xFF
+
+        if opcode == CMD_READ_STATUS_1:
+            return STATUS_WEL_BIT if self._write_enabled else 0
+
+        if opcode == CMD_READ_STATUS_2:
+            return STATUS2_QE_BIT
+
+        if opcode == CMD_WRITE_STATUS:
+            return 0  # accepted and ignored - see STATUS2_QE_BIT above
+
+        if opcode == CMD_READ_JEDEC_ID:
+            index = pos - 1
+            return JEDEC_ID[index] if index < len(JEDEC_ID) else 0
+
+        if opcode == CMD_READ_DATA and pos >= 4:
+            address = self._address_from_buffer()
+            target = address + (pos - 4)
+            flash = self.rp2040.flash
+            return flash[target] if 0 <= target < len(flash) else 0xFF
+
+        # Unrecognized opcode (e.g. a dummy/mode-continuation byte in a quad-I/O read sequence, or
+        # a probe this peripheral doesn't need to model): 0xFF, not 0x00 - matching what a real
+        # floating/idle SPI bus reads back, the least likely value to look like "a real but wrong"
+        # answer to whatever's checking it.
+        return 0xFF
+
+    def _address_from_buffer(self) -> int:
+        buf = self._tx_buffer
+        return (buf[1] << 16) | (buf[2] << 8) | buf[3]
+
+    def _apply_command(self) -> None:
+        if not self._tx_buffer:
+            return
+        opcode = self._tx_buffer[0]
+        flash = self.rp2040.flash
+
+        if opcode in (CMD_SECTOR_ERASE, CMD_BLOCK_ERASE) and len(self._tx_buffer) >= 4:
+            if self._write_enabled:
+                size = FLASH_SECTOR_SIZE if opcode == CMD_SECTOR_ERASE else FLASH_BLOCK_SIZE
+                address = self._address_from_buffer() & ~(size - 1)
+                flash[address : address + size] = b"\xff" * size
+            self._write_enabled = False
+
+        elif opcode == CMD_PAGE_PROGRAM and len(self._tx_buffer) > 4:
+            if self._write_enabled:
+                address = self._address_from_buffer()
+                data = self._tx_buffer[4 : 4 + FLASH_PAGE_SIZE]
+                for i, byte in enumerate(data):
+                    target = address + i
+                    if 0 <= target < len(flash):
+                        # NOR flash program can only clear bits (1 -> 0), never set them - AND
+                        # rather than overwrite, matching real hardware (and catching software
+                        # that programs without erasing first the same way real flash would).
+                        flash[target] &= byte
+            self._write_enabled = False
+
+        elif opcode == CMD_WRITE_STATUS:
+            self._write_enabled = False
+
+        self._tx_buffer = bytearray()
