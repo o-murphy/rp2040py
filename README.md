@@ -158,7 +158,9 @@ rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # 
 [docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
 for why.
 
-Currently, the filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented yet.
+The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
+SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
+hardware uses to erase/program flash.
 
 ### CircuitPython code
 
@@ -191,7 +193,9 @@ sudo cp code.py fat12/  # copy code.py to the filesystem
 sudo umount fat12/  # unmount the filesystem
 ```
 
-While CircuitPython does not typically use a writeable filesystem, note that this functionality is unavailable (see the MicroPython filesystem support section for more details).
+CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython's
+`os`/`rp2.Flash` does, so this hasn't been separately exercised - but the underlying flash-write
+path (see the MicroPython filesystem support section) is the same SSI peripheral either way.
 
 ### Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)
 

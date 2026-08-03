@@ -52,6 +52,9 @@ jobs:
       - name: Create SPI test filesystem
         run: uv run rp2040py mklittlefs -o littlefs-spi.img tests/micropython/main-spi.py --main main-spi.py
 
+      - name: Create flash read/write test filesystem
+        run: uv run rp2040py mklittlefs -o littlefs-flash-rw.img tests/micropython/main-flash-rw.py --main main-flash-rw.py
+
       - name: Setup Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
@@ -64,5 +67,10 @@ jobs:
 
       - name: Test MicroPython SPI ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
         run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py --image ${{ matrix.micropython_version }} "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+      - name: Test MicroPython flash read/write ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ${{ matrix.micropython_version }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
