@@ -1,0 +1,79 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - "master"
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  pull_request:
+    branches:
+      - "*"
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/coverage.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.10"
+          activate-environment: "true"
+          github-token: ${{ github.token }}
+
+      - name: Install the project
+        run: uv sync
+        shell: bash
+
+      - name: Run coverage for pure core
+        run: >
+          uv run pytest
+          --cov=rp2040py
+          --cov-report=
+        shell: bash
+        env:
+          COVERAGE_FILE: .coverage.pure
+
+      - name: Run coverage for native core
+        run: >
+          uv run pytest
+          --cov=rp2040py
+          --cov-report=
+        shell: bash
+        env:
+          RP2040PY_SKIP_CYTHON: 1
+          COVERAGE_FILE: .coverage.native
+
+      - name: Combine coverage
+        run: |
+          uv run coverage combine
+          uv run coverage xml
+          uv run coverage html
+        shell: bash
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true
