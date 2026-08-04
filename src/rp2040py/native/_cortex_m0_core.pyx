@@ -1251,8 +1251,20 @@ cdef int op_sbcs_encoding_t1(CortexM0Core core, unsigned int opcode, unsigned in
     # SBCS (Encoding T1)
     cdef unsigned int rm = (opcode >> 3) & 0x7
     cdef unsigned int rdn = opcode & 0x7
+    # `<long long>` on registers[rm], not left to Cython to infer from subtract_update_flags's own
+    # `long long subtrahend` parameter type: the pure-Python reference (_cortex_m0_core.py's
+    # _op_sbcs_encoding_t1) relies on Python's arbitrary-precision `registers[rm] + (1 - carry)`
+    # never wrapping - e.g. rm=0xFFFFFFFF, carry=False needs the *unwrapped* 0x100000000 reaching
+    # subtract_update_flags for its `minuend >= subtrahend` borrow check to come out right. Without
+    # the explicit cast, whether Cython computes this addition in 32-bit `unsigned int` (silently
+    # wrapping 0xFFFFFFFF + 1 to 0, losing the borrow) or widens to `long long` first based on the
+    # call target's declared parameter type is Cython-version-dependent, not part of any documented
+    # contract - confirmed by a real, reproduced CI failure (test_should_execute_a_sbcs_r0_r3_
+    # instruction_2 passed locally on Cython 3.2.9 but failed on whatever `cibuildwheel`'s
+    # unpinned `cython>=3.2.9` build-isolation environment resolved). The cast makes the widening
+    # happen first, explicitly, so the result can't depend on that inference either way.
     core.registers[rdn] = <unsigned int> subtract_update_flags(
-        core, core.registers[rdn], core.registers[rm] + (1 - (1 if core.c else 0))
+        core, core.registers[rdn], (<long long> core.registers[rm]) + (1 - (1 if core.c else 0))
     )
     return 1
 
