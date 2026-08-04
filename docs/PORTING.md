@@ -262,15 +262,23 @@ write new ones against `Simulator`:
   `Simulator` worker thread once the first 1,000,000-step burst has completed, and
   `sys.exit()`/`SystemExit` only unwinds the thread that raised it - it will not terminate the
   process the way Node's `process.exit()` does. See `demo/micropython_run.py` and
-  `tests/micropython_spi_run.py` for the pattern.
+  `tests/micropython_spi_run.py` for the pattern. **Prefer `Simulator.shutdown_request.request(code)`
+  over a raw `os._exit()` where practical** (see `docs/BACKLOG.md`'s "Unified process-shutdown
+  coordinator"): it flags the same cross-thread problem this bullet describes, but lets
+  `Simulator.wait_for_shutdown()` - always running on the thread actually driving the simulator -
+  do a real `sys.exit()` after running proper cleanup (terminal restore, `GDBTCPServer.close()`,
+  etc.), instead of skipping straight past atexit/finally the way `os._exit()` does. `cli/__init__.py`
+  uses this now; `demo/*.py`'s standalone scripts, listed below, still use the older
+  `os._exit()`-direct pattern and haven't been migrated.
 - **Wait on the main thread after calling `simulator.execute()`**, e.g.
-  `while simulator.executing: time.sleep(0.1)`. `execute()` only runs the first burst
-  synchronously and then returns, rescheduling itself via a non-daemon `threading.Timer` so the
-  process stays alive while the simulation runs (matching Node keeping the event loop alive). If
-  `main()` returns without waiting, Python proceeds straight into interpreter shutdown, which
-  blocks joining that non-daemon timer thread - and a Ctrl+C at that point produces an ugly
-  `Exception ignored in: <module 'threading'>` traceback instead of a clean exit. All four demo
-  entry points (`demo/emulator_run.py`, `demo/micropython_run.py`, `demo/kaluma_run.py`,
+  `while simulator.executing: time.sleep(0.1)` (or just call `simulator.wait_for_shutdown()`, which
+  does exactly this). `execute()` only runs the first burst synchronously and then returns,
+  rescheduling itself via a non-daemon `threading.Timer` so the process stays alive while the
+  simulation runs (matching Node keeping the event loop alive). If `main()` returns without
+  waiting, Python proceeds straight into interpreter shutdown, which blocks joining that non-daemon
+  timer thread - and a Ctrl+C at that point produces an ugly `Exception ignored in: <module
+  'threading'>` traceback instead of a clean exit. All four demo entry points
+  (`demo/emulator_run.py`, `demo/micropython_run.py`, `demo/kaluma_run.py`,
   `tests/micropython_spi_run.py`) do this wait-then-`os._exit(130)`-on-`KeyboardInterrupt` dance.
 - **Don't schedule follow-up work with `threading.Timer`/a real OS thread if it touches anything a
   `Simulator` worker thread also touches** (a FIFO, a peripheral register, `USBCDC.tx_fifo`, etc.)
@@ -291,6 +299,26 @@ every 8ms of simulated idle time - the actual driver behind wildly variable `--e
 wall-clock times, not anything USB-specific. Fixed by counting an idle jump as ~1 unit like
 everything else, matching what `_bench_firmware`'s independent hand-rolled loop in
 `cli/__init__.py` (which doesn't go through `Simulator.execute()`) already did.
+
+That fix addresses *idle* runs specifically. A *busy* run (guest actively executing, not WFI'd -
+e.g. MicroPython 1.28's resident-script loop) still pays for every handoff regardless: found while
+investigating a report that `rp2040py.native` "shouldn't be 3x slower than expected" running real
+guest code. A ~65M-step MicroPython 1.28 + littlefs boot needs ~65 `threading.Timer` handoffs at
+the default 1,000,000-step batch size; a headless `rp2040py bench` run of the identical workload
+(single tight loop, zero handoffs) finished in 24.95s against the CLI path's ~45s for the same
+work - patching `execute()` to use one giant batch (no handoffs at all) brought the CLI path down
+to 19.45s, actually beating the headless number. The yield-and-reschedule dance mirrors upstream
+JS's `setTimeout(..., 0)`, necessary there because Node's event loop is single-threaded; CPython's
+GIL already preemptively time-slices between real OS threads, so a tight loop on a background
+thread doesn't starve the main thread the way single-threaded JS would - this port carried the
+pattern over without needing it, and each handoff's cost (new thread creation, GIL contention
+against the main thread's own periodic poll) was always there, just dwarfed by how slow pure-Python
+instruction dispatch was until `rp2040py.native` made dispatch itself ~4x+ faster. See
+`docs/BACKLOG.md`'s CDC investigation follow-up for the full numbers. Not yet fixed - a single
+persistent worker thread (no `threading.Timer` rescheduling) is the likely direction, but every
+caller of `Simulator.execute()` currently relies on it returning almost immediately and continuing
+in the background, so this is a real change to the scheduling model this section already flags as
+unsettled, not a drop-in fix.
 
 ### Raw-REPL uploads and cross-thread `USBCDC.tx_fifo` access (a real, previously undiscovered bug)
 

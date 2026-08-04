@@ -3,6 +3,7 @@ import argparse
 import pytest
 
 from rp2040py import cli
+from rp2040py.simulator import Simulator
 
 
 def _mp_args(**overrides):
@@ -200,7 +201,10 @@ class _FakeKalumaDevice:
         _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs, "program": program}
         _FakeKalumaDevice.last_bootrom_words = bootrom_words
         _FakeKalumaDevice.last_instance = self
-        self.simulator = None
+        # A real Simulator (cheap to construct - no thread starts until .execute()) rather than
+        # None: _cmd_kaluma reads device.simulator.shutdown_request and calls
+        # device.simulator.wait_for_shutdown(), both real Simulator behavior now.
+        self.simulator = Simulator()
         self.cdc = _FakeKalumaCdc()
 
     def start(self, timeout=None):
@@ -213,9 +217,9 @@ class _FakeKalumaDevice:
 class _FakeStdioInteractiveRepl:
     """Stands in for StdioInteractiveRepl - _cmd_kaluma has no non-interactive escape hatch (no
     -c/-m/<filename> like _cmd_micropython), so the real class (raw termios, a stdin-reading
-    thread, _wait_for_simulator's loop) would otherwise block these tests."""
+    thread, wait_for_shutdown's loop) would otherwise block these tests."""
 
-    def __init__(self, cdc, on_data=None):
+    def __init__(self, cdc, on_data=None, on_quit=None):
         self.cdc = cdc
 
     def start(self):
@@ -232,7 +236,7 @@ def fake_kaluma_device(monkeypatch):
     monkeypatch.setattr(cli, "KalumaDevice", _FakeKalumaDevice)
     monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: "fixed-kaluma-image.uf2")
     monkeypatch.setattr(cli, "StdioInteractiveRepl", _FakeStdioInteractiveRepl)
-    monkeypatch.setattr(cli, "_wait_for_simulator", lambda simulator, on_interrupt=None: None)
+    monkeypatch.setattr(Simulator, "wait_for_shutdown", lambda self, cleanup=None: None)
     return _FakeKalumaDevice
 
 

@@ -31,6 +31,7 @@ Subcommands:
 """
 
 import argparse
+import contextlib
 import importlib.util
 import logging
 import struct
@@ -63,7 +64,7 @@ from rp2040py.device.raw_repl import RawReplError
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.memory_map import RAM_START_ADDRESS
 from rp2040py.rp2040 import RP2040
-from rp2040py.simulator import Simulator
+from rp2040py.simulator import ShutdownRequest, Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
@@ -149,29 +150,6 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
     return list(struct.unpack(f"<{word_count}I", data[: word_count * 4]))
 
 
-def _wait_for_simulator(simulator: Simulator, on_interrupt: "Callable[[], None] | None" = None) -> None:
-    # simulator.execute() only runs the first burst synchronously and then reschedules itself via
-    # threading.Timer, so the caller would otherwise return immediately and leave the process
-    # hanging in interpreter shutdown, joining that non-daemon timer chain forever - and
-    # unresponsive to Ctrl+C there. Waiting here on the main thread keeps KeyboardInterrupt
-    # handling clean.
-    #
-    # TODO: boot can take anywhere from under a second to several minutes depending on firmware
-    # (see README's MicroPython 1.28 benchmark) with nothing on stdout meanwhile, indistinguishable
-    # from a genuine hang - a heartbeat here would help, but a naive stderr print stepped on the
-    # REPL's own output (cursor movement/redraw racing the device's echoed bytes). Revisit via
-    # `rp2040.logger`/Logger instead of a raw print, so it composes with whatever the device itself
-    # is writing rather than fighting it.
-    try:
-        while simulator.executing:
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        if on_interrupt is not None:
-            on_interrupt()
-        simulator.stop()
-        _os_exit(130)
-
-
 def _cmd_run(args: argparse.Namespace) -> None:
     simulator = Simulator()
     mcu = simulator.rp2040
@@ -191,7 +169,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     mcu.core.pc = 0x10000000
     simulator.execute()
-    _wait_for_simulator(simulator)
+    # gdb_server.close() as the cleanup hook: its accept thread is deliberately non-daemon (see
+    # its own docstring), so a plain sys.exit() below would otherwise hang forever joining it.
+    simulator.wait_for_shutdown(cleanup=gdb_server.close)
 
 
 def _raw_repl_source(args: argparse.Namespace) -> "str | None":
@@ -205,10 +185,12 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
     return None
 
 
-def _make_expect_text_watcher(expect_text: "str | None") -> "Callable[[bytes | bytearray], None]":
+def _make_expect_text_watcher(
+    expect_text: "str | None", shutdown: "ShutdownRequest"
+) -> "Callable[[bytes | bytearray], None]":
     """Returns an `on_data` callback for `StdioInteractiveRepl` that scans serial output for
-    `expect_text` and exits the process once found - the `--expect-text` CI-test-harness hook
-    shared by `micropython` and `kaluma`."""
+    `expect_text` and requests a clean process exit once found - the `--expect-text`
+    CI-test-harness hook shared by `micropython` and `kaluma`."""
     current_line = ""
 
     def _watch(value: bytes | bytearray) -> None:
@@ -219,11 +201,11 @@ def _make_expect_text_watcher(expect_text: "str | None") -> "Callable[[bytes | b
                 if expect_text and expect_text in current_line:
                     print(f'Expected text found: "{expect_text}"')
                     print("TEST PASSED.")
-                    # _os_exit(), not sys.exit(): this callback runs on a Simulator worker thread
-                    # (threading.Timer), and sys.exit() there only terminates that thread, not the
-                    # whole process (unlike Node's process.exit(), which the upstream JS relies on
-                    # here).
-                    _os_exit(0)
+                    # shutdown.request(), not os._exit(): this callback runs on a Simulator
+                    # worker thread (threading.Timer), so it can't safely tear the process down
+                    # itself - it just flags the thread driving wait_for_shutdown, which does the
+                    # actual repl/GDB-server cleanup and sys.exit() from there.
+                    shutdown.request(0)
                 current_line = ""
             else:
                 current_line += char
@@ -262,46 +244,60 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         _logger.error("%s", exc)
         sys.exit(1)
 
-    if args.gdb:
-        gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
-        _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
+    # cleanup runs everything registered on it (in reverse order) whenever this block exits for
+    # any reason - normal fall-through, an explicit sys.exit() below, or one raised from inside
+    # wait_for_shutdown() - so each resource's teardown lives right next to where it's created,
+    # instead of a separate hand-assembled "cleanup everything" function that has to be kept in
+    # sync with whatever the rest of this function does or doesn't construct.
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(device.stop)
 
-    raw_repl_source = _raw_repl_source(args)
-    if raw_repl_source is not None:
-        # No timeout (unlike MicroPythonDevice's library default): matches this CLI's existing
-        # philosophy elsewhere of running until done or Ctrl+C, not an arbitrary deadline.
-        try:
-            device.start(timeout=None)
-            stdout, stderr = device.exec(raw_repl_source, timeout=None)
-        except KeyboardInterrupt:
-            device.stop()
-            sys.exit(130)
-        except (TimeoutError, RawReplError) as exc:
-            _logger.error("%s", exc)
-            device.stop()
-            sys.exit(1)
-        _buf_write(sys.stdout, stdout)
-        if stderr:
-            _buf_write(sys.stderr, stderr)
-        device.stop()
-        sys.exit(1 if stderr else 0)
+        gdb_server: GDBTCPServer | None = None
+        if args.gdb:
+            gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+            _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
+            # Its accept thread is deliberately non-daemon (see GDBTCPServer.close()'s own
+            # docstring) - without this, any sys.exit() below would hang forever joining it.
+            cleanup.callback(gdb_server.close)
 
-    cdc = device.cdc
+        raw_repl_source = _raw_repl_source(args)
+        if raw_repl_source is not None:
+            # No timeout (unlike MicroPythonDevice's library default): matches this CLI's
+            # existing philosophy elsewhere of running until done or Ctrl+C, not an arbitrary
+            # deadline.
+            try:
+                device.start(timeout=None)
+                stdout, stderr = device.exec(raw_repl_source, timeout=None)
+            except KeyboardInterrupt:
+                sys.exit(130)
+            except (TimeoutError, RawReplError) as exc:
+                _logger.error("%s", exc)
+                sys.exit(1)
+            _buf_write(sys.stdout, stdout)
+            if stderr:
+                _buf_write(sys.stderr, stderr)
+            sys.exit(1 if stderr else 0)
 
-    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
-    # while enumerating is dropped.
-    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
-    repl.start()
+        cdc = device.cdc
+        shutdown = device.simulator.shutdown_request
 
-    device.start(timeout=None)
-    if not args.circuitpython:
-        # We send a newline so the user sees the MicroPython prompt
-        cdc.send_serial_byte(ord("\r"))
-        cdc.send_serial_byte(ord("\n"))
-    else:
-        cdc.send_serial_byte(3)
+        # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+        # while enumerating is dropped.
+        repl = StdioInteractiveRepl(
+            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+        )
+        repl.start()
+        cleanup.callback(repl.stop)
 
-    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
+        device.start(timeout=None)
+        if not args.circuitpython:
+            # We send a newline so the user sees the MicroPython prompt
+            cdc.send_serial_byte(ord("\r"))
+            cdc.send_serial_byte(ord("\n"))
+        else:
+            cdc.send_serial_byte(3)
+
+        device.simulator.wait_for_shutdown()
 
 
 def _cmd_kaluma(args: argparse.Namespace) -> None:
@@ -330,25 +326,35 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         _logger.error("%s", exc)
         sys.exit(1)
 
-    if args.gdb:
-        gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
-        _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(device.stop)
 
-    cdc = device.cdc
+        gdb_server: GDBTCPServer | None = None
+        if args.gdb:
+            gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+            _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
+            cleanup.callback(gdb_server.close)
 
-    # Constructed (and its on_serial_data wired) before start() so nothing the device prints
-    # while enumerating is dropped.
-    repl = StdioInteractiveRepl(cdc, on_data=_make_expect_text_watcher(args.expect_text))
-    repl.start()
+        cdc = device.cdc
+        shutdown = device.simulator.shutdown_request
 
-    device.start(timeout=None)
-    # No nudge sent: Kaluma's own boot-time "Welcome to Kaluma" banner is racy (gone by the time
-    # the USB-CDC connection is actually up, same as real hardware racing a host terminal that
-    # isn't attached yet - Kaluma's own docs: "if you cannot see the prompt, press Enter several
-    # times"), but a staged <script.js>'s own auto-run output isn't - it arrives on its own a few
-    # real seconds after connecting, no nudge needed (unlike the banner, confirmed empirically).
+        # Constructed (and its on_serial_data wired) before start() so nothing the device prints
+        # while enumerating is dropped.
+        repl = StdioInteractiveRepl(
+            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+        )
+        repl.start()
+        cleanup.callback(repl.stop)
 
-    _wait_for_simulator(device.simulator, on_interrupt=repl.stop)
+        device.start(timeout=None)
+        # No nudge sent: Kaluma's own boot-time "Welcome to Kaluma" banner is racy (gone by the
+        # time the USB-CDC connection is actually up, same as real hardware racing a host
+        # terminal that isn't attached yet - Kaluma's own docs: "if you cannot see the prompt,
+        # press Enter several times"), but a staged <script.js>'s own auto-run output isn't - it
+        # arrives on its own a few real seconds after connecting, no nudge needed (unlike the
+        # banner, confirmed empirically).
+
+        device.simulator.wait_for_shutdown()
 
 
 def _interpreter_label() -> str:

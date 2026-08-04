@@ -38,13 +38,15 @@ __all__ = ("StdioInteractiveRepl", "buf_write", "os_exit")
 
 _CTRL_X = 24
 
-# The terminal-owning StdioInteractiveRepl currently in raw mode, if any - so os_exit() can put
-# the terminal back before it tears down the process. os._exit() (below) skips atexit callbacks,
-# object finalizers, and every other normal cleanup hook by design, and every quit path in this
-# module (Ctrl+X, --expect-text matching in cli/__init__.py) goes through it rather than a plain
-# sys.exit()/return, so atexit.register() alone (see StdioInteractiveRepl._on_start()) only
-# catches the *other* ways this process can end (an uncaught exception, an external SIGTERM) -
-# not this one.
+# The terminal-owning StdioInteractiveRepl currently in raw mode, if any - so os_exit() (the
+# standalone fallback below, used only when a caller doesn't supply on_quit) can put the terminal
+# back before it tears down the process. os._exit() skips atexit callbacks, object finalizers,
+# and every other normal cleanup hook by design. cli/__init__.py's commands instead pass on_quit=
+# a Simulator.shutdown_request.request (see rp2040py.simulator), so Ctrl+X/--expect-text/SIGTERM
+# here just flag that request and let Simulator.wait_for_shutdown - on the thread driving the
+# simulator - do the actual repl/GDB-server cleanup and a real sys.exit(); atexit.register() (see
+# _on_start()) is the last-resort net for anything that still bypasses that (an uncaught
+# exception, or this class used standalone with no on_quit).
 _active_raw_repl: "StdioInteractiveRepl | None" = None
 
 
@@ -72,17 +74,29 @@ def buf_write(buf, data: "int | bytes | bytearray") -> None:
 class StdioInteractiveRepl(InteractiveRepl):
     """Interactive bridge between a device's USB-CDC console and this process's stdin/stdout.
     `start()` puts the terminal (if any) into raw mode and spawns a daemon thread forwarding
-    stdin to the device; `stop()` restores the terminal. Quit by typing Ctrl+X, which exits the
-    whole process (`os._exit`) - matching the existing `rp2040py micropython`/`demo/kaluma_run.py`
-    behavior this replaces.
+    stdin to the device; `stop()` restores the terminal. Quit by typing Ctrl+X.
 
     `on_data`, if given, is called with every chunk of device output in addition to it being
     echoed to stdout - e.g. for the CLI's `--expect-text` test-harness hook.
+
+    `on_quit`, if given, is called with an exit code on Ctrl+X or a SIGTERM received while this
+    instance owns the terminal - instead of this class tearing the process down itself, letting a
+    caller (typically `Simulator.shutdown_request.request` - see `rp2040py.simulator`) centralize
+    cleanup (restoring the terminal, closing a GDB server's socket, etc.) before a real
+    `sys.exit()`. Without `on_quit`, this class falls back to its original standalone behavior:
+    restore the terminal itself and call `os._exit()` directly - for any caller that just wants a
+    working REPL without wiring up a shutdown coordinator.
     """
 
-    def __init__(self, cdc: USBCDC, on_data: "Callable[[bytes | bytearray], None] | None" = None) -> None:
+    def __init__(
+        self,
+        cdc: USBCDC,
+        on_data: "Callable[[bytes | bytearray], None] | None" = None,
+        on_quit: "Callable[[int], None] | None" = None,
+    ) -> None:
         super().__init__(cdc, on_data=self._dispatch)
         self._extra_on_data = on_data
+        self._on_quit = on_quit
         self._stdin_fd: int | None = None
         self._old_termios: list[Any] | None = None
         self._old_sigterm_handler: Any = None
@@ -103,18 +117,18 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # it's just forwarded to the device instead (deliberate: matches screen/mpremote,
                 # letting Ctrl+C interrupt whatever's running on the emulated device rather than
                 # this process). That means the normal `except KeyboardInterrupt` path in
-                # `_wait_for_simulator` can never fire from the keyboard while raw mode is active,
-                # so it's no longer a reliable place to restore the terminal. Cover the two ways
-                # this process actually ends normally: os_exit() (Ctrl+X, --expect-text match -
-                # see `_active_raw_repl` above) and an uncaught exception, via atexit here -
-                # otherwise the real terminal is left raw (no echo/line-buffering) after exit,
-                # which looks like "the keyboard stopped working" until `stty sane`.
+                # `Simulator.wait_for_shutdown` can never fire from the keyboard while raw mode is
+                # active, so it's no longer a reliable place to restore the terminal - _request_quit()
+                # (Ctrl+X, --expect-text, SIGTERM) is. atexit here is the last-resort net for
+                # anything that still bypasses that (an uncaught exception, or standalone use with
+                # no on_quit) - otherwise the real terminal is left raw (no echo/line-buffering)
+                # after exit, which looks like "the keyboard stopped working" until `stty sane`.
                 #
                 # atexit does NOT cover a plain SIGTERM (e.g. from `timeout`, or `kill` without
                 # -9): Python's default SIGTERM disposition kills the process at the OS level
                 # before the interpreter ever gets to run atexit callbacks - confirmed empirically
                 # (a bare `atexit.register(...)` + `kill -TERM` never fires it). Needs its own
-                # signal handler that restores the terminal before letting the process die.
+                # signal handler, routed through the same _request_quit() as Ctrl+X.
                 _active_raw_repl = self
                 atexit.register(self._restore_termios)
                 self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
@@ -127,11 +141,22 @@ class StdioInteractiveRepl(InteractiveRepl):
         self._restore_termios()
 
     def _on_sigterm(self, signum: int, _frame: Any) -> None:
-        # Restore the terminal, then actually terminate - matching the default SIGTERM
-        # disposition we're overriding (signal.signal() replaces it, not supplements it), and the
-        # 128+signum convention the shell/`timeout` itself would otherwise report.
-        self._restore_termios()
-        os._exit(128 + signum)
+        # 128+signum matches the convention the shell/`timeout` itself would otherwise report for
+        # a signal-terminated process.
+        self._request_quit(128 + signum)
+
+    def _request_quit(self, code: int) -> None:
+        if self._on_quit is not None:
+            # Just flag it - the caller's Simulator.wait_for_shutdown loop does the actual
+            # repl.stop()/gdb_server.close()/sys.exit(). This runs from the stdin-reader thread
+            # (Ctrl+X) or the main thread via a signal handler (SIGTERM) - either way, it must not
+            # block or do teardown itself, since on_quit just sets an Event and returns.
+            self._on_quit(code)
+        else:
+            # Standalone fallback (no shutdown coordinator wired up): behave like this always did
+            # before on_quit existed - restore the terminal and force-exit directly.
+            self.stop()
+            os_exit(code)
 
     def _restore_termios(self) -> None:
         global _active_raw_repl
@@ -161,15 +186,25 @@ class StdioInteractiveRepl(InteractiveRepl):
         try:
             if self._stdin_fd is not None:
                 while True:
-                    chunk = os.read(self._stdin_fd, 4096)
+                    try:
+                        chunk = os.read(self._stdin_fd, 4096)
+                    except OSError:
+                        # The read side going away out from under us (e.g. a real terminal
+                        # disconnecting, or - relevant for a future --pty mode - the pty's other
+                        # end closing) is not fundamentally different from a clean EOF here: this
+                        # thread's only job is forwarding bytes, and there's nothing left to
+                        # forward. Treated as EOF rather than left to propagate and print an
+                        # unhandled-thread-exception traceback for what's really just "the other
+                        # end hung up."
+                        break
                     if not chunk:
                         break
                     if chunk[0] == _CTRL_X:
-                        # os_exit(), not sys.exit(): this runs on the dedicated stdin reader
-                        # thread, not the main thread, so sys.exit() would only terminate that
-                        # thread instead of the whole process.
-                        self.stop()
-                        os_exit(0)
+                        # _request_quit(), not sys.exit(): this runs on the dedicated stdin
+                        # reader thread, not the main thread, so sys.exit() would only terminate
+                        # that thread instead of the whole process.
+                        self._request_quit(0)
+                        return
                     self.send(chunk)
             else:
                 while True:
@@ -179,8 +214,8 @@ class StdioInteractiveRepl(InteractiveRepl):
                     byte_data = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
                     for byte in byte_data:
                         if byte == _CTRL_X:
-                            self.stop()
-                            os_exit(0)
+                            self._request_quit(0)
+                            return
                         self._send_byte_blocking(byte)
                     self._send_byte_blocking(13)
         finally:
