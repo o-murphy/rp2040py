@@ -7,6 +7,7 @@ CircuitPython).
 
 import atexit
 import os
+import signal
 import sys
 import threading
 from collections.abc import Callable
@@ -84,6 +85,7 @@ class StdioInteractiveRepl(InteractiveRepl):
         self._extra_on_data = on_data
         self._stdin_fd: int | None = None
         self._old_termios: list[Any] | None = None
+        self._old_sigterm_handler: Any = None
 
     def _dispatch(self, data: "bytes | bytearray") -> None:
         buf_write(sys.stdout, data)
@@ -103,13 +105,19 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # this process). That means the normal `except KeyboardInterrupt` path in
                 # `_wait_for_simulator` can never fire from the keyboard while raw mode is active,
                 # so it's no longer a reliable place to restore the terminal. Cover the two ways
-                # this process actually ends: os_exit() (Ctrl+X, --expect-text match - see
-                # `_active_raw_repl` above) and anything else (an uncaught exception, an external
-                # SIGTERM from e.g. `timeout`), via atexit here - otherwise the real terminal is
-                # left raw (no echo/line-buffering) after exit, which looks like "the keyboard
-                # stopped working" until `stty sane`.
+                # this process actually ends normally: os_exit() (Ctrl+X, --expect-text match -
+                # see `_active_raw_repl` above) and an uncaught exception, via atexit here -
+                # otherwise the real terminal is left raw (no echo/line-buffering) after exit,
+                # which looks like "the keyboard stopped working" until `stty sane`.
+                #
+                # atexit does NOT cover a plain SIGTERM (e.g. from `timeout`, or `kill` without
+                # -9): Python's default SIGTERM disposition kills the process at the OS level
+                # before the interpreter ever gets to run atexit callbacks - confirmed empirically
+                # (a bare `atexit.register(...)` + `kill -TERM` never fires it). Needs its own
+                # signal handler that restores the terminal before letting the process die.
                 _active_raw_repl = self
                 atexit.register(self._restore_termios)
+                self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
         except AttributeError:
             self._stdin_fd = None
 
@@ -118,13 +126,34 @@ class StdioInteractiveRepl(InteractiveRepl):
     def _on_stop(self) -> None:
         self._restore_termios()
 
+    def _on_sigterm(self, signum: int, _frame: Any) -> None:
+        # Restore the terminal, then actually terminate - matching the default SIGTERM
+        # disposition we're overriding (signal.signal() replaces it, not supplements it), and the
+        # 128+signum convention the shell/`timeout` itself would otherwise report.
+        self._restore_termios()
+        os._exit(128 + signum)
+
     def _restore_termios(self) -> None:
         global _active_raw_repl
+        atexit.unregister(self._restore_termios)
         if self._stdin_fd is not None and self._old_termios is not None:
             try:
                 termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._old_termios)
-            except OSError:
+            except (OSError, termios.error):
+                # termios.error isn't an OSError subclass (confirmed: its MRO is just
+                # (termios.error, Exception, BaseException, object)) - both are caught here since
+                # the fd can legitimately go bad before this runs (e.g. the pty's other end
+                # already closed).
                 pass
+        if self._old_sigterm_handler is not None and threading.current_thread() is threading.main_thread():
+            # signal.signal() only works from the main thread - this can also run from
+            # _read_stdin_loop's daemon thread (its own `finally`), where restoring is skipped
+            # rather than raising; the process is tearing down either way at that point.
+            try:
+                signal.signal(signal.SIGTERM, self._old_sigterm_handler)
+            except ValueError:
+                pass
+            self._old_sigterm_handler = None
         if _active_raw_repl is self:
             _active_raw_repl = None
 
