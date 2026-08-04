@@ -15,14 +15,19 @@ Env vars:
   regardless of whether Cython/a C compiler are actually available (e.g. for a deliberately "pure"
   release artifact rather than a best-effort one).
 
-Stable ABI (abi3): built against Py_LIMITED_API for CPython 3.10+ - its buffer-protocol support,
-needed by this code's heavy use of typed memoryviews, only entered the limited API at 3.10. Below
-that floor, or on free-threaded builds (Py_LIMITED_API and Py_GIL_DISABLED are mutually
-incompatible per PEP 703), falls back to a normal, version-specific extension. Must match
-[tool.cibuildwheel] in pyproject.toml, which builds cp310-abi3 and cp3XXt separately for exactly
-this reason.
+Stable ABI (abi3): built against Py_LIMITED_API for CPython 3.11+ - its buffer-protocol support,
+needed by this code's heavy use of typed memoryviews, only entered the limited API at 3.11 (verified
+directly: forcing the floor down to 3.10 fails to compile - Py_buffer's struct fields, e.g. format/
+strides/itemsize, are hidden by CPython's own headers below the 3.11 hex gate). Below that floor,
+or on free-threaded builds (Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible per PEP
+703), falls back to a normal, version-specific extension - which also means 3.10 (this project's
+default dev target, see .python-version) always gets the normal build, never abi3, and measures
+faster for it (see docs/BACKLOG.md's Cython follow-up section: ~13.3M vs. ~5.2M instr/sec
+synthetic, same source, abi3 vs. normal). Must match [tool.cibuildwheel] in pyproject.toml, which
+builds cp311-abi3 and cp3XXt separately for exactly this reason.
 """
 
+import platform
 import sys
 import sysconfig
 from os import environ
@@ -37,6 +42,36 @@ _ABI3_HEX = "0x030B0000"
 # rejects absolute paths in Extension sources ("setup() arguments must *always* be /-separated
 # paths relative to the setup.py directory").
 _NATIVE_DIR = Path("src/rp2040py/native")
+
+# Explicit optimization flags rather than relying on the ambient interpreter's own sysconfig
+# CFLAGS: those happen to already include -O3 on a normal CPython build, but that's an implicit
+# default this project doesn't control, not a guarantee - a debug build, a different distro's
+# CPython packaging, or a cibuildwheel manylinux container could hand back something else (or
+# nothing) for OPT/CFLAGS. This is a hand-written interpreter core on a genuinely hot per-instruction
+# path (see docs/BACKLOG.md's Cython section), so it needs -O2/-O3 for real, not by accident.
+# RP2040PY_DISABLE_STRIP=1 keeps debug symbols in the built .so (e.g. for profiling this
+# extension itself with a sampling profiler that wants symbol names, or debugging a segfault) -
+# stripped is the default since none of the three compiled modules are meant to be debugged in
+# the shipped wheel, only symbols the (much larger, unstripped) sdist->local rebuild path needs.
+_DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
+
+if platform.system() == "Windows":
+    _EXTRA_COMPILE_ARGS = ["/O2", "/W3"]
+    _EXTRA_LINK_ARGS: list[str] = []
+else:
+    # -O3, not -O0: an earlier version of this project's sibling (py_ballisticcalc.exts/setup.py,
+    # the pattern this file mirrors) shipped exactly this list with -O0 instead - debug flags left
+    # in from a troubleshooting session and never reverted, silently building its C extensions
+    # fully unoptimized. Found by reading that file side by side with this one while chasing an
+    # unrelated performance question here; -O3 is deliberate, not a typo for the more conservative
+    # -O2 - the isolated Cython-vs-boxing win this module depends on (see docs/BACKLOG.md) wants
+    # every optimization pass available, and this is a small, self-contained extension where -O3's
+    # usual risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
+    # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
+    # wheel, marginally faster load - doesn't touch the optimizations above, which happen at
+    # compile time on the .c GCC/Clang already emitted from Cython's own generated source).
+    _EXTRA_LINK_ARGS = [] if _DISABLE_STRIP else ["-Wl,-strip-all"]
 
 
 def _use_abi3() -> bool:
@@ -72,6 +107,8 @@ def _build_ext_modules() -> list[Extension]:
             [str(path)],
             py_limited_api=use_abi3,
             define_macros=[("Py_LIMITED_API", _ABI3_HEX)] if use_abi3 else [],
+            extra_compile_args=_EXTRA_COMPILE_ARGS,
+            extra_link_args=_EXTRA_LINK_ARGS,
             # If the compiler/toolchain is genuinely missing, build_ext skips this extension
             # (with a warning) instead of failing the whole build - rp2040py must install
             # everywhere, including without a C compiler.

@@ -750,36 +750,95 @@ annotation coloring alone.
    confirmed each one now compiles to plain C by re-reading the generated C, not just re-running
    the benchmark and assuming.
 
-**Measured results after both fixes** (same machine as above, CPython 3.10, abi3 build):
+**Measured results after both fixes, on CPython 3.10 (this project's default target - see
+`.python-version` - and, since 3.10 sits below the abi3 floor, a normal per-version build, not the
+stable-ABI one 3.11+ gets - see the abi3 finding below for why that distinction turned out to
+matter a lot for this specific measurement):**
 
-- *Synthetic* (`rp2040py bench --instructions 10000000`, ADDS/SUBS mix): native throughput went
-  from ~1.7M instr/sec to **~5.2M instr/sec** - roughly another 3x on top of the already-landed
-  Cython port, and ~5.5x over the pure-Python baseline on this machine (vs. the ~4x measured
-  above before this follow-up).
+- *Synthetic* (`rp2040py bench`, default 5,000,000-instruction ADDS/SUBS mix): native throughput
+  went from ~523K instr/sec (pure Python) to **~13.3M instr/sec** - **~25.5x**, not the ~4x
+  originally measured for the first Cython pass.
 - *Real firmware boot* (MicroPython 1.28.0 + littlefs, boot to first `print()`, same fixture as
-  the README's table): **46.65s -> 33.90s**, ~27% faster wall-clock. Smaller than the synthetic
-  win because a real boot spends a large, unchanged share of its time in still-Python peripherals
-  (UART, SSI/littlefs, USB) that this port never touched - the synthetic benchmark is 100% inside
-  the code paths these two fixes actually touch, a real boot isn't.
-- Still behind PyPy on both measures (PyPy: ~40M instr/sec synthetic, 8.75s real boot on the same
-  machine) - closer than before, not caught up. The remaining gap is architectural, not another
-  hidden-boxing bug: PyPy's trace JIT specializes the *actual* dynamic instruction mix at runtime,
-  where this port dispatches through a fixed, ahead-of-time C function-pointer table sized for the
-  worst case every time.
+  the README's table): **46.65s -> 25.83s**, **~7.3x** over the 188.98s pure-Python baseline (was
+  ~4.1x). Smaller relative win than the synthetic benchmark because a real boot spends a large,
+  unchanged share of its time in still-Python peripherals (UART, SSI/littlefs, USB) that this port
+  never touched - the synthetic benchmark is 100% inside the code paths these two fixes actually
+  touch, a real boot isn't.
+- Closer to PyPy than before, not caught up: PyPy measures ~40M instr/sec synthetic / 8.75s real
+  boot on the same machine - synthetic is now ~3x behind (was ~24x), real boot ~3x behind (was
+  ~4x). The remaining gap is architectural, not another hidden-boxing bug: PyPy's trace JIT
+  specializes the *actual* dynamic instruction mix at runtime, where this port dispatches through a
+  fixed, ahead-of-time C function-pointer table sized for the worst case every time.
 - `PYTHON_JIT=1` (CPython 3.14's experimental tier-2 JIT) remains slightly *slower* than
-  `PYTHON_JIT=0` for native mode even after these fixes (~4.7M vs. ~5.2M instr/sec, synthetic) -
-  unaffected by either fix since both touched code that already ran outside the CPython bytecode
-  interpreter. The outer driving loop (`Simulator.execute`/`_bench_synthetic`) is thin Python
-  bytecode that immediately calls into the now much-faster C extension per instruction; CPython's
-  tier-2 JIT's specialization/instrumentation bookkeeping is pure overhead on a loop that does
-  almost no work at the bytecode level to begin with. Not something this project's code controls.
+  `PYTHON_JIT=0` for native mode even after these fixes (~4.7M vs. ~5.2M instr/sec synthetic,
+  measured on the 3.11 abi3 build) - unaffected by either fix since both touched code that already
+  ran outside the CPython bytecode interpreter. The outer driving loop (`Simulator.execute`/
+  `_bench_synthetic`) is thin Python bytecode that immediately calls into the now much-faster C
+  extension per instruction; CPython's tier-2 JIT's specialization/instrumentation bookkeeping is
+  pure overhead on a loop that does almost no work at the bytecode level to begin with. Not
+  something this project's code controls.
+
+**A third, unrelated discovery made while producing the numbers above: the abi3/`Py_LIMITED_API`
+build (what every CPython 3.11+ install actually gets) is measurably slower than a normal
+per-version build of the identical source** - ~5.2M instr/sec synthetic / 33.90s real boot on
+CPython 3.11 (abi3) vs. the ~13.3M / 25.83s above on 3.10 (normal build), same fixes, same
+machine, same run. Not yet root-caused (a reasonable suspect: the limited API routes typed-
+memoryview-heavy code like this through more indirection than the normal C-API's direct struct/
+slot access, but that's a hypothesis, not confirmed by reading generated code the way the two
+boxing bugs above were) and not something this pass changed - `_use_abi3()`'s CPython-3.11-floor
+stable-ABI wheel is a deliberate one-wheel-covers-every-3.11+-version distribution tradeoff (see
+"Stable ABI (abi3)" earlier in this file), and trading it away is a real decision for whoever owns
+that tradeoff, not something to flip silently as a side effect of a performance pass. Flagging it
+here as a scoped, standalone follow-up instead.
+
+**Found and fixed in the same pass, unrelated to Cython specifically: `setup.py` was not passing
+any explicit optimization flags to the C compiler at all**, relying entirely on whatever
+`sysconfig`'s ambient `CFLAGS`/`OPT` happened to be for the interpreter running the build (`-O3` on
+this machine, incidentally - not a guarantee `cibuildwheel`'s manylinux containers or every
+downstream packager's CPython necessarily share). Fixed by adding explicit
+`extra_compile_args=["-O3", "-std=c99"]` (`["/O2", "/W3"]` on MSVC) and `-Wl,-strip-all` at link
+time (`RP2040PY_DISABLE_STRIP=1` to keep symbols, e.g. for profiling the extension itself) -
+mirrors `py_ballisticcalc.exts/setup.py`'s own platform-flag pattern (this file's docstring already
+said it "mirrors" that file), except deliberately *not* copying that file's own `c_compile_args =
+["-g", "-O0", "-std=c99"]` - real, still-present `-O0` there, apparently debug flags left over from
+a troubleshooting session and never reverted. Confirmed via `sysconfig.get_config_var("CFLAGS")`
+that this machine's ambient flags already included `-O3` (so the explicit flags measured as a
+no-op here, benchmark identical before/after down to noise) - added anyway since "happens to
+already be optimized on this machine" isn't the same guarantee as "is optimized," and the stripped
+`.so` files are a genuine, measured win regardless (~334KB vs. ~1.96MB for `_cortex_m0_core.so`,
+same benchmarked speed).
+
+**A build hazard found the hard way while producing all the numbers above, unrelated to any of the
+three fixes themselves: stale `.so` files from a previous Python-version build silently shadow a
+fresh one.** `src/rp2040py/native/` accumulated `_cortex_m0_core.abi3.so`,
+`_cortex_m0_core.cpython-310-*.so`, *and* `_cortex_m0_core.cpython-311-*.so` simultaneously after
+switching the dev venv between Python versions a few times without cleaning between builds -
+Python's extension-suffix search order prefers an exact `cpython-3XX-*` match over the generic
+`.abi3.so` when both are present and loadable under that interpreter, so a *stale*, version-
+matching `.so` left over from an earlier (possibly broken, mid-experiment) build silently wins over
+a freshly-built, correct one sitting right next to it - no error, just the wrong code running,
+surfaced here only because a completely unrelated symbol (`SYSM_CONTROL`) happened to be missing
+from the stale build and tripped the `except ImportError` fallback loudly. A quieter version of the
+same staleness (same symbols present, just older/different codegen) would have produced no warning
+at all. `rm -f src/rp2040py/native/*.so src/rp2040py/native/*.c src/rp2040py/native/*.html &&
+uv sync --reinstall-package rp2040py --no-cache` before trusting any from-source perf number is the
+only real guard against this - a real `pip install`/`uv add` from a clean checkout never hits it
+(one target interpreter, one build, nothing stale to shadow it), so this is purely a "rebuilding
+in-place across multiple interpreters in the same checkout" hazard, exactly what a local dev/perf
+session does.
 
 **Lesson for future work on these three files:** `cython -a`'s color-coded HTML is a reasonable
-first pass, but its score numbers are not a reliable 0-9 scale and both bugs above were found only
-by grepping the *generated C* for `PyNumber_*`/`__Pyx_PyLong_*` and reading the surrounding
-function, not by trusting the annotation view. Any new arithmetic touching a literal at or above
-`0x80000000` needs the same treatment (`U`/`LL`/`ULL` suffix, or a `cdef` constant) or it will
-silently re-introduce this exact bug.
+first pass, but its score numbers are not a reliable 0-9 scale and both boxing bugs above were
+found only by grepping the *generated C* for `PyNumber_*`/`__Pyx_PyLong_*` and reading the
+surrounding function, not by trusting the annotation view. Any new arithmetic touching a literal at
+or above `0x80000000` needs the same treatment (`U`/`LL`/`ULL` suffix, or a `cdef` constant) or it
+will silently re-introduce this exact bug. Relatedly: `noexcept` on an individual `op_*` handler is
+a dead end as long as they're only ever invoked through `DISPATCH_TABLE`/`OpHandler` - the
+generated call site's exception check (`if (unlikely(result == -1)) ...`) is emitted based on the
+*function pointer's* declared type, not the concrete function actually behind it at runtime, so
+marking individual table entries `noexcept` changes nothing observable; it would need `OpHandler`
+itself to be `noexcept`, which isn't safe here (real bus/peripheral/`bl_taken`-callback exceptions
+need to keep propagating, not get silently swallowed).
 
 ## littlefs persistence to the host `--littlefs` image file — not started
 

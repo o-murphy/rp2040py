@@ -79,9 +79,13 @@ fallback_version = "0.0.0.dev0"
 [tool.cibuildwheel]
 # Use uv and build
 build-frontend = "build[uv]"
-# cp310-abi3 covers standard CPython 3.10+; free-threaded build (cp314t-*) is
-# built separately because Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
-build = "cp310-* cp314t-*"
+# cp310 gets its own normal, version-specific wheel: Py_LIMITED_API's buffer-protocol support
+# (needed by this project's typed memoryviews) only entered the limited API at 3.11 - confirmed
+# by trying to force the floor down to 3.10, which fails to compile (see setup.py/docs/BACKLOG.md).
+# cp311-* builds once and self-tags as cp311-abi3 (setup.py's _bdist_wheel_abi3), covering every
+# 3.11+ interpreter with that one wheel. Free-threaded (cp314t-*) is separate for the usual reason:
+# Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
+build = "cp310-* cp311-* cp314t-*"
 test-extras = "fs"
 test-requires = "pytest"
 # cibuildwheel runs tests from a scratch directory (not the repo checkout) so only the built
