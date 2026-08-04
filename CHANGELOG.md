@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-04
+
 ### Fixed
 - `RP2040.write_uint32()` checked `find_peripheral()` (a dict lookup) unconditionally before any
   other address range, unlike `read_uint32()`/`write_uint8()`/`write_uint16()`, which all check
@@ -355,7 +357,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc2...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc2...v0.1.0
 [0.1.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc1...v0.1.0rc2
 [0.1.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b6...v0.1.0rc1
 [0.1.0b6]: https://github.com/o-murphy/rp2040py/compare/v0.1.0b5...v0.1.0b6
