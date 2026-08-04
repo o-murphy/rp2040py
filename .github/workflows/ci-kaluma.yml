@@ -39,7 +39,7 @@ jobs:
         run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
 
       - name: Upload littlefs image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kaluma-littlefs-image
           path: kaluma-littlefs-flash-rw.img
@@ -76,7 +76,7 @@ jobs:
         run: uv sync
 
       - name: Download littlefs image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kaluma-littlefs-image
 

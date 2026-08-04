@@ -42,7 +42,7 @@ jobs:
         run: uv run rp2040py mklittlefs -o littlefs-flash-rw.img tests/micropython/main-flash-rw.py --main main-flash-rw.py
 
       - name: Upload littlefs images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: littlefs-images
           path: |
@@ -84,7 +84,7 @@ jobs:
         run: uv sync
 
       - name: Download littlefs images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: littlefs-images
 
