@@ -3,9 +3,15 @@
 # instead of a generic `object` - so a hot-path call like `core.rp2040.read_uint32(addr)` resolves
 # to a direct C-level cpdef call instead of a Python attribute lookup + method call.
 #
-# This is a one-way reference (CortexM0Core -> RP2040): RP2040.core is intentionally left
-# untyped (stored via __dict__ like the rest of RP2040's non-hot-path fields), so there's no
-# circular cimport between this file and _cortex_m0_core.pxd.
+# RP2040.core is now typed too (a genuine mutual .pxd cimport with _cortex_m0_core.pxd, which
+# cimports RP2040 the other way for the same reason) - `public` is required, not just `cdef`:
+# rp2040.core is read from plain Python outside this module (Simulator.execute(),
+# peripherals/ppb.py's `core = self.rp2040.core`), and a non-public cdef field has no Python-level
+# attribute at all, typed or not - `public` is what generates the __get__/__set__ slot that makes
+# `rp2040.core` resolve as an attribute from outside Cython in the first place.
+
+from rp2040py.native._cortex_m0_core cimport CortexM0Core
+
 
 cdef class RP2040:
     # Not `public`: a `cdef public X[:]` field's auto-generated Python getter returns Cython's
@@ -15,6 +21,7 @@ cdef class RP2040:
     # against a bytes literal. sram/flash/usb_dpram/bootrom are still real live views into the
     # same backing buffers (correctness unaffected) - see the `property` blocks in _rp2040.pyx,
     # which wrap them in a real memoryview() for Python-facing access.
+    cdef public CortexM0Core core
     cdef unsigned char[:] _sram
     cdef unsigned char[:] _flash
     cdef unsigned char[:] _usb_dpram

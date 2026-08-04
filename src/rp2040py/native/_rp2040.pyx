@@ -14,7 +14,7 @@ attribute support). None of that is on the per-instruction hot path, so typing i
 add real duplication-drift risk for no measurable benefit.
 """
 
-from rp2040py.native._cortex_m0_core import CortexM0Core
+from rp2040py.native._cortex_m0_core cimport CortexM0Core
 
 from rp2040py.clock.clock import IClock
 from rp2040py.clock.simulation_clock import SimulationClock
@@ -107,14 +107,13 @@ cdef class RP2040:
         self.flash_byte_size = len(self._flash)
         self._usb_dpram = bytearray(4 * KB)
         self.dpram_byte_size = len(self._usb_dpram)
+        self.core = CortexM0Core(self)
 
     def __init__(self, clock: IClock | None = None):
         # NOTE: must be set before constructing any peripheral below - several of them
         # (RPPPB, RPWatchdog, RPADC, RPPWM, RPPIO, RPUSBController, RPDMA) call
         # self.clock.create_alarm(...) from their own __init__.
         self.clock = clock if clock is not None else SimulationClock()
-
-        self.core = CortexM0Core(self)
 
         # Clocks
         self.clk_sys = 125 * MHZ
