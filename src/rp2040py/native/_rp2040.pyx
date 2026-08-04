@@ -75,9 +75,9 @@ __all__ = (
 
 LOG_NAME = "RP2040"
 
-KB = 1024
-MB = 1024 * KB
-MHZ = 1_000_000
+cdef const unsigned int KB = 1024
+cdef unsigned int MB = 1024 * KB
+cdef const unsigned int MHZ = 1_000_000
 
 # Not `const`: Cython requires a const global's initializer to be a compile-time constant, and
 # these are cast from Python-level values imported from rp2040py.memory_map at module load.

@@ -607,20 +607,20 @@ the original ~11.5x thesis was sound, just under-executed the first time. This f
 that lesson everywhere: every parameter and local on the per-instruction path is genuinely C-typed,
 not just the fields.
 
-**Stable ABI (abi3):** built against `Py_LIMITED_API` for CPython 3.11+ (`setup.py`'s
+**Stable ABI (abi3):** built against `Py_LIMITED_API` for CPython 3.10+ (`setup.py`'s
 `_use_abi3()`, plus a `bdist_wheel` `cmdclass` override setting `self.py_limited_api = "cp311"` -
 `py_limited_api=True` on the `Extension` controls what the *compiler* builds against, the
 `bdist_wheel` option controls what the *wheel filename* gets tagged, and both are needed), producing
-one `cp311-abi3` wheel that covers every 3.11+ interpreter instead of one per minor version -
-verified directly: built once against 3.11, the identical `.abi3.so` loads and passes the full
-437-test suite on 3.12 with zero recompilation. 3.11 specifically (not 3.10) because
+one `cp310-abi3` wheel that covers every 3.10+ interpreter instead of one per minor version -
+verified directly: built once against 3.10, the identical `.abi3.so` loads and passes the full
+437-test suite on 3.12 with zero recompilation. 3.10 specifically (not 3.10) because
 `Py_LIMITED_API`'s buffer-protocol support - needed by this code's heavy use of typed memoryviews -
-only entered the limited API at 3.11; below that floor, or on free-threaded builds (where
+only entered the limited API at 3.10; below that floor, or on free-threaded builds (where
 `Py_LIMITED_API` and `Py_GIL_DISABLED` are mutually incompatible per PEP 703 - `setup.py` checks
 `sysconfig.get_config_var("Py_GIL_DISABLED")`), `setup.py` falls back to a normal, version-specific
-extension instead. `[tool.cibuildwheel]` builds `cp311-abi3` and `cp3XXt`
+extension instead. `[tool.cibuildwheel]` builds `cp310-abi3` and `cp3XXt`
 separately for exactly this reason; a real local `cibuildwheel` run confirmed `auditwheel repair`
-correctly relabels the output to `cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64`. One real
+correctly relabels the output to `cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64`. One real
 compile-time incompatibility found and fixed: `from cpython cimport array` (added for fast
 `array.array` construction) reaches into CPython-internal `arrayobject`/`PyTypeObject` struct
 layout that doesn't exist under the limited API (GCC: "invalid use of incomplete typedef
@@ -658,7 +658,7 @@ just eyeballing the code.
 **Correctness verification:** full test suite (437/437) passes with the compiled extension active,
 with `RP2040PY_SKIP_CYTHON=1` forcing the pure-Python path, and with the extension never built at
 all - each checked against the *actual installed wheel* (not just in-place `.so` files) in clean
-venvs on CPython 3.10, 3.11 (abi3), 3.12 (loading the 3.11-built `.abi3.so` unmodified), and 3.14
+venvs on CPython 3.10, 3.10 (abi3), 3.12 (loading the 3.10-built `.abi3.so` unmodified), and 3.14
 free-threaded (falls back to a normal per-version build, confirmed via its `cp314-cp314t` wheel
 tag). Two real correctness bugs were caught this way, not by reasoning about the port in the
 abstract:
@@ -700,6 +700,86 @@ abstract:
   still spends real time in still-Python peripherals (DMA, PIO, USB, SPI) this port doesn't touch -
   but closing most of the original gap, rather than capturing only ~5-20% of it, validates that the
   "type the fields, not the methods" theory was the actual bug, not "Cython just doesn't help here."
+
+### Follow-up: two more boxing sources found by reading the generated C, not by guessing
+
+**Status: implemented and merged.** The ~4x above still left a large gap versus the isolated
+~10.9x ceiling and versus PyPy (`docs/PORTING.md`'s synthetic instructions/sec table put PyPy at
+~16x pure-Python). Both remaining gaps traced back to real Python-C-API traffic still hiding
+*inside* code that looked fully C-typed on a first read - found by generating `cython -a`'s
+annotated C (`cython -a _rp2040.pyx` / `_cortex_m0_core.pyx`) and grepping the output for
+`PyNumber_And`/`__Pyx_PyLong_From_*`/`__Pyx_PyLong_As_*` rather than trusting the yellow/white
+annotation coloring alone.
+
+1. **`RP2040.read_uint32/16/8` and `write_uint32/16/8` took an untyped `address`/`value`
+   parameter.** `cpdef unsigned int read_uint32(self, address)` with no type on `address` means
+   Cython treats it as a plain `object` - so even though every real call site on the hot path
+   (`execute_instruction`'s opcode fetch, every `op_*` load/store handler) passes an already-typed
+   `unsigned int` C local or memoryview element, Cython has to box that value into a real `PyLong`
+   *at the call site* before the call, and the `address & 0xFFFFFFFF` masking on entry then runs
+   as Python bigint arithmetic on the boxed value instead of a single C `AND`. Fixed by retyping
+   `address`/`value` as `long long` in both `_rp2040.pyx` and `_rp2040.pxd` (matching `_bit.pyx`'s
+   own `u32`/`s32` convention, not `unsigned int` - a `long long` round-trips negative/oversized
+   Python ints via a plain C `&`, the same as the removed `object` parameter did, so out-of-range
+   callers elsewhere in the codebase keep working instead of hitting `OverflowError`). `value` on
+   `write_uint32` specifically needed a caller audit first (`sio.write_uint32`'s hardware-divider
+   emulation relies on receiving the *true signed* Python value, per the existing "sign-preservation
+   bug" entry above) - confirmed safe since a `long long` preserves sign and magnitude for every
+   real caller (register-derived values only, all comfortably inside `long long`'s range).
+
+2. **A bare `0xFFFFFFFF`-style literal is not a C literal to Cython - it's a Python `int`
+   constant.** This is the bigger one. Any hex literal that doesn't fit inside a signed 32-bit
+   `int` (i.e. `0x80000000` through `0xFFFFFFFF`) is parsed by Cython as a Python object constant
+   unless explicitly suffixed (`0xFFFFFFFFU`) or cast. That meant `n & 0xFFFFFFFF` - even where `n`
+   is a genuine `cdef long long`/`unsigned int` local - silently compiled to
+   `PyNumber_And(__Pyx_PyLong_From_PY_LONG_LONG(n), <boxed 0xFFFFFFFF>)` followed by
+   `__Pyx_PyLong_As_unsigned_int(...)`: a full box, a Python-level bigint AND, and an unbox, on
+   what looked like (and was written to be) a single C instruction. This exact pattern was in
+   `_bit.pyx`'s `u32()`/`s32()` themselves - the two helpers this whole port's docstrings hold up
+   as the "genuinely C-typed" answer to the first attempt's boxing bug - so every call to `u32()`/
+   `s32()` anywhere in the interpreter was paying this tax. It was also directly inline at ~30 more
+   sites across `_cortex_m0_core.pyx`/`_rp2040.pyx`, most critically `core.registers[15] =
+   (core.registers[15] + 2) & 0xFFFFFFFF` (the PC increment - executed on literally every
+   instruction, 8 call sites) and `core.n = (result & 0x80000000) != 0` (the N-flag update in
+   `add_update_flags`/`subtract_update_flags` and ~15 `op_*` handlers - executed on essentially
+   every arithmetic/logical instruction). Verified in isolation first (a standalone 4-variant `.pyx`
+   confirmed a bare literal boxes while `<long long>0xFFFFFFFF`/`0xFFFFFFFFU`/a `cdef long long`
+   module constant all compile to a single C `&`), then fixed by mechanically appending the `U`
+   suffix to every literal in `{0xFFFFFFFF, 0x80000000, 0xFFFFFFFC, 0xFFFFFFFE, 0xFFFFFFFD,
+   0xFFFFFFF9, 0xFFFFFFF1, 0xFFFF0000, 0xF0000000}` across all three `.pyx` files (~78 sites) -
+   confirmed each one now compiles to plain C by re-reading the generated C, not just re-running
+   the benchmark and assuming.
+
+**Measured results after both fixes** (same machine as above, CPython 3.10, abi3 build):
+
+- *Synthetic* (`rp2040py bench --instructions 10000000`, ADDS/SUBS mix): native throughput went
+  from ~1.7M instr/sec to **~5.2M instr/sec** - roughly another 3x on top of the already-landed
+  Cython port, and ~5.5x over the pure-Python baseline on this machine (vs. the ~4x measured
+  above before this follow-up).
+- *Real firmware boot* (MicroPython 1.28.0 + littlefs, boot to first `print()`, same fixture as
+  the README's table): **46.65s -> 33.90s**, ~27% faster wall-clock. Smaller than the synthetic
+  win because a real boot spends a large, unchanged share of its time in still-Python peripherals
+  (UART, SSI/littlefs, USB) that this port never touched - the synthetic benchmark is 100% inside
+  the code paths these two fixes actually touch, a real boot isn't.
+- Still behind PyPy on both measures (PyPy: ~40M instr/sec synthetic, 8.75s real boot on the same
+  machine) - closer than before, not caught up. The remaining gap is architectural, not another
+  hidden-boxing bug: PyPy's trace JIT specializes the *actual* dynamic instruction mix at runtime,
+  where this port dispatches through a fixed, ahead-of-time C function-pointer table sized for the
+  worst case every time.
+- `PYTHON_JIT=1` (CPython 3.14's experimental tier-2 JIT) remains slightly *slower* than
+  `PYTHON_JIT=0` for native mode even after these fixes (~4.7M vs. ~5.2M instr/sec, synthetic) -
+  unaffected by either fix since both touched code that already ran outside the CPython bytecode
+  interpreter. The outer driving loop (`Simulator.execute`/`_bench_synthetic`) is thin Python
+  bytecode that immediately calls into the now much-faster C extension per instruction; CPython's
+  tier-2 JIT's specialization/instrumentation bookkeeping is pure overhead on a loop that does
+  almost no work at the bytecode level to begin with. Not something this project's code controls.
+
+**Lesson for future work on these three files:** `cython -a`'s color-coded HTML is a reasonable
+first pass, but its score numbers are not a reliable 0-9 scale and both bugs above were found only
+by grepping the *generated C* for `PyNumber_*`/`__Pyx_PyLong_*` and reading the surrounding
+function, not by trusting the annotation view. Any new arithmetic touching a literal at or above
+`0x80000000` needs the same treatment (`U`/`LL`/`ULL` suffix, or a `cdef` constant) or it will
+silently re-introduce this exact bug.
 
 ## littlefs persistence to the host `--littlefs` image file — not started
 

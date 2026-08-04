@@ -48,7 +48,7 @@ __all__ = (
 
 def _result(future: "Future[_T]", timeout: "float | None") -> _T:
     """future.result(timeout), raising the builtin TimeoutError uniformly - concurrent.futures'
-    own TimeoutError is a distinct, unrelated class on Python <3.11, so plain `except TimeoutError`
+    own TimeoutError is a distinct, unrelated class on Python <3.10, so plain `except TimeoutError`
     would otherwise silently miss "still queued behind other work" timeouts on those versions."""
     try:
         return future.result(timeout)

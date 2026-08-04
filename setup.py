@@ -15,11 +15,11 @@ Env vars:
   regardless of whether Cython/a C compiler are actually available (e.g. for a deliberately "pure"
   release artifact rather than a best-effort one).
 
-Stable ABI (abi3): built against Py_LIMITED_API for CPython 3.11+ - its buffer-protocol support,
-needed by this code's heavy use of typed memoryviews, only entered the limited API at 3.11. Below
+Stable ABI (abi3): built against Py_LIMITED_API for CPython 3.10+ - its buffer-protocol support,
+needed by this code's heavy use of typed memoryviews, only entered the limited API at 3.10. Below
 that floor, or on free-threaded builds (Py_LIMITED_API and Py_GIL_DISABLED are mutually
 incompatible per PEP 703), falls back to a normal, version-specific extension. Must match
-[tool.cibuildwheel] in pyproject.toml, which builds cp311-abi3 and cp3XXt separately for exactly
+[tool.cibuildwheel] in pyproject.toml, which builds cp310-abi3 and cp3XXt separately for exactly
 this reason.
 """
 
@@ -91,7 +91,7 @@ if _use_abi3():
     from wheel.bdist_wheel import bdist_wheel
 
     # py_limited_api=True on the Extension above tells Cython/the compiler to build against the
-    # limited API; this subclass is what actually tags the *wheel* filename as cp311-abi3-* -
+    # limited API; this subclass is what actually tags the *wheel* filename as cp310-abi3-* -
     # they're two separate settings, not one.
     class _bdist_wheel_abi3(bdist_wheel):
         def finalize_options(self):

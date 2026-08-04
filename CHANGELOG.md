@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the full writeup and [README.md#performance](README.md#performance) for the short version.
 - `RP2040PY_SKIP_CYTHON=1` (runtime) and `RP2040PY_SKIP_NATIVE_BUILD=1` (build-time) env vars to
   opt out of the native backend explicitly.
-- `cp311-abi3` stable-ABI wheels: one compiled wheel covers every CPython 3.11+ interpreter instead
+- `cp310-abi3` stable-ABI wheels: one compiled wheel covers every CPython 3.10+ interpreter instead
   of one per minor version (built via `cibuildwheel`, `Py_LIMITED_API`). Free-threaded builds and
   PyPy get a normal, version-specific build (abi3 and free-threading are mutually incompatible;
   PyPy's `cpyext` C-API emulation is slower than PyPy's own JIT for this kind of code, so

@@ -241,7 +241,7 @@ callback style, and cancellation of not-yet-started calls, all for free. (An ear
 this hand-rolled the queue with a `deque` + a `Future`-per-call + a `threading.Timer` timeout
 watchdog; it worked, but was substantially more code for the same guarantees the stdlib already
 provides.) `concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class,
-distinct from the builtin `TimeoutError`, until Python 3.11 - `_result()`/`_await()` in
+distinct from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in
 `mp_device.py` normalize all three to the builtin one so `except TimeoutError` behaves the same
 everywhere on the 3.10 floor this project supports.
 
@@ -441,12 +441,12 @@ RAM fetches), and a firmware mode that boots a real image and runs a script to a
 REPL/`--expect-text` match, the same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise.
 Measured on this machine:
 
-| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
-|---|---|---|
-| CPython 3.10 | 499,806 | 188.98s (342,244 steps/sec) |
-| CPython 3.10 + `rp2040py.native` (Cython) | 2,049,726 (~4.1x) | 46.65s (~4.1x, 1,386,605 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 961,218 (~1.9x) | 113.77s (~1.7x, 568,486 steps/sec) |
-| PyPy 3.10 | 37,989,746 (~76x) | 11.59s (~16x, 5,580,638 steps/sec) |
+| Interpreter                               | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
+| ----------------------------------------- | ---------------------------- | ----------------------------------------------------- |
+| CPython 3.10                              | 499,806                      | 188.98s (342,244 steps/sec)                           |
+| CPython 3.10 + `rp2040py.native` (Cython) | 2,049,726 (~4.1x)            | 46.65s (~4.1x, 1,386,605 steps/sec)                   |
+| CPython 3.14 + `PYTHON_JIT=1`             | 961,218 (~1.9x)              | 113.77s (~1.7x, 568,486 steps/sec)                    |
+| PyPy 3.10                                 | 37,989,746 (~76x)            | 11.59s (~16x, 5,580,638 steps/sec)                    |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
@@ -486,7 +486,7 @@ Two mitigations, worth combining:
   speedup in local benchmarking (once warmed up) and comfortably completes the same MicroPython +
   littlefs boot in well under a minute. Note `--no-dev` (or a separate PyPy-only sync): the `dev`
   dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
-  ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
+  ≥3.10, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
   mypy/ruff/pytest tooling, not for running the emulator itself, whose only runtime dependency
   (`pyelftools`, for `--bootrom` ELF parsing) is a pure-Python wheel with no PyPy-specific build
   issues of its own. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a

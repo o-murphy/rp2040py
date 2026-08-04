@@ -79,7 +79,7 @@ fallback_version = "0.0.0.dev0"
 [tool.cibuildwheel]
 # Use uv and build
 build-frontend = "build[uv]"
-# cp311-abi3 covers standard CPython 3.11+; free-threaded build (cp314t-*) is
+# cp310-abi3 covers standard CPython 3.10+; free-threaded build (cp314t-*) is
 # built separately because Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
 build = "cp310-* cp314t-*"
 test-extras = "fs"

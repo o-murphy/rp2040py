@@ -95,9 +95,18 @@ file already on disk:
 > | Interpreter | Time |
 > |---|---|
 > | CPython 3.10 | 188.98s |
-> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 46.65s (~4.1x) |
+> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 33.90s (~5.6x) |
 > | CPython 3.14 + `PYTHON_JIT=1` | 113.77s (~1.7x) |
-> | PyPy 3.10 | 11.59s (~16x) |
+> | PyPy 3.10 | 8.75s (~22x) |
+>
+> The `rp2040py.native` figure improved from an earlier 46.65s (~4.1x) after fixing two Cython
+> compilation gotchas in the bus/interpreter hot path (untyped `address`/`value` parameters forcing
+> a `PyLong` box on every memory access, and bare `0x80000000`+ hex literals silently compiling as
+> Python-object constants instead of C literals) - see
+> [docs/BACKLOG.md](docs/BACKLOG.md#follow-up-two-more-boxing-sources-found-by-reading-the-generated-c-not-by-guessing)
+> for the full writeup, including why PyPy's gap didn't close by the same amount (a real boot
+> spends a large, unchanged share of its time in still-Python peripheral emulation that these fixes
+> don't touch).
 >
 > The `rp2040py.native` row is what most installs actually get with no extra effort - see
 > [Performance](#performance) below. It doesn't help PyPy (compilation is deliberately skipped
@@ -340,7 +349,7 @@ All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(m
 ## Performance
 
 The interpreter core (`CortexM0Core`) and the memory bus's hot read/write paths are also available
-as a compiled Cython extension (`rp2040py.native`), giving roughly **4x** the instruction
+as a compiled Cython extension (`rp2040py.native`), giving roughly **5-6x** the instruction
 throughput of the pure-Python implementation on both a synthetic benchmark and a real MicroPython
 boot (see [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
 for the full measured breakdown).
