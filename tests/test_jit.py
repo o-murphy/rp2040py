@@ -8,7 +8,14 @@ import pytest
 from rp2040py.jit.engine import JITEngine
 from rp2040py.memory_map import RAM_START_ADDRESS
 from rp2040py.rp2040 import RP2040
-from rp2040py.utils.assembler import opcode_b_t1, opcode_ldrb_reg, opcode_strb_reg, opcode_subs2
+from rp2040py.utils.assembler import (
+    opcode_b_t1,
+    opcode_ldmia,
+    opcode_ldrb_reg,
+    opcode_stmia,
+    opcode_strb_reg,
+    opcode_subs2,
+)
 
 BOOTROM_WORD_COUNT = 4 * 1024
 
@@ -30,6 +37,24 @@ def _bootrom_with_pattern_at(
 ) -> list[int]:
     words = [0] * BOOTROM_WORD_COUNT
     pattern = _memcpy_slow_lp_words(dst_reg, src_reg, count_reg, scratch_reg)
+    words[word_offset : word_offset + len(pattern)] = pattern
+    return words
+
+
+def _bulk_copy_words(dst_reg: int, src_reg: int, count_reg: int, reg_list: int) -> list[int]:
+    byte_step = reg_list.bit_count() * 4
+    ldmia = opcode_ldmia(src_reg, reg_list)
+    stmia = opcode_stmia(dst_reg, reg_list)
+    subs = opcode_subs2(count_reg, byte_step)
+    bcs = opcode_b_t1(2, -10)  # CS, branch back 10 bytes (to the ldmia)
+    return [_pack_word(ldmia, stmia), _pack_word(subs, bcs)]
+
+
+def _bootrom_with_bulk_pattern_at(
+    word_offset: int, dst_reg: int, src_reg: int, count_reg: int, reg_list: int
+) -> list[int]:
+    words = [0] * BOOTROM_WORD_COUNT
+    pattern = _bulk_copy_words(dst_reg, src_reg, count_reg, reg_list)
     words[word_offset : word_offset + len(pattern)] = pattern
     return words
 
@@ -127,6 +152,123 @@ def test_jit_memcpy_slow_lp_matches_interpretation(monkeypatch, dst_reg, src_reg
     assert jit_core.c == ref_core.c
     assert jit_core.v == ref_core.v
     assert jit_core.cycles == ref_core.cycles
+
+
+def _run_bulk_interpreted(monkeypatch, dst_reg, src_reg, count_reg, reg_list, dst_base, src_base, count, data):
+    monkeypatch.delenv("RP2040PY_ENABLE_JIT", raising=False)
+    rp2040 = RP2040()
+    entry_pc = 0x100
+    rp2040.load_bootrom(_bootrom_with_bulk_pattern_at(entry_pc // 4, dst_reg, src_reg, count_reg, reg_list))
+    for i, byte in enumerate(data):
+        rp2040.write_uint8(src_base + i, byte)
+
+    core = rp2040.core
+    core.registers[dst_reg] = dst_base
+    core.registers[src_reg] = src_base
+    # The real routine's own pre-loop `sub r2, #byte_step` already happened by the time execution
+    # reaches the loop's own entry (the ldmia) - see _BulkCopyBlock's class docstring.
+    byte_step = reg_list.bit_count() * 4
+    core.registers[count_reg] = count - byte_step
+    core.pc = entry_pc
+    core.cycles = 0
+
+    exit_pc = entry_pc + 8
+    steps = 0
+    while core.pc != exit_pc:
+        rp2040.step()
+        steps += 1
+        if steps > (count // byte_step) * 8 + 8:
+            raise AssertionError("interpreted loop did not terminate as expected")
+
+    return rp2040, core, steps
+
+
+def _run_bulk_jit(monkeypatch, dst_reg, src_reg, count_reg, reg_list, dst_base, src_base, count, data):
+    monkeypatch.setenv("RP2040PY_ENABLE_JIT", "1")
+    rp2040 = RP2040()
+    entry_pc = 0x100
+    rp2040.load_bootrom(_bootrom_with_bulk_pattern_at(entry_pc // 4, dst_reg, src_reg, count_reg, reg_list))
+    for i, byte in enumerate(data):
+        rp2040.write_uint8(src_base + i, byte)
+
+    core = rp2040.core
+    core.registers[dst_reg] = dst_base
+    core.registers[src_reg] = src_base
+    byte_step = reg_list.bit_count() * 4
+    core.registers[count_reg] = count - byte_step
+    core.pc = entry_pc
+    core.cycles = 0
+
+    exit_pc = entry_pc + 8
+    jit_steps = 0
+    while core.pc != exit_pc:
+        rp2040.step()
+        jit_steps += 1
+        if jit_steps > 4:
+            raise AssertionError("JIT-enabled loop took more than one interpreted iteration plus the compiled tail")
+
+    return rp2040, core, jit_steps
+
+
+@pytest.mark.parametrize(
+    ("dst_reg", "src_reg", "count_reg", "reg_list"),
+    [
+        (0, 1, 2, 0b01111000),  # the real bootrom's own assignment: r0/r1/r2, {r3,r4,r5,r6}
+        (5, 6, 4, 0b00000111),  # different registers/reg_list - proves detection isn't hardcoded
+    ],
+)
+def test_jit_bulk_copy_matches_interpretation(monkeypatch, dst_reg, src_reg, count_reg, reg_list):
+    byte_step = reg_list.bit_count() * 4
+    src_base = RAM_START_ADDRESS + 0x1000
+    dst_base = RAM_START_ADDRESS + 0x2000
+    count = byte_step * 5  # 5 full blocks
+    data = bytes((i * 11 + 5) & 0xFF for i in range(count))
+
+    ref_rp2040, ref_core, steps = _run_bulk_interpreted(
+        monkeypatch, dst_reg, src_reg, count_reg, reg_list, dst_base, src_base, count, data
+    )
+    jit_rp2040, jit_core, jit_steps = _run_bulk_jit(
+        monkeypatch, dst_reg, src_reg, count_reg, reg_list, dst_base, src_base, count, data
+    )
+
+    assert steps > 1  # sanity: the interpreted reference really did loop multiple times
+    assert jit_steps == 4
+
+    for i in range(count):
+        assert ref_rp2040.read_uint8(dst_base + i) == data[i]
+        assert jit_rp2040.read_uint8(dst_base + i) == data[i]
+
+    assert jit_core.registers == ref_core.registers
+    assert jit_core.n == ref_core.n
+    assert jit_core.z == ref_core.z
+    assert jit_core.c == ref_core.c
+    assert jit_core.v == ref_core.v
+    assert jit_core.cycles == ref_core.cycles
+
+
+def test_jit_bulk_copy_ignores_non_matching_code(jit_rp2040):
+    # STMIA uses a different register list than LDMIA - must not be detected.
+    entry_pc = 0x100
+    words = [0] * BOOTROM_WORD_COUNT
+    ldmia = opcode_ldmia(1, 0b01111000)
+    stmia = opcode_stmia(0, 0b00111000)  # NOT the same reg_list
+    subs = opcode_subs2(2, 16)
+    bcs = opcode_b_t1(2, -10)
+    words[entry_pc // 4 : entry_pc // 4 + 2] = [_pack_word(ldmia, stmia), _pack_word(subs, bcs)]
+    jit_rp2040.load_bootrom(words)
+
+    assert jit_rp2040.jit is not None
+    assert entry_pc not in jit_rp2040.jit._blocks
+
+
+def test_jit_bulk_copy_write_invalidates_cached_block(jit_rp2040):
+    entry_pc = 0x100
+    jit_rp2040.load_bootrom(_bootrom_with_bulk_pattern_at(entry_pc // 4, 0, 1, 2, 0b01111000))
+    assert entry_pc in jit_rp2040.jit._blocks
+
+    jit_rp2040.write_uint32(entry_pc, 0)
+
+    assert entry_pc not in jit_rp2040.jit._blocks
 
 
 def test_jit_disabled_by_default(monkeypatch):

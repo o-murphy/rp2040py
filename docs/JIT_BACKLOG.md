@@ -225,15 +225,52 @@ though it only fires on a fraction of calls - appears to disrupt how well PyPy c
 "check-count × cost-per-check" - *where* the check sits in the hot path matters independently of
 how often it fires.
 
-**What would actually be needed to reopen this.** Both structural fixes suggested after the first
-attempt are now tried and both net negative. The one remaining lever, per the original
-1.21-vs-1.28 investigation in `docs/BACKLOG.md`: target the *actual* bulk-copy loop
-(`ldmia`/`stmia`-based, word-aligned), where the real instruction volume is - `__memcpy_slow_lp`
-was always just the ≤3-byte tail handler, never the dominant path. Detecting and compiling a
-multi-word unrolled loop is meaningfully harder than either of this phase's two attempts (more
-instruction variety, register-list handling for `ldmia`/`stmia` rather than three fixed registers),
-but it's the only remaining path to a check that fires often enough, on expensive-enough work, to
-plausibly pay for itself.
+**Third attempt: the actual bulk-copy loop (also DONE - also net negative, for a different
+reason).** Added a second pattern/block type, `_BulkCopyBlock` / `_decode_bulk_copy` in
+`jit/engine.py`, targeting `_memcpy_aligned`'s 16-byte loop (`ldmia src!,{...}; stmia dst!,{...};
+subs count,#byte_step; bcs` back to the `ldmia`) - confirmed against the real
+`bootrom_misc.S` source (not just reverse-engineered from bytes) that the loop transfers exactly
+`count // byte_step` blocks despite its transfer-then-check order, because the `sub count,
+#byte_step` immediately before the loop already accounts for one iteration's budget. `LDMIA`/
+`STMIA` in this codebase's own cost model never call `cycles_io()` (flat `1 + registers`
+regardless of address), so unlike the byte loop, this block never needs to decline on a
+region-boundary case. Reuses the same branch-only hook from the second attempt (both patterns
+share `_op_b_with_cond_jit`, keyed by branch target). `tests/test_jit.py` extended with the same
+register/flag/memory/cycle-count equivalence check, parametrized over two different
+register/register-list assignments. Found and fixed an unrelated pre-existing bug while writing
+the test: the test-only `opcode_b_t1` assembler helper (both here and in upstream rp2040js, which
+has the identical bug - `src/utils/assembler.ts`'s `opcodeBT1`) masked a shifted immediate to 9
+bits instead of 8, letting a negative offset's sign bit corrupt the adjacent `cond` field for
+some cond values; unrelated to the JIT itself, fixed and regression-tested separately.
+
+Result: net negative again, ~20-23% slower on real PyPy 3.10 (~14.0s disabled vs. ~17.2s enabled,
+2 runs each, same full 1.28 boot) - worse than either byte-loop attempt. Instrumentation explained
+why, and it wasn't the expected reason: the bulk loop fired only **35 times, moving 11,040 bytes
+total** - the byte-tail loop was still doing nearly all the work (71,262 hits, 855,300 bytes),
+completely unaffected by adding this second pattern. Re-reading `bootrom_misc.S`'s `__memcpy`
+entry point explains it: `__memcpy_slow_lp` isn't only a ≤3-byte tail handler - it's the *entire*
+copy path whenever source and destination aren't co-aligned (`sub r3,r0,r1; lsl r3,#30; bne
+__memcpy_slow_lp` skips the bulk path completely on any alignment mismatch). This matches what
+`docs/BACKLOG.md`'s original investigation already established: TinyUSB's `tu_fifo_read/write` and
+littlefs's `lfs2_bd_read()` - the dominant real callers - do small, often-misaligned transfers,
+exactly the shape that routes through the byte loop end-to-end rather than ever reaching the
+16-byte bulk path. "Target the dominant copy path" was the right instinct in the abstract, but
+*this specific firmware's* actual call pattern makes the byte loop dominant, not the bulk loop -
+a fact no amount of reading the bootrom's own source code in isolation would reveal, only tracing
+real execution does.
+
+**What would actually be needed to reopen this.** All three attempts - cheaper checks, checking
+less often, and targeting a different fixed pattern - converge on the same underlying issue:
+*hardcoding which loop to accelerate* is a losing bet, because which code is actually hot is a
+property of the calling firmware's behavior, not of any one routine's shape in isolation (the
+byte loop "looks like" a niche tail-case in the source, but dominates in practice for this
+workload). The lever that hasn't been tried: general hot-loop detection - track which backward
+branch targets actually get revisited often at runtime (for *this* specific program, not
+decided in advance), and compile whichever loop body is actually hot, whatever instructions it
+happens to contain - rather than pattern-matching a hardcoded shape. This is a substantially
+larger undertaking (generic codegen for arbitrary instruction sequences, not one fixed 4-instruction
+shape per pattern) and is the only remaining path that doesn't depend on correctly guessing, in
+advance, which specific routine happens to be hot in whichever firmware is running.
 
 **Phase 2 - a small, common subset of instruction patterns.**
 Expand codegen to the patterns that show up most often in hot loops per already-gathered profiling
