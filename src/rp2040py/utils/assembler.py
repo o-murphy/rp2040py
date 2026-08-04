@@ -43,7 +43,7 @@ def opcode_asrs_reg(rdn: int, rm: int) -> int:
 
 
 def opcode_b_t1(cond: int, imm8: int) -> int:
-    return (0b1101 << 12) | ((cond & 0xF) << 8) | ((imm8 >> 1) & 0x1FF)
+    return (0b1101 << 12) | ((cond & 0xF) << 8) | ((imm8 >> 1) & 0xFF)
 
 
 def opcode_b_t2(imm11: int) -> int:

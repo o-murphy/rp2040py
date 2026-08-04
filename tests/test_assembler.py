@@ -140,6 +140,14 @@ def test_b_t1():
     assert opcode_b_t1(1, 0x1F8) == 0xD1FC
 
 
+def test_b_t1_negative_offset_does_not_corrupt_cond():
+    # Regression test: a 9-bit mask on the shifted immediate let its sign-extended top bit bleed
+    # into the adjacent cond field for negative offsets - e.g. cond=2 (CS) silently became cond=3
+    # (CC) for imm8=-10, since (-10 >> 1) & 0x1FF has bit 8 set. cond=1 happened to already have
+    # that bit set too, masking the bug for the one case the pre-existing test above covered.
+    assert opcode_b_t1(2, -10) == 0xD2FB
+
+
 def test_b_t2():
     assert opcode_b_t2(0xFEC) == 0xE7F6
 
