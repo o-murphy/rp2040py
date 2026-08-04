@@ -10,6 +10,7 @@ either way it's downloaded automatically via ``rp2040py.cli.firmware_retrieve`` 
 import argparse
 import os
 import time
+from pathlib import Path
 
 from rp2040py.cli.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
@@ -42,7 +43,7 @@ def main() -> None:
     load_uf2(image_name, mcu)
 
     littlefs = "littlefs-spi.img"
-    if os.path.exists(littlefs):
+    if Path(littlefs).exists():
         print(f"Loading littlefs image {littlefs}")
         load_micropython_flash_image(littlefs, mcu)
 

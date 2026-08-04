@@ -20,6 +20,7 @@ def _mp_args(**overrides):
         "command": "pass",
         "module": None,
         "filename": None,
+        "log_level": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -33,7 +34,7 @@ class _FakeMicroPythonDevice:
     last_kwargs: "dict | None" = None
     last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None):
+    def __init__(self, image, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None, log_level=None):
         _FakeMicroPythonDevice.last_kwargs = {
             "image": image,
             "littlefs": littlefs,
@@ -121,7 +122,7 @@ def test_circuitpython_mode_skips_missing_fat12_image(fake_device):
     assert fake_device.last_kwargs["fat12"] is None
 
 
-def test_missing_image_prints_the_requested_identifier_not_none(capsys, monkeypatch):
+def test_missing_image_prints_the_requested_identifier_not_none(caplog, monkeypatch):
     # Regression test: this used to print the literal string "None" (the *result* of the failed
     # lookup) instead of what the user actually asked for.
     monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: None)
@@ -130,9 +131,8 @@ def test_missing_image_prints_the_requested_identifier_not_none(capsys, monkeypa
         cli._cmd_micropython(_mp_args(image="totally-bogus-version"))
 
     assert exc_info.value.code == 1
-    out = capsys.readouterr().out
-    assert "totally-bogus-version" in out
-    assert "None" not in out
+    assert "totally-bogus-version" in caplog.text
+    assert "None" not in caplog.text
 
 
 def test_exec_mode_writes_stdout_and_exits_zero_on_success(capsys, fake_device, monkeypatch):
@@ -171,6 +171,7 @@ def _kaluma_args(**overrides):
         "bootrom": None,
         "littlefs": "kaluma_littlefs.img",
         "filename": None,
+        "log_level": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -195,7 +196,7 @@ class _FakeKalumaDevice:
     last_instance: "_FakeKalumaDevice | None" = None
     last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, program=None, bootrom_words=None):
+    def __init__(self, image, littlefs=None, program=None, bootrom_words=None, log_level=None):
         _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs, "program": program}
         _FakeKalumaDevice.last_bootrom_words = bootrom_words
         _FakeKalumaDevice.last_instance = self
@@ -275,14 +276,14 @@ def test_kaluma_sends_no_nudge_bytes_after_start(fake_kaluma_device):
     assert bytes(fake_kaluma_device.last_instance.cdc.sent) == b""
 
 
-def test_kaluma_missing_image_prints_the_requested_identifier(capsys, monkeypatch):
+def test_kaluma_missing_image_prints_the_requested_identifier(caplog, monkeypatch):
     monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: None)
 
     with pytest.raises(SystemExit) as exc_info:
         cli._cmd_kaluma(_kaluma_args(image="totally-bogus-version"))
 
     assert exc_info.value.code == 1
-    assert "totally-bogus-version" in capsys.readouterr().out
+    assert "totally-bogus-version" in caplog.text
 
 
 def test_kaluma_end_to_end_through_argparse(fake_kaluma_device):
@@ -370,9 +371,9 @@ def test_mklittlefs_end_to_end_through_argparse(tmp_path):
     assert image.exists()
 
 
-def test_mklittlefs_rejects_main_not_in_files_cleanly(capsys, tmp_path):
+def test_mklittlefs_rejects_main_not_in_files_cleanly(caplog, tmp_path):
     # Regression test: build_littlefs_image's ValueError for an unmatched --main used to bubble
-    # up as a raw Python traceback instead of the CLI's usual "error: ..." + exit(1) style.
+    # up as a raw Python traceback instead of a clean logged error + exit(1).
     pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
     app_src = tmp_path / "app.py"
     app_src.write_text("pass\n")
@@ -382,10 +383,10 @@ def test_mklittlefs_rejects_main_not_in_files_cleanly(capsys, tmp_path):
         cli.main(["mklittlefs", "-o", str(image), str(app_src), "--main", "not_in_files.py"])
 
     assert exc_info.value.code == 1
-    assert "error:" in capsys.readouterr().err
+    assert "not_in_files.py" in caplog.text
 
 
-def test_mklittlefs_rejects_existing_output_without_force(capsys, tmp_path):
+def test_mklittlefs_rejects_existing_output_without_force(caplog, tmp_path):
     pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
     app_src = tmp_path / "app.py"
     app_src.write_text("pass\n")
@@ -397,7 +398,7 @@ def test_mklittlefs_rejects_existing_output_without_force(capsys, tmp_path):
         cli.main(["mklittlefs", "-o", str(image), str(app_src)])
 
     assert exc_info.value.code == 1
-    assert "already exists" in capsys.readouterr().err
+    assert "already exists" in caplog.text
 
 
 def test_mklittlefs_force_overwrites_existing_output(tmp_path):
@@ -432,7 +433,7 @@ def test_mklittlefs_target_presets_block_size_and_count(tmp_path):
     assert image.stat().st_size == KALUMA_FS_BLOCKSIZE * KALUMA_FS_BLOCKCOUNT
 
 
-def test_mklittlefs_target_rejects_explicit_block_size_or_count(capsys, tmp_path):
+def test_mklittlefs_target_rejects_explicit_block_size_or_count(caplog, tmp_path):
     pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
     image = tmp_path / "out.img"
 
@@ -440,5 +441,5 @@ def test_mklittlefs_target_rejects_explicit_block_size_or_count(capsys, tmp_path
         cli.main(["mklittlefs", "-o", str(image), "--target", "kaluma", "--block-size", "4096"])
 
     assert exc_info.value.code == 1
-    assert "mutually exclusive" in capsys.readouterr().err
+    assert "mutually exclusive" in caplog.text
     assert not image.exists()

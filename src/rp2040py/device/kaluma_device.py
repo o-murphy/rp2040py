@@ -7,6 +7,7 @@ only `start()`/`stop()`/`.cdc` (inherited from `BaseDevice`).
 
 from rp2040py.device.base_device import BaseDevice
 from rp2040py.device.load_flash import load_kaluma_flash_image, load_kaluma_program
+from rp2040py.utils.logging import LogLevel
 
 __all__ = ("KalumaDevice",)
 
@@ -27,8 +28,9 @@ class KalumaDevice(BaseDevice):
         littlefs: "str | None" = None,
         program: "str | None" = None,
         bootrom_words: "list[int] | None" = None,
+        log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, bootrom_words=bootrom_words)
+        super().__init__(image, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
             load_kaluma_flash_image(littlefs, self.mcu)
         if program is not None:

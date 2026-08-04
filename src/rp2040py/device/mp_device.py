@@ -37,6 +37,7 @@ from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice, connect_blo
 from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
 from rp2040py.usb.cdc import USBCDC
+from rp2040py.utils.logging import LogLevel
 
 _T = TypeVar("_T")
 
@@ -133,8 +134,9 @@ class MicroPythonDevice(BaseDevice):
         fat12: "str | None" = None,
         circuitpython: bool = False,
         bootrom_words: "list[int] | None" = None,
+        log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, bootrom_words=bootrom_words)
+        super().__init__(image, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
             load_micropython_flash_image(littlefs, self.mcu)
         if fat12 is not None:
