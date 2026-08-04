@@ -55,22 +55,35 @@ _NATIVE_DIR = Path("src/rp2040py/native")
 # the shipped wheel, only symbols the (much larger, unstripped) sdist->local rebuild path needs.
 _DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
 
+# -O3, not -O0: an earlier version of this project's sibling (py_ballisticcalc.exts/setup.py, the
+# pattern this file mirrors) shipped exactly this list with -O0 instead - debug flags left in from
+# a troubleshooting session and never reverted, silently building its C extensions fully
+# unoptimized. Found by reading that file side by side with this one while chasing an unrelated
+# performance question here; -O3 is deliberate, not a typo for the more conservative -O2 - the
+# isolated Cython-vs-boxing win this module depends on (see docs/BACKLOG.md) wants every
+# optimization pass available, and this is a small, self-contained extension where -O3's usual
+# risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
 if platform.system() == "Windows":
     _EXTRA_COMPILE_ARGS = ["/O2", "/W3"]
     _EXTRA_LINK_ARGS: list[str] = []
+elif platform.system() == "Darwin":
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
+    # No -Wl,-strip-all here: that's GNU ld syntax (see the Linux branch below) - Apple's linker
+    # rejects it outright ("ld: unknown options: -strip-all"), which broke every macOS wheel build
+    # the one time this was tried unconditionally on "not Windows" instead of "Linux specifically"
+    # (a real, CI-caught regression, not a hypothetical). Apple's ld does have its own strip flags
+    # (-S/-x), but skipping strip here entirely rather than guessing at one - this project has no
+    # macOS runner to actually verify a replacement against, and strip is a binary-size nice-to-
+    # have (confirmed no speed difference on Linux), not worth a second unverified platform-specific
+    # guess.
+    _EXTRA_LINK_ARGS = []
 else:
-    # -O3, not -O0: an earlier version of this project's sibling (py_ballisticcalc.exts/setup.py,
-    # the pattern this file mirrors) shipped exactly this list with -O0 instead - debug flags left
-    # in from a troubleshooting session and never reverted, silently building its C extensions
-    # fully unoptimized. Found by reading that file side by side with this one while chasing an
-    # unrelated performance question here; -O3 is deliberate, not a typo for the more conservative
-    # -O2 - the isolated Cython-vs-boxing win this module depends on (see docs/BACKLOG.md) wants
-    # every optimization pass available, and this is a small, self-contained extension where -O3's
-    # usual risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
     _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
     # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
     # wheel, marginally faster load - doesn't touch the optimizations above, which happen at
-    # compile time on the .c GCC/Clang already emitted from Cython's own generated source).
+    # compile time on the .c GCC/Clang already emitted from Cython's own generated source). GNU ld
+    # syntax specifically - verified Linux-only, see the Darwin branch above for why it isn't
+    # shared with macOS.
     _EXTRA_LINK_ARGS = [] if _DISABLE_STRIP else ["-Wl,-strip-all"]
 
 
