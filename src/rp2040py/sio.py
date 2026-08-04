@@ -8,6 +8,14 @@ if TYPE_CHECKING:
 
 __all__ = ("RPSIO",)
 
+# A variable, not an inline literal, at the two logger.warning() call sites below - matches
+# _rp2040.py's own LOG_NAME convention, and (not just style) ruff's PLE1205 can statically count
+# %-placeholders in a literal string argument but not in a variable, so an inline "SIO" literal
+# gets misread as a stdlib logging.warning(msg, *args)-style call with a stray extra positional
+# arg (this project's own Logger Protocol is warning(component_name, message), a different
+# signature entirely) - a real, reproduced pre-commit failure, not just an IDE hint.
+LOG_NAME = "SIO"
+
 CPUID = 0x000
 
 # GPIO
@@ -254,7 +262,7 @@ class RPSIO:
         if offset == INTERP1_ACCUM1_ADD:
             return self.interp1.smresult1
 
-        print(f"warning: Read from invalid SIO address: {offset:x}")
+        self.rp2040.logger.warning(LOG_NAME, f"Read from invalid SIO address: {offset:x}")
         return 0xFFFFFFFF
 
     def write_uint32(self, offset: int, value: int) -> None:
@@ -375,7 +383,7 @@ class RPSIO:
         elif offset == INTERP1_BASE_1AND0:
             self.interp1.set_base01(value)
         else:
-            print(f"warning: Write to invalid SIO address: {offset:x}, value={value:x}")
+            self.rp2040.logger.warning(LOG_NAME, f"Write to invalid SIO address: {offset:x}, value={value:x}")
 
         pins_to_update = (self.gpio_value ^ prev_gpio_value) | (self.gpio_output_enable ^ prev_gpio_output_enable)
         if pins_to_update:

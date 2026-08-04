@@ -4,8 +4,8 @@ Requires the optional ``littlefs-python`` dependency (``pip install rp2040py[fs]
 lazily here so the rest of the CLI stays usable without it.
 """
 
-import os
 from collections.abc import Sequence
+from pathlib import Path
 
 from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKCOUNT, MICROPYTHON_FS_BLOCKSIZE
 
@@ -59,10 +59,10 @@ def build_littlefs_image(
     if disk_version not in LITTLEFS_DISK_VERSIONS:
         raise ValueError(f"unknown disk_version {disk_version!r}; expected one of {tuple(LITTLEFS_DISK_VERSIONS)}")
 
-    if os.path.exists(output) and not force:
+    if Path(output).exists() and not force:
         raise ValueError(f"{output!r} already exists - pass --force to overwrite it")
 
-    basenames = [os.path.basename(f) for f in files]
+    basenames = [Path(f).name for f in files]
     if main is not None and main not in basenames:
         raise ValueError(f"--main {main!r} must match the basename of one of the given files: {basenames}")
 
@@ -71,7 +71,7 @@ def build_littlefs_image(
     # silently overwrite one another - whichever gets written last wins, with no warning.
     dest_names: dict[str, str] = {}
     for filename in files:
-        dest_name = "main.py" if os.path.basename(filename) == main else os.path.basename(filename)
+        dest_name = "main.py" if Path(filename).name == main else Path(filename).name
         if dest_name in dest_names:
             raise ValueError(f"{filename!r} and {dest_names[dest_name]!r} would both be written as {dest_name!r}")
         dest_names[dest_name] = filename

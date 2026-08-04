@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional Cython-accelerated backend (`rp2040py.native`): a fully-typed port of `CortexM0Core`'s
+  ~90 instruction handlers (real C function-pointer dispatch, not a Python-level table) and
+  `RP2040`'s bus hot paths (`read`/`write_uint8/16/32`). Built automatically when a C compiler is
+  available - falls back transparently to the existing pure-Python implementation otherwise, with
+  identical behavior either way. Measured ~4x instruction throughput on both a synthetic benchmark
+  and a real MicroPython 1.21 boot; see
+  [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
+  for the full writeup and [README.md#performance](README.md#performance) for the short version.
+- `RP2040PY_SKIP_CYTHON=1` (runtime) and `RP2040PY_SKIP_NATIVE_BUILD=1` (build-time) env vars to
+  opt out of the native backend explicitly.
+- `cp310-abi3` stable-ABI wheels: one compiled wheel covers every CPython 3.10+ interpreter instead
+  of one per minor version (built via `cibuildwheel`, `Py_LIMITED_API`). Free-threaded builds and
+  PyPy get a normal, version-specific build (abi3 and free-threading are mutually incompatible;
+  PyPy's `cpyext` C-API emulation is slower than PyPy's own JIT for this kind of code, so
+  compilation is skipped there rather than attempted).
+- `--log-level {debug,info,warning,error}` on every subcommand: one flag now controls both this
+  CLI's own progress/error messages (stdlib `logging`, replacing what used to be raw `print()`
+  calls throughout `cli/__init__.py`) and the emulator's internal component logger
+  (`rp2040.logger`/`ConsoleLogger`, previously only settable per call site, hardcoded). Left unset,
+  both keep their existing defaults (progress messages at info, component logger at error) - no
+  behavior change unless the flag is actually passed.
+- `check_flash_image_size()` (`device/load_flash.py`): validates a `--littlefs`/`--fat12` image is
+  exactly `block_size * block_count` bytes before loading it, raising a clear error instead of
+  silently loading a truncated filesystem (image smaller than expected) or overrunning past the end
+  of the flash region into whatever comes after it (image larger than expected - e.g. Kaluma's
+  128-block littlefs image loaded where MicroPython's 352-block one is expected) - the loader had no
+  bounds check of its own before this.
+
+### Fixed
+- `--littlefs`/`--fat12` on `micropython`/`kaluma`/`bench` no longer default to `littlefs.img`/
+  `fat12.img` in the current directory - a stray leftover image from an earlier step (e.g. a shared
+  CI working directory) used to get auto-loaded whenever one of those exact filenames happened to
+  exist, regardless of whether the running command actually wanted a filesystem at all, sometimes
+  hanging a boot that expected a clean image. Now only loaded when `--littlefs`/`--fat12` is passed
+  explicitly.
+- `firmware_retrieve.retrieve()`'s download had no timeout at all (`urllib.request.urlretrieve`
+  doesn't accept one) - a stuck connection (server never responds, or goes silent mid-transfer)
+  hung indefinitely with no feedback outside of CI's own outer `timeout` wrapper. Rewritten around
+  `urlopen(url, timeout=30)` (per socket operation - connect and each read - not the download as a
+  whole, so a slow-but-progressing transfer is unaffected) with manual chunked streaming; a partial
+  file left behind by a download that dies mid-transfer is now cleaned up so a retry re-downloads
+  instead of finding a corrupt "cached" image.
+
 ## [0.1.0] - 2026-08-04
 
 ### Fixed

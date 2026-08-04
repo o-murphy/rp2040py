@@ -32,12 +32,13 @@ Subcommands:
 
 import argparse
 import importlib.util
-import os
+import logging
 import struct
 import sys
 import time
 from collections.abc import Callable
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any
 
 from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
@@ -69,23 +70,44 @@ from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
 
+_logger = logging.getLogger(__name__)
+
 # mklittlefs's only dependency, littlefs-python, is the optional `fs` extra rather than a hard
 # runtime dependency - only register the subcommand (and thus advertise it in --help) when it's
 # actually installed, instead of adding it unconditionally and failing lazily once invoked.
 _HAS_LITTLEFS = importlib.util.find_spec("littlefs") is not None
 
+_LOG_LEVEL_CHOICES = ("debug", "info", "warning", "error")
+# The emulator's own component Logger (ConsoleLogger/LogLevel, see rp2040.logger) speaks a
+# different vocabulary from stdlib logging - notably WARN, not WARNING - so --log-level's stdlib-
+# style choices need translating rather than a 1:1 name lookup.
+_CONSOLE_LOG_LEVEL = {
+    "debug": LogLevel.DEBUG,
+    "info": LogLevel.INFO,
+    "warning": LogLevel.WARN,
+    "error": LogLevel.ERROR,
+}
+
+
+def _console_log_level(args: argparse.Namespace) -> LogLevel:
+    # Every rp2040.logger assignment below defaulted to ConsoleLogger(LogLevel.ERROR) before
+    # --log-level existed (bar `run`, which inherited RP2040's own DEBUG default by omission - an
+    # inconsistency fixed here rather than preserved) - ERROR is the fallback so leaving the flag
+    # unset changes nothing.
+    return _CONSOLE_LOG_LEVEL[args.log_level] if args.log_level else LogLevel.ERROR
+
 
 def _load_image(image_name: str, rp2040: RP2040) -> None:
     extension = image_name.rsplit(".", 1)[-1]
     if extension == "hex":
-        print(f"Loading hex image: {image_name}")
+        _logger.info("Loading hex image: %s", image_name)
         with open(image_name) as f:
             load_hex(f.read(), rp2040.flash, 0x10000000)
     elif extension == "uf2":
-        print(f"Loading uf2 image: {image_name}")
+        _logger.info("Loading uf2 image: %s", image_name)
         load_uf2(image_name, rp2040)
     else:
-        print(f"Unsupported file type: {extension}")
+        _logger.error("Unsupported file type: %s", extension)
         sys.exit(1)
 
 
@@ -100,14 +122,14 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
 
     path = retrieve(BOOTROM, source)
     if path is None:
-        print(f"Could not find bootrom: {source}")
+        _logger.error("Could not find bootrom: %s", source)
         sys.exit(1)
 
     extension = path.rsplit(".", 1)[-1].lower()
     if extension == "elf":
         from elftools.elf.elffile import ELFFile
 
-        print(f"Loading bootrom elf: {path}")
+        _logger.info("Loading bootrom elf: %s", path)
         with open(path, "rb") as f:
             elffile = ELFFile(f)
             segment = next(
@@ -115,11 +137,11 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
                 None,
             )
             if segment is None:
-                print(f"No PT_LOAD segment at address 0 found in {path}")
+                _logger.error("No PT_LOAD segment at address 0 found in %s", path)
                 sys.exit(1)
             data = segment.data()
     else:
-        print(f"Loading bootrom binary: {path}")
+        _logger.info("Loading bootrom binary: %s", path)
         with open(path, "rb") as f:
             data = f.read()
 
@@ -155,11 +177,12 @@ def _cmd_run(args: argparse.Namespace) -> None:
     mcu = simulator.rp2040
 
     mcu.load_bootrom(_resolve_bootrom_words(args.bootrom))
+    mcu.logger = ConsoleLogger(_console_log_level(args))
 
     _load_image(args.image, mcu)
 
     gdb_server = GDBTCPServer(simulator, args.gdb_port)
-    print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
+    _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
 
     def _on_byte(value: int) -> None:
         _buf_write(sys.stdout, value)
@@ -211,30 +234,37 @@ def _make_expect_text_watcher(expect_text: "str | None") -> "Callable[[bytes | b
 def _cmd_micropython(args: argparse.Namespace) -> None:
     image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
-        print(f"Could not find micropython image: {args.image}")
+        _logger.error("Could not find micropython image: %s", args.image)
         sys.exit(1)
 
-    print(f"Loading uf2 image: {image_name}")
-    littlefs = args.littlefs if not args.circuitpython and os.path.exists(args.littlefs) else None
-    fat12 = args.fat12 if args.circuitpython and os.path.exists(args.fat12) else None
+    _logger.info("Loading uf2 image: %s", image_name)
+    littlefs = (
+        args.littlefs if not args.circuitpython and args.littlefs is not None and Path(args.littlefs).exists() else None
+    )
+    fat12 = args.fat12 if args.circuitpython and args.fat12 is not None and Path(args.fat12).exists() else None
 
     if littlefs is not None:
-        print(f"Loading littlefs image: {littlefs}")
+        _logger.info("Loading littlefs image: %s", littlefs)
 
     if fat12 is not None:
-        print(f"Loading fat12 image: {fat12}")
+        _logger.info("Loading fat12 image: %s", fat12)
 
-    device = MicroPythonDevice(
-        image_name,
-        littlefs=littlefs,
-        fat12=fat12,
-        circuitpython=args.circuitpython,
-        bootrom_words=_resolve_bootrom_words(args.bootrom),
-    )
+    try:
+        device = MicroPythonDevice(
+            image_name,
+            littlefs=littlefs,
+            fat12=fat12,
+            circuitpython=args.circuitpython,
+            bootrom_words=_resolve_bootrom_words(args.bootrom),
+            log_level=_console_log_level(args),
+        )
+    except ValueError as exc:
+        _logger.error("%s", exc)
+        sys.exit(1)
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
-        print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
+        _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
 
     raw_repl_source = _raw_repl_source(args)
     if raw_repl_source is not None:
@@ -247,7 +277,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
             device.stop()
             sys.exit(130)
         except (TimeoutError, RawReplError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
+            _logger.error("%s", exc)
             device.stop()
             sys.exit(1)
         _buf_write(sys.stdout, stdout)
@@ -277,24 +307,32 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 def _cmd_kaluma(args: argparse.Namespace) -> None:
     image_name = retrieve(KALUMA, args.image)
     if image_name is None:
-        print(f"Could not find kaluma image: {args.image}")
+        _logger.error("Could not find kaluma image: %s", args.image)
         sys.exit(1)
 
-    print(f"Loading uf2 image: {image_name}")
-    littlefs = args.littlefs if os.path.exists(args.littlefs) else None
+    _logger.info("Loading uf2 image: %s", image_name)
+    littlefs = args.littlefs if args.littlefs is not None and Path(args.littlefs).exists() else None
     if littlefs is not None:
-        print(f"Loading littlefs image: {littlefs}")
+        _logger.info("Loading littlefs image: %s", littlefs)
 
     if args.filename is not None:
-        print(f"Loading program: {args.filename}")
+        _logger.info("Loading program: %s", args.filename)
 
-    device = KalumaDevice(
-        image_name, littlefs=littlefs, program=args.filename, bootrom_words=_resolve_bootrom_words(args.bootrom)
-    )
+    try:
+        device = KalumaDevice(
+            image_name,
+            littlefs=littlefs,
+            program=args.filename,
+            bootrom_words=_resolve_bootrom_words(args.bootrom),
+            log_level=_console_log_level(args),
+        )
+    except ValueError as exc:
+        _logger.error("%s", exc)
+        sys.exit(1)
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
-        print(f"RP2040 GDB Server ready! Listening on port {gdb_server.port}")
+        _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
 
     cdc = device.cdc
 
@@ -321,13 +359,13 @@ def _interpreter_label() -> str:
     return f"{impl} {'.'.join(str(part) for part in sys.version_info[:3])}"
 
 
-def _bench_synthetic(instruction_count: int, block_size: int) -> None:
+def _bench_synthetic(instruction_count: int, block_size: int, log_level: LogLevel) -> None:
     rp2040 = RP2040()
 
     from rp2040py.device.bootrom import BOOTROM_B1
 
     rp2040.load_bootrom(BOOTROM_B1)
-    rp2040.logger = ConsoleLogger(LogLevel.ERROR)
+    rp2040.logger = ConsoleLogger(log_level)
 
     core = rp2040.core
     addr = RAM_START_ADDRESS
@@ -352,7 +390,12 @@ def _bench_synthetic(instruction_count: int, block_size: int) -> None:
 
 
 def _bench_firmware(
-    image: str, littlefs: str | None, expect_text: str | None, timeout: float, bootrom: str | None = None
+    image: str,
+    littlefs: str | None,
+    expect_text: str | None,
+    timeout: float,
+    bootrom: str | None,
+    log_level: LogLevel,
 ) -> None:
     # Uses Simulator (not a bare RP2040) so the clock actually advances: real firmware relies on
     # timer-based busy-waits during boot (e.g. hardware_timer's timer_busy_wait_until()), and those
@@ -363,12 +406,16 @@ def _bench_firmware(
     clock = simulator.clock
 
     rp2040.load_bootrom(_resolve_bootrom_words(bootrom))
-    rp2040.logger = ConsoleLogger(LogLevel.ERROR)
+    rp2040.logger = ConsoleLogger(log_level)
 
     _load_image(image, rp2040)
 
     if littlefs:
-        load_micropython_flash_image(littlefs, rp2040)
+        try:
+            load_micropython_flash_image(littlefs, rp2040)
+        except ValueError as exc:
+            _logger.error("%s", exc)
+            sys.exit(1)
 
     current_line = ""
     found = False
@@ -422,10 +469,11 @@ def _bench_firmware(
 
 
 def _cmd_bench(args: argparse.Namespace) -> None:
+    log_level = _console_log_level(args)
     if args.image:
-        _bench_firmware(args.image, args.littlefs, args.expect_text, args.timeout, args.bootrom)
+        _bench_firmware(args.image, args.littlefs, args.expect_text, args.timeout, args.bootrom, log_level)
     else:
-        _bench_synthetic(args.instructions, args.block_size)
+        _bench_synthetic(args.instructions, args.block_size, log_level)
 
 
 _TARGET_FS_LAYOUTS = {
@@ -437,7 +485,7 @@ _TARGET_FS_LAYOUTS = {
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
     if args.target is not None and (args.block_size is not None or args.block_count is not None):
-        print("error: --target is mutually exclusive with --block-size/--block-count", file=sys.stderr)
+        _logger.error("--target is mutually exclusive with --block-size/--block-count")
         sys.exit(1)
 
     if args.target is not None:
@@ -457,9 +505,9 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
             force=args.force,
         )
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        _logger.error("%s", exc)
         sys.exit(1)
-    print(f"Wrote littlefs image: {args.output}")
+    _logger.info("Wrote littlefs image: %s", args.output)
 
     if sys.implementation.name == "pypy":
         # _os_exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
@@ -479,7 +527,10 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
 
 
 _IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"
+_IMAGE_PATH_HELP = "local .hex/.uf2 image path"
 _BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the default (B1, bundled - no download)"
+_EXPECT_TEXT_HELP = "stop once this text appears on the device's serial console"
+_LITTLEFS_HELP = "optional littlefs.img to load"
 
 
 def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
@@ -493,6 +544,8 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "gdb-port": {"type": int, "default": 3333},
         "gdb": {"action": "store_true"},
         "bootrom": {"help": _BOOTROM_HELP},
+        "expect-text": {"help": _EXPECT_TEXT_HELP},
+        "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
     }
     shared = argparse.ArgumentParser(add_help=False)
     for name in names:
@@ -501,8 +554,20 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
 
 
 def main(argv: "list[str] | None" = None) -> None:
-    parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
+    prolog, _ = __doc__.split("\n", 1)
+    parser = argparse.ArgumentParser(prog="rp2040py", description=prolog)
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
+    parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVEL_CHOICES,
+        default=None,
+        help=(
+            "verbosity for both this CLI's own progress/error messages and the emulator's "
+            "internal component logger (memory/peripheral access warnings, unimplemented "
+            "opcodes, ...) - unset keeps each at its existing default (progress messages at "
+            "info, component logger at error)"
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser(
@@ -510,19 +575,17 @@ def main(argv: "list[str] | None" = None) -> None:
         parents=[_shared_arg_parser("gdb-port", "bootrom")],
         help="run a native .hex/.uf2 image with a GDB server",
     )
-    run_parser.add_argument("--image", default="hello_uart.hex")
+    run_parser.add_argument("--image", default="hello_uart.hex", help=f"{_IMAGE_PATH_HELP} (default: %(default)s)")
     run_parser.set_defaults(func=_cmd_run)
 
     mp_parser = subparsers.add_parser(
         "micropython",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs")],
         help="run a MicroPython/CircuitPython UF2 image",
     )
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
-    mp_parser.add_argument("--expect-text")
     mp_parser.add_argument("--circuitpython", action="store_true")
-    mp_parser.add_argument("--littlefs", help="firmware mode: optional littlefs.img to load", default="littlefs.img")
-    mp_parser.add_argument("--fat12", help="firmware mode: optional fat12.img to load", default="fat12.img")
+    mp_parser.add_argument("--fat12", type=Path, help="optional fat12.img to load")
     mp_source_group = mp_parser.add_mutually_exclusive_group()
     mp_source_group.add_argument(
         "-c", dest="command", metavar="<command>", help="execute the given command on the device, then exit"
@@ -533,30 +596,30 @@ def main(argv: "list[str] | None" = None) -> None:
         metavar="<module>",
         help="import the given module on the device (approximates `-m`), then exit",
     )
-    mp_source_group.add_argument("filename", nargs="?", help="run the given local script file on the device, then exit")
+    mp_source_group.add_argument(
+        "filename", nargs="?", type=Path, help="run the given local script file on the device, then exit"
+    )
     mp_parser.set_defaults(func=_cmd_micropython)
 
     kaluma_parser = subparsers.add_parser(
         "kaluma",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs")],
         help="run a Kaluma UF2 image (interactive REPL only)",
     )
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
-    kaluma_parser.add_argument("--expect-text")
-    kaluma_parser.add_argument("--littlefs", help="optional littlefs.img to load", default="kaluma_littlefs.img")
     kaluma_parser.add_argument(
         "filename", nargs="?", help="local .js file to stage as the auto-run user program, then boot"
     )
     kaluma_parser.set_defaults(func=_cmd_kaluma)
 
     bench_parser = subparsers.add_parser(
-        "bench", parents=[_shared_arg_parser("bootrom")], help="benchmark instruction-dispatch throughput"
+        "bench",
+        parents=[_shared_arg_parser("bootrom", "expect-text", "littlefs")],
+        help="benchmark instruction-dispatch throughput",
     )
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")
     bench_parser.add_argument("--block-size", type=int, default=1000, help="synthetic mode: instructions per block")
-    bench_parser.add_argument("--image", help="firmware mode: path to a .hex or .uf2 image")
-    bench_parser.add_argument("--littlefs", help="firmware mode: optional littlefs.img to load")
-    bench_parser.add_argument("--expect-text", help="firmware mode: stop once this text appears on UART0")
+    bench_parser.add_argument("--image", help=f"firmware mode: {_IMAGE_PATH_HELP}")
     bench_parser.add_argument("--timeout", type=float, default=60.0, help="firmware mode: seconds before giving up")
     bench_parser.set_defaults(func=_cmd_bench)
 
@@ -564,11 +627,13 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser = subparsers.add_parser(
             "mklittlefs", help="build a littlefs image for `micropython`'s filesystem support"
         )
-        mklittlefs_parser.add_argument("files", nargs="*", help="source files to add, keeping their own basename")
+        mklittlefs_parser.add_argument(
+            "files", nargs="*", type=Path, help="source files to add, keeping their own basename"
+        )
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
         )
-        mklittlefs_parser.add_argument("-o", "--output", default="littlefs.img", help="output image path")
+        mklittlefs_parser.add_argument("-o", "--output", type=Path, default="littlefs.img", help="output image path")
         mklittlefs_parser.add_argument(
             "-f", "--force", action="store_true", help="overwrite `--output` if it already exists"
         )
@@ -595,6 +660,26 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.set_defaults(func=_cmd_mklittlefs)
 
     args = parser.parse_args(argv)
+
+    # format="%(message)s": without a handler configured anywhere, stdlib logging's own "handler
+    # of last resort" only ever emits WARNING+ (to stderr) - INFO-level calls like
+    # firmware_retrieve.py's "Found local image"/"Download: ..." progress messages would otherwise
+    # be silently dropped, a real UX regression from when they were plain print() calls. The
+    # plain-message format (no timestamp/level/logger-name prefix) keeps CLI output looking like
+    # the print() calls it replaced rather than diagnostic log noise - this is the application
+    # entry point, the conventional place for basicConfig(), not a library module like
+    # firmware_retrieve.py itself.
+    #
+    # Not basicConfig(..., force=True): force=True tears out *every* handler already on the root
+    # logger, including ones this process didn't install itself - e.g. pytest's caplog fixture
+    # attaches its own handler before each test, and this project's own tests call cli.main()
+    # repeatedly, so force=True would silently blank caplog's captures on the second call onward.
+    # basicConfig() without force is a no-op once a handler exists (from a prior main() call, or
+    # caplog's), which is what we want for the handler/format - but info (not warning) needs to
+    # keep being the *default* level on every call, not just the first, so --log-level still takes
+    # effect on repeated calls: setLevel() does that without touching any handler.
+    logging.basicConfig(format="%(message)s")
+    logging.getLogger().setLevel((args.log_level or "info").upper())
     args.func(args)
 
 

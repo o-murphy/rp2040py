@@ -1,7 +1,8 @@
 # Backlog / in-progress work notes
 
 Working notes for tasks that span multiple sessions. Not user-facing docs — see README.md /
-PORTING.md / CHANGELOG.md for those.
+PORTING.md / CHANGELOG.md for those. One item large enough to need its own file:
+[docs/JIT_BACKLOG.md](JIT_BACKLOG.md) (basic-block fusion / mini-JIT).
 
 ## SSI flash-write support (branch `feat/ssi-rw-support`)
 
@@ -371,17 +372,473 @@ reason to diverge - same reasoning already applied to the SSI flash-write gap ea
 file), this is not something to fix locally: doing so would mean diverging from the reference for
 no documented hardware reason. Closed - no action needed.
 
+**Update: the memcpy call-stack question above was chased further and resolved - see "HLE hook for
+bootrom `__memcpy`/`__memcpy_44`" below.** Walking up the call stack (via `lr` captured at
+bootrom's `__memcpy` entry, across both versions' full boot-to-first-`print()` runs) found 1.28's
+dominant callers are TinyUSB's `tu_fifo_read`/`tu_fifo_write` (confirmed field-for-field against
+`tu_fifo_t` by building MicroPython 1.28 from source with debug symbols), not littlefs/GC/qstr -
+full trail in that section. That in turn led to a genuine optimization opportunity (HLE-hooking the
+bootrom routine itself, since its call frequency and per-call cost were now both understood), also
+documented below.
+
 **Not started yet:**
-- Walking up the call stack from the hot `__memcpy_slow_lp` hits (via `lr`/stack contents at a
-  sampled PC hit) to find what in 1.28 calls into unaligned memcpy so much more than 1.21 - the one
-  remaining concrete, unexplained lead. Low priority given 1.28's firmware itself can't be changed
-  even once identified (see above) - worth doing only if it points at something *emulator*-side
-  again, the way the `write_uint32` find did.
 - PyPy 3.10 isn't obtainable in this sandbox for re-running any of this faster - `uv python
   install pypy-3.10` needs `downloads.python.org`, which this sandbox's network policy 403s
   (`gateway answered 403 to CONNECT`), same class of restriction as `micropython.org` elsewhere in
   this file. Not blocking (CPython profiling was sufficient here), but would speed up any follow-up
   tracing significantly if run somewhere unrestricted.
+
+## HLE hook for bootrom `__memcpy`/`__memcpy_44` — implemented, opt-in, measured net negative
+
+**Goal:** once the 1.21-vs-1.28 investigation above pinned down that real firmware's own `memcpy()`
+calls (TinyUSB's `tu_fifo_read`/`tu_fifo_write`, littlefs's `lfs2_bd_read()`) route through two
+fixed bootrom routines, and that they're interpreted one emulated Thumb instruction at a time like
+everything else, the natural next question was whether HLE-ing (high-level-emulating) just those
+two routines - replacing the interpreted copy loop with a native bulk copy - is worth doing as a
+real, general (not 1.28-specific) throughput win.
+
+**Design, implemented in `rp2040.py`/`cortex_m0_core.py`:**
+- `CortexM0Core.execute_instruction()` checks `core.pc` against `RP2040.hle_memcpy_entries` (a
+  `frozenset[int]`, computed once per `load_bootrom()` call, not per instruction) before the normal
+  fetch/decode/dispatch path. On a hit, `_hle_memcpy()` runs instead: reads `r0`/`r1`/`r2` (AAPCS
+  `dst`/`src`/`n`), calls `RP2040.bus_copy(dst, src, n)`, sets `pc = lr` (masking the Thumb bit),
+  and returns a rough (not cycle-accurate) `delta_cycles` estimate - aligned copies cost `~n//8`,
+  unaligned ones `~n*4` (matching `_memcpy_aligned`'s `ldmia`/`stmia` throughput vs.
+  `__memcpy_slow_lp`'s exact 4-instructions-per-byte, both confirmed against the real
+  `bootrom_misc.S` source) - so simulated-time-driven behavior elsewhere (SOF cadence, etc.) isn't
+  disturbed by treating the copy as instantaneous. `r0` is left holding the unchanged `dst`
+  (matching the real routines' own `mov r0, ip` tail); `r1`-`r3`/`ip` are left untouched, which is a
+  stricter subset of "undefined after call" (real `memcpy()` is free to clobber them) so this can't
+  violate the ABI; `r4`+ are never touched at all, matching the real routines' own push/pop of
+  whichever they use.
+- `RP2040.bus_copy(dst, src, n)`: a `bytearray` slice copy (`dst_buf[o:o+n] = src_buf[o:o+n]`) when
+  both ends land in RAM or flash (the common case) - correct even when overlapping, since slicing
+  the right-hand side first materializes an independent copy before assignment, giving memmove
+  semantics regardless of copy direction - falling back to a plain byte-by-byte bus copy (still
+  correct, just not the fast path) for anything else, e.g. touching peripheral space, which no real
+  firmware routes a `memcpy()` through but isn't assumed impossible here.
+- **Detecting where these two routines actually live: a whole-bootrom signature scan, not a
+  hardcoded address** (`_find_hle_memcpy_entries()`). Downloaded `b0.elf`/`b2.elf` via `--bootrom`
+  (this project already supports B0/B1/B2 - see the "Bootrom B0/B2 support" section below) and
+  found the routines' own machine code is byte-for-byte identical across all three revisions - only
+  their *position* in ROM differs (B0: `0x2888`/`0x28a0`, B1: `0x2628`/`0x2640`, B2: `0x2604`/
+  `0x261c`), presumably because other ROM code shifted around them between revisions, not because
+  the routines themselves changed. So `_find_hle_memcpy_entries()` takes the 20-byte signature
+  bytes from `BOOTROM_B1`'s own known offsets (source of the signature only) and does a plain
+  `bytes.find()` over the *whole* loaded bootrom (16KB, once per `load_bootrom()` call - nowhere
+  near the hot per-instruction path) to locate wherever it actually is in the bootrom that's
+  currently loaded. This finds the right offset for B0/B1/B2 automatically, and for any future
+  revision that happens to carry the same unchanged routine, without a manually-maintained
+  per-revision address table - and a revision where the signature genuinely isn't found anywhere
+  (the routine's bytes really did change) leaves the hook safely inert for that image instead of
+  risking a misfire against code it wasn't verified against.
+- **Opt-in, not opt-out:** `RP2040PY_ENABLE_HLE_MEMCPY=1` is required to activate the hook at all;
+  `hle_memcpy_entries` stays empty otherwise, checked once in `load_bootrom()`.
+
+**Verified:**
+- Full test suite (436/436), `ruff`/`mypy` clean.
+- Real MicroPython 1.21 + littlefs boot produces byte-identical output (`Hello, MicroPython!
+  version: 1.21.0`) with the hook enabled, across all three bootrom revisions (B0/B1/B2) - each one
+  correctly finding its own routines at their own (different) offsets.
+
+**Performance result - measured, both benchmarks, both negative or neutral. Confirms staying
+opt-in (default off) was the right call, not just a cautious placeholder:**
+- Clean A/B (`rp2040py bench`, 3 runs each side) on the fast MicroPython 1.21 boot-to-first-print
+  benchmark: **no measurable improvement** (before: ~334K/331K/332K instructions/sec; after:
+  ~324K/337K/320K - both ranges overlap, within run-to-run noise). Makes sense: in that same
+  benchmark, `__memcpy` is called only 3,948 times out of ~1.42M total instructions (~0.2%) - not
+  enough traffic through the hook to outweigh the small added cost of checking
+  `core.pc in self.rp2040.hle_memcpy_entries` on literally every one of the other 99.8% of
+  instructions, which never hit it.
+- **The real test - a full MicroPython 1.28 boot-and-run A/B, where `memcpy` traffic is ~18x
+  higher (72,208 calls) - is now measured, and it's a net regression, not a win.** Baseline (hook
+  off): 65,000,000 instructions in 213.86s. With the hook enabled: 217.82s - **~1.8% *slower***,
+  not faster. Instructions/sec is actively misleading for this specific comparison and shouldn't be
+  used to read these two runs against each other: with the hook enabled, one `__memcpy`/
+  `__memcpy_44` call collapses what would have been dozens of interpreted Thumb instructions into a
+  single step in the outer instruction-counting loop, so the *step count itself differs between the
+  two runs* (65,000,000 without the hook vs. 63,000,000 with it, to reach the same
+  `--expect-text` match) - comparing "instructions per second" across runs whose "instruction" no
+  longer means the same unit of work compares apples to oranges. Wall-clock time (213.86s vs.
+  217.82s) is the only fair comparison, and it's unambiguous: slower with the hook on.
+- **Why it nets negative despite real memcpy traffic:** the per-instruction
+  `core.pc in self.rp2040.hle_memcpy_entries` check (an attribute lookup plus a `frozenset`
+  membership test) is paid by *every single one* of the ~63-65 million instructions in this run,
+  while only a modest fraction of them are actually memcpy-loop instructions the hook can skip -
+  even with 18x more memcpy traffic than 1.21, that fraction isn't large enough to outweigh a fixed
+  tax multiplied across effectively the entire instruction stream. The technique's payoff scales
+  with how much of *total* execution time the hooked routine accounts for; here, TinyUSB's
+  `tu_fifo_read`/`write` calling into `memcpy` is a real, measured contributor to 1.28's slowdown
+  (see the investigation above), but evidently not a large enough share of *this specific
+  benchmark's total instruction count* for a per-instruction-checked hook to pay for itself.
+
+**Conclusion: not adopted as a default, and not recommended to enable as-is.** The mechanism itself
+works correctly (verified against real MicroPython boots across all three bootrom revisions), so
+this isn't a correctness failure - it's a genuine "measured this specific optimization technique,
+found it doesn't pay off for this workload" result, which is exactly what the opt-in flag
+(`RP2040PY_ENABLE_HLE_MEMCPY`) was designed to make safe to discover without shipping a regression
+to anyone who doesn't explicitly ask for it.
+
+**Not started yet (only worth pursuing if someone wants to revisit this technique, not blocking
+anything else):**
+- Reducing the per-instruction check's own overhead - e.g. an early-exit when
+  `hle_memcpy_entries` is empty (not applicable to the measurement above, where it wasn't empty,
+  but relevant to make sure the *disabled* default case has effectively zero added cost), or
+  moving the check to a less-hot location. Given the *enabled* case is already a net loss even with
+  real traffic through the hook, shaving the check's own cost further is unlikely to flip the
+  overall verdict on its own - the fundamental issue is that a per-instruction Python-level check
+  is expensive relative to the work it's trying to save.
+- A coarser-grained version of the same idea - e.g. checking only at basic-block boundaries, or
+  only after a cheap pre-filter (like a bloom filter or address-range check) - might change this
+  calculus, but hasn't been explored; not worth it without evidence the underlying idea is worth
+  saving, given the current measurement.
+
+## Basic-block fusion / mini-JIT via `ast`-generated code — moved to docs/JIT_BACKLOG.md
+
+Split into its own dedicated backlog file, **[docs/JIT_BACKLOG.md](JIT_BACKLOG.md)**, given its
+size (a real, multi-session undertaking, not a follow-up fix - see that file for the full
+motivation, isolated-test results (~13x CPython / ~17x PyPy steady-state on the same
+`__memcpy_slow_lp` loop from the investigation above), decoupled/opt-in architecture, phased
+implementation plan, and exact file:line integration points).
+
+## Cython port of the interpreter core — implemented, on by default, real-world win confirmed (~4x)
+
+**Status: implemented and merged into the real codebase.** Follows the JIT investigation above:
+after three separate JIT attempts all measured net negative (see `docs/JIT_BACKLOG.md`) because
+*any* runtime check added to the interpreter's hot path costs more than it saves unless the
+accelerated code is a huge share of total execution, the natural next question was whether an
+**ahead-of-time, whole-module** approach sidesteps that problem entirely - no runtime "is this
+hot" check needed if the *entire* dispatch loop is compiled, not a hand-picked slice of it. It
+does, and this time the real-world result actually matches the isolated ceiling estimate - see
+"Measured results" below. (An earlier, narrower pass - typing only `cdef class` fields, not method
+bodies - shipped first and measured only ~2-9% real-world despite an ~11.5x isolated estimate; see
+"Why the first attempt underperformed" below for what that gap actually was and how it was closed.)
+
+**Why this is structurally different from the JIT attempts:** Cython compiles a whole module to C
+at build time. There's no per-instruction or per-branch "should I take the fast path" check -
+every instruction benefits, not just ones matching a specific pre-selected pattern. Cython-compiled
+code still runs *inside* CPython, so every existing C-extension dependency keeps working exactly
+as today.
+
+**Architecture: a subpackage of the main package, not a separate pip package.** `rp2040py.native`
+(`src/rp2040py/native/`) ships inside `rp2040py` itself, compiled by `setup.py`'s
+`Extension`/`cythonize()` (plain `setuptools` + `setuptools-scm`, `build-backend =
+"setuptools.build_meta"`). A separate `rp2040py-native` distribution (its own `pyproject.toml`, a
+`uv` workspace member, a runtime `importlib.metadata` version-matching guard between the two
+packages) was tried first, mirroring `py_ballisticcalc`/`py_ballisticcalc.exts`'s split - and
+abandoned same-session in favor of the current in-tree subpackage, since the extra moving parts
+(two independently-versioned packages that must always match) bought nothing a `try`/`except
+ImportError` inside one package doesn't already give. Every public entry point
+(`rp2040py.rp2040.RP2040`, `rp2040py.cortex_m0_core.CortexM0Core`, `rp2040py.utils.bit.*`) is a
+thin facade: `try: from rp2040py.native._X import ... except ImportError: from rp2040py._X import
+...`, with the real pure-Python reference implementation living in the underscore-prefixed private
+module (`_rp2040.py`, `_cortex_m0_core.py`, `_bit.py`) - callers never import the private module
+or `rp2040py.native` directly.
+
+The build itself first went through a custom hatchling build hook (`hatch_build.py`, not the
+third-party `hatch-cython` plugin, whose default `files.targets` glob matching and
+`--inplace`/`--build-lib` handling didn't produce a working wheel in this sandbox - compiled `.so`
+files were built but never landed in the wheel), then migrated to plain `setuptools` +
+`setuptools-scm` (`setup.py`) same-session, matching `py_ballisticcalc.exts/setup.py`'s own proven
+pattern more directly - `optional=True` on each `Extension` is setuptools' native mechanism for
+"skip this extension gracefully if it fails to build," replacing the hand-rolled
+subprocess-and-catch-the-failure logic the hatchling hook needed. `hatch_build.py`'s
+soft-fail/PyPy-skip/abi3 logic below carried over to `setup.py` unchanged in substance, just in
+setuptools' idiom instead of hatchling's.
+
+**Build failure modes are all soft, on purpose - this package still has to install everywhere:**
+
+- No C compiler available at build time -> each `Extension`'s `optional=True` makes `build_ext`
+  skip it (with a warning) instead of failing the whole build; the facades' `except ImportError`
+  transparently uses the pure-Python implementation. (Cython/setuptools/setuptools-scm are still
+  hard `[build-system] requires` - they're pure-Python-installable everywhere; it's specifically a
+  missing *C compiler* this degrades gracefully for. Cython unavailable at all - e.g. `pip
+  install --no-build-isolation` without it present - is handled the same way, via a plain
+  `try: from Cython.Build import cythonize except ImportError: return []` in `setup.py`.)
+- `RP2040PY_SKIP_NATIVE_BUILD=1` - forces a pure-Python wheel outright at *build* time, regardless
+  of whether Cython/a compiler are actually available (e.g. for a deliberately "pure" release
+  artifact).
+- `RP2040PY_SKIP_CYTHON=1` - a separate, *runtime* gate (checked in each of the three facades, not
+  just once in `rp2040py.native/__init__.py` - see "A gate that didn't gate anything" below) that
+  forces the pure-Python fallback even when the compiled extension **is** installed. Used by
+  pre-commit's `uv-pytest-pure` hook to validate the reference implementation on every commit
+  without needing a rebuild, and useful generally for isolating whether a bug is native-specific.
+- PyPy - compilation is skipped outright (`sys.implementation.name != "cpython"`), not attempted
+  and silently discarded like the other cases. See "PyPy: compiling for it was actively harmful"
+  below for why this needed to be a proactive skip, not just a fallback.
+
+**What was actually ported, fully (not just fields this time):**
+
+1. **`src/rp2040py/native/_cortex_m0_core.pyx`** - every one of the ~90 `_op_*` instruction
+   handlers as a **module-level `cdef` function** (not a bound method) taking the core instance as
+   an explicit first parameter, dispatched through a genuine **C function-pointer table**
+   (`DISPATCH_TABLE`, a `ctypedef int (*OpHandler)(CortexM0Core, unsigned int, unsigned int,
+   unsigned int) except -1` array of 0x10000 entries, built the same way as the pure-Python
+   `_DISPATCH_TABLE`/`_DISPATCH_PATTERNS`/`_resolve_wide()`, including the same wide-opcode-range
+   assertion) - not a Python-level list of bound methods. `registers`/`interrupt_priorities` are
+   `unsigned int[:]` memoryviews backed by `array.array`, allocated in `__cinit__` (guaranteed to
+   run exactly once at allocation, unlike `__init__`, which a subclass could in principle skip).
+   `core.rp2040` is typed as the concrete native `RP2040` class (not `object`), via a `.pxd`
+   cimport - a hot-path call like `core.rp2040.read_uint32(addr)` (present in nearly every
+   load/store instruction) resolves to a direct C-level `cpdef` call instead of a Python attribute
+   lookup + method call.
+2. **`src/rp2040py/native/_rp2040.pyx`** - the bus hot paths (`read_uint8/16/32`,
+   `write_uint8/16/32`). `sram`/`flash`/`usb_dpram`/`bootrom` are typed memoryviews - real, live
+   views into the same underlying `bytearray`/`array.array` buffers, not copies, so external code
+   that slices/mutates `rp2040.flash[...]` (peripherals, `device/load_flash.py`, tests) keeps
+   working unchanged. RAM/flash(base region)/DPRAM/bootrom access branches directly on these
+   memoryviews at C speed; SIO/PPB/the `peripherals` dict fall back to ordinary Python calls
+   (`self.sio.read_uint32(...)` etc.) since those ~30 peripheral objects (UART, I2C, DMA, PIO,
+   GPIO, the clock...) are still plain Python and get no benefit from being typed - only their
+   *construction*, in `RP2040.__init__`, is transcribed here (verbatim, to avoid drift from
+   `_rp2040.py`), not their internals.
+
+**Why the first attempt underperformed (the real root cause, not just "types didn't help"):**
+typing only `cdef class` *fields* makes attribute *access* fast (direct C struct offset), but
+every one of the ~90 `_op_*` *method bodies* stayed plain, untyped Python - so a value read via a
+fast typed field access was immediately re-boxed into a `PyObject` the moment it crossed into an
+untyped method call, and re-unboxed on the way back. Confirmed by literally reading the generated
+C (`annotate=True`'s HTML report, color-coded by Python-C-API-call density) rather than guessing:
+`__Pyx_PyLong_From_unsigned_int(...)` immediately following a fast pointer-arithmetic field read,
+because the *caller* of that read was an untyped method. A follow-up isolated test (12 real
+instruction handlers, genuine C function-pointer dispatch - not the field-only pattern) reproduced
+~10.9x on a realistic mix, matching the very first isolated estimate almost exactly - confirming
+the original ~11.5x thesis was sound, just under-executed the first time. This full port applies
+that lesson everywhere: every parameter and local on the per-instruction path is genuinely C-typed,
+not just the fields.
+
+**Stable ABI (abi3):** built against `Py_LIMITED_API` for CPython 3.10+ (`setup.py`'s
+`_use_abi3()`, plus a `bdist_wheel` `cmdclass` override setting `self.py_limited_api = "cp311"` -
+`py_limited_api=True` on the `Extension` controls what the *compiler* builds against, the
+`bdist_wheel` option controls what the *wheel filename* gets tagged, and both are needed), producing
+one `cp310-abi3` wheel that covers every 3.10+ interpreter instead of one per minor version -
+verified directly: built once against 3.10, the identical `.abi3.so` loads and passes the full
+437-test suite on 3.12 with zero recompilation. 3.10 specifically (not 3.10) because
+`Py_LIMITED_API`'s buffer-protocol support - needed by this code's heavy use of typed memoryviews -
+only entered the limited API at 3.10; below that floor, or on free-threaded builds (where
+`Py_LIMITED_API` and `Py_GIL_DISABLED` are mutually incompatible per PEP 703 - `setup.py` checks
+`sysconfig.get_config_var("Py_GIL_DISABLED")`), `setup.py` falls back to a normal, version-specific
+extension instead. `[tool.cibuildwheel]` builds `cp310-abi3` and `cp3XXt`
+separately for exactly this reason; a real local `cibuildwheel` run confirmed `auditwheel repair`
+correctly relabels the output to `cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64`. One real
+compile-time incompatibility found and fixed: `from cpython cimport array` (added for fast
+`array.array` construction) reaches into CPython-internal `arrayobject`/`PyTypeObject` struct
+layout that doesn't exist under the limited API (GCC: "invalid use of incomplete typedef
+`PyTypeObject`") - removed in favor of a plain `import array`, since the only thing actually used
+was the ordinary `array.array(...)` constructor call, which needs no special declaration either way.
+
+**PyPy: compiling for it was actively harmful, not just unhelpful.** Before the proactive
+`sys.implementation.name != "cpython"` skip existed, `hatch_build.py` happily compiled the Cython
+extensions for PyPy too (`_rp2040.pypy310-pp73-x86_64-linux-gnu.so` etc.) - and they *worked*, in
+the sense of importing and running correctly. The problem: every hot-path call then went through
+PyPy's `cpyext` C-API compatibility shim instead of PyPy's own JIT, and `cpyext` is well known to
+be dramatically slower than PyPy's native path for exactly this kind of call-heavy code - so
+"accelerating" the interpreter core on PyPy made it *slower* than the plain pure-Python fallback,
+which PyPy's JIT would otherwise have handled well on its own. Found via a real CI symptom (the
+`Micropython 1.28.0 / pypy-3.10` job in `.github/workflows/ci-micropython.yml` running against its
+10-minute per-step timeout) and confirmed by reproducing the old `hatch_build.py` in a git worktree
+against `pypy3.10` directly - it silently built a working-but-slow native extension. The fix
+(skip compilation outright on non-CPython interpreters) means PyPy always gets the pure-Python
+implementation, where its JIT can do what it's actually good at.
+
+**A gate that didn't gate anything (found by testing the actual behavior, not the code):** the
+first version of `RP2040PY_SKIP_CYTHON`'s check lived only in `rp2040py.native/__init__.py`'s own
+`try`/`except ImportError`. It didn't work - `RP2040`/`CortexM0Core` kept resolving to the native
+backend regardless. Root cause: none of the three facades import `from rp2040py.native import X`
+(the aggregated namespace `__init__.py` controls); each imports directly from a specific submodule
+(`from rp2040py.native._rp2040 import RP2040`). Python always runs a package's `__init__.py`
+before importing one of its submodules, but that execution completing (even via an internally
+*caught* exception) doesn't prevent a separate, independent import of the submodule itself -
+Python's import system doesn't gate submodule imports on what a parent's `__init__.py` did with
+its own local names. Fixed by moving the actual check (a tiny shared `rp2040py._native_gate`
+module) into each of the three facades directly, at the point where they decide which
+implementation to import - verified by actually asserting `RP2040.__module__` under the flag, not
+just eyeballing the code.
+
+**Correctness verification:** full test suite (437/437) passes with the compiled extension active,
+with `RP2040PY_SKIP_CYTHON=1` forcing the pure-Python path, and with the extension never built at
+all - each checked against the *actual installed wheel* (not just in-place `.so` files) in clean
+venvs on CPython 3.10, 3.10 (abi3), 3.12 (loading the 3.10-built `.abi3.so` unmodified), and 3.14
+free-threaded (falls back to a normal per-version build, confirmed via its `cp314-cp314t` wheel
+tag). Two real correctness bugs were caught this way, not by reasoning about the port in the
+abstract:
+
+- **`write_uint32`'s sign-preservation bug.** The pure-Python `RP2040.write_uint32` deliberately
+  passes the *raw, possibly-negative* Python `value` through to `self.sio.write_uint32(...)` /
+  `self.ppb.write_uint32(...)` / `peripheral.write_uint32_atomic(...)` - only the
+  bootrom/flash/sram/dpram branches mask it (`value & 0xFFFFFFFF`) before use. The first native
+  version masked once, up front, for every branch uniformly. `s32()`/`u32()` are idempotent
+  regardless of pre-masking, so this looked harmless - but `sio.py`'s hardware-divider emulation
+  does a raw `self.div_dividend > 0` comparison (not through `s32()`) to detect the "divide by
+  zero, negative dividend" sentinel case, which silently broke once `div_dividend` was always
+  stored pre-masked-to-unsigned (always positive). Caught by
+  `test_sio.py::TestHardwareDivider::test_signed_division_by_zero_negative_3000_over_0`.
+- **Cython typed-memoryview vs. `bytes` equality.** A `cdef public unsigned char[:] flash`
+  field's auto-generated Python getter returns Cython's own typed-memoryview-slice object, which -
+  unlike a real builtin `memoryview` - doesn't support content-based `==` against `bytes`/
+  `bytearray` (falls back to identity comparison). Broke
+  `test_kaluma_device.py`'s `written == b'console.log("hi");\x00'` even though the underlying bytes
+  were byte-for-byte identical (`bytes(written) == expected` was `True`). Fixed by exposing
+  `sram`/`flash`/`usb_dpram`/`bootrom` as `@property` methods wrapping the internal (now
+  non-public, `_`-prefixed) typed memoryview field in a real builtin `memoryview(...)` - still a
+  live view onto the same buffer, just one that supports the comparison semantics external callers
+  already relied on.
+
+**Measured results - this time matching the isolated ceiling, not falling far short of it:**
+
+- *Synthetic* (`rp2040py bench --instructions 20000000 --block-size 1000`, an ADDS/SUBS mix):
+  pure-Python 520,552 instr/sec vs. native 2,049,726 instr/sec - **~3.9x**.
+- *Real firmware boot* (MicroPython 1.21.0, `rp2040py bench --image ... --expect-text ">>>"
+  --timeout 30`; neither side reaches the REPL prompt within 30s, so this measures sustained
+  instruction rate under real, representative boot-time workload rather than wall-clock-to-prompt):
+  pure-Python 382,870 instr/sec (12,000,000 instructions in 31.34s) vs. native 1,581,870 instr/sec
+  (48,000,000 instructions in 30.34s) - **~4.1x**.
+- **~4x, consistent across a synthetic microbenchmark and a real firmware boot workload** - a
+  genuine, substantial win, unlike the first attempt's ~2-9%. The isolated 12-instruction test's
+  ~10.9x remains a true ceiling, not a promise: `core.rp2040` is typed but its own `read_uint32`
+  etc. still cross a real (if now `cpdef`-fast) call boundary per memory access, and a full boot
+  still spends real time in still-Python peripherals (DMA, PIO, USB, SPI) this port doesn't touch -
+  but closing most of the original gap, rather than capturing only ~5-20% of it, validates that the
+  "type the fields, not the methods" theory was the actual bug, not "Cython just doesn't help here."
+
+### Follow-up: two more boxing sources found by reading the generated C, not by guessing
+
+**Status: implemented and merged.** The ~4x above still left a large gap versus the isolated
+~10.9x ceiling and versus PyPy (`docs/PORTING.md`'s synthetic instructions/sec table put PyPy at
+~16x pure-Python). Both remaining gaps traced back to real Python-C-API traffic still hiding
+*inside* code that looked fully C-typed on a first read - found by generating `cython -a`'s
+annotated C (`cython -a _rp2040.pyx` / `_cortex_m0_core.pyx`) and grepping the output for
+`PyNumber_And`/`__Pyx_PyLong_From_*`/`__Pyx_PyLong_As_*` rather than trusting the yellow/white
+annotation coloring alone.
+
+1. **`RP2040.read_uint32/16/8` and `write_uint32/16/8` took an untyped `address`/`value`
+   parameter.** `cpdef unsigned int read_uint32(self, address)` with no type on `address` means
+   Cython treats it as a plain `object` - so even though every real call site on the hot path
+   (`execute_instruction`'s opcode fetch, every `op_*` load/store handler) passes an already-typed
+   `unsigned int` C local or memoryview element, Cython has to box that value into a real `PyLong`
+   *at the call site* before the call, and the `address & 0xFFFFFFFF` masking on entry then runs
+   as Python bigint arithmetic on the boxed value instead of a single C `AND`. Fixed by retyping
+   `address`/`value` as `long long` in both `_rp2040.pyx` and `_rp2040.pxd` (matching `_bit.pyx`'s
+   own `u32`/`s32` convention, not `unsigned int` - a `long long` round-trips negative/oversized
+   Python ints via a plain C `&`, the same as the removed `object` parameter did, so out-of-range
+   callers elsewhere in the codebase keep working instead of hitting `OverflowError`). `value` on
+   `write_uint32` specifically needed a caller audit first (`sio.write_uint32`'s hardware-divider
+   emulation relies on receiving the *true signed* Python value, per the existing "sign-preservation
+   bug" entry above) - confirmed safe since a `long long` preserves sign and magnitude for every
+   real caller (register-derived values only, all comfortably inside `long long`'s range).
+
+2. **A bare `0xFFFFFFFF`-style literal is not a C literal to Cython - it's a Python `int`
+   constant.** This is the bigger one. Any hex literal that doesn't fit inside a signed 32-bit
+   `int` (i.e. `0x80000000` through `0xFFFFFFFF`) is parsed by Cython as a Python object constant
+   unless explicitly suffixed (`0xFFFFFFFFU`) or cast. That meant `n & 0xFFFFFFFF` - even where `n`
+   is a genuine `cdef long long`/`unsigned int` local - silently compiled to
+   `PyNumber_And(__Pyx_PyLong_From_PY_LONG_LONG(n), <boxed 0xFFFFFFFF>)` followed by
+   `__Pyx_PyLong_As_unsigned_int(...)`: a full box, a Python-level bigint AND, and an unbox, on
+   what looked like (and was written to be) a single C instruction. This exact pattern was in
+   `_bit.pyx`'s `u32()`/`s32()` themselves - the two helpers this whole port's docstrings hold up
+   as the "genuinely C-typed" answer to the first attempt's boxing bug - so every call to `u32()`/
+   `s32()` anywhere in the interpreter was paying this tax. It was also directly inline at ~30 more
+   sites across `_cortex_m0_core.pyx`/`_rp2040.pyx`, most critically `core.registers[15] =
+   (core.registers[15] + 2) & 0xFFFFFFFF` (the PC increment - executed on literally every
+   instruction, 8 call sites) and `core.n = (result & 0x80000000) != 0` (the N-flag update in
+   `add_update_flags`/`subtract_update_flags` and ~15 `op_*` handlers - executed on essentially
+   every arithmetic/logical instruction). Verified in isolation first (a standalone 4-variant `.pyx`
+   confirmed a bare literal boxes while `<long long>0xFFFFFFFF`/`0xFFFFFFFFU`/a `cdef long long`
+   module constant all compile to a single C `&`), then fixed by mechanically appending the `U`
+   suffix to every literal in `{0xFFFFFFFF, 0x80000000, 0xFFFFFFFC, 0xFFFFFFFE, 0xFFFFFFFD,
+   0xFFFFFFF9, 0xFFFFFFF1, 0xFFFF0000, 0xF0000000}` across all three `.pyx` files (~78 sites) -
+   confirmed each one now compiles to plain C by re-reading the generated C, not just re-running
+   the benchmark and assuming.
+
+**Measured results after both fixes, on CPython 3.10 (this project's default target - see
+`.python-version` - and, since 3.10 sits below the abi3 floor, a normal per-version build, not the
+stable-ABI one 3.11+ gets - see the abi3 finding below for why that distinction turned out to
+matter a lot for this specific measurement):**
+
+- *Synthetic* (`rp2040py bench`, default 5,000,000-instruction ADDS/SUBS mix): native throughput
+  went from ~523K instr/sec (pure Python) to **~13.3M instr/sec** - **~25.5x**, not the ~4x
+  originally measured for the first Cython pass.
+- *Real firmware boot* (MicroPython 1.28.0 + littlefs, boot to first `print()`, same fixture as
+  the README's table): **46.65s -> 25.83s**, **~7.3x** over the 188.98s pure-Python baseline (was
+  ~4.1x). Smaller relative win than the synthetic benchmark because a real boot spends a large,
+  unchanged share of its time in still-Python peripherals (UART, SSI/littlefs, USB) that this port
+  never touched - the synthetic benchmark is 100% inside the code paths these two fixes actually
+  touch, a real boot isn't.
+- Closer to PyPy than before, not caught up: PyPy measures ~40M instr/sec synthetic / 8.75s real
+  boot on the same machine - synthetic is now ~3x behind (was ~24x), real boot ~3x behind (was
+  ~4x). The remaining gap is architectural, not another hidden-boxing bug: PyPy's trace JIT
+  specializes the *actual* dynamic instruction mix at runtime, where this port dispatches through a
+  fixed, ahead-of-time C function-pointer table sized for the worst case every time.
+- `PYTHON_JIT=1` (CPython 3.14's experimental tier-2 JIT) remains slightly *slower* than
+  `PYTHON_JIT=0` for native mode even after these fixes (~4.7M vs. ~5.2M instr/sec synthetic,
+  measured on the 3.11 abi3 build) - unaffected by either fix since both touched code that already
+  ran outside the CPython bytecode interpreter. The outer driving loop (`Simulator.execute`/
+  `_bench_synthetic`) is thin Python bytecode that immediately calls into the now much-faster C
+  extension per instruction; CPython's tier-2 JIT's specialization/instrumentation bookkeeping is
+  pure overhead on a loop that does almost no work at the bytecode level to begin with. Not
+  something this project's code controls.
+
+**A third, unrelated discovery made while producing the numbers above: the abi3/`Py_LIMITED_API`
+build (what every CPython 3.11+ install actually gets) is measurably slower than a normal
+per-version build of the identical source** - ~5.2M instr/sec synthetic / 33.90s real boot on
+CPython 3.11 (abi3) vs. the ~13.3M / 25.83s above on 3.10 (normal build), same fixes, same
+machine, same run. Not yet root-caused (a reasonable suspect: the limited API routes typed-
+memoryview-heavy code like this through more indirection than the normal C-API's direct struct/
+slot access, but that's a hypothesis, not confirmed by reading generated code the way the two
+boxing bugs above were) and not something this pass changed - `_use_abi3()`'s CPython-3.11-floor
+stable-ABI wheel is a deliberate one-wheel-covers-every-3.11+-version distribution tradeoff (see
+"Stable ABI (abi3)" earlier in this file), and trading it away is a real decision for whoever owns
+that tradeoff, not something to flip silently as a side effect of a performance pass. Flagging it
+here as a scoped, standalone follow-up instead.
+
+**Found and fixed in the same pass, unrelated to Cython specifically: `setup.py` was not passing
+any explicit optimization flags to the C compiler at all**, relying entirely on whatever
+`sysconfig`'s ambient `CFLAGS`/`OPT` happened to be for the interpreter running the build (`-O3` on
+this machine, incidentally - not a guarantee `cibuildwheel`'s manylinux containers or every
+downstream packager's CPython necessarily share). Fixed by adding explicit
+`extra_compile_args=["-O3", "-std=c99"]` (`["/O2", "/W3"]` on MSVC) and `-Wl,-strip-all` at link
+time (`RP2040PY_DISABLE_STRIP=1` to keep symbols, e.g. for profiling the extension itself) -
+mirrors `py_ballisticcalc.exts/setup.py`'s own platform-flag pattern (this file's docstring already
+said it "mirrors" that file), except deliberately *not* copying that file's own `c_compile_args =
+["-g", "-O0", "-std=c99"]` - real, still-present `-O0` there, apparently debug flags left over from
+a troubleshooting session and never reverted. Confirmed via `sysconfig.get_config_var("CFLAGS")`
+that this machine's ambient flags already included `-O3` (so the explicit flags measured as a
+no-op here, benchmark identical before/after down to noise) - added anyway since "happens to
+already be optimized on this machine" isn't the same guarantee as "is optimized," and the stripped
+`.so` files are a genuine, measured win regardless (~334KB vs. ~1.96MB for `_cortex_m0_core.so`,
+same benchmarked speed).
+
+**A build hazard found the hard way while producing all the numbers above, unrelated to any of the
+three fixes themselves: stale `.so` files from a previous Python-version build silently shadow a
+fresh one.** `src/rp2040py/native/` accumulated `_cortex_m0_core.abi3.so`,
+`_cortex_m0_core.cpython-310-*.so`, *and* `_cortex_m0_core.cpython-311-*.so` simultaneously after
+switching the dev venv between Python versions a few times without cleaning between builds -
+Python's extension-suffix search order prefers an exact `cpython-3XX-*` match over the generic
+`.abi3.so` when both are present and loadable under that interpreter, so a *stale*, version-
+matching `.so` left over from an earlier (possibly broken, mid-experiment) build silently wins over
+a freshly-built, correct one sitting right next to it - no error, just the wrong code running,
+surfaced here only because a completely unrelated symbol (`SYSM_CONTROL`) happened to be missing
+from the stale build and tripped the `except ImportError` fallback loudly. A quieter version of the
+same staleness (same symbols present, just older/different codegen) would have produced no warning
+at all. `rm -f src/rp2040py/native/*.so src/rp2040py/native/*.c src/rp2040py/native/*.html &&
+uv sync --reinstall-package rp2040py --no-cache` before trusting any from-source perf number is the
+only real guard against this - a real `pip install`/`uv add` from a clean checkout never hits it
+(one target interpreter, one build, nothing stale to shadow it), so this is purely a "rebuilding
+in-place across multiple interpreters in the same checkout" hazard, exactly what a local dev/perf
+session does.
+
+**Lesson for future work on these three files:** `cython -a`'s color-coded HTML is a reasonable
+first pass, but its score numbers are not a reliable 0-9 scale and both boxing bugs above were
+found only by grepping the *generated C* for `PyNumber_*`/`__Pyx_PyLong_*` and reading the
+surrounding function, not by trusting the annotation view. Any new arithmetic touching a literal at
+or above `0x80000000` needs the same treatment (`U`/`LL`/`ULL` suffix, or a `cdef` constant) or it
+will silently re-introduce this exact bug. Relatedly: `noexcept` on an individual `op_*` handler is
+a dead end as long as they're only ever invoked through `DISPATCH_TABLE`/`OpHandler` - the
+generated call site's exception check (`if (unlikely(result == -1)) ...`) is emitted based on the
+*function pointer's* declared type, not the concrete function actually behind it at runtime, so
+marking individual table entries `noexcept` changes nothing observable; it would need `OpHandler`
+itself to be `noexcept`, which isn't safe here (real bus/peripheral/`bl_taken`-callback exceptions
+need to keep propagating, not get silently swallowed).
 
 ## littlefs persistence to the host `--littlefs` image file — not started
 

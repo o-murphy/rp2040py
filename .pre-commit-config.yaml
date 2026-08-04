@@ -40,9 +40,18 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: uv-pytest
-        name: uv run pytest
-        entry: uv
-        args: ["run", "pytest"]
+      # pre-commit's hook schema has no `env:` key (language: system runs entry/args directly,
+      # no shell) - `env VAR=val cmd...` is the portable way to set one for the child process.
+      - id: uv-pytest-pure
+        name: uv run pytest (pure-Python, RP2040PY_SKIP_CYTHON=1)
+        entry: env
+        args: ["RP2040PY_SKIP_CYTHON=1", "uv", "run", "pytest"]
+        language: system
+        pass_filenames: false
+
+      - id: uv-pytest-native
+        name: uv run pytest (native-cpython-extensions, RP2040PY_SKIP_CYTHON=0)
+        entry: env
+        args: ["RP2040PY_SKIP_CYTHON=0", "uv", "run", "pytest"]
         language: system
         pass_filenames: false

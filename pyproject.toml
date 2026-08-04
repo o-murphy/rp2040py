@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "rp2040py"
@@ -9,7 +9,8 @@ description = "A Raspberry Pi Pico Emulator in Python"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = []
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Intended Audience :: Developers",
     "Natural Language :: English",
@@ -25,10 +26,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = [
-    "pyelftools>=0.33",
-    "semver>=3.0.4",
-]
+dependencies = ["pyelftools>=0.33", "semver>=3.0.4"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -62,11 +60,38 @@ mypy_path = "src"
 files = ["src"]
 disable_error_code = ["annotation-unchecked"]
 
-[tool.hatch.version]
-source = "vcs"
+# rp2040py.native's compiled extension modules aren't always built (see setup.py's soft fallback
+# when Cython/a C compiler isn't available), so mypy can't reliably resolve them here. The
+# try/except ImportError fallback pattern (see rp2040py/utils/bit.py, rp2040py/rp2040.py) is what
+# actually handles their absence at runtime; this just quiets the analysis-time noise.
+[[tool.mypy.overrides]]
+module = "rp2040py.native.*"
+ignore_missing_imports = true
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/rp2040py"]
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rp2040py*"]
+
+[tool.setuptools_scm]
+root = "."
+fallback_version = "0.0.0.dev0"
+
+[tool.cibuildwheel]
+# Use uv and build
+build-frontend = "build[uv]"
+# cp310 gets its own normal, version-specific wheel: Py_LIMITED_API's buffer-protocol support
+# (needed by this project's typed memoryviews) only entered the limited API at 3.11 - confirmed
+# by trying to force the floor down to 3.10, which fails to compile (see setup.py/docs/BACKLOG.md).
+# cp311-* builds once and self-tags as cp311-abi3 (setup.py's _bdist_wheel_abi3), covering every
+# 3.11+ interpreter with that one wheel. Free-threaded (cp314t-*) is separate for the usual reason:
+# Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
+build = "cp310-* cp311-* cp314t-*"
+test-extras = "fs"
+test-requires = "pytest"
+# cibuildwheel runs tests from a scratch directory (not the repo checkout) so only the built
+# wheel's contents are ever imported - {project} is substituted with the repo root so pytest can
+# still find the test suite itself (tests/ isn't part of the wheel).
+test-command = "pytest {project}/tests"
 
 [dependency-groups]
 dev = [
@@ -77,4 +102,5 @@ dev = [
     "rp2040py[fs]",
     "pytest-cov>=7.1.0",
     "littlefs-python>=0.18.0",
+    "cython>=3.2.9",
 ]

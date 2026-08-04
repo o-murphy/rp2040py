@@ -30,6 +30,33 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
+### Environments without compiled-extension support (Pythonista, other iOS apps)
+
+`rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
+[Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
+handful of environments, notably iOS apps like [Pythonista](http://omz-software.com/pythonista/)
+sandboxed by the OS, can't load compiled `.so` extensions or import native code dynamically at
+all. A plain `pip install rp2040py` there resolves to a platform-specific wheel that simply won't
+load. Force the pure-Python universal wheel instead:
+
+```sh
+pip download rp2040py --only-binary=:all: --platform any --abi none
+pip install rp2040py-*.whl --upgrade
+```
+
+This is the exact same artifact `rp2040py`'s own release pipeline builds and publishes for every
+release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
+not a degraded or unsupported build, just the emulator without the compiled speedup.
+
+To confirm you actually got it:
+- **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
+  `rp2040py-<version>-py3-none-any.whl`, with no platform/ABI tag (e.g. no `cp310-abi3-manylinux...`)
+  anywhere in the filename.
+- **At runtime**: `rp2040py.rp2040.RP2040.__module__` is `"rp2040py._rp2040"` (pure Python) rather
+  than `"rp2040py.native._rp2040"` (compiled) - equivalently, watch for the `UserWarning` ("Native
+  extensions are not available...") `rp2040py.native` raises on import once the compiled backend
+  isn't present, which is the expected, harmless case here rather than an error.
+
 ## Run the demo project
 
 The commands below assume `rp2040py` is installed (`pip install rp2040py` / `uv add rp2040py` /
@@ -95,11 +122,29 @@ file already on disk:
 > | Interpreter | Time |
 > |---|---|
 > | CPython 3.10 | 188.98s |
+> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 25.83s (~7.3x) |
 > | CPython 3.14 + `PYTHON_JIT=1` | 113.77s (~1.7x) |
-> | PyPy 3.10 | 11.59s (~16x) |
+> | PyPy 3.10 | 8.75s (~22x) |
 >
-> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- rp2040py
-> micropython ...` (or `... -- python demo/micropython_run.py ...` from a checkout). See
+> The `rp2040py.native` figure improved from an earlier 46.65s (~4.1x) after fixing two Cython
+> compilation gotchas in the bus/interpreter hot path (untyped `address`/`value` parameters forcing
+> a `PyLong` box on every memory access, and bare `0x80000000`+ hex literals silently compiling as
+> Python-object constants instead of C literals) - see
+> [docs/BACKLOG.md](docs/BACKLOG.md#follow-up-two-more-boxing-sources-found-by-reading-the-generated-c-not-by-guessing)
+> for the full writeup, including why PyPy's gap didn't close by the same amount (a real boot
+> spends a large, unchanged share of its time in still-Python peripheral emulation that these fixes
+> don't touch). **This row is CPython 3.10 specifically** (this project's default target, and below
+> the abi3 floor - see [Performance](#performance) below): CPython 3.11+ actually measures slower
+> in absolute terms (33.90s, ~5.6x) on the *same* fixed source, purely from the stable-ABI
+> (`Py_LIMITED_API`) build every 3.11+ wheel uses - see the same BACKLOG.md section for that gap
+> too, found (and initially mismeasured!) while producing these very numbers.
+>
+> The `rp2040py.native` row is what most installs actually get with no extra effort - see
+> [Performance](#performance) below. It doesn't help PyPy (compilation is deliberately skipped
+> there - PyPy's own JIT already does better on its own than routing through `rp2040py.native`'s
+> CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner:
+> `uv run --python pypy3.10 --no-dev -- rp2040py micropython ...` (or `... -- python
+> demo/micropython_run.py ...` from a checkout). See
 > [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.
@@ -146,7 +191,7 @@ rp2040py micropython path/to/script.py
 
 #### Filesystem support
 
-With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Just put a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image called `littlefs.img` into the rp2040py root directory, and your `main.py` will be automatically started from there. A different path can be supplied with `--littlefs` (it's silently skipped, not an error, if the file doesn't exist).
+With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Build a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image (see `mklittlefs` below) and pass it with `--littlefs path/to/littlefs.img`, and your `main.py` will be automatically started from there (it's silently skipped, not an error, if the file doesn't exist - but it's never loaded unless `--littlefs` is given explicitly, even if a `littlefs.img` happens to sit in the current directory).
 
 The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
 rp2040py[fs]` / `uv sync --extra fs`). Every file keeps its own basename; pass `--main` to mark one
@@ -205,6 +250,13 @@ sudo cp code.py fat12/  # copy code.py to the filesystem
 sudo umount fat12/  # unmount the filesystem
 ```
 
+Then pass it explicitly with `--fat12` (no default - `fat12.img` sitting in the current directory
+is never picked up implicitly):
+
+```sh
+rp2040py micropython --circuitpython --fat12 fat12.img
+```
+
 CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython's
 `os`/`rp2.Flash` does, so this hasn't been separately exercised - but the underlying flash-write
 path (see the MicroPython filesystem support section) is the same SSI peripheral either way.
@@ -246,8 +298,9 @@ Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
 [its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
 4096-byte blocks - a *different* flash region than the user-program one above, with no auto-run
 semantics of its own (plain storage, accessible from JS via `require('fs')`). Build a compatible
-image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_littlefs.img` - a
-different default than MicroPython's `littlefs.img`, since the block size/count differ):
+image with `mklittlefs` and pass it via `--littlefs` explicitly (no default - unlike MicroPython's
+`--littlefs`, it's never picked up implicitly, even from a `kaluma_littlefs.img` sitting in the
+current directory):
 
 ```sh
 rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
@@ -331,6 +384,25 @@ async def main():
 ```
 
 All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(max_workers=1)` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start()`/`start_async()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
+
+## Performance
+
+The interpreter core (`CortexM0Core`) and the memory bus's hot read/write paths are also available
+as a compiled Cython extension (`rp2040py.native`), giving roughly **7x** the instruction
+throughput of the pure-Python implementation on both a synthetic benchmark and a real MicroPython
+boot (see [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
+for the full measured breakdown).
+
+This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
+when a C compiler is available (prebuilt wheels are published for common platforms, so most
+installs don't even need one) and falls back to the identical pure-Python implementation otherwise
+- correctness is the same either way, just the speed differs. A couple of environment variables
+exist for cases where you want to control this explicitly:
+
+- `RP2040PY_SKIP_CYTHON=1` - force the pure-Python implementation at runtime, even if the compiled
+  extension is installed (e.g. to rule out a native-specific issue).
+- `RP2040PY_SKIP_NATIVE_BUILD=1` - skip compiling the extension at *build* time, for a
+  deliberately pure-Python install/wheel.
 
 ## Used by
 

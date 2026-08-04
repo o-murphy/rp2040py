@@ -11,7 +11,7 @@ resolution silently skipped the same `v`-prefix stripping MicroPython's got (see
 """
 
 import json
-import sys
+import logging
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -19,6 +19,14 @@ from pathlib import Path
 import semver
 
 __all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
+
+_logger = logging.getLogger(__name__)
+
+# Applies per socket operation (connect, and each individual read()), not to the download as a
+# whole - urlopen()'s own `timeout` param, same as socket.settimeout() under the hood - so a slow
+# but still-progressing transfer is never cut off, only a genuinely stuck one (server never
+# responds, or goes silent mid-transfer) is.
+_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -54,9 +62,8 @@ def _cache_dir() -> Path:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        print(
-            f"warning: could not create cache directory {cache_dir} ({exc}); caching in the current directory instead",
-            file=sys.stderr,
+        _logger.warning(
+            "could not create cache directory %s (%s); caching in the current directory instead", cache_dir, exc
         )
         return Path()
     return cache_dir
@@ -111,7 +118,7 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
 
     local_image = Path(image)
     if local_image.exists():
-        print(f"Found local image: {local_image}")
+        _logger.info("Found local image: %s", local_image)
         return str(local_image)
 
     version = _resolve_version(spec, image)
@@ -120,21 +127,25 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
     cached_path = _cache_dir() / filename
 
     if cached_path.exists():
-        print(f"Found local image: {cached_path}")
+        _logger.info("Found local image: %s", cached_path)
         return str(cached_path)
 
     from urllib.error import HTTPError
-    from urllib.request import urlretrieve
+    from urllib.request import urlopen
 
-    def report_hook(chunk: int, chunk_size: int, size: int) -> object:
-        if chunk == 0:
-            print(f"Download: {filename} from {url}")
-        elif chunk * chunk_size >= size:
-            print(f"Download complete: file saved to: {cached_path}")
-        return None
-
+    _logger.info("Download: %s from %s", filename, url)
     try:
-        urlretrieve(url, cached_path, reporthook=report_hook)
-    except HTTPError:
+        with urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response, open(cached_path, "wb") as f:
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except (HTTPError, TimeoutError):
+        # Cleans up a partial file from a download that died mid-transfer (e.g. the timeout above
+        # firing after some bytes already landed) - otherwise a retry would find cached_path
+        # already "exists()" and hand back a truncated, corrupt image instead of re-downloading.
+        cached_path.unlink(missing_ok=True)
         return None
+    _logger.info("Download complete: file saved to: %s", cached_path)
     return str(cached_path)

@@ -6,20 +6,138 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Tag to build and publish (e.g. v0.11.0b1)"
-        required: true
+      testpypi:
+        description: "Publish to test pypi"
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: "Override version (e.g. 2.3.0b1) — required for TestPyPI to get a clean version instead of a dev suffix"
+        required: false
         type: string
+        default: ""
+
+run-name: >
+  Build & Publish → ${{ github.event_name == 'push' && 'PyPI' ||
+      github.event_name == 'workflow_dispatch' && inputs.testpypi && 'TestPyPI' ||
+      'Build Only' }}
 
 permissions:
   contents: write
 
 jobs:
+  build-pure:
+    name: Build SDist and pure Python wheel
+    runs-on: ubuntu-latest
+    env:
+      # Build-time flag (setup.py) - actually skips compiling rp2040py.native, unlike
+      # RP2040PY_SKIP_CYTHON (a *runtime* gate checked by the facades, no effect on the build
+      # itself). This job's whole point is a pure-Python sdist + universal wheel.
+      RP2040PY_SKIP_NATIVE_BUILD: "1"
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm to see tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.10"
+          github-token: ${{ github.token }}
+
+      - name: Build pure python package
+        run: uv build --out-dir dist
+        shell: bash
+
+      - name: list ./dist
+        run: ls ./dist
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-sdist-pure
+          path: ./dist
+          retention-days: 14
+
+  build-wheels:
+    name: Build wheels on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cibw_archs: "i686,x86_64" # x64 native, i686 over QEMU
+            needs_qemu: true
+
+          - os: ubuntu-24.04-arm
+            cibw_archs: "aarch64,armv7l" # aarch64
+            needs_qemu: false
+
+          - os: windows-latest
+            cibw_archs: "x86,AMD64"
+            needs_qemu: false
+
+          - os: windows-11-arm
+            cibw_archs: "ARM64"
+            needs_qemu: false
+
+          - os: macos-15
+            cibw_archs: "arm64,universal2"
+            needs_qemu: false
+
+          - os: macos-15-intel
+            cibw_archs: "x86_64,universal2"
+            needs_qemu: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # required for setuptools-scm to see tags
+
+      - name: Set up QEMU for Emulated Architectures
+        if: ${{ matrix.needs_qemu }}
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: all
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Build binary python package
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+          # cibuildwheel builds in an isolated environment per platform and doesn't inherit
+          # arbitrary host env vars by default - this whitelists the version override through.
+          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION
+        run: uvx cibuildwheel --output-dir dist --platform auto --archs ${{ matrix.cibw_archs }}
+        shell: bash
+
+      - name: list ./dist
+        run: ls ./dist
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheels-${{ matrix.os }}
+          path: ./dist
+          retention-days: 14
+
   deploy:
+    needs: [build-pure, build-wheels]
     runs-on: ubuntu-latest
 
-    # Specifying a GitHub environment is optional, but strongly encouraged
-    environment: pypi
+    # Dynamic: real PyPI on a tag push, TestPyPI on an explicit opt-in dispatch, otherwise just a
+    # build (no publish permissions needed/granted for that last case).
+    environment: ${{ github.event_name == 'push' && 'pypi' ||
+      (github.event_name == 'workflow_dispatch' && inputs.testpypi) && 'testpypi' || 'build' }}
     permissions:
       # job-level permissions replace (not merge with) the workflow-level block above,
       # so everything this job needs must be listed here explicitly.
@@ -30,18 +148,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ github.ref_name }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      - name: Download all artifacts dynamically
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: ./all-dist
 
-      - name: Build package
-        run: uv build
+      - name: Combine artifacts
+        run: |
+          mkdir -p dist
+          find ./all-dist -type f -exec cp {} dist/ \;
+        shell: bash
+
+      - name: list ./dist
+        run: ls ./dist
+        shell: bash
 
       - name: Resolve tag and version
         id: meta
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           if [[ "$VERSION" =~ (alpha|beta|pre|rc) ]]; then
             PRERELEASE=true
@@ -65,12 +193,24 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
+        if: ${{ github.event_name == 'push' }}
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: ./dist/*
 
-      - name: Publish package to PyPI
-        run: uv publish --check-url https://pypi.org/simple/
+      - name: Publish package distributions to PyPI
+        if: ${{ github.event_name == 'push' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Publish package distributions to TestPyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.testpypi == true }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          repository-url: https://test.pypi.org/legacy/

@@ -21,6 +21,9 @@ jobs:
   build-littlefs:
     name: Build littlefs test image
     runs-on: ubuntu-latest
+    env:
+      RP2040PY_SKIP_CYTHON: 1
+
     steps:
       - uses: actions/checkout@v7
 
@@ -28,6 +31,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: "3.10"
+          github-token: ${{ github.token }}
 
       - name: Install dependencies
         run: uv sync
@@ -71,6 +75,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: "3.10"
+          github-token: ${{ github.token }}
 
       - name: Install dependencies
         run: uv sync

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 import pytest
 
@@ -149,7 +149,7 @@ def test_empty_files_list_produces_a_freshly_formatted_image(tmp_path):
 
     build_littlefs_image(image, [])
 
-    assert os.path.exists(image)
+    assert Path(image).exists()
     with pytest.raises(OSError):
         _read_back(image, "anything.py")
 

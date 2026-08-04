@@ -241,7 +241,7 @@ callback style, and cancellation of not-yet-started calls, all for free. (An ear
 this hand-rolled the queue with a `deque` + a `Future`-per-call + a `threading.Timer` timeout
 watchdog; it worked, but was substantially more code for the same guarantees the stdlib already
 provides.) `concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class,
-distinct from the builtin `TimeoutError`, until Python 3.11 - `_result()`/`_await()` in
+distinct from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in
 `mp_device.py` normalize all three to the builtin one so `except TimeoutError` behaves the same
 everywhere on the 3.10 floor this project supports.
 
@@ -441,16 +441,22 @@ RAM fetches), and a firmware mode that boots a real image and runs a script to a
 REPL/`--expect-text` match, the same workload `ci-micropython.yml` and `ci-pico-sdk.yml` exercise.
 Measured on this machine:
 
-| Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
-|---|---|---|
-| CPython 3.10 | 499,806 | 188.98s (342,244 steps/sec) |
-| CPython 3.14 + `PYTHON_JIT=1` | 961,218 (~1.9x) | 113.77s (~1.7x, 568,486 steps/sec) |
-| PyPy 3.10 | 37,989,746 (~76x) | 11.59s (~16x, 5,580,638 steps/sec) |
+| Interpreter                               | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
+| ----------------------------------------- | ---------------------------- | ----------------------------------------------------- |
+| CPython 3.10                              | 499,806                      | 188.98s (342,244 steps/sec)                           |
+| CPython 3.10 + `rp2040py.native` (Cython) | 2,049,726 (~4.1x)            | 46.65s (~4.1x, 1,386,605 steps/sec)                   |
+| CPython 3.14 + `PYTHON_JIT=1`             | 961,218 (~1.9x)              | 113.77s (~1.7x, 568,486 steps/sec)                    |
+| PyPy 3.10                                 | 37,989,746 (~76x)            | 11.59s (~16x, 5,580,638 steps/sec)                    |
 
 ("Steps/sec" counts `WFI`/`WFE` clock-fast-forward iterations alongside real instructions, so
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
 interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
 biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
+`rp2040py.native` (see "Cython port of the interpreter core" below and `docs/BACKLOG.md`) is on by
+default whenever a C compiler is available, so the plain "CPython 3.10" row above is actually the
+*worse* case (no compiler, or `RP2040PY_SKIP_CYTHON=1`) - most real installs land on the native row
+without doing anything differently. It doesn't touch PyPy at all (compilation is skipped there on
+purpose - see below), so PyPy remains the fastest option for CPU-bound runs regardless.
 The "MicroPython 1.28 + littlefs" column specifically times booting, mounting a littlefs image,
 and running a resident `while True: print(...); time.sleep(1)` script (`tests/micropython/main.py`,
 what `ci-micropython.yml` actually boots) to its first line of output - reaching the bare REPL
@@ -480,7 +486,7 @@ Two mitigations, worth combining:
   speedup in local benchmarking (once warmed up) and comfortably completes the same MicroPython +
   littlefs boot in well under a minute. Note `--no-dev` (or a separate PyPy-only sync): the `dev`
   dependency group's `mypy` pulls in `ast-serialize`, whose PyO3 build currently requires PyPy
-  ≥3.11, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
+  ≥3.10, so `uv sync`-ing the full dev group under PyPy 3.10 fails - this only matters for
   mypy/ruff/pytest tooling, not for running the emulator itself, whose only runtime dependency
   (`pyelftools`, for `--bootrom` ELF parsing) is a pure-Python wheel with no PyPy-specific build
   issues of its own. `ci-micropython.yml` and `ci-pico-sdk.yml` run the firmware-boot steps against a
@@ -599,3 +605,69 @@ Two mitigations, worth combining:
   a clean A/B (`rp2040py bench`) on a real MicroPython 1.21 boot-to-first-print run, three runs
   each side: ~273K-313K instructions/sec before (noisy) vs. ~307K-312K after (tighter), roughly a
   7-8% improvement on top of everything above.
+- **`RP2040.bootrom_byte_size`'s caching pattern extended to `sram`/`usb_dpram`/`flash`
+  (`ram_byte_size`/`dpram_byte_size`/`flash_byte_size`)** - `read_uint16()`/`read_uint8()`/
+  `write_uint8()`/`write_uint16()` were still calling `len(self.sram)`/`len(self.flash)` on
+  essentially every RAM/flash bus access. Honest result, unlike the fix above: no measurable
+  difference on a clean A/B (3 runs each side, same 1.21 benchmark) -
+  `bytearray.__len__()` is already O(1) in CPython (a struct field read), so there wasn't
+  much to save here, unlike `find_peripheral()`'s real `dict.get()`. Kept for consistency with
+  the established pattern and because it cannot be a regression, not because it's a proven win.
+- **HLE (high-level emulation) hook for bootrom's `__memcpy`/`__memcpy_44`, opt-in via
+  `RP2040PY_ENABLE_HLE_MEMCPY=1` (off by default).** Found while tracing the 1.21-vs-1.28
+  instruction-count gap (see above) that real firmware's own `memcpy()` calls - TinyUSB's
+  `tu_fifo_read`/`tu_fifo_write`, littlefs's `lfs2_bd_read()` - route through these two bootrom
+  entry points, and that interpreting their per-byte/per-word copy loop one emulated Thumb
+  instruction at a time is pure overhead once the copy itself can be done as a single Python-level
+  bulk operation. `CortexM0Core.execute_instruction()` checks `core.pc` against
+  `RP2040.hle_memcpy_entries` (a `frozenset[int]`) before the normal fetch/decode/dispatch path; on
+  a hit, `_hle_memcpy()` performs the copy via `RP2040.bus_copy()` (a `bytearray` slice copy when
+  both ends land in RAM/flash - the common case - falling back to a plain byte-by-byte bus copy for
+  anything else, e.g. touching peripheral space) and jumps directly to the return address, still
+  advancing the clock by a rough (not cycle-accurate) cost estimate so SOF-cadence/timing-sensitive
+  code elsewhere isn't disturbed by treating the copy as free.
+
+  Detecting *where* these two routines live is a whole-bootrom byte-pattern scan (`bytes.find()`
+  over the 16KB bootrom, once per `load_bootrom()` call - nowhere near the hot per-instruction
+  path), not a hardcoded address: downloaded `b0.elf`/`b2.elf` via `--bootrom` and confirmed the
+  routines' own machine code is byte-for-byte identical across B0/B1/B2 (only their *position*
+  differs - B0: `0x2888`/`0x28a0`, B1: `0x2628`/`0x2640`, B2: `0x2604`/`0x261c` - presumably other
+  ROM code shifting around them, not the routines themselves changing), so a scan finds the right
+  offset for any of the three (or any future revision carrying the same unchanged routine)
+  automatically, rather than needing a manually-maintained per-revision offset table. A revision
+  where the signature genuinely isn't found anywhere leaves the hook inert for that image rather
+  than risking a misfire. Verified booting real MicroPython 1.21 + littlefs against all three
+  bootrom revisions with the hook enabled - identical, correct output (`Hello, MicroPython!
+  version: 1.21.0`) on each.
+
+  **Measured net negative on both benchmarks - off by default, not recommended to enable.** No
+  measurable improvement on the fast 1.21 boot-to-first-print benchmark (memcpy is only ~0.2% of
+  its instructions there). The real test - the full MicroPython 1.28 boot-and-run, where `memcpy`
+  traffic is ~18x higher - is now measured too: 213.86s baseline vs. 217.82s with the hook enabled,
+  **~1.8% *slower***, not faster (instructions/sec is misleading here and shouldn't be used - the
+  hook collapses many interpreted instructions into one counted step, so the two runs' step counts
+  aren't the same unit; wall-clock time is the only fair comparison). The per-instruction
+  `core.pc in self.rp2040.hle_memcpy_entries` check is paid by every single instruction in the run,
+  and even 18x more memcpy traffic isn't a large enough share of total execution to outweigh that
+  fixed tax. The mechanism itself is correct (verified against real boots on all three bootrom
+  revisions) - this is a clean "measured, doesn't pay off" result, not a bug. See
+  `docs/BACKLOG.md` for the full numbers and rationale.
+- **Ahead-of-time Cython compilation of `CortexM0Core`/`RP2040`'s hot paths - unlike every
+  runtime-check-based idea above (dispatch table aside), this one is a genuine ~4x win, on by
+  default.** All the items above tried to make the *interpreter loop* itself cheaper or skip parts
+  of it conditionally; this instead compiles the whole thing to C ahead of time, so there's no
+  per-instruction "should I take the fast path" check to weigh against the savings - the exact
+  problem that made the HLE hook and three separate JIT attempts (`docs/JIT_BACKLOG.md`) all net
+  negative. Ships as an optional-but-automatic `rp2040py.native` extension: every one of
+  `CortexM0Core`'s ~90 instruction handlers is a genuinely C-typed function (not just typed class
+  fields - an earlier, narrower attempt at exactly that shipped first and measured only ~2-9%
+  real-world despite an ~11.5x isolated estimate, then got replaced by this full port once the gap
+  was root-caused to untyped method *bodies* re-boxing every value at the call boundary), dispatched
+  through a real C function-pointer table, plus `RP2040`'s `read`/`write_uint8/16/32` bus paths.
+  Falls back to the identical pure-Python implementation automatically if no C compiler is
+  available at install time, or at runtime via `RP2040PY_SKIP_CYTHON=1`. Measured **~3.9x** on the
+  synthetic instructions/sec benchmark and **~4.1x** on a real MicroPython 1.21 boot - see
+  `docs/BACKLOG.md`'s "Cython port of the interpreter core" section for the full writeup (the
+  root-cause analysis of why the first attempt underperformed, the abi3/stable-ABI build, the PyPy
+  regression this found and fixed, and the two real correctness bugs the build-then-test loop
+  caught along the way).

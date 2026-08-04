@@ -21,6 +21,9 @@ jobs:
   build-littlefs:
     name: Build littlefs test images
     runs-on: ubuntu-latest
+    env:
+      RP2040PY_SKIP_CYTHON: 1
+
     steps:
       - uses: actions/checkout@v7
 
@@ -28,6 +31,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: "3.10"
+          github-token: ${{ github.token }}
 
       - name: Install dependencies
         run: uv sync
@@ -92,6 +96,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: ${{ matrix.python_runtime }}
+          github-token: ${{ github.token }}
 
       # Downloads (and caches) this version's UF2 outside the timed test steps below, so a slow
       # micropython.org fetch doesn't get counted as (or blow the budget of) actual boot/run time.
@@ -102,7 +107,7 @@ jobs:
         run: timeout 1m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} -c "import sys; sys.implementation"
 
       - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --expect-text "Hello, MicroPython!"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
