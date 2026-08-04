@@ -30,6 +30,33 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
+### Environments without compiled-extension support (Pythonista, other iOS apps)
+
+`rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
+[Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
+handful of environments, notably iOS apps like [Pythonista](http://omz-software.com/pythonista/)
+sandboxed by the OS, can't load compiled `.so` extensions or import native code dynamically at
+all. A plain `pip install rp2040py` there resolves to a platform-specific wheel that simply won't
+load. Force the pure-Python universal wheel instead:
+
+```sh
+pip download rp2040py --only-binary=:all: --platform any --abi none
+pip install rp2040py-*.whl --upgrade
+```
+
+This is the exact same artifact `rp2040py`'s own release pipeline builds and publishes for every
+release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
+not a degraded or unsupported build, just the emulator without the compiled speedup.
+
+To confirm you actually got it:
+- **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
+  `rp2040py-<version>-py3-none-any.whl`, with no platform/ABI tag (e.g. no `cp310-abi3-manylinux...`)
+  anywhere in the filename.
+- **At runtime**: `rp2040py.rp2040.RP2040.__module__` is `"rp2040py._rp2040"` (pure Python) rather
+  than `"rp2040py.native._rp2040"` (compiled) - equivalently, watch for the `UserWarning` ("Native
+  extensions are not available...") `rp2040py.native` raises on import once the compiled backend
+  isn't present, which is the expected, harmless case here rather than an error.
+
 ## Run the demo project
 
 The commands below assume `rp2040py` is installed (`pip install rp2040py` / `uv add rp2040py` /
@@ -223,6 +250,13 @@ sudo cp code.py fat12/  # copy code.py to the filesystem
 sudo umount fat12/  # unmount the filesystem
 ```
 
+Then pass it explicitly with `--fat12` (no default - `fat12.img` sitting in the current directory
+is never picked up implicitly):
+
+```sh
+rp2040py micropython --circuitpython --fat12 fat12.img
+```
+
 CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython's
 `os`/`rp2.Flash` does, so this hasn't been separately exercised - but the underlying flash-write
 path (see the MicroPython filesystem support section) is the same SSI peripheral either way.
@@ -264,8 +298,9 @@ Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
 [its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
 4096-byte blocks - a *different* flash region than the user-program one above, with no auto-run
 semantics of its own (plain storage, accessible from JS via `require('fs')`). Build a compatible
-image with `mklittlefs` and pass it via `--littlefs` (defaults to `kaluma_littlefs.img` - a
-different default than MicroPython's `littlefs.img`, since the block size/count differ):
+image with `mklittlefs` and pass it via `--littlefs` explicitly (no default - unlike MicroPython's
+`--littlefs`, it's never picked up implicitly, even from a `kaluma_littlefs.img` sitting in the
+current directory):
 
 ```sh
 rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
