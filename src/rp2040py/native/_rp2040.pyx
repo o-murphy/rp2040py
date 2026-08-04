@@ -231,7 +231,7 @@ cdef class RP2040:
         # a plain array.array/bytearray/bytes only auto-coerces when passed as a *parameter*, not
         # as a slice-assignment RHS (confirmed via isolated repro; raises "TypeError: an integer
         # is required" otherwise).
-        cdef unsigned int[:] materialized = array.array("I", (value & 0xFFFFFFFF for value in bootrom_data))
+        cdef unsigned int[:] materialized = array.array("I", (value & 0xFFFFFFFFU for value in bootrom_data))
         self._bootrom[: len(bootrom_data)] = materialized
         self.reset()
 
@@ -242,8 +242,8 @@ cdef class RP2040:
         filler = bytearray(b"\xff" * len(self._flash))
         self._flash[:] = filler
 
-    cpdef unsigned int read_uint32(self, address) except? 0:
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
+    cpdef unsigned int read_uint32(self, long long address) except? 0:
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int offset
         if addr & 0x3:
             self.logger.error(LOG_NAME, f"read from address {addr:x}, which is not 32 bit aligned")
@@ -269,21 +269,21 @@ cdef class RP2040:
             # consumer (typed-array store, bitwise op) truncates it immediately via ToUint32, so
             # truncate here rather than letting a float leak into the rest of the bus/CPU/DMA
             # read path.
-            return <unsigned int> (int(self.sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFF)
+            return <unsigned int> (int(self.sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFFU)
 
         peripheral = self.find_peripheral(addr)
         if peripheral is not None:
             return <unsigned int> peripheral.read_uint32(addr & 0x3FFF)
 
         self.logger.warning(LOG_NAME, f"Read from invalid memory address: {addr:x}")
-        return 0xFFFFFFFF
+        return 0xFFFFFFFFU
 
     def find_peripheral(self, address):
         return self.peripherals.get((u32(address) >> 14) << 2)
 
-    cpdef unsigned int read_uint16(self, address):
+    cpdef unsigned int read_uint16(self, long long address):
         """We assume the address is 16-bit aligned."""
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int offset
         cdef unsigned int value
         if FLASH_START <= addr < FLASH_START + self.flash_byte_size:
@@ -293,23 +293,23 @@ cdef class RP2040:
             offset = addr - RAM_START
             return read_uint16_le(self._sram, offset)
 
-        value = self.read_uint32(addr & 0xFFFFFFFC)
-        return (value & 0xFFFF0000) >> 16 if (addr & 0x2) else (value & 0xFFFF)
+        value = self.read_uint32(addr & 0xFFFFFFFCU)
+        return (value & 0xFFFF0000U) >> 16 if (addr & 0x2) else (value & 0xFFFF)
 
-    cpdef unsigned int read_uint8(self, address):
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
+    cpdef unsigned int read_uint8(self, long long address):
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int value
         if FLASH_START <= addr < FLASH_START + self.flash_byte_size:
             return self._flash[addr - FLASH_START]
         if RAM_START <= addr < RAM_START + self.ram_byte_size:
             return self._sram[addr - RAM_START]
 
-        value = self.read_uint16(addr & 0xFFFFFFFE)
+        value = self.read_uint16(addr & 0xFFFFFFFEU)
         return <unsigned int> ((value & 0xFF00) >> 8 if (addr & 0x1) else (value & 0xFF))
 
-    cpdef write_uint32(self, address, value):
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
-        cdef unsigned int val = <unsigned int> (value & 0xFFFFFFFF)
+    cpdef write_uint32(self, long long address, long long value):
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
+        cdef unsigned int val = <unsigned int> (value & 0xFFFFFFFFU)
         cdef unsigned int atomic_type
         cdef unsigned int offset
         # Same range order as read_uint32() - RAM/flash/bootrom checked first via cheap integer
@@ -343,8 +343,8 @@ cdef class RP2040:
             else:
                 self.logger.warning(LOG_NAME, f"Write to undefined address: {addr:x}")
 
-    cpdef write_uint8(self, address, value):
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
+    cpdef write_uint8(self, long long address, long long value):
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int val = <unsigned int> (value & 0xFF)
         cdef unsigned int aligned_address
         cdef unsigned int offset
@@ -354,7 +354,7 @@ cdef class RP2040:
             self._sram[addr - RAM_START] = val
             return
 
-        aligned_address = addr & 0xFFFFFFFC
+        aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
         peripheral = self.find_peripheral(addr)
         if peripheral is not None:
@@ -371,10 +371,10 @@ cdef class RP2040:
         patched[offset] = val
         self.write_uint32(aligned_address, int.from_bytes(patched, "little"))
 
-    cpdef write_uint16(self, address, value):
+    cpdef write_uint16(self, long long address, long long value):
         # we assume that address is 16-bit aligned.
         # Ideally we should generate a fault if not!
-        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFF)
+        cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int val = <unsigned int> (value & 0xFFFF)
         cdef unsigned int aligned_address
         cdef unsigned int offset
@@ -384,7 +384,7 @@ cdef class RP2040:
             write_uint16_le(self._sram, addr - RAM_START, val)
             return
 
-        aligned_address = addr & 0xFFFFFFFC
+        aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
         peripheral = self.find_peripheral(addr)
         if peripheral is not None:

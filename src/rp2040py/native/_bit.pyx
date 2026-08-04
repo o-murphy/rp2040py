@@ -8,12 +8,12 @@ cpdef inline long long bit(long long n):
 
 
 cpdef inline unsigned int u32(long long n):
-    return <unsigned int>(n & 0xFFFFFFFF)
+    return <unsigned int>(n & 0xFFFFFFFFU)
 
 
 cpdef inline int s32(long long n):
-    cdef unsigned int u = <unsigned int>(n & 0xFFFFFFFF)
-    if u & 0x80000000:
+    cdef unsigned int u = <unsigned int>(n & 0xFFFFFFFFU)
+    if u & 0x80000000U:
         return <int>(u - 0x100000000)
     return <int>u
 

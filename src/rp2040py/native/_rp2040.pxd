@@ -25,9 +25,22 @@ cdef class RP2040:
     cdef unsigned int dpram_byte_size
     cdef dict __dict__
 
-    cpdef unsigned int read_uint32(self, address) except? 0
-    cpdef unsigned int read_uint16(self, address)
-    cpdef unsigned int read_uint8(self, address)
-    cpdef write_uint32(self, address, value)
-    cpdef write_uint8(self, address, value)
-    cpdef write_uint16(self, address, value)
+    # `address`/`value` typed `long long` (not left as plain `object`, the implicit default for
+    # an untyped cpdef parameter): every call site on the hot path (execute_instruction's opcode
+    # fetch, every op_* load/store handler in _cortex_m0_core.pyx) passes an already-C-typed
+    # `unsigned int` local or memoryview element. Against an `object` parameter, Cython has no
+    # choice but to box that C value into a real PyLong before the call (and the `& 0xFFFFFFFF`
+    # masking done on entry below then runs as a Python-level bigint op on the boxed value,
+    # rather than a single C AND) - confirmed by reading the generated C, same class of bug the
+    # module docstring's "why the first attempt underperformed" already covers for method bodies,
+    # just one layer further out at this cross-module call boundary. `long long` (not `unsigned
+    # int`) matches _bit.pyx's u32/s32 convention: it round-trips negative/oversized Python ints
+    # the same way the removed `object` parameter did (via a plain C `&`), so out-of-range test/
+    # peripheral callers keep working, whereas `unsigned int` would raise OverflowError on a
+    # negative argument instead of wrapping it.
+    cpdef unsigned int read_uint32(self, long long address) except? 0
+    cpdef unsigned int read_uint16(self, long long address)
+    cpdef unsigned int read_uint8(self, long long address)
+    cpdef write_uint32(self, long long address, long long value)
+    cpdef write_uint8(self, long long address, long long value)
+    cpdef write_uint16(self, long long address, long long value)

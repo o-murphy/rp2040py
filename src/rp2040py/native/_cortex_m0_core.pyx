@@ -91,12 +91,12 @@ LOG_NAME = "CortexM0Core"
 
 cdef inline int sign_extend8(unsigned int value) noexcept:
     # s32 is cpdef (Python-callable too), so it requires the GIL - can't be nogil here.
-    cdef unsigned int shifted = (value << 24) & 0xFFFFFFFF
+    cdef unsigned int shifted = (value << 24) & 0xFFFFFFFFU
     return s32(<long long> shifted) >> 24
 
 
 cdef inline int sign_extend16(unsigned int value) noexcept:
-    cdef unsigned int shifted = (value << 16) & 0xFFFFFFFF
+    cdef unsigned int shifted = (value << 16) & 0xFFFFFFFFU
     return s32(<long long> shifted) >> 16
 
 
@@ -108,7 +108,7 @@ cdef class CortexM0Core:
         # Cython's __cinit__/__init__ split. Ignores the `rp2040` constructor arg entirely -
         # Cython passes it through but a no-args-besides-self __cinit__ just ignores it.
         self.registers = array.array("I", [0] * 16)
-        self.interrupt_priorities = array.array("I", [0xFFFFFFFF, 0, 0, 0])
+        self.interrupt_priorities = array.array("I", [0xFFFFFFFFU, 0, 0, 0])
 
     def __init__(self, rp2040):
         self.rp2040 = rp2040
@@ -146,61 +146,71 @@ cdef class CortexM0Core:
 
         self.bl_taken = lambda core, blx: None
 
-        self.registers[13] = 0xFFFFFFFC
-        self.banked_sp = 0xFFFFFFFC
+        self.registers[13] = 0xFFFFFFFCU
+        self.banked_sp = 0xFFFFFFFCU
 
-    property logger:
-        def __get__(self):
-            return self.rp2040.logger
+    @property
+    def logger(self):
+        return self.rp2040.logger
 
     cpdef reset(self):
-        self.registers[13] = (<unsigned int> self.rp2040.read_uint32(self.vtor)) & 0xFFFFFFFC
-        self.registers[15] = (<unsigned int> self.rp2040.read_uint32(self.vtor + 4)) & 0xFFFFFFFE
+        self.registers[13] = (<unsigned int> self.rp2040.read_uint32(self.vtor)) & 0xFFFFFFFCU
+        self.registers[15] = (<unsigned int> self.rp2040.read_uint32(self.vtor + 4)) & 0xFFFFFFFEU
         self.cycles = 0
 
-    property sp:
-        def __get__(self):
-            return self.registers[13]
-        def __set__(self, value):
-            self.registers[13] = <unsigned int> (value & 0xFFFFFFFC)
+    @property
+    def sp(self):
+        return self.registers[13]
+    
+    @sp.setter
+    def sp(self, value):
+        self.registers[13] = <unsigned int> (value & 0xFFFFFFFCU)
 
-    property lr:
-        def __get__(self):
-            return self.registers[14]
-        def __set__(self, value):
-            self.registers[14] = <unsigned int> (value & 0xFFFFFFFF)
+    @property
+    def lr(self):
+        return self.registers[14]
+        
+    @lr.setter
+    def lr(self, value):
+        self.registers[14] = <unsigned int> (value & 0xFFFFFFFFU)
 
-    property pc:
-        def __get__(self):
-            return self.registers[15]
-        def __set__(self, value):
-            self.registers[15] = <unsigned int> (value & 0xFFFFFFFF)
+    @property
+    def pc(self):
+        return self.registers[15]
+    
+    @pc.setter    
+    def pc(self, value):
+        self.registers[15] = <unsigned int> (value & 0xFFFFFFFFU)
 
-    property apsr:
-        def __get__(self):
-            cdef unsigned int result = 0
-            if self.n:
-                result |= 0x80000000
-            if self.z:
-                result |= 0x40000000
-            if self.c:
-                result |= 0x20000000
-            if self.v:
-                result |= 0x10000000
-            return result
-        def __set__(self, value):
-            cdef unsigned int v = <unsigned int> (value & 0xFFFFFFFF)
-            self.n = bool(v & 0x80000000)
-            self.z = bool(v & 0x40000000)
-            self.c = bool(v & 0x20000000)
-            self.v = bool(v & 0x10000000)
+    @property
+    def apsr(self):
+        cdef unsigned int result = 0
+        if self.n:
+            result |= 0x80000000U
+        if self.z:
+            result |= 0x40000000
+        if self.c:
+            result |= 0x20000000
+        if self.v:
+            result |= 0x10000000
+        return result
 
-    property x_psr:
-        def __get__(self):
-            return self.apsr | self.ipsr | (1 << 24)
-        def __set__(self, value):
-            self.apsr = value
-            self.ipsr = <unsigned int> (value & 0x3F)
+    @apsr.setter
+    def apsr(self, value):
+        cdef unsigned int v = <unsigned int> (value & 0xFFFFFFFFU)
+        self.n = bool(v & 0x80000000U)
+        self.z = bool(v & 0x40000000)
+        self.c = bool(v & 0x20000000)
+        self.v = bool(v & 0x10000000)
+
+    @property
+    def x_psr(self):
+        return self.apsr | self.ipsr | (1 << 24)
+    
+    @x_psr.setter
+    def x_psr(self, value):
+        self.apsr = value
+        self.ipsr = <unsigned int> (value & 0x3F)
 
     def check_condition(self, cond) -> bool:
         cdef unsigned int c = <unsigned int> cond
@@ -234,23 +244,27 @@ cdef class CortexM0Core:
             self.banked_sp = temp
             self.sp_sel = stack
 
-    property sp_process:
-        def __get__(self):
-            return self.sp if self.sp_sel == SP_PROCESS else self.banked_sp
-        def __set__(self, value):
-            if self.sp_sel == SP_PROCESS:
-                self.sp = value
-            else:
-                self.banked_sp = <unsigned int> (value & 0xFFFFFFFF)
+    @property
+    def sp_process(self):
+        return self.sp if self.sp_sel == SP_PROCESS else self.banked_sp
+    
+    @sp_process.setter
+    def sp_process(self, value):
+        if self.sp_sel == SP_PROCESS:
+            self.sp = value
+        else:
+            self.banked_sp = <unsigned int> (value & 0xFFFFFFFFU)
 
-    property sp_main:
-        def __get__(self):
-            return self.sp if self.sp_sel == SP_MAIN else self.banked_sp
-        def __set__(self, value):
-            if self.sp_sel == SP_MAIN:
-                self.sp = value
-            else:
-                self.banked_sp = <unsigned int> (value & 0xFFFFFFFF)
+    @property
+    def sp_main(self):
+        return self.sp if self.sp_sel == SP_MAIN else self.banked_sp
+
+    @sp_main.setter
+    def sp_main(self, value):
+        if self.sp_sel == SP_MAIN:
+            self.sp = value
+        else:
+            self.banked_sp = <unsigned int> (value & 0xFFFFFFFFU)
 
     def exception_entry(self, exception_number) -> None:
         cdef unsigned int frame_ptr = 0
@@ -273,11 +287,11 @@ cdef class CortexM0Core:
         self.rp2040.write_uint32(frame_ptr + 0x18, self.pc & ~1)  # ReturnAddress(ExceptionType);
         self.rp2040.write_uint32(frame_ptr + 0x1C, (self.x_psr & ~(1 << 9)) | (frame_ptr_align << 9))
         if self.current_mode == MODE_HANDLER:
-            self.lr = 0xFFFFFFF1
+            self.lr = 0xFFFFFFF1U
         elif not self.sp_sel:
-            self.lr = 0xFFFFFFF9
+            self.lr = 0xFFFFFFF9U
         else:
-            self.lr = 0xFFFFFFFD
+            self.lr = 0xFFFFFFFDU
         # ExceptionTaken:
         self.current_mode = MODE_HANDLER  # Enter Handler Mode, now Privileged
         self.ipsr = exception_number
@@ -322,24 +336,24 @@ cdef class CortexM0Core:
         elif selector == 0b1101:
             self.sp_process = (self.sp_process + 0x20) | frame_ptr_align
 
-        self.apsr = psr & 0xF0000000
+        self.apsr = psr & 0xF0000000U
         force_thread = (self.current_mode == MODE_THREAD) and self.n_priv
         self.ipsr = 0 if force_thread else (psr & 0x3F)
         self.interrupts_updated = True
         # Thumb bit should always be one! EPSR<24> = psr<24>; // Load valid EPSR bits from memory
         self.event_registered = True
 
-    property pend_sv_priority:
-        def __get__(self):
-            return (self.shpr3 >> 22) & 0x3
+    @property
+    def pend_sv_priority(self):
+        return (self.shpr3 >> 22) & 0x3
 
-    property sv_call_priority:
-        def __get__(self):
-            return self.shpr2 >> 30
+    @property
+    def sv_call_priority(self):
+        return self.shpr2 >> 30
 
-    property systick_priority:
-        def __get__(self):
-            return self.shpr3 >> 30
+    @property
+    def systick_priority(self):
+        return self.shpr3 >> 30
 
     def exception_priority(self, n) -> int:
         cdef unsigned int int_num
@@ -364,29 +378,29 @@ cdef class CortexM0Core:
                 return priority
         return LOWEST_PRIORITY
 
-    property vect_pending:
-        def __get__(self):
-            cdef unsigned int sv_call_priority, systick_priority, pend_sv_priority
-            cdef unsigned int pending_interrupts, priority, level_interrupts, interrupt_number
-            if self.pending_nmi:
-                return EXC_NMI
-            sv_call_priority = self.sv_call_priority
-            systick_priority = self.systick_priority
-            pend_sv_priority = self.pend_sv_priority
-            pending_interrupts = self.pending_interrupts
-            for priority in range(LOWEST_PRIORITY):
-                level_interrupts = pending_interrupts & self.interrupt_priorities[priority]
-                if self.pending_svcall and priority == sv_call_priority:
-                    return EXC_SVCALL
-                if self.pending_pend_sv and priority == pend_sv_priority:
-                    return EXC_PENDSV
-                if self.pending_systick and priority == systick_priority:
-                    return EXC_SYSTICK
-                if level_interrupts:
-                    for interrupt_number in range(32):
-                        if level_interrupts & (1 << interrupt_number):
-                            return 16 + interrupt_number
-            return 0
+    @property
+    def vect_pending(self):
+        cdef unsigned int sv_call_priority, systick_priority, pend_sv_priority
+        cdef unsigned int pending_interrupts, priority, level_interrupts, interrupt_number
+        if self.pending_nmi:
+            return EXC_NMI
+        sv_call_priority = self.sv_call_priority
+        systick_priority = self.systick_priority
+        pend_sv_priority = self.pend_sv_priority
+        pending_interrupts = self.pending_interrupts
+        for priority in range(LOWEST_PRIORITY):
+            level_interrupts = pending_interrupts & self.interrupt_priorities[priority]
+            if self.pending_svcall and priority == sv_call_priority:
+                return EXC_SVCALL
+            if self.pending_pend_sv and priority == pend_sv_priority:
+                return EXC_PENDSV
+            if self.pending_systick and priority == systick_priority:
+                return EXC_SYSTICK
+            if level_interrupts:
+                for interrupt_number in range(32):
+                    if level_interrupts & (1 << interrupt_number):
+                        return 16 + interrupt_number
+        return 0
 
     cpdef set_interrupt(self, irq, value):
         cdef unsigned int irq_bit = <unsigned int> (1 << irq)
@@ -487,11 +501,11 @@ cdef class CortexM0Core:
         if self.interrupts_updated and self.check_for_interrupts():
             self.waiting = False
         # ARM Thumb instruction encoding - 16 bits / 2 bytes
-        opcode_pc = self.registers[15] & 0xFFFFFFFE  # ensure no LSB set PC are executed
+        opcode_pc = self.registers[15] & 0xFFFFFFFEU  # ensure no LSB set PC are executed
         opcode = self.rp2040.read_uint16(opcode_pc)
         wide_instruction = (opcode >> 12) == 0b1111 or (opcode >> 11) == 0b11101
         opcode2 = self.rp2040.read_uint16(opcode_pc + 2) if wide_instruction else 0
-        self.registers[15] = (self.registers[15] + 2) & 0xFFFFFFFF
+        self.registers[15] = (self.registers[15] + 2) & 0xFFFFFFFFU
 
         if WIDE_RANGE_START <= opcode < WIDE_RANGE_END:
             handler = resolve_wide(opcode, opcode2)
@@ -531,14 +545,14 @@ cdef void bx_write_pc(CortexM0Core core, unsigned int address) except *:
     if core.current_mode == MODE_HANDLER and (address >> 28) == 0xF:
         core.exception_return(address & 0x0FFFFFFF)
     else:
-        core.registers[15] = address & 0xFFFFFFFE
+        core.registers[15] = address & 0xFFFFFFFEU
 
 
 cdef inline long long add_update_flags(CortexM0Core core, long long addend1, long long addend2) noexcept:
     cdef long long raw_result = addend1 + addend2
     cdef unsigned int unsigned_sum = u32(raw_result)
     cdef long long signed_sum = (<long long> s32(addend1)) + (<long long> s32(addend2))
-    core.n = (raw_result & 0x80000000) != 0
+    core.n = (raw_result & 0x80000000U) != 0
     core.z = (raw_result & 0xFFFFFFFFLL) == 0
     core.c = raw_result != (<long long> unsigned_sum)
     core.v = s32(raw_result) != signed_sum
@@ -550,12 +564,12 @@ cdef inline long long subtract_update_flags(CortexM0Core core, long long minuend
     cdef unsigned int result_u = u32(result)
     cdef unsigned int minuend_u = u32(minuend)
     cdef unsigned int subtrahend_u = u32(subtrahend)
-    core.n = (result_u & 0x80000000) != 0
+    core.n = (result_u & 0x80000000U) != 0
     core.z = result_u == 0
     core.c = minuend >= subtrahend
     core.v = (
-        ((result_u & 0x80000000) != 0 and (minuend_u & 0x80000000) == 0 and (subtrahend_u & 0x80000000) != 0)
-        or ((result_u & 0x80000000) == 0 and (minuend_u & 0x80000000) != 0 and (subtrahend_u & 0x80000000) == 0)
+        ((result_u & 0x80000000U) != 0 and (minuend_u & 0x80000000U) == 0 and (subtrahend_u & 0x80000000U) != 0)
+        or ((result_u & 0x80000000U) == 0 and (minuend_u & 0x80000000U) != 0 and (subtrahend_u & 0x80000000U) == 0)
     )
     return result
 
@@ -592,7 +606,7 @@ cdef int op_add_sp_plus_immediate(
 ) except -1:
     # ADD (SP plus immediate)
     cdef unsigned int imm32 = (opcode & 0x7F) << 2
-    core.registers[13] = (core.registers[13] + imm32) & 0xFFFFFFFC
+    core.registers[13] = (core.registers[13] + imm32) & 0xFFFFFFFCU
     return 1
 
 
@@ -637,10 +651,10 @@ cdef int op_add_register(CortexM0Core core, unsigned int opcode, unsigned int op
     if rdn != SP_REGISTER and rdn != PC_REGISTER:
         core.registers[rdn] = result
     elif rdn == PC_REGISTER:
-        core.registers[rdn] = result & 0xFFFFFFFE
+        core.registers[rdn] = result & 0xFFFFFFFEU
         delta_cycles += 1
     elif rdn == SP_REGISTER:
-        core.registers[rdn] = result & 0xFFFFFFFC
+        core.registers[rdn] = result & 0xFFFFFFFCU
     return delta_cycles
 
 
@@ -648,7 +662,7 @@ cdef int op_adr(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
     # ADR
     cdef unsigned int imm8 = opcode & 0xFF
     cdef unsigned int rd = (opcode >> 8) & 0x7
-    core.registers[rd] = (opcode_pc & 0xFFFFFFFC) + 4 + (imm8 << 2)
+    core.registers[rd] = (opcode_pc & 0xFFFFFFFCU) + 4 + (imm8 << 2)
     return 1
 
 
@@ -658,7 +672,7 @@ cdef int op_ands_encoding_t2(CortexM0Core core, unsigned int opcode, unsigned in
     cdef unsigned int rdn = opcode & 0x7
     cdef unsigned int result = core.registers[rdn] & core.registers[rm]
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -674,9 +688,9 @@ cdef int op_asrs_immediate(CortexM0Core core, unsigned int opcode, unsigned int 
     if shift_n < 32:
         result = s32(<long long> input_value) >> shift_n
     else:
-        result = -1 if (input_value & 0x80000000) else 0
+        result = -1 if (input_value & 0x80000000U) else 0
     core.registers[rd] = <unsigned int> result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = u32(<long long> result) == 0
     core.c = (input_value & (<unsigned int> (1 << (shift_n - 1)))) != 0
     return 1
@@ -692,9 +706,9 @@ cdef int op_asrs_register(CortexM0Core core, unsigned int opcode, unsigned int o
     if shift_n < 32:
         result = s32(<long long> input_value) >> shift_n
     else:
-        result = -1 if (input_value & 0x80000000) else 0
+        result = -1 if (input_value & 0x80000000U) else 0
     core.registers[rdn] = <unsigned int> result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = u32(<long long> result) == 0
     # NOTE: shift_n can be 0 here (unlike the immediate form above); `& 31` replicates the
     # source's JS-shift-wraparound-emulating mask so the C shift amount stays in [0, 31].
@@ -730,7 +744,7 @@ cdef int op_bics(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
     cdef unsigned int rdn = opcode & 0x7
     cdef unsigned int result = core.registers[rdn] & ~core.registers[rm]
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -826,13 +840,13 @@ cdef int op_cpsie_i(CortexM0Core core, unsigned int opcode, unsigned int opcode2
 
 cdef int op_dmb_sy(CortexM0Core core, unsigned int opcode, unsigned int opcode2, unsigned int opcode_pc) except -1:
     # DMB SY
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 3
 
 
 cdef int op_dsb_sy(CortexM0Core core, unsigned int opcode, unsigned int opcode2, unsigned int opcode_pc) except -1:
     # DSB SY
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 3
 
 
@@ -842,14 +856,14 @@ cdef int op_eors(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
     cdef unsigned int rdn = opcode & 0x7
     cdef unsigned int result = core.registers[rm] ^ core.registers[rdn]
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
 
 cdef int op_isb_sy(CortexM0Core core, unsigned int opcode, unsigned int opcode2, unsigned int opcode_pc) except -1:
     # ISB SY
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 3
 
 
@@ -897,7 +911,7 @@ cdef int op_ldr_literal(CortexM0Core core, unsigned int opcode, unsigned int opc
     cdef unsigned int imm8 = (opcode & 0xFF) << 2
     cdef unsigned int rt = (opcode >> 8) & 7
     cdef unsigned int next_pc = core.registers[15] + 2
-    cdef unsigned int addr = (next_pc & 0xFFFFFFFC) + imm8
+    cdef unsigned int addr = (next_pc & 0xFFFFFFFCU) + imm8
     cdef int delta_cycles = 1 + cycles_io(addr, False)
     core.registers[rt] = core.rp2040.read_uint32(addr)
     return delta_cycles
@@ -988,7 +1002,7 @@ cdef int op_lsls_immediate(CortexM0Core core, unsigned int opcode, unsigned int 
     cdef unsigned int input_value = core.registers[rm]
     cdef unsigned int result = input_value << imm5
     core.registers[rd] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     if imm5:
         core.c = (input_value & (<unsigned int> (1 << (32 - imm5)))) != 0
@@ -1003,7 +1017,7 @@ cdef int op_lsls_register(CortexM0Core core, unsigned int opcode, unsigned int o
     cdef unsigned int shift_count = core.registers[rm] & 0xFF
     cdef unsigned int result = 0 if shift_count >= 32 else (input_value << shift_count)
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     # NOTE: shift_count ranges 0-255 here; `& 31` replicates the source's mod-32 shift-amount
     # wraparound so the C shift amount stays in [0, 31] instead of triggering UB.
@@ -1020,7 +1034,7 @@ cdef int op_lsrs_immediate(CortexM0Core core, unsigned int opcode, unsigned int 
     cdef unsigned int input_value = core.registers[rm]
     cdef unsigned int result = (input_value >> imm5) if imm5 else 0
     core.registers[rd] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     core.c = ((input_value >> (imm5 - 1 if imm5 else 31)) & 0x1) != 0
     return 1
@@ -1034,7 +1048,7 @@ cdef int op_lsrs_register(CortexM0Core core, unsigned int opcode, unsigned int o
     cdef unsigned int input_value = core.registers[rdn]
     cdef unsigned int result = (input_value >> shift_amount) if shift_amount < 32 else 0
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     # NOTE: shift_amount can be 0 here, making `shift_amount - 1` negative if done unmasked;
     # `& 31` replicates the source's mod-32 wraparound instead of triggering C shift UB.
@@ -1065,7 +1079,7 @@ cdef int op_movs(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
     cdef unsigned int value = opcode & 0xFF
     cdef unsigned int rd = (opcode >> 8) & 7
     core.registers[rd] = value
-    core.n = (value & 0x80000000) != 0
+    core.n = (value & 0x80000000U) != 0
     core.z = value == 0
     return 1
 
@@ -1075,7 +1089,7 @@ cdef int op_mrs(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
     cdef unsigned int sysm = opcode2 & 0xFF
     cdef unsigned int rd = (opcode2 >> 8) & 0xF
     core.registers[rd] = core.read_special_register(sysm)
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 3
 
 
@@ -1084,7 +1098,7 @@ cdef int op_msr(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
     cdef unsigned int sysm = opcode2 & 0xFF
     cdef unsigned int rn = opcode & 0xF
     core.write_special_register(sysm, core.registers[rn])
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 3
 
 
@@ -1092,9 +1106,9 @@ cdef int op_muls(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
     # MULS
     cdef unsigned int rn = (opcode >> 3) & 0x7
     cdef unsigned int rdm = opcode & 0x7
-    cdef unsigned int result = <unsigned int> ((<unsigned long long> core.registers[rn] * core.registers[rdm]) & 0xFFFFFFFF)
+    cdef unsigned int result = <unsigned int> ((<unsigned long long> core.registers[rn] * core.registers[rdm]) & 0xFFFFFFFFU)
     core.registers[rdm] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -1105,7 +1119,7 @@ cdef int op_mvns(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
     cdef unsigned int rd = opcode & 7
     cdef unsigned int result = ~core.registers[rm]
     core.registers[rd] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -1116,7 +1130,7 @@ cdef int op_orrs_encoding_t2(CortexM0Core core, unsigned int opcode, unsigned in
     cdef unsigned int rdn = opcode & 0x7
     cdef unsigned int result = core.registers[rdn] | core.registers[rm]
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -1133,11 +1147,11 @@ cdef int op_pop(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
             address += 4
             delta_cycles += 1
     if p:
-        core.registers[13] = (address + 4) & 0xFFFFFFFC
+        core.registers[13] = (address + 4) & 0xFFFFFFFCU
         bx_write_pc(core, core.rp2040.read_uint32(address))
         delta_cycles += 2
     else:
-        core.registers[13] = address & 0xFFFFFFFC
+        core.registers[13] = address & 0xFFFFFFFCU
     return delta_cycles
 
 
@@ -1157,7 +1171,7 @@ cdef int op_push(CortexM0Core core, unsigned int opcode, unsigned int opcode2, u
             address += 4
     if opcode & (1 << 8):
         core.rp2040.write_uint32(address, core.registers[14])
-    core.registers[13] = (core.registers[13] - 4 * bit_count) & 0xFFFFFFFC
+    core.registers[13] = (core.registers[13] - 4 * bit_count) & 0xFFFFFFFCU
     return delta_cycles
 
 
@@ -1214,9 +1228,9 @@ cdef int op_ror(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
     else:
         result = (input_value >> shift) | (input_value << (32 - shift))
     core.registers[rdn] = result
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
-    core.c = (result & 0x80000000) != 0
+    core.c = (result & 0x80000000U) != 0
     return 1
 
 
@@ -1348,7 +1362,7 @@ cdef int op_sub_sp_minus_immediate(
 ) except -1:
     # SUB (SP minus immediate)
     cdef unsigned int imm32 = (opcode & 0x7F) << 2
-    core.registers[13] = (core.registers[13] - imm32) & 0xFFFFFFFC
+    core.registers[13] = (core.registers[13] - imm32) & 0xFFFFFFFCU
     return 1
 
 
@@ -1406,7 +1420,7 @@ cdef int op_tst(CortexM0Core core, unsigned int opcode, unsigned int opcode2, un
     cdef unsigned int rm = (opcode >> 3) & 0x7
     cdef unsigned int rn = opcode & 0x7
     cdef unsigned int result = core.registers[rn] & core.registers[rm]
-    core.n = (result & 0x80000000) != 0
+    core.n = (result & 0x80000000U) != 0
     core.z = result == 0
     return 1
 
@@ -1425,7 +1439,7 @@ cdef int op_udf_encoding_t2(CortexM0Core core, unsigned int opcode, unsigned int
     cdef unsigned int imm12 = opcode2 & 0xFFF
     core.break_rewind = 4
     core.rp2040.on_break((imm4 << 12) | imm12)
-    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFF
+    core.registers[15] = (core.registers[15] + 2) & 0xFFFFFFFFU
     return 1
 
 
