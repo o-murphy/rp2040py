@@ -11,7 +11,7 @@ resolution silently skipped the same `v`-prefix stripping MicroPython's got (see
 """
 
 import json
-import sys
+import logging
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -19,6 +19,8 @@ from pathlib import Path
 import semver
 
 __all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,8 @@ def _cache_dir() -> Path:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        print(
-            f"warning: could not create cache directory {cache_dir} ({exc}); caching in the current directory instead",
-            file=sys.stderr,
+        _logger.warning(
+            "could not create cache directory %s (%s); caching in the current directory instead", cache_dir, exc
         )
         return Path()
     return cache_dir
@@ -111,7 +112,7 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
 
     local_image = Path(image)
     if local_image.exists():
-        print(f"Found local image: {local_image}")
+        _logger.info("Found local image: %s", local_image)
         return str(local_image)
 
     version = _resolve_version(spec, image)
@@ -120,7 +121,7 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
     cached_path = _cache_dir() / filename
 
     if cached_path.exists():
-        print(f"Found local image: {cached_path}")
+        _logger.info("Found local image: %s", cached_path)
         return str(cached_path)
 
     from urllib.error import HTTPError
@@ -128,9 +129,9 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
 
     def report_hook(chunk: int, chunk_size: int, size: int) -> object:
         if chunk == 0:
-            print(f"Download: {filename} from {url}")
+            _logger.info("Download: %s from %s", filename, url)
         elif chunk * chunk_size >= size:
-            print(f"Download complete: file saved to: {cached_path}")
+            _logger.info("Download complete: file saved to: %s", cached_path)
         return None
 
     try:

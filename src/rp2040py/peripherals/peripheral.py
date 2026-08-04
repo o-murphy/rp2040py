@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -9,6 +10,11 @@ __all__ = (
     "UnimplementedPeripheral",
     "atomic_update",
 )
+
+# Module-level, not the project's own Logger Protocol/ConsoleLogger: atomic_update() is a bare
+# utility function with no peripheral/RP2040 instance in scope to hang a component-named logger
+# call off of - this is the plain stdlib case the Logger Protocol was never meant to cover.
+_logger = logging.getLogger(__name__)
 
 ATOMIC_NORMAL = 0
 ATOMIC_XOR = 1
@@ -23,7 +29,7 @@ def atomic_update(current_value: int, atomic_type: int, new_value: int) -> int:
         return current_value | new_value
     if atomic_type == ATOMIC_CLEAR:
         return current_value & ~new_value
-    print(f"warning: Atomic update called with invalid writeType {atomic_type}")
+    _logger.warning("Atomic update called with invalid writeType %s", atomic_type)
     return new_value
 
 

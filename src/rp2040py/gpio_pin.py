@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from enum import IntEnum
 from typing import TYPE_CHECKING
@@ -6,6 +7,11 @@ from rp2040py.peripherals.pio import WaitType
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
+
+# Module-level: _apply_override() is a bare utility function with no GPIOPin/RP2040 instance in
+# scope to hang a component-named logger call off of (see peripherals/peripheral.py's identical
+# rationale for atomic_update()).
+_logger = logging.getLogger(__name__)
 
 
 __all__ = (
@@ -45,7 +51,7 @@ def _apply_override(value: bool, override_type: int) -> bool:
         return False
     if override_type == 3:
         return True
-    print(f"error: applyOverride received invalid override type {override_type}")
+    _logger.error("applyOverride received invalid override type %s", override_type)
     return value
 
 

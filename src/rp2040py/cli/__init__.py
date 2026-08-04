@@ -32,6 +32,7 @@ Subcommands:
 
 import argparse
 import importlib.util
+import logging
 import os
 import struct
 import sys
@@ -501,6 +502,15 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
 
 
 def main(argv: "list[str] | None" = None) -> None:
+    # format="%(message)s": without a handler configured anywhere, stdlib logging's own
+    # "handler of last resort" only ever emits WARNING+ (to stderr) - INFO-level calls like
+    # firmware_retrieve.py's "Found local image"/"Download: ..." progress messages would otherwise
+    # be silently dropped, a real UX regression from when they were plain print() calls. level=INFO
+    # here, not WARNING, specifically to keep that visible; the plain-message format (no
+    # timestamp/level/logger-name prefix) keeps CLI output looking like the print() calls it
+    # replaced rather than diagnostic log noise - this is the application entry point, the
+    # conventional place for basicConfig(), not a library module like firmware_retrieve.py itself.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(prog="rp2040py", description=__doc__)
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
