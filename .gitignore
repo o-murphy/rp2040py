@@ -3,12 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
-*.so
-
 # Distribution / packaging
 .Python
 build/
+wheelhouse/
 develop-eggs/
 dist/
 downloads/
@@ -96,3 +94,13 @@ Thumbs.db
 **/*.elf
 **/*.bin
 tmp/
+
+# native
+src/**/*.html
+src/**/*.c
+
+# C extensions
+src/**/*.dll
+src/**/*.so
+src/**/*.pyd
+src/**/*.dylib

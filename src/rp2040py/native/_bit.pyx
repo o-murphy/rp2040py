@@ -1,0 +1,43 @@
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
+"""Real, fully-typed Cython port of rp2040py.utils.bit - the same public API, genuinely typed
+this time (not the field-only .py+.pxd approach the main package briefly carried)."""
+
+
+cpdef inline long long bit(long long n):
+    return (<long long>1) << n
+
+
+cpdef inline unsigned int u32(long long n):
+    return <unsigned int>(n & 0xFFFFFFFF)
+
+
+cpdef inline int s32(long long n):
+    cdef unsigned int u = <unsigned int>(n & 0xFFFFFFFF)
+    if u & 0x80000000:
+        return <int>(u - 0x100000000)
+    return <int>u
+
+
+cpdef inline unsigned int urshift(long long n, long long shift):
+    return u32(n) >> (shift & 31)
+
+
+cpdef inline unsigned short read_uint16_le(const unsigned char[:] buffer, Py_ssize_t offset):
+    return buffer[offset] | (buffer[offset + 1] << 8)
+
+
+cpdef inline void write_uint16_le(unsigned char[:] buffer, Py_ssize_t offset, unsigned int value):
+    buffer[offset] = value & 0xFF
+    buffer[offset + 1] = (value >> 8) & 0xFF
+
+
+cpdef inline unsigned int read_uint32_le(const unsigned char[:] buffer, Py_ssize_t offset):
+    return (buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16)
+            | (<unsigned int>buffer[offset + 3] << 24))
+
+
+cpdef inline void write_uint32_le(unsigned char[:] buffer, Py_ssize_t offset, unsigned long long value):
+    buffer[offset] = value & 0xFF
+    buffer[offset + 1] = (value >> 8) & 0xFF
+    buffer[offset + 2] = (value >> 16) & 0xFF
+    buffer[offset + 3] = (value >> 24) & 0xFF

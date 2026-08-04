@@ -1,4 +1,4 @@
-"""Regression coverage for CortexM0Core's opcode dispatch table (see cortex_m0_core.py and
+"""Regression coverage for CortexM0Core's opcode dispatch table (see _cortex_m0_core.py and
 docs/PORTING.md#known-differences-from-rp2040js for the full design rationale).
 
 execute_instruction() decodes via a precomputed 65536-entry table for opcodes outside
@@ -8,9 +8,15 @@ sound as long as no *other* (opcode-only) instruction pattern ever matches insid
 _build_dispatch_table() already asserts this at import time, but a dedicated test makes the
 invariant discoverable (surfaces in a stack trace here, not as "import of rp2040py mysteriously
 raises AssertionError") and documents *why* it must hold for whoever adds the next instruction.
+
+Imports from the private _cortex_m0_core module directly (not the rp2040py.cortex_m0_core facade)
+since this is exercising the reference pure-Python dispatch table's own construction logic, not
+whichever backend happens to be active - the native Cython port has its own equivalent table and
+equivalent assertion, built the same way, checked at import time rather than by a Python-level
+test.
 """
 
-from rp2040py.cortex_m0_core import _DISPATCH_TABLE, WIDE_RANGE_END, WIDE_RANGE_START
+from rp2040py._cortex_m0_core import _DISPATCH_TABLE, WIDE_RANGE_END, WIDE_RANGE_START
 
 
 def test_wide_range_has_no_table_entries():

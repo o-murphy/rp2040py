@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "cython>=3.2.9", "setuptools"]
 build-backend = "hatchling.build"
 
 [project]
@@ -25,10 +25,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = [
-    "pyelftools>=0.33",
-    "semver>=3.0.4",
-]
+dependencies = ["pyelftools>=0.33", "semver>=3.0.4"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -62,11 +59,35 @@ mypy_path = "src"
 files = ["src"]
 disable_error_code = ["annotation-unchecked"]
 
+# rp2040py.native's compiled extension modules aren't always built (see hatch_build.py's soft
+# fallback when Cython/a C compiler isn't available), so mypy can't reliably resolve them here.
+# The try/except ImportError fallback pattern (see rp2040py/utils/bit.py, rp2040py/rp2040.py) is
+# what actually handles their absence at runtime; this just quiets the analysis-time noise.
+[[tool.mypy.overrides]]
+module = "rp2040py.native.*"
+ignore_missing_imports = true
+
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rp2040py"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.cibuildwheel]
+# Use uv and build
+build-frontend = "build[uv]"
+# cp311-abi3 covers standard CPython 3.11+; free-threaded build (cp314t-*) is
+# built separately because Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
+build = "cp310-* cp314t-*"
+test-extras = "fs"
+test-requires = "pytest"
+# cibuildwheel runs tests from a scratch directory (not the repo checkout) so only the built
+# wheel's contents are ever imported - {project} is substituted with the repo root so pytest can
+# still find the test suite itself (tests/ isn't part of the wheel).
+test-command = "pytest {project}/tests"
 
 [dependency-groups]
 dev = [
@@ -77,4 +98,6 @@ dev = [
     "rp2040py[fs]",
     "pytest-cov>=7.1.0",
     "littlefs-python>=0.18.0",
+    "cython>=3.2.9",
+    "cibuildwheel>=2.23.4",
 ]

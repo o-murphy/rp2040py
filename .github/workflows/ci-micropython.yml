@@ -21,6 +21,9 @@ jobs:
   build-littlefs:
     name: Build littlefs test images
     runs-on: ubuntu-latest
+    env:
+      RP2040PY_SKIP_CYTHON: 1
+
     steps:
       - uses: actions/checkout@v7
 
