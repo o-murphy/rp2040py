@@ -444,6 +444,7 @@ Measured on this machine:
 | Interpreter | Synthetic (instructions/sec) | MicroPython 1.28 + littlefs, running a typical script |
 |---|---|---|
 | CPython 3.10 | 499,806 | 188.98s (342,244 steps/sec) |
+| CPython 3.10 + `rp2040py.native` (Cython) | 2,049,726 (~4.1x) | 46.65s (~4.1x, 1,386,605 steps/sec) |
 | CPython 3.14 + `PYTHON_JIT=1` | 961,218 (~1.9x) | 113.77s (~1.7x, 568,486 steps/sec) |
 | PyPy 3.10 | 37,989,746 (~76x) | 11.59s (~16x, 5,580,638 steps/sec) |
 
@@ -451,6 +452,11 @@ Measured on this machine:
 it's not directly comparable to the synthetic column's pure instructions/sec - the *ratio between
 interpreters* is what's meaningful here, not the absolute numbers.) PyPy's JIT is decisively the
 biggest lever; CPython 3.14's still-experimental JIT is a smaller but real, zero-code-change win.
+`rp2040py.native` (see "Cython port of the interpreter core" below and `docs/BACKLOG.md`) is on by
+default whenever a C compiler is available, so the plain "CPython 3.10" row above is actually the
+*worse* case (no compiler, or `RP2040PY_SKIP_CYTHON=1`) - most real installs land on the native row
+without doing anything differently. It doesn't touch PyPy at all (compilation is skipped there on
+purpose - see below), so PyPy remains the fastest option for CPU-bound runs regardless.
 The "MicroPython 1.28 + littlefs" column specifically times booting, mounting a littlefs image,
 and running a resident `while True: print(...); time.sleep(1)` script (`tests/micropython/main.py`,
 what `ci-micropython.yml` actually boots) to its first line of output - reaching the bare REPL

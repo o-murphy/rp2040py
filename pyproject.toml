@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs", "cython>=3.2.9", "setuptools"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "rp2040py"
@@ -9,7 +9,8 @@ description = "A Raspberry Pi Pico Emulator in Python"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = []
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Intended Audience :: Developers",
     "Natural Language :: English",
@@ -59,22 +60,21 @@ mypy_path = "src"
 files = ["src"]
 disable_error_code = ["annotation-unchecked"]
 
-# rp2040py.native's compiled extension modules aren't always built (see hatch_build.py's soft
-# fallback when Cython/a C compiler isn't available), so mypy can't reliably resolve them here.
-# The try/except ImportError fallback pattern (see rp2040py/utils/bit.py, rp2040py/rp2040.py) is
-# what actually handles their absence at runtime; this just quiets the analysis-time noise.
+# rp2040py.native's compiled extension modules aren't always built (see setup.py's soft fallback
+# when Cython/a C compiler isn't available), so mypy can't reliably resolve them here. The
+# try/except ImportError fallback pattern (see rp2040py/utils/bit.py, rp2040py/rp2040.py) is what
+# actually handles their absence at runtime; this just quiets the analysis-time noise.
 [[tool.mypy.overrides]]
 module = "rp2040py.native.*"
 ignore_missing_imports = true
 
-[tool.hatch.version]
-source = "vcs"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rp2040py*"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/rp2040py"]
-
-[tool.hatch.build.targets.wheel.hooks.custom]
-path = "hatch_build.py"
+[tool.setuptools_scm]
+root = "."
+fallback_version = "0.0.0.dev0"
 
 [tool.cibuildwheel]
 # Use uv and build

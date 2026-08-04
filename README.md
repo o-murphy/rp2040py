@@ -95,11 +95,16 @@ file already on disk:
 > | Interpreter | Time |
 > |---|---|
 > | CPython 3.10 | 188.98s |
+> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 46.65s (~4.1x) |
 > | CPython 3.14 + `PYTHON_JIT=1` | 113.77s (~1.7x) |
 > | PyPy 3.10 | 11.59s (~16x) |
 >
-> For CPU-bound runs, PyPy is the clear winner: `uv run --python pypy3.10 --no-dev -- rp2040py
-> micropython ...` (or `... -- python demo/micropython_run.py ...` from a checkout). See
+> The `rp2040py.native` row is what most installs actually get with no extra effort - see
+> [Performance](#performance) below. It doesn't help PyPy (compilation is deliberately skipped
+> there - PyPy's own JIT already does better on its own than routing through `rp2040py.native`'s
+> CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner:
+> `uv run --python pypy3.10 --no-dev -- rp2040py micropython ...` (or `... -- python
+> demo/micropython_run.py ...` from a checkout). See
 > [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.

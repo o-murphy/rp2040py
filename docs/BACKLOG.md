@@ -521,28 +521,40 @@ code still runs *inside* CPython, so every existing C-extension dependency keeps
 as today.
 
 **Architecture: a subpackage of the main package, not a separate pip package.** `rp2040py.native`
-(`src/rp2040py/native/`) ships inside `rp2040py` itself, compiled in-place by a custom hatchling
-build hook (`hatch_build.py`) - not the third-party `hatch-cython` plugin, whose default
-`files.targets` glob matching and `--inplace`/`--build-lib` handling didn't produce a working
-wheel in this sandbox (compiled `.so` files were built but never landed in the wheel). A separate
-`rp2040py-native` distribution (its own `pyproject.toml`, a `uv` workspace member, a runtime
-`importlib.metadata` version-matching guard between the two packages) was tried first, mirroring
-`py_ballisticcalc`/`py_ballisticcalc.exts`'s split - and abandoned same-session in favor of the
-current in-tree subpackage, since the extra moving parts (two independently-versioned packages
-that must always match) bought nothing a `try`/`except ImportError` inside one package doesn't
-already give. Every public entry point (`rp2040py.rp2040.RP2040`, `rp2040py.cortex_m0_core.CortexM0Core`,
-`rp2040py.utils.bit.*`) is a thin facade: `try: from rp2040py.native._X import ... except
-ImportError: from rp2040py._X import ...`, with the real pure-Python reference implementation
-living in the underscore-prefixed private module (`_rp2040.py`, `_cortex_m0_core.py`, `_bit.py`) -
-callers never import the private module or `rp2040py.native` directly.
+(`src/rp2040py/native/`) ships inside `rp2040py` itself, compiled by `setup.py`'s
+`Extension`/`cythonize()` (plain `setuptools` + `setuptools-scm`, `build-backend =
+"setuptools.build_meta"`). A separate `rp2040py-native` distribution (its own `pyproject.toml`, a
+`uv` workspace member, a runtime `importlib.metadata` version-matching guard between the two
+packages) was tried first, mirroring `py_ballisticcalc`/`py_ballisticcalc.exts`'s split - and
+abandoned same-session in favor of the current in-tree subpackage, since the extra moving parts
+(two independently-versioned packages that must always match) bought nothing a `try`/`except
+ImportError` inside one package doesn't already give. Every public entry point
+(`rp2040py.rp2040.RP2040`, `rp2040py.cortex_m0_core.CortexM0Core`, `rp2040py.utils.bit.*`) is a
+thin facade: `try: from rp2040py.native._X import ... except ImportError: from rp2040py._X import
+...`, with the real pure-Python reference implementation living in the underscore-prefixed private
+module (`_rp2040.py`, `_cortex_m0_core.py`, `_bit.py`) - callers never import the private module
+or `rp2040py.native` directly.
+
+The build itself first went through a custom hatchling build hook (`hatch_build.py`, not the
+third-party `hatch-cython` plugin, whose default `files.targets` glob matching and
+`--inplace`/`--build-lib` handling didn't produce a working wheel in this sandbox - compiled `.so`
+files were built but never landed in the wheel), then migrated to plain `setuptools` +
+`setuptools-scm` (`setup.py`) same-session, matching `py_ballisticcalc.exts/setup.py`'s own proven
+pattern more directly - `optional=True` on each `Extension` is setuptools' native mechanism for
+"skip this extension gracefully if it fails to build," replacing the hand-rolled
+subprocess-and-catch-the-failure logic the hatchling hook needed. `hatch_build.py`'s
+soft-fail/PyPy-skip/abi3 logic below carried over to `setup.py` unchanged in substance, just in
+setuptools' idiom instead of hatchling's.
 
 **Build failure modes are all soft, on purpose - this package still has to install everywhere:**
 
-- No C compiler / Cython unavailable at build time -> `hatch_build.py` logs a warning and ships
-  the wheel without the compiled extension; the facades' `except ImportError` transparently uses
-  the pure-Python implementation. (Cython/setuptools are still hard `[build-system] requires` -
-  they're pure-Python-installable everywhere; it's specifically a missing *C compiler* this
-  degrades gracefully for.)
+- No C compiler available at build time -> each `Extension`'s `optional=True` makes `build_ext`
+  skip it (with a warning) instead of failing the whole build; the facades' `except ImportError`
+  transparently uses the pure-Python implementation. (Cython/setuptools/setuptools-scm are still
+  hard `[build-system] requires` - they're pure-Python-installable everywhere; it's specifically a
+  missing *C compiler* this degrades gracefully for. Cython unavailable at all - e.g. `pip
+  install --no-build-isolation` without it present - is handled the same way, via a plain
+  `try: from Cython.Build import cythonize except ImportError: return []` in `setup.py`.)
 - `RP2040PY_SKIP_NATIVE_BUILD=1` - forces a pure-Python wheel outright at *build* time, regardless
   of whether Cython/a compiler are actually available (e.g. for a deliberately "pure" release
   artifact).
@@ -595,15 +607,18 @@ the original ~11.5x thesis was sound, just under-executed the first time. This f
 that lesson everywhere: every parameter and local on the per-instruction path is genuinely C-typed,
 not just the fields.
 
-**Stable ABI (abi3):** built against `Py_LIMITED_API` for CPython 3.11+ (`hatch_build.py`
-`_use_abi3()`), producing one `cp311-abi3` wheel that covers every 3.11+ interpreter instead of one
-per minor version - verified directly: built once against 3.11, the identical `.abi3.so` loads and
-passes the full 437-test suite on 3.12 with zero recompilation. 3.11 specifically (not 3.10) because
+**Stable ABI (abi3):** built against `Py_LIMITED_API` for CPython 3.11+ (`setup.py`'s
+`_use_abi3()`, plus a `bdist_wheel` `cmdclass` override setting `self.py_limited_api = "cp311"` -
+`py_limited_api=True` on the `Extension` controls what the *compiler* builds against, the
+`bdist_wheel` option controls what the *wheel filename* gets tagged, and both are needed), producing
+one `cp311-abi3` wheel that covers every 3.11+ interpreter instead of one per minor version -
+verified directly: built once against 3.11, the identical `.abi3.so` loads and passes the full
+437-test suite on 3.12 with zero recompilation. 3.11 specifically (not 3.10) because
 `Py_LIMITED_API`'s buffer-protocol support - needed by this code's heavy use of typed memoryviews -
 only entered the limited API at 3.11; below that floor, or on free-threaded builds (where
-`Py_LIMITED_API` and `Py_GIL_DISABLED` are mutually incompatible per PEP 703 - `hatch_build.py`
-checks `sysconfig.get_config_var("Py_GIL_DISABLED")`), the build hook falls back to a normal,
-version-specific extension instead. `[tool.cibuildwheel]` builds `cp311-abi3` and `cp3XXt`
+`Py_LIMITED_API` and `Py_GIL_DISABLED` are mutually incompatible per PEP 703 - `setup.py` checks
+`sysconfig.get_config_var("Py_GIL_DISABLED")`), `setup.py` falls back to a normal, version-specific
+extension instead. `[tool.cibuildwheel]` builds `cp311-abi3` and `cp3XXt`
 separately for exactly this reason; a real local `cibuildwheel` run confirmed `auditwheel repair`
 correctly relabels the output to `cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64`. One real
 compile-time incompatibility found and fixed: `from cpython cimport array` (added for fast
