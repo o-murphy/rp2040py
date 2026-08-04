@@ -7,12 +7,14 @@ external package, since rp2040py otherwise has zero runtime dependencies.
 
 import struct
 from dataclasses import dataclass
+from pathlib import Path
 
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.rp2040 import RP2040
 
 __all__ = (
     "UF2Block",
+    "check_flash_image_size",
     "decode_block",
     "load_circuitpython_flash_image",
     "load_kaluma_flash_image",
@@ -73,7 +75,25 @@ def decode_block(buffer: bytes) -> UF2Block:
     return UF2Block(flash_address=target_addr, payload=buffer[32 : 32 + payload_size])
 
 
-def _load_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_size: int) -> None:
+def check_flash_image_size(filename: str, block_size: int, block_count: int) -> None:
+    """Raises `ValueError` unless `filename` is exactly `block_size * block_count` bytes - the
+    size `build_littlefs_image()` always produces (see `mklittlefs.py`'s `UserContext(buffsize=
+    block_size * block_count)`). A mismatch means either a truncated/corrupted file, or an image
+    built for a different target's littlefs region (e.g. Kaluma's 128-block image loaded where
+    MicroPython's 352-block one is expected) - both worth rejecting up front rather than silently
+    loading a partial filesystem or overrunning past the end of the flash region into whatever
+    comes after it (`_load_flash_image()` below has no bounds check of its own)."""
+    expected_size = block_size * block_count
+    actual_size = Path(filename).stat().st_size
+    if actual_size != expected_size:
+        raise ValueError(
+            f"{filename!r} is {actual_size} bytes, expected exactly {expected_size} "
+            f"({block_count} blocks x {block_size} bytes) - built for a different target, or truncated?"
+        )
+
+
+def _load_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_size: int, block_count: int) -> None:
+    check_flash_image_size(filename, block_size, block_count)
     with open(filename, "rb") as f:
         flash_address = flash_start
         while True:
@@ -85,15 +105,17 @@ def _load_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_siz
 
 
 def load_micropython_flash_image(filename: str, rp2040: RP2040) -> None:
-    _load_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE)
+    _load_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT)
 
 
 def load_circuitpython_flash_image(filename: str, rp2040: RP2040) -> None:
-    _load_flash_image(filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE)
+    _load_flash_image(
+        filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT
+    )
 
 
 def load_kaluma_flash_image(filename: str, rp2040: RP2040) -> None:
-    _load_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE)
+    _load_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT)
 
 
 def load_kaluma_program(filename: str, rp2040: RP2040) -> None:

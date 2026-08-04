@@ -22,6 +22,12 @@ __all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", 
 
 _logger = logging.getLogger(__name__)
 
+# Applies per socket operation (connect, and each individual read()), not to the download as a
+# whole - urlopen()'s own `timeout` param, same as socket.settimeout() under the hood - so a slow
+# but still-progressing transfer is never cut off, only a genuinely stuck one (server never
+# responds, or goes silent mid-transfer) is.
+_DOWNLOAD_TIMEOUT_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class FirmwareSpec:
@@ -125,17 +131,21 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
         return str(cached_path)
 
     from urllib.error import HTTPError
-    from urllib.request import urlretrieve
+    from urllib.request import urlopen
 
-    def report_hook(chunk: int, chunk_size: int, size: int) -> object:
-        if chunk == 0:
-            _logger.info("Download: %s from %s", filename, url)
-        elif chunk * chunk_size >= size:
-            _logger.info("Download complete: file saved to: %s", cached_path)
-        return None
-
+    _logger.info("Download: %s from %s", filename, url)
     try:
-        urlretrieve(url, cached_path, reporthook=report_hook)
-    except HTTPError:
+        with urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response, open(cached_path, "wb") as f:
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except (HTTPError, TimeoutError):
+        # Cleans up a partial file from a download that died mid-transfer (e.g. the timeout above
+        # firing after some bytes already landed) - otherwise a retry would find cached_path
+        # already "exists()" and hand back a truncated, corrupt image instead of re-downloading.
+        cached_path.unlink(missing_ok=True)
         return None
+    _logger.info("Download complete: file saved to: %s", cached_path)
     return str(cached_path)

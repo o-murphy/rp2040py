@@ -104,10 +104,10 @@ jobs:
       # right after will fail with a clearer signal if the download is genuinely broken.
       - name: Warm up MicroPython ${{ matrix.micropython_version }} download cache
         continue-on-error: true
-        run: timeout 2m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} -c "import sys; sys.implementation"
+        run: timeout 1m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} -c "import sys; sys.implementation"
 
       - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --expect-text "Hello, MicroPython!"
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 

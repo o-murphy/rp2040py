@@ -249,14 +249,18 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     if fat12 is not None:
         _logger.info("Loading fat12 image: %s", fat12)
 
-    device = MicroPythonDevice(
-        image_name,
-        littlefs=littlefs,
-        fat12=fat12,
-        circuitpython=args.circuitpython,
-        bootrom_words=_resolve_bootrom_words(args.bootrom),
-        log_level=_console_log_level(args),
-    )
+    try:
+        device = MicroPythonDevice(
+            image_name,
+            littlefs=littlefs,
+            fat12=fat12,
+            circuitpython=args.circuitpython,
+            bootrom_words=_resolve_bootrom_words(args.bootrom),
+            log_level=_console_log_level(args),
+        )
+    except ValueError as exc:
+        _logger.error("%s", exc)
+        sys.exit(1)
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -314,13 +318,17 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     if args.filename is not None:
         _logger.info("Loading program: %s", args.filename)
 
-    device = KalumaDevice(
-        image_name,
-        littlefs=littlefs,
-        program=args.filename,
-        bootrom_words=_resolve_bootrom_words(args.bootrom),
-        log_level=_console_log_level(args),
-    )
+    try:
+        device = KalumaDevice(
+            image_name,
+            littlefs=littlefs,
+            program=args.filename,
+            bootrom_words=_resolve_bootrom_words(args.bootrom),
+            log_level=_console_log_level(args),
+        )
+    except ValueError as exc:
+        _logger.error("%s", exc)
+        sys.exit(1)
 
     if args.gdb:
         gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -403,7 +411,11 @@ def _bench_firmware(
     _load_image(image, rp2040)
 
     if littlefs:
-        load_micropython_flash_image(littlefs, rp2040)
+        try:
+            load_micropython_flash_image(littlefs, rp2040)
+        except ValueError as exc:
+            _logger.error("%s", exc)
+            sys.exit(1)
 
     current_line = ""
     found = False

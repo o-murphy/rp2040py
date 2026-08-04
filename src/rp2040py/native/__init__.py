@@ -42,8 +42,8 @@ try:
         RP2040,
         SIO_START_ADDRESS,
     )
-except ImportError as exc:
-    warnings.warn(f"Native extensions are not available ({exc}). Falling back to pure python mode", stacklevel=2)
+except ImportError:
+    warnings.warn("Native extensions are not available in this environment - falling back to pure Python", stacklevel=2)
 
 __all__ = (
     "APB_START_ADDRESS",

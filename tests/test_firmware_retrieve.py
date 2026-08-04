@@ -89,6 +89,36 @@ def _cache_path(filename: str) -> str:
     return str(path)
 
 
+class _FakeResponse:
+    """Stands in for the context-managed response `urlopen()` returns - just enough of its
+    protocol (`with ... as response:`, `response.read(size)`) for `retrieve()`'s manual
+    chunked-copy loop to drive."""
+
+    def __init__(self, data: bytes) -> None:
+        self._remaining = data
+
+    def __enter__(self) -> "_FakeResponse":  # noqa: PYI034 (Self needs Python 3.11+)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        chunk, self._remaining = self._remaining[:size], self._remaining[size:]
+        return chunk
+
+
+def _fake_urlopen(monkeypatch: pytest.MonkeyPatch, calls: list, data: bytes = b"downloaded") -> None:
+    """Patches `urllib.request.urlopen` (as `retrieve()` imports and calls it) to hand back
+    `data` without touching the network, recording each requested URL in `calls`."""
+
+    def _urlopen(url: str, timeout: float | None = None) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse(data)
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+
 @pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_returns_existing_local_path_without_touching_the_network(spec, monkeypatch):
     local = "my_image.uf2"
@@ -98,7 +128,7 @@ def test_returns_existing_local_path_without_touching_the_network(spec, monkeypa
     def _boom(*args, **kwargs):
         raise AssertionError("should not attempt a download for a path that already exists")
 
-    monkeypatch.setattr("urllib.request.urlretrieve", _boom)
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
 
     assert retrieve(spec, local) == local
 
@@ -169,78 +199,68 @@ def test_kaluma_version_tag_resolves_to_the_release_filename():
 
 def test_downloads_when_no_local_file_matches(monkeypatch):
     calls = []
-
-    def _fake_urlretrieve(url, filename, reporthook=None):
-        calls.append((url, str(filename)))
-        with open(filename, "wb") as f:
-            f.write(b"downloaded")
-        if reporthook is not None:
-            reporthook(0, 8192, len(b"downloaded"))
-            reporthook(1, 8192, len(b"downloaded"))
-        return filename, None
-
-    monkeypatch.setattr("urllib.request.urlretrieve", _fake_urlretrieve)
+    _fake_urlopen(monkeypatch, calls)
 
     result = retrieve(MICROPYTHON, "1.21.0")
 
     expected_path = _cache_path("RPI_PICO-20231005-v1.21.0.uf2")
     assert result == expected_path
-    assert calls == [("https://micropython.org/resources/firmware/RPI_PICO-20231005-v1.21.0.uf2", expected_path)]
+    assert calls == ["https://micropython.org/resources/firmware/RPI_PICO-20231005-v1.21.0.uf2"]
     with open(expected_path, "rb") as f:
         assert f.read() == b"downloaded"
 
 
 def test_kaluma_download_url_includes_the_version_path_segment(monkeypatch):
     calls = []
-
-    def _fake_urlretrieve(url, filename, reporthook=None):
-        calls.append((url, str(filename)))
-        with open(filename, "wb") as f:
-            f.write(b"downloaded")
-
-    monkeypatch.setattr("urllib.request.urlretrieve", _fake_urlretrieve)
+    _fake_urlopen(monkeypatch, calls)
 
     result = retrieve(KALUMA, "1.2.1")
 
     expected_path = _cache_path("kaluma-rp2-pico-1.2.1.uf2")
     assert result == expected_path
-    assert calls == [
-        (
-            "https://github.com/kaluma-project/kaluma/releases/download/1.2.1/kaluma-rp2-pico-1.2.1.uf2",
-            expected_path,
-        )
-    ]
+    assert calls == ["https://github.com/kaluma-project/kaluma/releases/download/1.2.1/kaluma-rp2-pico-1.2.1.uf2"]
 
 
 def test_bootrom_download_url_includes_the_version_path_segment(monkeypatch):
     calls = []
-
-    def _fake_urlretrieve(url, filename, reporthook=None):
-        calls.append((url, str(filename)))
-        with open(filename, "wb") as f:
-            f.write(b"downloaded")
-
-    monkeypatch.setattr("urllib.request.urlretrieve", _fake_urlretrieve)
+    _fake_urlopen(monkeypatch, calls)
 
     result = retrieve(BOOTROM, "b2")
 
     expected_path = _cache_path("b2.elf")
     assert result == expected_path
-    assert calls == [
-        (
-            "https://github.com/raspberrypi/pico-bootrom-rp2040/releases/download/b2/b2.elf",
-            expected_path,
-        )
-    ]
+    assert calls == ["https://github.com/raspberrypi/pico-bootrom-rp2040/releases/download/b2/b2.elf"]
 
 
 @pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_returns_none_on_http_error_instead_of_raising(spec, monkeypatch):
     from urllib.error import HTTPError
 
-    def _fake_urlretrieve(url, filename, reporthook=None):
+    def _fake_urlopen(url, timeout=None):
         raise HTTPError(url, 404, "Not Found", hdrs=None, fp=None)  # type: ignore[arg-type]
 
-    monkeypatch.setattr("urllib.request.urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
     assert retrieve(spec, "not-a-real-version") is None
+
+
+def test_removes_partial_file_and_returns_none_on_timeout(monkeypatch):
+    class _DyingResponse:
+        def __enter__(self) -> "_DyingResponse":  # noqa: PYI034 (Self needs Python 3.11+)
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            raise TimeoutError("timed out")
+
+    def _fake_urlopen(url: str, timeout: float | None = None) -> "_DyingResponse":
+        return _DyingResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    result = retrieve(MICROPYTHON, "1.21.0")
+
+    assert result is None
+    assert not Path(_cache_path("RPI_PICO-20231005-v1.21.0.uf2")).exists()
