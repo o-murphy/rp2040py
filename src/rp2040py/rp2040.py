@@ -1,7 +1,4 @@
-import os
-import struct
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 from rp2040py.clock.clock import IClock
 from rp2040py.clock.simulation_clock import SimulationClock
@@ -50,9 +47,6 @@ from rp2040py.utils.bit import (
 )
 from rp2040py.utils.logging import ConsoleLogger, Logger, LogLevel
 
-if TYPE_CHECKING:
-    from rp2040py.jit import JITEngine
-
 __all__ = (
     "APB_START_ADDRESS",
     "DPRAM_START_ADDRESS",
@@ -68,65 +62,6 @@ LOG_NAME = "RP2040"
 KB = 1024
 MB = 1024 * KB
 MHZ = 1_000_000
-
-
-def _bootrom_bytes(words: "list[int]", byte_offset: int, length: int) -> bytes:
-    word_start = byte_offset // 4
-    word_count = (length + (byte_offset - word_start * 4) + 3) // 4
-    chunk = words[word_start : word_start + word_count]
-    data = b"".join(struct.pack("<I", w & 0xFFFFFFFF) for w in chunk)
-    inner_offset = byte_offset - word_start * 4
-    return data[inner_offset : inner_offset + length]
-
-
-# HLE (high-level emulation) hook for bootrom's __memcpy/__memcpy_44 (see CortexM0Core._hle_memcpy)
-# - these two entry points, confirmed against the real bootrom source (raspberrypi/pico-bootrom's
-# bootrom_misc.S, see docs/BACKLOG.md's 1.21-vs-1.28 investigation), are what real firmware's own
-# memcpy() calls route through (TinyUSB's tu_fifo_read/write, littlefs's lfs2_bd_read() - both
-# confirmed as the dominant real-world callers in that same investigation).
-#
-# Detected by scanning the *whole* loaded bootrom for these two signatures, rather than checking
-# fixed offsets: confirmed (by downloading b0.elf/b2.elf via --bootrom and searching for BOOTROM_B1's
-# exact signature bytes in each) that __memcpy/__memcpy_44's own machine code is byte-for-byte
-# identical across B0/B1/B2 - only its *position* moves between revisions (B0: 0x2888/0x28a0, B1:
-# 0x2628/0x2640, B2: 0x2604/0x261c), presumably because other ROM code shifted around it, not
-# because the routine itself changed. A whole-bootrom scan (cheap - one bytes.find() over 16KB,
-# once per load_bootrom() call, nowhere near the hot per-instruction path) finds the right offset
-# for any of the three automatically, and for any future revision that also happens to carry the
-# same routine unchanged - versus hardcoding a per-revision offset table that needs a manual update
-# every time a new bootrom revision ships. A signature that isn't found at all (a hypothetical
-# revision where the routine's bytes genuinely differ) leaves the hook safely inert for that image
-# rather than misfiring against code it wasn't verified against.
-_HLE_MEMCPY_SIGNATURE_LEN = 20
-_HLE_MEMCPY_SIGNATURE_OFFSETS_IN_B1 = (0x2628, 0x2640)  # __memcpy_44, __memcpy - source of the
-# signature bytes only; actual detection below scans the whole loaded bootrom, not these offsets.
-# Computed lazily (on first load_bootrom() call, not at import time): rp2040py.device.bootrom is
-# only a data module, but importing it still runs rp2040py.device's own __init__.py first (Python
-# always initializes a parent package before a submodule), which imports back to this module -
-# fine once everything else has already finished importing, a real cycle at module-import time.
-_hle_memcpy_signatures: "tuple[bytes, ...] | None" = None
-
-
-def _get_hle_memcpy_signatures() -> "tuple[bytes, ...]":
-    global _hle_memcpy_signatures
-    if _hle_memcpy_signatures is None:
-        from rp2040py.device.bootrom import BOOTROM_B1
-
-        _hle_memcpy_signatures = tuple(
-            _bootrom_bytes(BOOTROM_B1, offset, _HLE_MEMCPY_SIGNATURE_LEN)
-            for offset in _HLE_MEMCPY_SIGNATURE_OFFSETS_IN_B1
-        )
-    return _hle_memcpy_signatures
-
-
-def _find_hle_memcpy_entries(bootrom_words: "list[int]") -> "frozenset[int]":
-    data = _bootrom_bytes(bootrom_words, 0, len(bootrom_words) * 4)
-    entries = set()
-    for signature in _get_hle_memcpy_signatures():
-        offset = data.find(signature)
-        if offset >= 0:
-            entries.add(offset)
-    return frozenset(entries)
 
 
 class RP2040:
@@ -148,17 +83,6 @@ class RP2040:
         # never changes after construction, and this matters on the hot read_uint32/write_uint32
         # path regardless of container type.
         self.bootrom_byte_size = len(self.bootrom) * 4
-        # Empty until load_bootrom() confirms (by signature) this bootrom actually has __memcpy/
-        # __memcpy_44 at the expected offsets - see _HLE_MEMCPY_SIGNATURES above.
-        self.hle_memcpy_entries: frozenset[int] = frozenset()
-        # Basic-block-fusion mini-JIT (Phase 0: scaffolding only, see docs/JIT_BACKLOG.md) - None
-        # by default, so CortexM0Core.execute_instruction()'s hook is a single cheap identity
-        # check with the src/rp2040py/jit package never even imported, unless explicitly enabled.
-        self.jit: "JITEngine | None" = None  # noqa: UP037 - real name only bound in the branch below
-        if os.environ.get("RP2040PY_ENABLE_JIT"):
-            from rp2040py.jit import JITEngine
-
-            self.jit = JITEngine()
         self.sram = bytearray(264 * KB)
         # Same reasoning as bootrom_byte_size above: sram/usb_dpram sizes never change after
         # construction, and read_uint16()/read_uint8()/write_uint8()/write_uint16() are all on the
@@ -263,18 +187,6 @@ class RP2040:
 
     def load_bootrom(self, bootrom_data: list[int]) -> None:
         self.bootrom[: len(bootrom_data)] = (value & 0xFFFFFFFF for value in bootrom_data)
-        # Opt-in, not opt-out: RP2040PY_ENABLE_HLE_MEMCPY=1 is required to activate the hook at
-        # all. Measured effect is still unconfirmed (no measurable win on a fast 1.21 boot, full
-        # 1.28 boot-and-run A/B not measured yet as of this commit - see docs/BACKLOG.md), so this
-        # stays off by default until both a real speedup and no regressions are confirmed.
-        if os.environ.get("RP2040PY_ENABLE_HLE_MEMCPY"):
-            self.hle_memcpy_entries = _find_hle_memcpy_entries(self.bootrom)
-        else:
-            self.hle_memcpy_entries = frozenset()
-        # Same lifecycle as the HLE scan above: a bootrom-wide pattern scan done once here, never
-        # on the per-instruction path - see JITEngine.load() in jit/engine.py.
-        if self.jit is not None:
-            self.jit.load(self.read_uint16, len(self.bootrom))
         self.reset()
 
     def reset(self) -> None:
@@ -371,14 +283,9 @@ class RP2040:
             else:
                 self.logger.warning(LOG_NAME, f"Write to undefined address: {address:x}")
 
-        if self.jit is not None:
-            self.jit.on_write(address, 4)
-
     def write_uint8(self, address: int, value: int) -> None:
         if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             self.sram[address - RAM_START_ADDRESS] = value & 0xFF
-            if self.jit is not None:
-                self.jit.on_write(address, 1)
             return
 
         aligned_address = u32(address & 0xFFFFFFFC)
@@ -392,8 +299,6 @@ class RP2040:
                 (value & 0xFF) | ((value & 0xFF) << 8) | ((value & 0xFF) << 16) | ((value & 0xFF) << 24),
                 atomic_type,
             )
-            if self.jit is not None:
-                self.jit.on_write(aligned_address, 4)
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray(u32(original_value).to_bytes(4, "little"))
@@ -406,8 +311,6 @@ class RP2040:
 
         if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
             write_uint16_le(self.sram, address - RAM_START_ADDRESS, value)
-            if self.jit is not None:
-                self.jit.on_write(address, 2)
             return
 
         aligned_address = u32(address & 0xFFFFFFFC)
@@ -417,54 +320,11 @@ class RP2040:
             atomic_type = (aligned_address & 0x3000) >> 12
             peripheral_offset = aligned_address & 0xFFF
             peripheral.write_uint32_atomic(peripheral_offset, (value & 0xFFFF) | ((value & 0xFFFF) << 16), atomic_type)
-            if self.jit is not None:
-                self.jit.on_write(aligned_address, 4)
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray(u32(original_value).to_bytes(4, "little"))
         write_uint16_le(patched, offset, value)
         self.write_uint32(aligned_address, int.from_bytes(patched, "little"))
-
-    def bus_copy(self, dst: int, src: int, n: int) -> None:
-        """memcpy(dst, src, n)-equivalent bulk copy, used only by CortexM0Core._hle_memcpy() (the
-        bootrom-__memcpy HLE hook - see hle_memcpy_entries above) - not part of the normal bus API,
-        and not cycle-accurate the way individual read/write_uint*() calls are meant to be.
-
-        Fast path: a single bytearray slice copy when both ends land in RAM/flash (by far the
-        common case for real firmware's own memcpy() calls - TinyUSB's tu_fifo_read/write,
-        littlefs's lfs2_bd_read(), see docs/BACKLOG.md). Slice assignment handles overlap
-        correctly here (the source slice is materialized as an independent copy before the
-        assignment happens), matching real memcpy - well, memmove - semantics regardless of
-        overlap direction.
-
-        Fallback: a plain byte-by-byte bus copy for anything else (bootrom-to-somewhere,
-        peripheral space, crossing between RAM and flash) - still correct, just not the fast
-        path, since no real firmware routes a memcpy() through peripheral registers but this
-        doesn't assume that's impossible.
-        """
-        if n <= 0:
-            return
-        dst = u32(dst)
-        src = u32(src)
-
-        dst_buf, dst_off = self._ram_or_flash(dst)
-        src_buf, src_off = self._ram_or_flash(src)
-        if dst_buf is not None and src_buf is not None and dst_off + n <= len(dst_buf) and src_off + n <= len(src_buf):
-            dst_buf[dst_off : dst_off + n] = src_buf[src_off : src_off + n]
-            if self.jit is not None:
-                self.jit.on_write(dst, n)
-            return
-
-        data = bytes(self.read_uint8(src + i) for i in range(n))
-        for i in range(n):
-            self.write_uint8(dst + i, data[i])
-
-    def _ram_or_flash(self, address: int) -> "tuple[bytearray, int] | tuple[None, int]":
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
-            return self.sram, address - RAM_START_ADDRESS
-        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size:
-            return self.flash, address - FLASH_START_ADDRESS
-        return None, 0
 
     @property
     def gpio_values(self) -> int:

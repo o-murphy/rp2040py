@@ -122,12 +122,6 @@ file already on disk:
 > the running log). These are general wins, not something that closes the 1.21-vs-1.28 gap itself -
 > that gap is real work MicroPython 1.28's own compiled firmware does per loop iteration, not
 > something this project's emulator code controls.
->
-> `RP2040PY_ENABLE_HLE_MEMCPY=1` turns on an experimental optimization that replaces bootrom's
-> `memcpy` routine (heavily used by real firmware's own USB/filesystem code) with a native bulk
-> copy instead of interpreting it Thumb instruction by instruction. Off by default and **not
-> recommended to enable**: measured ~1.8% *slower* on a full MicroPython 1.28 boot, not faster -
-> see [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for why.
 
 ```sh
 rp2040py micropython --image 1.28.0
