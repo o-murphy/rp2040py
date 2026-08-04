@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional Cython-accelerated backend (`rp2040py.native`): a fully-typed port of `CortexM0Core`'s
+  ~90 instruction handlers (real C function-pointer dispatch, not a Python-level table) and
+  `RP2040`'s bus hot paths (`read`/`write_uint8/16/32`). Built automatically when a C compiler is
+  available - falls back transparently to the existing pure-Python implementation otherwise, with
+  identical behavior either way. Measured ~4x instruction throughput on both a synthetic benchmark
+  and a real MicroPython 1.21 boot; see
+  [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
+  for the full writeup and [README.md#performance](README.md#performance) for the short version.
+- `RP2040PY_SKIP_CYTHON=1` (runtime) and `RP2040PY_SKIP_NATIVE_BUILD=1` (build-time) env vars to
+  opt out of the native backend explicitly.
+- `cp311-abi3` stable-ABI wheels: one compiled wheel covers every CPython 3.11+ interpreter instead
+  of one per minor version (built via `cibuildwheel`, `Py_LIMITED_API`). Free-threaded builds and
+  PyPy get a normal, version-specific build (abi3 and free-threading are mutually incompatible;
+  PyPy's `cpyext` C-API emulation is slower than PyPy's own JIT for this kind of code, so
+  compilation is skipped there rather than attempted).
+
 ## [0.1.0] - 2026-08-04
 
 ### Fixed

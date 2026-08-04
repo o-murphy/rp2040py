@@ -646,3 +646,22 @@ Two mitigations, worth combining:
   fixed tax. The mechanism itself is correct (verified against real boots on all three bootrom
   revisions) - this is a clean "measured, doesn't pay off" result, not a bug. See
   `docs/BACKLOG.md` for the full numbers and rationale.
+- **Ahead-of-time Cython compilation of `CortexM0Core`/`RP2040`'s hot paths - unlike every
+  runtime-check-based idea above (dispatch table aside), this one is a genuine ~4x win, on by
+  default.** All the items above tried to make the *interpreter loop* itself cheaper or skip parts
+  of it conditionally; this instead compiles the whole thing to C ahead of time, so there's no
+  per-instruction "should I take the fast path" check to weigh against the savings - the exact
+  problem that made the HLE hook and three separate JIT attempts (`docs/JIT_BACKLOG.md`) all net
+  negative. Ships as an optional-but-automatic `rp2040py.native` extension: every one of
+  `CortexM0Core`'s ~90 instruction handlers is a genuinely C-typed function (not just typed class
+  fields - an earlier, narrower attempt at exactly that shipped first and measured only ~2-9%
+  real-world despite an ~11.5x isolated estimate, then got replaced by this full port once the gap
+  was root-caused to untyped method *bodies* re-boxing every value at the call boundary), dispatched
+  through a real C function-pointer table, plus `RP2040`'s `read`/`write_uint8/16/32` bus paths.
+  Falls back to the identical pure-Python implementation automatically if no C compiler is
+  available at install time, or at runtime via `RP2040PY_SKIP_CYTHON=1`. Measured **~3.9x** on the
+  synthetic instructions/sec benchmark and **~4.1x** on a real MicroPython 1.21 boot - see
+  `docs/BACKLOG.md`'s "Cython port of the interpreter core" section for the full writeup (the
+  root-cause analysis of why the first attempt underperformed, the abi3/stable-ABI build, the PyPy
+  regression this found and fixed, and the two real correctness bugs the build-then-test loop
+  caught along the way).

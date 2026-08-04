@@ -332,6 +332,25 @@ async def main():
 
 All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(max_workers=1)` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start()`/`start_async()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
 
+## Performance
+
+The interpreter core (`CortexM0Core`) and the memory bus's hot read/write paths are also available
+as a compiled Cython extension (`rp2040py.native`), giving roughly **4x** the instruction
+throughput of the pure-Python implementation on both a synthetic benchmark and a real MicroPython
+boot (see [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
+for the full measured breakdown).
+
+This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
+when a C compiler is available (prebuilt wheels are published for common platforms, so most
+installs don't even need one) and falls back to the identical pure-Python implementation otherwise
+- correctness is the same either way, just the speed differs. A couple of environment variables
+exist for cases where you want to control this explicitly:
+
+- `RP2040PY_SKIP_CYTHON=1` - force the pure-Python implementation at runtime, even if the compiled
+  extension is installed (e.g. to rule out a native-specific issue).
+- `RP2040PY_SKIP_NATIVE_BUILD=1` - skip compiling the extension at *build* time, for a
+  deliberately pure-Python install/wheel.
+
 ## Used by
 
 - [ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc) — tests
