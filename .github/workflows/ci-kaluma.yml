@@ -89,6 +89,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           python-version: ${{ matrix.python_runtime }}
+          github-token: ${{ github.token }}
 
       # Downloads (and caches) this version's UF2 outside the timed test steps below, so a slow
       # kaluma-project/kaluma GitHub-release fetch doesn't get counted as (or blow the budget of)
