@@ -70,10 +70,14 @@ class TestResolveVersion:
 @pytest.fixture(autouse=True)
 def _isolated_cwd(tmp_path, monkeypatch):
     # retrieve() checks the current directory for a local-path passthrough, and its cache
-    # directory (~/.cache/rp2040py, i.e. HOME-relative) for anything resolved by tag - isolate
+    # directory (~/.cache/rp2040py, i.e. home-relative) for anything resolved by tag - isolate
     # both so tests can't see each other's "downloaded" files or the real user's actual cache.
+    # Patching Path.home() directly (rather than the HOME env var) is required for this to work on
+    # Windows too: ntpath's expanduser() prefers USERPROFILE over HOME, so with HOME alone this
+    # fixture was a no-op on Windows runners and every test after the first in the same
+    # cibuildwheel job saw the previous test's "downloaded" files in the real user cache dir.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
 
 def _cache_path(filename: str) -> str:

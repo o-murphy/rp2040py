@@ -103,5 +103,4 @@ dev = [
     "pytest-cov>=7.1.0",
     "littlefs-python>=0.18.0",
     "cython>=3.2.9",
-    "cibuildwheel>=2.23.4",
 ]
