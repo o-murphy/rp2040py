@@ -8,11 +8,27 @@ CircuitPython).
 import atexit
 import os
 import sys
-import termios
 import threading
-import tty
 from collections.abc import Callable
 from typing import Any
+
+try:
+    # POSIX-only (raw terminal mode has no Windows equivalent - Windows console handling is a
+    # completely different API, e.g. msvcrt, not a drop-in replacement). Gated at import time so
+    # the whole module - and everything that transitively imports it, notably cli/__init__.py's
+    # top-level `from rp2040py.cli.stdio_repl import StdioInteractiveRepl` - stays importable on
+    # Windows instead of failing outright (a real, CI-caught regression: this broke test
+    # collection for every test that merely imports rp2040py.cli, not just ones exercising the
+    # interactive REPL). `termios is None` below reuses _on_start()'s existing isatty()-gated
+    # fallback to line-buffered sys.stdin.read() - the same degraded path already used when stdin
+    # isn't a real tty at all (e.g. piped input) - so Windows gets that same graceful behavior
+    # rather than a new, separate code path: no raw mode / no Ctrl+X-without-Enter, but the REPL
+    # itself still works.
+    import termios
+    import tty
+except ImportError:
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
 
 from rp2040py.device.repl_runner import InteractiveRepl
 from rp2040py.usb.cdc import USBCDC
@@ -78,7 +94,7 @@ class StdioInteractiveRepl(InteractiveRepl):
         global _active_raw_repl
         try:
             self._stdin_fd = sys.stdin.fileno()
-            if sys.stdin.isatty():
+            if termios is not None and sys.stdin.isatty():
                 self._old_termios = termios.tcgetattr(self._stdin_fd)
                 tty.setraw(self._stdin_fd)
                 # tty.setraw() disables ISIG, so a real Ctrl+C no longer generates SIGINT at all -
