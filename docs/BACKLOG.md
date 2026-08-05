@@ -1,8 +1,11 @@
 # Backlog / in-progress work notes
 
 Working notes for tasks that span multiple sessions. Not user-facing docs — see README.md /
-PORTING.md / CHANGELOG.md for those. One item large enough to need its own file:
-[docs/JIT_BACKLOG.md](JIT_BACKLOG.md) (basic-block fusion / mini-JIT).
+PORTING.md / CHANGELOG.md for those. Items large enough to need their own file:
+[docs/JIT_BACKLOG.md](JIT_BACKLOG.md) (basic-block fusion / mini-JIT),
+[docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md) (replacing every
+`threading`-based workaround - `stdio_repl.py`'s reader thread, `pio.py`'s `RLock`,
+`gdb_tcp_server.py`'s accept-thread poll, ... - with one `asyncio` event loop).
 
 ## SSI flash-write support (branch `feat/ssi-rw-support`)
 
@@ -988,6 +991,12 @@ region.
      moot) - worth doing if a general graceful-shutdown mechanism is wanted for its own sake, but
      more than persistence alone justifies. **(a) is the pragmatic choice for this feature
      specifically; (b) is a legitimate but separate, larger piece of work.**
+
+     Update: (b) landed in spirit (see "Unified process-shutdown coordinator" below -
+     `ShutdownRequest`/`wait_for_shutdown()` is exactly this), but still thread-based underneath.
+     The *further* step this note gestures at - replacing the threads themselves, not just giving
+     them a shared exit protocol - is scoped separately in
+     [docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md).
 
 5. **Flag surface: `--persistent PATH`, value required - not a boolean.** Both `micropython` and
    `kaluma` subcommands already have a positional `filename` argument (`nargs="?"`, e.g.

@@ -1,12 +1,16 @@
+import asyncio
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 
 from rp2040py.clock.simulation_clock import SimulationClock
 from rp2040py.rp2040 import RP2040
 
 __all__ = ("ShutdownRequest", "Simulator")
+
+_T = TypeVar("_T")
 
 
 class ShutdownRequest:
