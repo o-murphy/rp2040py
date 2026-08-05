@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 from rp2040py.clock.simulation_clock import SimulationClock
 from rp2040py.rp2040 import RP2040
+from rp2040py.utils.asyncio_loop_thread import start_loop_thread
 
 __all__ = ("ShutdownRequest", "Simulator")
 
@@ -60,11 +61,7 @@ class Simulator:
         if self._loop is None:
             with self._loop_init_lock:
                 if self._loop is None:
-                    loop = asyncio.new_event_loop()
-                    thread = threading.Thread(target=loop.run_forever, daemon=True)
-                    thread.start()
-                    self._loop = loop
-                    self._loop_thread = thread
+                    self._loop, self._loop_thread = start_loop_thread()
         return self._loop
 
     def start_execution(self) -> None:

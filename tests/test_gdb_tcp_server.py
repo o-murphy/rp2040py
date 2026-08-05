@@ -19,13 +19,13 @@ class _FakeTarget:
     rp2040 = _FakeRP2040()
 
 
-def test_close_unblocks_and_joins_the_accept_thread():
+def test_close_unblocks_and_joins_the_loop_thread():
     server = GDBTCPServer(_FakeTarget(), port=0)
-    assert server._accept_thread.is_alive()
+    assert server._loop_thread.is_alive()
 
     server.close()
 
-    assert not server._accept_thread.is_alive()
+    assert not server._loop_thread.is_alive()
 
 
 def test_close_is_idempotent():
@@ -36,10 +36,11 @@ def test_close_is_idempotent():
 
 def test_close_actually_lets_a_plain_process_exit_join_cleanly():
     """The whole point of close() - reproduces the exact hang `os._exit()` was working around:
-    a non-daemon thread blocked in accept() forever. A join() with a short timeout is the
-    regression check - without close(), this would time out instead of the thread having ended."""
+    a non-daemon thread blocked forever with nothing telling it to stop. A join() with a short
+    timeout is the regression check - without close(), this would time out instead of the thread
+    having ended."""
     server = GDBTCPServer(_FakeTarget(), port=0)
-    thread = server._accept_thread
+    thread = server._loop_thread
     server.close()
     thread.join(timeout=2.0)
     assert not thread.is_alive()
@@ -48,8 +49,7 @@ def test_close_actually_lets_a_plain_process_exit_join_cleanly():
 def test_gdb_client_can_still_connect_before_close():
     server = GDBTCPServer(_FakeTarget(), port=0)
     try:
-        port = server._socket_server.getsockname()[1]
-        client = socket.create_connection(("127.0.0.1", port), timeout=2.0)
+        client = socket.create_connection(("127.0.0.1", server.port), timeout=2.0)
         client.close()
     finally:
         server.close()
