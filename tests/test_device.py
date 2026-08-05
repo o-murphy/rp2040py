@@ -73,6 +73,20 @@ def _pretend_started(device: MicroPythonDevice) -> None:
     device._started = True
 
 
+def _reply(device: MicroPythonDevice, *chunks: bytes) -> None:
+    # cdc.on_serial_data must fire on the Simulator's own engine-room thread in real usage (that's
+    # the whole point of phase 5 - see mp_device.py's module docstring): _aexec()'s `done` is a
+    # plain asyncio.Event now, not a threading.Event, and calling .set() on it from a foreign
+    # thread doesn't reliably wake an awaiter on the engine-room loop. Bridged via simulator.call()
+    # (built in PR 1) so these synthetic device replies match that invariant instead of calling
+    # on_serial_data from this thread directly.
+    async def _send() -> None:
+        for chunk in chunks:
+            device.cdc.on_serial_data(chunk)
+
+    device.simulator.call(_send())
+
+
 def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_image):
     device = MicroPythonDevice(garbage_image)
     _pretend_started(device)
@@ -80,15 +94,12 @@ def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_im
     def _fake_device_replies() -> None:
         # The exact byte sequence real MicroPython/CircuitPython send back for the raw-REPL
         # protocol, delivered the same way USBCDC's real endpoint dispatch would: by calling
-        # on_serial_data. Runs on its own thread to simulate the Simulator worker thread.
+        # on_serial_data. Runs on its own thread (bridged into the engine room via _reply()) to
+        # simulate whatever's driving the Simulator.
         while device.cdc.on_serial_data is None:
             # exec() (called concurrently below) hasn't registered its handler yet.
             time.sleep(0.001)
-        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
-        device.cdc.on_serial_data(b"OK")
-        device.cdc.on_serial_data(b"4\r\n")
-        device.cdc.on_serial_data(bytes([4]))
-        device.cdc.on_serial_data(bytes([4]))
+        _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"OK", b"4\r\n", bytes([4]), bytes([4]))
 
     threading.Thread(target=_fake_device_replies).start()
     stdout, stderr = device.exec("print(2 + 2)", timeout=5)
@@ -111,15 +122,11 @@ def _serve_queued_execs(device: MicroPythonDevice, replies: "list[bytes]") -> No
         while device.cdc.on_serial_data is last_handler:
             time.sleep(0.001)
         # Capture *before* replying, not after: the final on_serial_data call below can
-        # synchronously cascade all the way into starting the next queued exec (its done-callback
-        # runs synchronously off the last byte of this reply) - reading on_serial_data afterwards
-        # would already see that next handler, not the one we're about to finish serving.
+        # cascade all the way into starting the next queued exec on the engine-room loop (its
+        # done-callback releases the repl lock as part of the same reply) - reading on_serial_data
+        # afterwards would already see that next handler, not the one we're about to finish serving.
         handler_being_served = device.cdc.on_serial_data
-        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
-        device.cdc.on_serial_data(b"OK")
-        device.cdc.on_serial_data(reply)
-        device.cdc.on_serial_data(bytes([4]))
-        device.cdc.on_serial_data(bytes([4]))
+        _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"OK", reply, bytes([4]), bytes([4]))
         last_handler = handler_being_served
 
 
@@ -151,22 +158,13 @@ def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image)
             last_handler = device.cdc.on_serial_data
 
         _next_handler()
-        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
-        device.cdc.on_serial_data(b"OK")
-        device.cdc.on_serial_data(b"1\r\n")
-        device.cdc.on_serial_data(bytes([4]))
-        device.cdc.on_serial_data(bytes([4]))
+        _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"OK", b"1\r\n", bytes([4]), bytes([4]))
 
         _next_handler()  # 2nd exec: malformed ack -> RawReplError, shouldn't wedge the 3rd
-        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
-        device.cdc.on_serial_data(b"XY")
+        _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"XY")
 
         _next_handler()
-        device.cdc.on_serial_data(b"raw REPL; CTRL-B to exit\r\n>")
-        device.cdc.on_serial_data(b"OK")
-        device.cdc.on_serial_data(b"3\r\n")
-        device.cdc.on_serial_data(bytes([4]))
-        device.cdc.on_serial_data(bytes([4]))
+        _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"OK", b"3\r\n", bytes([4]), bytes([4]))
 
     threading.Thread(target=_serve).start()
 

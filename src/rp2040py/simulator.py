@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import sys
 import threading
 import time
@@ -87,6 +88,13 @@ class Simulator:
     async def acall(self, coro: "Coroutine[Any, Any, _T]") -> _T:
         """Async equivalent of call(), for a caller that already has its own running loop."""
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self._ensure_loop()))
+
+    def submit(self, coro: "Coroutine[Any, Any, _T]") -> "concurrent.futures.Future[_T]":
+        """Runs `coro` on the engine-room thread, returning immediately with a Future rather than
+        blocking - call()'s non-blocking counterpart, for a caller that wants to hand back a
+        concurrent.futures.Future itself (device/mp_device.py's own *_async() API) rather than
+        block the calling thread right away."""
+        return asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
 
     def _execute_batch(self) -> None:
         """Runs up to 1,000,000 instructions/idle-jumps, or until stop() is called - whichever

@@ -9,13 +9,14 @@ instead - the blocking methods are one-line wrappers around them. A Future alrea
 callback style for free (``future.add_done_callback(...)``), and
 ``astart()``/``aexec()``/``aexec_file()`` are thin ``async def`` wrappers for asyncio callers.
 
-All of these share one `concurrent.futures.ThreadPoolExecutor` with a single worker: the device
-only has one REPL channel, so it can't run two ``exec()``s at once anyway - a single-worker
-executor gets queueing (extra calls simply wait their turn), Future/callback/async support, and
-cancellation of not-yet-started calls all from the standard library, instead of a hand-rolled
-alternative. Both boot and exec submit *plain blocking* work to it (`threading.Event.wait`) - the
-executor is what turns "blocking" into "queued, cancellable, awaitable" for callers, without the
-underlying implementation needing to know or care which style is being used.
+All of these run as coroutines on the ``Simulator``'s own engine-room loop (`simulator.submit()`),
+serialized by one `asyncio.Lock`: the device only has one REPL channel, so it can't run two
+``exec()``s at once anyway - the lock gets queueing (extra calls simply wait their turn behind
+whichever coroutine holds it), while `simulator.submit()` gets Future/callback/async support for
+free the same way `concurrent.futures.Executor.submit()` would. Running on the engine room
+(instead of a separate worker thread) also means the raw-REPL protocol's own byte sends
+(`RawReplRunner.start()`'s Ctrl-C/Ctrl-A, `pump()`'s FIFO-paced uploads) happen on the same thread
+that drives `execute_instruction()`'s own USBCDC FIFO access - by construction, not by convention.
 
 .. code-block:: python
 
@@ -27,16 +28,14 @@ underlying implementation needing to know or care which style is being used.
 """
 
 import asyncio
-import threading
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TypeVar
 
-from rp2040py.clock.clock import IClock
-from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice, connect_blocking
+from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
 from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
-from rp2040py.usb.cdc import USBCDC
+from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.utils.logging import LogLevel
 
 _T = TypeVar("_T")
@@ -65,58 +64,6 @@ async def _await(future: "Future[_T]", timeout: "float | None") -> _T:
         raise TimeoutError(f"did not complete within {timeout}s") from exc
 
 
-def _exec_blocking(cdc: USBCDC, clock: "IClock", source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
-    done = threading.Event()
-    errors: list[RawReplError] = []
-
-    def _on_result(_result: "tuple[bytes, bytes]") -> None:
-        done.set()
-
-    def _on_error(exc: Exception) -> None:
-        assert isinstance(exc, RawReplError)
-        errors.append(exc)
-        done.set()
-
-    runner = RawReplRunner(cdc, source, on_result=_on_result, on_error=_on_error)
-
-    def _pump_until_sent() -> None:
-        # feed() only pushes as much of the source as fits in cdc's FIFO right away (see
-        # RawReplRunner.pump()'s docstring for why) - this drip-feeds the rest, giving the
-        # simulator loop room to actually drain the FIFO between attempts (pump() itself can't do
-        # that: like feed(), it'd be running synchronously inside the emulated CPU's own call
-        # chain). Scheduled via the simulated clock, not threading.Timer: a real-time timer fires
-        # on its own OS thread, which then races USBCDC.tx_fifo.push()/pull() against whichever
-        # thread is driving the simulator (pull() happens deep in the emulated USB peripheral's own
-        # read path, mid-instruction-execution) - USBCDC/FIFO were never meant to be thread-safe
-        # (it's a hot path used everywhere in peripheral emulation, not worth locking globally for
-        # this one caller), and that race really did corrupt uploads intermittently (confirmed:
-        # different corruption each run - an IndentationError one run, a SyntaxError the next, same
-        # input). An alarm callback instead runs synchronously inside Clock.tick(), on whatever
-        # thread is already driving the simulator - same thread as feed()/pull(), no race. Keeps
-        # rescheduling until `done` regardless of pump()'s own return value - there's nothing
-        # queued to send yet the first few times this fires (feed() only populates it once the
-        # raw-REPL banner arrives), so an empty-queue "nothing to send" from pump() isn't a
-        # reliable "fully sent, stop" signal on its own; `done` (set once the exec has actually
-        # finished or errored) is.
-        if done.is_set():
-            return
-        runner.pump()
-        pump_alarm.schedule(1_000_000)  # 1ms of emulated time, in nanoseconds
-
-    pump_alarm = clock.create_alarm(_pump_until_sent)
-
-    runner.start()  # wires cdc.on_serial_data = runner.feed, then sends CTRL_C, CTRL_C, CTRL_A
-    pump_alarm.schedule(1_000_000)
-
-    if not done.wait(timeout):
-        raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s")
-    runner.stop()
-    if errors:
-        raise errors[0]
-    assert runner.result is not None
-    return runner.result
-
-
 class MicroPythonDevice(BaseDevice):
     """Boots a MicroPython/CircuitPython UF2 image and lets you run code on it programmatically
     via the raw-REPL protocol (the same one `mpremote run`/`pyboard.py` and Thonny's "Run" use
@@ -142,12 +89,30 @@ class MicroPythonDevice(BaseDevice):
         if fat12 is not None:
             load_circuitpython_flash_image(fat12, self.mcu)
         self.circuitpython = circuitpython
-        self._executor = ThreadPoolExecutor(max_workers=1)
+        # Serializes start_async()/exec_async() coroutines running on the engine room (see
+        # simulator.submit() below) the same way ThreadPoolExecutor(max_workers=1) used to -
+        # extra calls simply wait their turn behind whichever one holds the lock. Safe to
+        # construct here even though __init__ doesn't run on the engine-room thread: modern
+        # asyncio.Lock (3.10+, this project's floor) binds to a loop lazily on first acquire(),
+        # not at construction - every acquire() below always happens on the same loop (the engine
+        # room, via simulator.submit()).
+        self._repl_lock = asyncio.Lock()
 
     # -- start -----------------------------------------------------------------------------
     # Overridden (rather than inheriting BaseDevice.start()/stop() as-is) to route through
-    # self._executor - the same single-worker queue exec_async() uses, so start_async()/
-    # exec_async() calls made back-to-back queue behind each other instead of racing.
+    # self._repl_lock - the same lock exec_async() uses, so start_async()/exec_async() calls
+    # made back-to-back queue behind each other instead of racing.
+
+    async def _aconnect(self, timeout: "float | None") -> None:
+        async with self._repl_lock:
+            connected = asyncio.Event()
+            self.cdc.on_device_connected = connected.set
+            self.mcu.core.pc = FLASH_START_ADDRESS
+            self.simulator.start_execution()
+            try:
+                await asyncio.wait_for(connected.wait(), timeout)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails
@@ -155,7 +120,7 @@ class MicroPythonDevice(BaseDevice):
         if self._started:
             raise RuntimeError("start()/start_async() already called")
         self._started = True
-        return self._executor.submit(connect_blocking, self.cdc, self.simulator, self.mcu, timeout)
+        return self.simulator.submit(self._aconnect(timeout))
 
     def start(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
         """Blocking version of `start_async()`."""
@@ -171,6 +136,61 @@ class MicroPythonDevice(BaseDevice):
     # response it was waiting for.
 
     # -- exec ------------------------------------------------------------------------------
+
+    async def _aexec(self, source: bytes, timeout: "float | None") -> "tuple[bytes, bytes]":
+        async with self._repl_lock:
+            done = asyncio.Event()
+            errors: list[RawReplError] = []
+
+            def _on_result(_result: "tuple[bytes, bytes]") -> None:
+                done.set()
+
+            def _on_error(exc: Exception) -> None:
+                assert isinstance(exc, RawReplError)
+                errors.append(exc)
+                done.set()
+
+            runner = RawReplRunner(self.cdc, source, on_result=_on_result, on_error=_on_error)
+
+            def _pump_until_sent() -> None:
+                # feed() only pushes as much of the source as fits in cdc's FIFO right away (see
+                # RawReplRunner.pump()'s docstring for why) - this drip-feeds the rest, giving the
+                # simulator loop room to actually drain the FIFO between attempts (pump() itself
+                # can't do that: like feed(), it'd be running synchronously inside the emulated
+                # CPU's own call chain). Scheduled via the simulated clock, not a real-time
+                # asyncio.sleep(): pacing must stay tied to simulated time, not wall-clock time, or
+                # it drifts against however fast/slow the emulator itself is actually running. The
+                # alarm callback runs synchronously inside Clock.tick(), on this Simulator's own
+                # engine-room thread - the same thread this coroutine itself runs on (both this
+                # method and every USBCDC/RawReplRunner touch it makes), so there's no cross-thread
+                # race here at all, unlike the old ThreadPoolExecutor-worker-thread design this
+                # replaces. Keeps rescheduling until `done` regardless of pump()'s own return
+                # value - there's nothing queued to send yet the first few times this fires (feed()
+                # only populates it once the raw-REPL banner arrives), so an empty-queue "nothing to
+                # send" from pump() isn't a reliable "fully sent, stop" signal on its own; `done`
+                # (set once the exec has actually finished or errored) is.
+                if done.is_set():
+                    return
+                runner.pump()
+                pump_alarm.schedule(1_000_000)  # 1ms of emulated time, in nanoseconds
+
+            pump_alarm = self.simulator.clock.create_alarm(_pump_until_sent)
+
+            # wires cdc.on_serial_data = runner.feed, then sends CTRL_C, CTRL_C, CTRL_A - now
+            # genuinely running on the engine room, closing the same USBCDC.tx_fifo race PR 3
+            # closed for stdin (see docs/ASYNCIO_MIGRATION_BACKLOG.md's "Resolved during PR 3").
+            runner.start()
+            pump_alarm.schedule(1_000_000)
+
+            try:
+                await asyncio.wait_for(done.wait(), timeout)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s") from exc
+            runner.stop()
+            if errors:
+                raise errors[0]
+            assert runner.result is not None
+            return runner.result
 
     def exec_async(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[tuple[bytes, bytes]]":
         """Run `code` on the device via the raw-REPL protocol. Returns a Future resolving to its
@@ -189,7 +209,7 @@ class MicroPythonDevice(BaseDevice):
         """
         if not self._started:
             raise RuntimeError("call start()/start_async() (or enter as a context manager) before exec_async()")
-        return self._executor.submit(_exec_blocking, self.cdc, self.simulator.clock, code.encode(), timeout)
+        return self.simulator.submit(self._aexec(code.encode(), timeout))
 
     def exec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """Blocking version of `exec_async()` - `timeout` bounds the *entire* wait, including any

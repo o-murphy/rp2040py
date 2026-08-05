@@ -187,8 +187,8 @@ lifecycle `MicroPythonDevice` and the newer `KalumaDevice` (`device/kaluma_devic
 load the image, create the `USBCDC` console, block `start()`/`stop()` around actually running the
 emulator - which used to be duplicated between `MicroPythonDevice.__init__` and
 `demo/kaluma_run.py`'s hand-rolled boot sequence before the `kaluma` subcommand existed.
-`MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `ThreadPoolExecutor` on
-top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
+`MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `Simulator`-engine-room
+queueing on top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
 "CLI packaging" above), so there's no `exec()` to add, just optional `littlefs`/`program` loading.
 
 `KalumaDevice(program=...)`/`load_kaluma_program()` (`device/load_flash.py`) stage a local `.js`
@@ -232,18 +232,22 @@ for exactly the GP22 case this fixes. See `tests/test_gpio_pin.py`.
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
-`astart()`/`aexec()`/`aexec_file()` for asyncio. All of these submit the same plain blocking
-implementation (`threading.Event.wait()`) to one `ThreadPoolExecutor(max_workers=1)` per device -
-deliberately reusing the standard library's own executor/Future machinery rather than hand-rolling
-a queue: the device only has one REPL channel and can't run two `exec()`s at once, so a
-single-worker executor gets FIFO queueing of overlapping calls, `Future.add_done_callback()` for
-callback style, and cancellation of not-yet-started calls, all for free. (An earlier version of
-this hand-rolled the queue with a `deque` + a `Future`-per-call + a `threading.Timer` timeout
-watchdog; it worked, but was substantially more code for the same guarantees the stdlib already
-provides.) `concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class,
-distinct from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in
-`mp_device.py` normalize all three to the builtin one so `except TimeoutError` behaves the same
-everywhere on the 3.10 floor this project supports.
+`astart()`/`aexec()`/`aexec_file()` for asyncio. All of these run as coroutines on the
+`Simulator`'s own engine-room loop (`simulator.submit()`, `run_coroutine_threadsafe()` under the
+hood - already returns a plain `concurrent.futures.Future`, no extra wrapping needed), serialized
+by one `asyncio.Lock` per device: the device only has one REPL channel and can't run two `exec()`s
+at once, so the lock gets FIFO queueing of overlapping calls the same way
+`ThreadPoolExecutor(max_workers=1)` used to, for free. (Two earlier versions of this: first a
+hand-rolled `deque` + a `Future`-per-call + a `threading.Timer` timeout watchdog; then a
+`ThreadPoolExecutor(max_workers=1)` submitting plain blocking `threading.Event.wait()` calls -
+replaced once `Simulator` got its own engine-room loop, see
+`docs/ASYNCIO_MIGRATION_BACKLOG.md`'s phase 5: running on a worker thread neither of those first
+two designs actually needed to exist raced `USBCDC.tx_fifo` against whatever thread was really
+driving the simulator, the same class of bug PR 3 found and fixed for `cli/stdio_repl.py`.)
+`concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class, distinct
+from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in `mp_device.py`
+normalize all three to the builtin one so `except TimeoutError` behaves the same everywhere on the
+3.10 floor this project supports.
 
 ### Threading model (`Simulator.execute()` / `RPPIO.run()`)
 
