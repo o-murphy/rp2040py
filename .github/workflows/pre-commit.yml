@@ -18,7 +18,15 @@ concurrency:
 jobs:
   pre-commit:
     name: pre-commit run --all-files
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      max-parallel: 10
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
