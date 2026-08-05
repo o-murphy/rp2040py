@@ -1,8 +1,8 @@
 # Full asyncio migration
 
-**Status:** PR 1 (`simulator.py` + `peripherals/pio.py`) and PR 2 (`gdb/gdb_tcp_server.py`) landed -
-see "Phased migration order" below. Everything else is still a design sketch, not implemented or
-committed to.
+**Status:** PR 1 (`simulator.py` + `peripherals/pio.py`), PR 2 (`gdb/gdb_tcp_server.py`), and PR 3
+(`cli/stdio_repl.py` + `device/repl_runner.py`) landed - see "Phased migration order" below.
+Everything else is still a design sketch, not implemented or committed to.
 
 ## Why this document exists
 
@@ -27,12 +27,15 @@ independently-discovered bugs, more than once, in different subsystems:
 - `src/rp2040py/simulator.py:70-78` (`Simulator.execute()`): the exact same pattern —
   `threading.Timer(0, self.execute)` standing in for `setTimeout(fn, 0)` — with the same comment,
   independently written, about the same tradeoff.
-- `src/rp2040py/cli/stdio_repl.py`: a whole session's worth of bugs chased through this file (see
+- `src/rp2040py/cli/stdio_repl.py` (pre-PR-3 state): a whole session's worth of bugs chased
+  through this file (see
   [docs/BACKLOG.md](BACKLOG.md#unified-process-shutdown-coordinator-ctrlx---expect-text-sigterm--done)
   and the two fixes landed just before this document was written) — a stdin-reader thread that
   wasn't joinable, then wasn't joined correctly, a SIGTERM handler that only works from the main
   thread, a `_wake_r`/`_wake_w` self-pipe whose entire job is working around Python not having a
-  way to cancel a blocked `os.read()` from another thread.
+  way to cancel a blocked `os.read()` from another thread. Fixed in PR 3 - see "Resolved during
+  PR 3" below, including a real, previously-undetected `USBCDC.tx_fifo` race this same thread
+  caused.
 - `src/rp2040py/gdb/gdb_tcp_server.py` (pre-PR-2 state): a non-daemon accept thread (so a
   listening GDB server keeps the process alive, matching Node's `net.Server.listen()`) that can't
   be unblocked by closing its socket out from under it — confirmed the hard way, an earlier
@@ -85,11 +88,25 @@ to host GDB's connection I/O, `GDBTCPServer` got its **own** independent engine 
 connection handling (accepting a socket, reading bytes) has nothing to do with CPU/peripheral
 state, so there's no shared-state reason to put it on the same loop as `execute()` - and keeping it
 separate meant zero changes to `IGDBTarget`'s `Protocol` (`gdb/gdb_target.py`), so every existing
-fake target in tests stayed exactly as simple as it was. **So the actual current shape is: every
-long-lived async component gets its own independent engine room, bridged into from synchronous
-callers via the same small pattern - not one shared loop everything lives on.** Whether a single
-process-wide "front door" loop ever gets built is now an open question for phase 5 (`cli/__init__.py`'s
-`main()`) rather than a foregone conclusion - see "Open questions" below.
+fake target in tests stayed exactly as simple as it was.
+
+PR 3 (`StdioInteractiveRepl`) went the **other** way, on purpose - the first case that didn't get
+its own engine room. Reasoning: unlike GDB connection I/O, forwarding stdin *is* touching
+`Simulator`/`USBCDC` state, on every single byte typed (`cdc.send_serial_byte()`), not just
+per-command. Giving it a separate loop would mean bridging into `Simulator`'s engine room on every
+keystroke for no benefit; registering `loop.add_reader(stdin_fd, callback)` directly on
+`Simulator`'s own engine-room loop means the callback *is already running on the right thread*, so
+`send_serial_byte()` is a plain, safe, synchronous call - no bridge call needed per byte at all.
+Only the one-time `add_reader`/`remove_reader` registration (which must run on the target loop's
+own thread) needs `Simulator.call()`.
+
+**So the actual shape, three components in: each long-lived async component picks whichever loop
+its own state-touching pattern calls for** - a dedicated engine room when it's mostly decoupled I/O
+touching shared state rarely (`GDBTCPServer`), sharing `Simulator`'s when it's touching that same
+state on nearly every I/O event (`StdioInteractiveRepl`) - not a fixed rule either way. Whether a
+single process-wide "front door" loop ever gets built at all is now looking less likely than PR 1
+planning assumed - phase 5's `mp_device.py` only ever needed to bridge into `Simulator`'s engine
+room too - see "Open questions" below.
 
 The shared building blocks (not duplicated per component):
 
@@ -105,8 +122,9 @@ The shared building blocks (not duplicated per component):
   (fire-and-forget), `call(coro, timeout=None)` (blocking bridge), `acall(coro)` (async bridge).
   `GDBTCPServer` doesn't reuse these specifically (it has its own engine room, see above) but
   follows the identical pattern inline (`asyncio.run_coroutine_threadsafe(...).result(timeout)`
-  in `__init__`/`close()`) - worth promoting into a small shared bridge class if a third component
-  needs the same shape.
+  in `__init__`/`close()`). `StdioInteractiveRepl` (**PR 3**) *does* reuse `Simulator.call()`
+  directly (for the one-time `add_reader`/`remove_reader` registration) - the first real second
+  user of the bridge as originally built, no changes needed to it.
 
 | Today (thread-based) | Becomes | File | Status |
 |---|---|---|---|
@@ -115,13 +133,14 @@ The shared building blocks (not duplicated per component):
 | `connect_blocking()`'s bootstrap thread + `threading.Event` | `simulator.start_execution()`; the `threading.Event`/`connected.wait(timeout)` wait itself is unchanged - still safe, `on_device_connected` fires from the engine-room thread and `Event.set()` is cross-thread-safe | `device/base_device.py` | **Done** |
 | `gdb_server.py`'s two direct `self.target.execute()` calls (`c`/`vCont;c`) | `self.target.start_execution()` | `gdb/gdb_server.py` | **Done** |
 | `wait_for_shutdown()`'s `time.sleep(0.1)` poll loop | Unchanged - it only reads a plain bool and a `threading.Event`, neither needs to run on the engine-room loop | `simulator.py` | N/A, correctly left alone |
-| stdin reader thread + `_wake_r`/`_wake_w` self-pipe | `loop.add_reader(fd, callback)` (POSIX); `loop.run_in_executor()` wrapping the existing blocking fallback (Windows/non-tty) | `cli/stdio_repl.py` | Not started |
-| `signal.signal(SIGTERM, handler)` + main-thread-affinity checks | `loop.add_signal_handler(signal.SIGTERM, callback)` | `cli/stdio_repl.py` | Not started |
+| stdin reader thread + `_wake_r`/`_wake_w` self-pipe | `loop.add_reader(stdin_fd, callback)`, registered on **`Simulator`'s own engine-room loop** (not a separate one - see "Target shape" above) | `cli/stdio_repl.py` | **Done** (POSIX) |
+| Non-tty/Windows fallback (`sys.stdin.read()`, no real fd to `add_reader()`) | Kept a small dedicated thread for the blocking read itself (no portable alternative) - the fix was routing each chunk's *send* through `simulator.call()` instead of calling `send_serial_byte()` directly from that thread | `cli/stdio_repl.py` | **Done** |
+| `signal.signal(SIGTERM, handler)` + main-thread-affinity checks | **Not `loop.add_signal_handler()`** - see "Resolved during PR 3": that still requires the actual process main thread, which isn't running an event loop until phase 5. Stays `signal.signal()`, simplified only by losing the "am I the reader thread" branch (no reader thread left) | `cli/stdio_repl.py` | **Done** (simplified, not migrated) |
 | GDB accept thread (non-daemon) + 0.2s `socket.settimeout()` poll | `asyncio.start_server()` on `GDBTCPServer`'s own engine room | `gdb/gdb_tcp_server.py` | **Done** |
 | GDB per-connection thread + `client_socket.recv()` | `asyncio.StreamReader`/`StreamWriter` from the same `start_server()` connection callback | `gdb/gdb_tcp_server.py` | **Done** |
 | `GDBServer.add_connection()`'s `_on_break` (fires on `Simulator`'s engine-room thread) writing a stop-reply directly | Per-connection `on_response` closure does `gdb_loop.call_soon_threadsafe(writer.write, ...)` instead of writing directly - the one new cross-thread hop this phase needed, localized to one closure | `gdb/gdb_tcp_server.py` | **Done** |
 | `ThreadPoolExecutor(max_workers=1)` (boot/exec queueing) | `Simulator.call()`/`.acall()` (built, unused by this file yet) instead of a second, separate executor-based serialization point | `device/mp_device.py` | Not started |
-| `BaseReplRunner._send_byte_blocking()`'s spin-wait (`time.sleep(_FIFO_TIMEOUT)`) | `await asyncio.sleep(_FIFO_TIMEOUT)`, or better, an `asyncio.Condition` the FIFO signals on drain | `device/repl_runner.py` | Not started |
+| `InteractiveRepl.send()`'s blocking per-byte spin-wait (`_send_byte_blocking()`/`time.sleep(_FIFO_TIMEOUT)`) | Deleted. `send()` now just `_queue(data); return pump()` - the same non-blocking pacing `RawReplRunner` already used, reused instead of a second mechanism | `device/repl_runner.py` | **Done** |
 
 The public synchronous API surface (`MicroPythonDevice.start()`/`.exec()`, `BaseDevice` as a
 context manager, `KalumaDevice`) still doesn't get to assume its caller is running an event loop -
@@ -164,25 +183,31 @@ checking for before starting phase 3+ too.
    doesn't know or care that this is cross-thread. Two bugs found and fixed during this phase, both
    real, both worth remembering for phase 4/5's own use of `asyncio.start_server()`-style code -
    see "Resolved during PR 2" below.
-4. **`device/repl_runner.py`, `device/raw_repl.py`, `cli/stdio_repl.py`**. The REPL/stdin layer,
-   bridging to the engine room via `Simulator.call()`/`.acall()` (already built) instead of
-   inventing its own thread-coordination. `StdioInteractiveRepl` in particular gets simpler in the
-   same direction this session's two prior fixes already pushed it (`on_quit` as a required,
-   non-blocking signal) — under asyncio that signal is naturally `shutdown_event.set()` from an
-   `add_reader` callback, no thread-affinity question to even ask.
+4. ~~**`device/repl_runner.py`, `cli/stdio_repl.py`**~~ **Done** (`refactor: stdio_repl.py on
+   add_reader(), sharing Simulator's engine room`). `device/raw_repl.py` ended up untouched -
+   `RawReplRunner`'s `feed()`/pacing already used `_queue()`/`pump()` correctly, nothing to
+   migrate there. Found and fixed a real bug along the way, not just thread-count cleanup: the old
+   reader thread called `send()` → `_send_byte_blocking()` → `cdc.send_serial_byte()` directly,
+   from a different thread than `Simulator.execute()` - the same unguarded `USBCDC.tx_fifo` race
+   that once corrupted raw-REPL uploads (`mp_device.py:86-96`'s comment), just never reproduced
+   for interactive stdin specifically. See "Resolved during PR 3" for the fix and two more
+   *related but out-of-scope* races found while tracing this.
 5. **`device/mp_device.py`'s sync facade + `cli/__init__.py`**. Last, because it's the highest-risk
    step for external callers: the `ThreadPoolExecutor`-backed sync API becomes
    `Simulator.call()`/`.acall()` (already built, just not wired up here yet), and
-   `cli/__init__.py`'s `main()` becomes the thing that actually calls `asyncio.run()` for the
-   front-door loop.
+   `cli/__init__.py`'s `main()` becomes the thing that actually calls `asyncio.run()` if a
+   front-door loop turns out to be worth building at all (see "Target shape" above - looking less
+   necessary than originally assumed). This phase should also close the two races PR 3 found but
+   deliberately didn't fix (`mp_device.py`'s own `Ctrl-C`/`Ctrl-A` kickoff bytes sent from the
+   executor thread; `gdb_server.py`'s `process_gdb_message()` touching `rp2040` state from
+   `GDBTCPServer`'s own loop with no bridge at all) - both are exactly what this phase's
+   `Simulator.call()`/`.acall()` wiring is for.
 
 Each remaining phase should land as its own PR with its own full test-suite-green checkpoint —
 this is explicitly *not* a stop-the-world rewrite; the codebase is shippable after every phase
-(confirmed after 1+2 and again after 3: 450/450 tests × 10 runs, mypy/ruff clean, a live GDB
-continue/Ctrl-C/continue smoke test - see each PR's own commit message for exact numbers), with
-threads and asyncio coexisting in between. `stdio_repl.py` staying thread-based for now already
-bridges into `Simulator`'s engine room fine via the one-word `start_execution()` swap PR 1 already
-made in `gdb_server.py` - phase 4 doesn't block on phase 5.
+(confirmed after every PR so far: 450+/450+ tests × 10 runs, mypy/ruff clean, live pty-based
+SIGTERM/Ctrl+X and GDB continue/Ctrl-C/continue smoke tests - see each PR's own commit message for
+exact numbers), with threads and asyncio coexisting in between.
 
 ## Resolved during PR 1
 
@@ -250,21 +275,62 @@ made in `gdb_server.py` - phase 4 doesn't block on phase 5.
   thread) and make plain synchronous assertions against it - no test needed to itself run inside a
   coroutine.
 
+## Resolved during PR 3
+
+- **The `USBCDC.tx_fifo` race, found while designing this phase, not while debugging a symptom.**
+  `StdioInteractiveRepl`'s reader thread called `send()` → `cdc.send_serial_byte()` directly, racing
+  whatever thread drives `execute_instruction()`'s own FIFO pull
+  (`RPUSBController._on_endpoint_read`) - structurally identical to the raw-REPL-upload corruption
+  `mp_device.py:86-96` already documents fixing, just never reproduced for interactive stdin.
+  Closed as a consequence of registering `add_reader()` directly on `Simulator`'s engine-room loop
+  (see "Target shape" above) rather than as a separate fix - once the callback runs on the right
+  thread, `send_serial_byte()` needs no bridging at all. Verified live: a 601-byte pasted line (over
+  `USBCDC`'s 512-byte `TX_FIFO_SIZE`) round-trips through a real MicroPython session with no
+  truncation.
+- **`loop.add_signal_handler()` cannot replace `signal.signal()` yet.** The original migration
+  sketch assumed it could, for this phase. It can't: `add_signal_handler()` still requires being
+  called from the actual process main thread (a CPython `signal`-module restriction, not something
+  asyncio lifts), and `Simulator`'s engine-room loop runs on a background thread, not the main one.
+  Only phase 5 - if `cli/__init__.py`'s `main()` itself becomes the main-thread event loop - would
+  make this viable. `_on_sigterm` stays on `signal.signal()` this phase, just loses the "am I the
+  reader thread" branch since there's no reader thread left to accidentally join from within
+  itself.
+- **Two more instances of the exact same tx_fifo-class race found while tracing this, left
+  unfixed on purpose:** `mp_device.py`'s `_exec_blocking()` sends its initial `Ctrl-C`/`Ctrl-A`
+  bytes from the `ThreadPoolExecutor` worker thread, not the engine room - squarely phase 5's
+  problem (that's the whole point of migrating `mp_device.py`'s sync facade). `gdb_server.py`'s
+  `process_gdb_message()` reads/writes `core.registers`/memory directly from whatever thread calls
+  `feed_data()` - after PR 2, `GDBTCPServer`'s own engine-room thread, never bridged into
+  `Simulator`'s - pre-existing since before PR 2 even, not a regression from this migration, but
+  not yet assigned to a phase. Added as an open question below rather than fixed inline; fixing it
+  means every `process_gdb_message()` call would need `Simulator.call()`/`.acall()`, likely
+  reopening the "does GDB need `Simulator`'s engine room after all" question PR 2 closed the other
+  way.
+- **No `pytest-asyncio` needed here either**, matching PR 1 and PR 2's finding. `test_stdio_repl.py`
+  still drives a real `Simulator()` + a real pty synchronously; nothing needed to run inside a
+  coroutine itself.
+
 ## Open questions / not decided
 
 - **Windows stdin.** `loop.add_reader()` on `ProactorEventLoop` (asyncio's default on Windows)
   only supports sockets, not arbitrary file descriptors or pipes — matches today's situation
-  exactly (no raw mode there either), so the existing `sys.stdin.read()` fallback
-  (`cli/stdio_repl.py`'s `else` branch) would move into `loop.run_in_executor()` rather than
-  `add_reader()`. Not a regression, but confirm `SelectorEventLoop` isn't a better fit there before
-  committing to `run_in_executor` — untested either way.
-- **Is a single shared "front door" loop worth building in phase 5, given phases 1-3 each ended up
-  with their own independent engine room instead?** Two independent components (`Simulator`,
-  `GDBTCPServer`) doing this with zero coordination problems so far suggests a shared loop might
-  not be needed at all - `cli/stdio_repl.py` (phase 4) could plausibly get its own third engine
-  room the same way, and phase 5's `mp_device.py` sync facade only ever needed to bridge into
-  `Simulator`'s anyway. Revisit once phase 4 is built and it's clear whether anything actually
-  needs to coordinate *across* two of these independent loops (right now nothing does).
+  exactly (no raw mode there either), so `cli/stdio_repl.py`'s non-tty/Windows fallback (PR 3) kept
+  a small dedicated thread for the blocking `sys.stdin.read()` call itself rather than trying
+  `add_reader()`/`run_in_executor()` there - untested whether `run_in_executor()` would actually be
+  better than what's there now, since the fallback already isn't the primary interactive path.
+- **Is a single shared "front door" loop worth building in phase 5 at all?** Three phases in
+  (`Simulator`, `GDBTCPServer`, `StdioInteractiveRepl`), and every component has picked whichever
+  loop suits its own state-touching pattern - two with their own engine room, one sharing
+  `Simulator`'s - with zero cross-loop coordination problems. Phase 5's `mp_device.py` sync facade
+  only ever needed to bridge into `Simulator`'s engine room too. Increasingly looks like the answer
+  is "no, not unless something concrete needs it" - revisit once phase 5 is actually built.
+- **`gdb_server.py`'s `process_gdb_message()` touches `rp2040`/`core` state directly from
+  `GDBTCPServer`'s own engine-room thread, never bridged into `Simulator`'s** (found during PR 3,
+  see "Resolved during PR 3" above) - a real, pre-existing race (true even before PR 2, under the
+  old thread-per-connection design), not caused by this migration but not fixed by it either. Not
+  currently assigned to a phase - candidate for phase 5 (alongside `mp_device.py`'s own analogous
+  issue) or a dedicated follow-up, since fixing it revisits PR 2's "GDB gets its own engine room,
+  not `Simulator`'s" decision.
 
 ## Considered and rejected (for now)
 

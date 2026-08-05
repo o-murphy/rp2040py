@@ -284,7 +284,10 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
         repl = StdioInteractiveRepl(
-            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+            cdc,
+            device.simulator,
+            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
+            on_quit=shutdown.request,
         )
         repl.start()
         cleanup.callback(repl.stop)
@@ -341,7 +344,10 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
         repl = StdioInteractiveRepl(
-            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+            cdc,
+            device.simulator,
+            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
+            on_quit=shutdown.request,
         )
         repl.start()
         cleanup.callback(repl.stop)

@@ -1,32 +1,24 @@
-"""Shared FIFO-backpressure/threading plumbing for driving a firmware's USB-CDC console, factored
-out from what used to be three near-identical implementations (raw-REPL upload, the CLI's
-interactive MicroPython/CircuitPython mode, and demo/kaluma_run.py's generic interactive mode).
+"""Shared FIFO-backpressure plumbing for driving a firmware's USB-CDC console, factored out from
+what used to be three near-identical implementations (raw-REPL upload, the CLI's interactive
+MicroPython/CircuitPython mode, and demo/kaluma_run.py's generic interactive mode).
 
-`BaseReplRunner` owns the `USBCDC` reference and both backpressure strategies real callers need:
-
-- `_send_byte_blocking()`: spin-waits for FIFO room, then sends. Safe from a dedicated real thread
-  that has nothing else to do while blocked (e.g. a stdin reader thread) - NOT safe to call from
-  `feed()`/`_feed_safe()` itself, since that runs on whatever thread is driving the simulator and
-  must not block it.
-- `_queue()`/`pump()`: enqueues data and drains as much as currently fits, for callers that can't
-  block (`feed()`, or anything driven by the simulated clock). Scheduling *when* to call `pump()`
-  again is left to the caller - it must never be a real `threading.Timer` against a live
-  `Simulator`, only something that runs on the simulator's own thread (e.g. a clock alarm); see
-  `device/mp_device.py`'s `_exec_blocking` for why.
+`BaseReplRunner` owns the `USBCDC` reference and the one backpressure strategy every caller needs:
+`_queue()`/`pump()` enqueues data and drains as much as currently fits. Scheduling *when* to call
+`pump()` again is left to the caller - it must never be a real `threading.Timer` against a live
+`Simulator`, only something that runs on the simulator's own thread (e.g. a clock alarm, or an
+`asyncio.get_event_loop().add_reader()` callback already running there); see
+`device/mp_device.py`'s `_exec_blocking` and `cli/stdio_repl.py` for why.
 
 `InteractiveRepl` is a generic bidirectional bridge (device output -> callback, input bytes ->
 device) with no tty/stdio knowledge of its own - usable against any CDC-console firmware.
 """
 
 import threading
-import time
 from collections.abc import Callable
 
 from rp2040py.usb.cdc import USBCDC
 
 __all__ = ("BaseReplRunner", "InteractiveRepl")
-
-_FIFO_TIMEOUT = 0.001
 
 
 class BaseReplRunner:
@@ -74,11 +66,6 @@ class BaseReplRunner:
             else:
                 raise
 
-    def _send_byte_blocking(self, byte: int) -> None:
-        while self._cdc.tx_fifo.item_count >= self._cdc.tx_fifo.size:
-            time.sleep(_FIFO_TIMEOUT)
-        self._cdc.send_serial_byte(byte)
-
     def _queue(self, data: bytes) -> None:
         with self._pending_lock:
             self._pending += data
@@ -100,8 +87,7 @@ class BaseReplRunner:
 
 class InteractiveRepl(BaseReplRunner):
     """Generic bidirectional bridge: forwards device output bytes to `on_data`, and lets callers
-    push input bytes to the device via `send()` (blocking backpressure - callers must do so from a
-    dedicated thread that has nothing else to keep running while blocked).
+    push input bytes to the device via `send()`.
     """
 
     def __init__(self, cdc: USBCDC, on_data: "Callable[[bytes | bytearray], None]") -> None:
@@ -111,6 +97,9 @@ class InteractiveRepl(BaseReplRunner):
     def feed(self, data: "bytes | bytearray") -> None:
         self._on_data(data)
 
-    def send(self, data: bytes) -> None:
-        for byte in data:
-            self._send_byte_blocking(byte)
+    def send(self, data: bytes) -> bool:
+        """Queues `data` and attempts one immediate `pump()`. Returns whether it all went out -
+        call `pump()` again (e.g. from a clock alarm) while this returns `False`, same as `pump()`
+        itself; see the module docstring for why the *scheduling* of those repeat calls matters."""
+        self._queue(data)
+        return self.pump()
