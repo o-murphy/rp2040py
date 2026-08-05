@@ -43,6 +43,18 @@ def pty_stdin(monkeypatch):
     os.close(master_fd)
 
 
+def _stable(attrs):
+    """Masks PENDIN out of a termios snapshot before comparing two of them for equality. PENDIN
+    ("retype pending input at next read") is kernel-managed bookkeeping, not application state -
+    tcsetattr() restoring every field this code actually controls doesn't guarantee PENDIN round-
+    trips identically, and it has no bearing on whether the terminal is actually back in
+    cooked/echoing mode. Confirmed on macOS CI: PENDIN = 0x20000000 there vs 0x4000 on Linux -
+    different bit position per platform, hence getattr() rather than a hardcoded mask."""
+    normalized = list(attrs)
+    normalized[3] &= ~getattr(termios, "PENDIN", 0)
+    return normalized
+
+
 def test_sigterm_signals_quit_without_touching_terminal(pty_stdin):
     """A plain SIGTERM (e.g. from `timeout`) must route through on_quit like every other quit
     trigger - it must not restore the terminal or exit the process itself. `on_quit` is always
@@ -54,7 +66,7 @@ def test_sigterm_signals_quit_without_touching_terminal(pty_stdin):
     repl = StdioInteractiveRepl(_FakeCdc(), on_quit=quit_calls.append)
     repl.start()
     try:
-        assert repl._old_termios == canonical_before
+        assert _stable(repl._old_termios) == _stable(canonical_before)
 
         handler = signal.getsignal(signal.SIGTERM)
         assert handler == repl._on_sigterm
@@ -77,7 +89,7 @@ def test_stop_restores_terminal(pty_stdin):
 
     repl.stop()
 
-    assert termios.tcgetattr(pty_stdin.slave_fd) == canonical_before
+    assert _stable(termios.tcgetattr(pty_stdin.slave_fd)) == _stable(canonical_before)
 
 
 def test_stop_restores_previous_sigterm_handler(pty_stdin):
