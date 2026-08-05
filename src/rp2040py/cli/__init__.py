@@ -168,7 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     mcu.uart[0].on_byte = _on_byte
 
     mcu.core.pc = 0x10000000
-    simulator.execute()
+    simulator.start_execution()
     # gdb_server.close() as the cleanup hook: its accept thread is deliberately non-daemon (see
     # its own docstring), so a plain sys.exit() below would otherwise hang forever joining it.
     simulator.wait_for_shutdown(cleanup=gdb_server.close)
