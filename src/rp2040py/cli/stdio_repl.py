@@ -7,6 +7,7 @@ CircuitPython).
 
 import atexit
 import os
+import select
 import signal
 import sys
 import threading
@@ -100,6 +101,13 @@ class StdioInteractiveRepl(InteractiveRepl):
         self._stdin_fd: int | None = None
         self._old_termios: list[Any] | None = None
         self._old_sigterm_handler: Any = None
+        self._reader_thread: threading.Thread | None = None
+        # Self-pipe so stop() can unblock the reader thread's select()/os.read() deterministically
+        # instead of relying on the fd it's reading from eventually going away. Closing the target
+        # fd itself to cancel a pending read would be racy: another thread's fd reuse could get
+        # redirected onto it mid-syscall (this is precisely the bug this fixes - see _on_stop()).
+        self._wake_r: int | None = None
+        self._wake_w: int | None = None
 
     def _dispatch(self, data: "bytes | bytearray") -> None:
         buf_write(sys.stdout, data)
@@ -135,10 +143,30 @@ class StdioInteractiveRepl(InteractiveRepl):
         except AttributeError:
             self._stdin_fd = None
 
-        threading.Thread(target=self._read_stdin_loop, daemon=True).start()
+        if self._stdin_fd is not None:
+            self._wake_r, self._wake_w = os.pipe()
+        self._reader_thread = threading.Thread(target=self._read_stdin_loop, daemon=True)
+        self._reader_thread.start()
 
     def _on_stop(self) -> None:
+        if self._wake_w is not None:
+            try:
+                os.write(self._wake_w, b"x")
+            except OSError:
+                pass
+        # Guard against joining ourselves: on standalone Ctrl+X (no on_quit), _request_quit() calls
+        # stop() from inside _read_stdin_loop itself, after it's already past the select() below -
+        # joining here would deadlock (Thread.join() on the current thread raises RuntimeError).
+        if self._reader_thread is not None and threading.current_thread() is not self._reader_thread:
+            self._reader_thread.join(timeout=1.0)
         self._restore_termios()
+        for fd in (self._wake_r, self._wake_w):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        self._wake_r = self._wake_w = None
 
     def _on_sigterm(self, signum: int, _frame: Any) -> None:
         # 128+signum matches the convention the shell/`timeout` itself would otherwise report for
@@ -185,7 +213,16 @@ class StdioInteractiveRepl(InteractiveRepl):
     def _read_stdin_loop(self) -> None:
         try:
             if self._stdin_fd is not None:
+                # _on_start() always pairs _wake_r/_wake_w with a non-None _stdin_fd.
+                assert self._wake_r is not None
                 while True:
+                    try:
+                        ready, _, _ = select.select([self._stdin_fd, self._wake_r], [], [])
+                    except OSError:
+                        break
+                    if self._wake_r in ready:
+                        # stop() woke us up via the self-pipe - unrelated to stdin having data.
+                        break
                     try:
                         chunk = os.read(self._stdin_fd, 4096)
                     except OSError:
