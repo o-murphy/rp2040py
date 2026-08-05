@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `GDBTCPServer.close()`: stops and joins the accept thread so the process can actually exit. That
+  thread is deliberately non-daemon ("a listening GDB server should keep the process alive by
+  itself", matching Node's `net.Server.listen()`), which is exactly why nothing previously called a
+  plain `sys.exit()`/return while `--gdb` was active - every exit path used `os._exit()` instead,
+  which works but skips the terminal restore and other cleanup below. Uses a short (`0.2s`)
+  `socket.settimeout()` poll rather than closing the listening socket out from under a blocked
+  `accept()` call on another thread - the latter doesn't reliably unblock `accept()` on Linux (a
+  known glibc/kernel gotcha) and is undefined on Windows/macOS too, so the poll avoids the platform
+  question entirely instead of relying on a Linux-specific trick.
+- `Simulator.shutdown_request` / `Simulator.wait_for_shutdown(cleanup=...)`: a shared, thread-safe
+  way for a REPL's Ctrl+X handler, a `--expect-text` watcher, a SIGTERM handler, or (later) a `--pty`
+  disconnect handler to request a clean process exit instead of calling `os._exit()` itself.
+  `os._exit()` works but unconditionally skips atexit/finally/normal cleanup wherever it's used;
+  `wait_for_shutdown` - always running on the thread actually driving the `Simulator` - is the only
+  thing that acts on a request, via one real `sys.exit()` after its own `cleanup` callback (composed
+  per-caller via `contextlib.ExitStack` in `cli/__init__.py` - terminal restore, GDB server socket,
+  device teardown) has run.
 - Optional Cython-accelerated backend (`rp2040py.native`): a fully-typed port of `CortexM0Core`'s
   ~90 instruction handlers (real C function-pointer dispatch, not a Python-level table) and
   `RP2040`'s bus hot paths (`read`/`write_uint8/16/32`). Built automatically when a C compiler is
@@ -36,7 +53,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   128-block littlefs image loaded where MicroPython's 352-block one is expected) - the loader had no
   bounds check of its own before this.
 
+### Changed
+- `StdioInteractiveRepl(on_quit=...)` is now a required constructor argument (**breaking** for any
+  caller constructing it without one) - collapses the class down to a single shutdown mode instead
+  of two. It previously also supported a standalone mode (`on_quit=None`) where Ctrl+X/SIGTERM
+  called `self.stop()` and `os._exit()` directly from whichever thread noticed; nothing in this
+  repo's own CLI ever used that mode (`_cmd_micropython`/`_cmd_kaluma` always pass
+  `on_quit=shutdown.request`), and it was the source of several follow-up bugs - a "don't join
+  myself" special case needed only because standalone Ctrl+X called `stop()` from inside the
+  stdin-reader thread itself, a module-global `_active_raw_repl` + exported `os_exit()` function
+  (removed, along with its `"Pythonista3.app"`/`"Python IDE.app"` special-case) that existed purely
+  so a raw `os._exit()` call could still find a terminal to restore, and a real fd-reuse race
+  between sequential test runs (see Fixed, below). Every quit trigger now only ever calls
+  `on_quit(code)` - never `sys.exit()`/`os._exit()` itself - leaving exactly one place in the
+  codebase responsible for actually exiting the process: whatever thread drives the caller's own
+  `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
+
 ### Fixed
+- `StdioInteractiveRepl`'s stdin-reader thread wasn't joined on `stop()` - it stayed blocked in
+  `os.read()` until its fd eventually went away, so its own `finally`-triggered terminal restore
+  could fire *after* a later `StdioInteractiveRepl` instance (e.g. the next test in the same
+  process) had already opened a new pty that reused the same fd number, corrupting that instance's
+  termios state instead of its own. Fixed with a self-pipe the reader thread also selects on, so
+  `stop()` can wake and join it deterministically before returning - closing the target fd itself to
+  cancel the pending read was considered and rejected as no safer (another thread's fd reuse could
+  get redirected onto it mid-syscall, the same failure mode this fixes).
+- A plain `SIGTERM` (e.g. from `timeout`, or `kill` without `-9`) while `micropython`/`kaluma`'s
+  interactive REPL had the terminal in raw mode left the real terminal stuck raw after the process
+  died - no echo, no line buffering, looking like "the keyboard stopped working" until `stty sane`.
+  The existing `atexit.register()`-based restore doesn't cover this: confirmed empirically that
+  Python's default `SIGTERM` disposition kills the process at the OS level before the interpreter
+  ever runs atexit callbacks, regardless of what registered one. Fixed by giving
+  `StdioInteractiveRepl` its own `SIGTERM` handler (installed only when raw mode was actually
+  engaged, restoring whatever handler was there before on `stop()`) routed through the same
+  `on_quit`/`Simulator.shutdown_request` path as Ctrl+X and `--expect-text` (see
+  `Simulator.wait_for_shutdown` above) - verified end to end against a real subprocess under a pty
+  (boot, `SIGTERM` mid-session, confirm the terminal's actual termios state afterward), not just
+  unit tests against the handler in isolation.
+- `_restore_termios()`'s `except OSError` didn't actually catch `termios.error` - confirmed its MRO
+  is just `(termios.error, Exception, BaseException, object)`, not an `OSError` subclass - so a
+  legitimately-gone fd (e.g. the pty's other end already closed) could raise out of an `atexit`
+  callback uncaught. Now catches both.
 - `--littlefs`/`--fat12` on `micropython`/`kaluma`/`bench` no longer default to `littlefs.img`/
   `fat12.img` in the current directory - a stray leftover image from an earlier step (e.g. a shared
   CI working directory) used to get auto-loaded whenever one of those exact filenames happened to

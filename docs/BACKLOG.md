@@ -205,6 +205,51 @@ reaches its CPU-bound resident-script loop, so it's simply exposed to far fewer 
 (and far less of root cause #2's noise) than a `--expect-text` test waiting for banner/resident-
 script text after full boot.
 
+**Follow-up (2026-08-05): with `rp2040py.native` in the picture, root cause #2's own "no
+thread-handoff churn" claim above no longer holds, and thread-handoff overhead turns out to be the
+dominant cost of a CLI-driven run - found while investigating a report that `rp2040py.native`
+"shouldn't be 3x slower than expected" running real guest code (MicroPython 1.28 + littlefs,
+`--expect-text "Hello, MicroPython!"`).** `CortexM0Core.execute_instruction()` under
+`rp2040py.native` never appears anywhere in a `cProfile` trace, for any of ~65M calls across a full
+boot - confirmed this is expected Cython behavior (no trace hooks are emitted unless built with
+`profile=True`), not a bug, and it means native dispatch itself is *not* the bottleneck: if it were
+slow, that time would still show up, attributed to whichever Python frame called it, and it doesn't.
+`{built-in method time.sleep}` instead dominates the profile (~35s of a ~45s run) - not evidence of
+waste on its own (it's `_wait_for_simulator`'s main-thread poll loop faithfully reporting that the
+main thread spent nearly all its time waiting on the background thread doing the real work, which is
+by design), but it obscured the actual answer for a while.
+
+Three numbers settle it, all against the same ~65M-step MicroPython 1.28 + littlefs boot:
+
+| Path | Time |
+| --- | --- |
+| `rp2040py bench` (headless, single tight loop, no `threading.Timer`/polling at all) | 24.95s |
+| `rp2040py micropython` (normal CLI path, ~65 `threading.Timer` handoffs - `execute()`'s 1,000,000-step batch size) | ~45s |
+| Same CLI path, `Simulator.execute()` patched to run the whole boot in one batch (no handoffs) | 19.45s |
+
+Removing the handoffs took the CLI path from ~45s to 19.45s - actually *beating* the headless
+benchmark, not just matching it. That ~25s gap is pure threading-model tax, orthogonal to
+instruction-dispatch speed entirely: `execute()`'s `threading.Timer(0, self.execute)` reschedule
+(a brand-new OS thread every batch) directly mirrors upstream rp2040js's
+`setTimeout(() => this.execute(), 0)`, which in Node's single-threaded event loop is *necessary* so
+other callbacks (stdin, GDB socket, USB) get a turn between bursts. CPython's GIL already
+preemptively time-slices between real OS threads, so a tight loop on a background thread doesn't
+starve the main thread's own polling the way single-threaded JS would - the yield-and-reschedule
+dance this ported over doesn't buy Python anything, and each handoff (new thread creation/scheduling,
+plus contending for the GIL against the main thread's own periodic 100ms wake-ups) has a real cost.
+This cost was always there, in both the pure-Python and native builds - it just used to be a small
+fraction of a much slower pure-Python run, and native dispatch being ~4x (or more, per this) faster
+made a *fixed* per-batch cost dominate wall time instead.
+
+**Not yet changed in the actual code** - `execute()`'s batch-size/reschedule shape is exactly the
+"overall scheduling model" its own NOTE already flags as unsettled, and removing the
+`threading.Timer` chain in favor of one persistent worker thread is a real change to that model
+(`stop()`/Ctrl+C responsiveness should be unaffected - `self.stopped` is already checked every
+single loop iteration, not just at batch boundaries - but every caller of `Simulator.execute()`
+currently relies on it returning almost immediately and rescheduling itself in the background,
+which a single persistent-thread design would change). Left as a scoped-out follow-up rather than
+bundled into this investigation.
+
 ## MicroPython 1.21-vs-1.28 instruction-count gap — one real fix landed, root cause still not isolated
 
 **Goal:** actually root-cause README/PORTING.md's documented ~45x instruction-count gap (1.21:
@@ -1003,6 +1048,89 @@ like they would to a real Pico over USB, with no rp2040py-specific client needed
 - No investigation done yet into interactions with the raw-REPL machinery (`device/raw_repl.py`)
   used by `-c`/`-m`/`<filename>` - those likely need to keep working independently of whether `--pty`
   is also active, or be explicitly mutually exclusive with it; not yet decided which.
+- A disconnect handler here has somewhere to report to now: `Simulator.shutdown_request.request()`
+  (see "Unified process-shutdown coordinator" below) - it didn't exist when this section was first
+  written, and every shutdown trigger before it had to either duplicate `os._exit()`-based
+  teardown or grow its own bespoke path. A `--pty` disconnect would just be one more caller.
+
+## Unified process-shutdown coordinator (Ctrl+X / --expect-text / SIGTERM) — DONE
+
+**Goal:** every way `micropython`/`kaluma`/`run` can end - Ctrl+X, `--expect-text` matching,
+`SIGTERM`, `Ctrl+C` - used to tear the process down via `os._exit()` from whichever thread noticed
+first (the stdin reader, a `Simulator` worker thread, ad hoc). `os._exit()` works, but
+unconditionally skips atexit/finally/every normal cleanup hook, and adding a new exit trigger meant
+duplicating that teardown logic again at the new call site. Two concrete bugs came out of exactly
+this pattern before the fix:
+
+- A plain `SIGTERM` (`timeout`, `kill` without `-9`) while `StdioInteractiveRepl` had the terminal
+  in raw mode left the real terminal stuck raw after the process died. `atexit.register()` doesn't
+  cover it - confirmed empirically that Python's default `SIGTERM` disposition kills the process at
+  the OS level before the interpreter ever runs atexit callbacks, no matter what's registered.
+- `GDBTCPServer`'s accept thread is deliberately non-daemon ("a listening GDB server should keep the
+  process alive by itself", matching Node's `net.Server.listen()`) and had no `close()` at all -
+  switching any exit path from `os._exit()` to a plain `sys.exit()` while `--gdb` was active would
+  have hung forever joining that thread. Found *while fixing the SIGTERM bug above*, before it ever
+  shipped - not a separate incident, but real enough that it shaped the whole design: every exit
+  path had to be gdb-server-safe from the start, not patched in after the fact.
+
+**What landed:**
+
+- `GDBTCPServer.close()` stops and joins the accept thread. Closing the listening socket out from
+  under a thread blocked in `accept()` doesn't reliably unblock it on Linux (confirmed the hard way -
+  an earlier close()-only version hung indefinitely in a test) and is undefined on Windows/macOS
+  too, so `close()` instead uses a short (`0.2s`) `socket.settimeout()` poll against a
+  `threading.Event` - portable by construction, not by luck.
+- `Simulator.shutdown_request` (a `ShutdownRequest`: a `threading.Event` + exit code, first request
+  wins) and `Simulator.wait_for_shutdown(cleanup=...)` - owned by `Simulator` itself, not the CLI,
+  since a bare `Simulator` (no `Device`, no REPL - `_cmd_run`'s case) is the one thing every command
+  actually has in common. Any thread with a reference to the simulator can call
+  `simulator.shutdown_request.request(code)`; the thread actually driving the simulator is the only
+  one that acts on it, running `cleanup()` once and then a real `sys.exit(code)`.
+- `StdioInteractiveRepl(on_quit=...)`: Ctrl+X and a new `SIGTERM` handler (installed only when raw
+  mode was actually engaged, previous handler restored on `stop()`) both call `on_quit(code)` instead
+  of tearing the process down themselves. No `on_quit` (standalone use, no shutdown coordinator
+  wired up) falls back to the original behavior unchanged - restore the terminal, `os._exit()`
+  directly.
+- `cli/__init__.py`'s `micropython`/`kaluma` commands compose per-resource cleanup
+  (`repl.stop`, `gdb_server.close`, `device.stop`) via `contextlib.ExitStack`, registered right next
+  to where each resource is created, instead of a hand-assembled "clean up everything" function that
+  has to be kept in sync by hand with whatever the rest of the command does or doesn't construct.
+  `wait_for_shutdown()` itself doesn't need an explicit `cleanup` argument in these commands - a
+  `SystemExit` raised inside the `with ExitStack():` block unwinds through it normally, running every
+  registered callback in reverse order.
+
+**Verified**, not just unit-tested in isolation: a real `rp2040py micropython --gdb` subprocess
+under a pty, booted to the REPL prompt, killed by `SIGTERM` mid-session - process exits in ~0.3s (not
+hanging), the GDB port stops accepting connections, and the pty's actual termios state (reopened
+fresh from its path, not the stale fd) comes back canonical. Same setup with Ctrl+X instead of
+`SIGTERM` (a different triggering thread) - same result. Full test suite (450/450) plus dedicated
+coverage: `tests/test_gdb_tcp_server.py` (`close()` unblocking/joining/idempotency, a real client
+connecting beforehand), `tests/test_simulator_shutdown.py` (`ShutdownRequest`/`wait_for_shutdown`
+integration, including a real `GDBTCPServer` to catch exactly the hang this exists to prevent),
+`tests/test_stdio_repl.py` (`SIGTERM` restoring the terminal, the previous handler being restored on
+`stop()`, both the standalone-fallback and `on_quit`-wired-up behavior for `SIGTERM` and Ctrl+X).
+
+**Not done as part of this:** `_cmd_run`'s own `KeyboardInterrupt` path uses
+`Simulator.wait_for_shutdown`'s generic mechanism too now, but `_cmd_run` has no `SIGTERM` handler of
+its own (no `StdioInteractiveRepl` there) - an external `SIGTERM` against `run` still hits Python's
+default disposition unchanged. Not a regression (that was already true before this work), just not
+extended to a command that doesn't own a terminal to protect.
+
+**Update - the standalone (no `on_quit`) fallback was later removed entirely.** Option (b) above
+("replace `os._exit()` with a main-thread `sys.exit()`") turned out not to be separate, larger work
+after all: `StdioInteractiveRepl` still carried a second shutdown mode alongside the coordinated one
+- `on_quit=None` meant Ctrl+X/SIGTERM called `self.stop()` + `os._exit()` directly, from whichever
+thread noticed. Nothing in this repo ever constructed it that way (`_cmd_micropython`/`_cmd_kaluma`
+always pass `on_quit=shutdown.request`), but that second mode was the actual source of several
+follow-up bugs: a "don't join myself" special case in `stop()` (needed only because standalone
+Ctrl+X called `stop()` from inside the reader thread itself), a module-global `_active_raw_repl` +
+`os_exit()` function purely so a raw `os._exit()` call could still find a terminal to restore, a
+`"Pythonista3.app"` special-case inside that function, and a real fd-reuse race between sequential
+test runs (a lingering reader thread's own termios-restore firing against a *different* test's pty
+after fd numbers got recycled). `on_quit` is now a required constructor argument - every quit
+trigger only ever signals it, never exits the process itself - and `os_exit()`/`_active_raw_repl`
+are gone. `_cmd_mklittlefs`'s unrelated PyPy-finalization `os._exit(0)` (never coupled to
+`_active_raw_repl` in the first place) now just calls `os._exit()` directly.
 
 ## Bootrom B0/B2 support (issue #11) — DONE
 
