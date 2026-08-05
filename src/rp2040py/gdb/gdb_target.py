@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
     from rp2040py.rp2040 import RP2040
 
 
@@ -15,3 +17,5 @@ class IGDBTarget(Protocol):
 
     def start_execution(self) -> None: ...
     def stop(self) -> None: ...
+
+    async def acall(self, coro: "Coroutine[Any, Any, Any]") -> Any: ...

@@ -1,11 +1,10 @@
 # Full asyncio migration
 
 **Status:** PR 1 (`simulator.py` + `peripherals/pio.py`), PR 2 (`gdb/gdb_tcp_server.py`), PR 3
-(`cli/stdio_repl.py` + `device/repl_runner.py`), and PR 4 (`device/mp_device.py`) landed - see
-"Phased migration order" below. That's every migration target originally planned. What's left is
-one deliberately-deferred item: the `gdb_server.py`/`process_gdb_message()` cross-thread race (see
-"Phase 6 / not yet started" below) - real, pre-existing, but out of scope for every PR so far by
-explicit decision each time it came up.
+(`cli/stdio_repl.py` + `device/repl_runner.py`), PR 4 (`device/mp_device.py`), and PR 5
+(`gdb/gdb_target.py` + `gdb/gdb_tcp_server.py`) landed - see "Phased migration order" below. That's
+every item this document ever named. There is no more open migration work tracked here; new
+findings (if any) get their own section rather than reopening this list.
 
 ## Why this document exists
 
@@ -103,15 +102,19 @@ keystroke for no benefit; registering `loop.add_reader(stdin_fd, callback)` dire
 Only the one-time `add_reader`/`remove_reader` registration (which must run on the target loop's
 own thread) needs `Simulator.call()`.
 
-**So the actual shape, four components in: each long-lived async component picks whichever loop
-its own state-touching pattern calls for** - a dedicated engine room when it's mostly decoupled I/O
-touching shared state rarely (`GDBTCPServer`), sharing `Simulator`'s when it's touching that same
-state on nearly every I/O event (`StdioInteractiveRepl`, and now `MicroPythonDevice`'s raw-REPL
-`exec()` family too - PR 4) - not a fixed rule either way. A single process-wide "front door" loop
-never ended up getting built: PR 4 confirms what PR 1-3 already suggested - `cli/__init__.py`
-needed zero changes for phase 5, since `simulator.submit()` returning a plain
-`concurrent.futures.Future` means the public sync API's shape never had to change at all. See
-"Open questions" below for the one thing this still leaves unresolved.
+**So the actual shape: each long-lived async component picks whichever loop its own state-touching
+pattern calls for** - a dedicated engine room when it's mostly decoupled I/O touching shared state
+rarely (`GDBTCPServer`'s connection handling), sharing `Simulator`'s when it's touching that same
+state on nearly every I/O event (`StdioInteractiveRepl`, `MicroPythonDevice`'s raw-REPL `exec()`
+family - PR 4) - not a fixed rule either way, and not even a fixed rule *per component*: PR 5
+refined this further by showing a component can split, keeping its own engine room for I/O while
+bridging the specific calls that touch shared state onto `Simulator`'s instead of moving wholesale
+(`GDBTCPServer` keeps its own loop for accepting connections/reading bytes, but bridges
+`process_gdb_message()` - the one thing that actually touches `core`/`rp2040` state - via
+`target.acall()` per message; see "Resolved during PR 5"). A single process-wide "front door" loop
+never ended up getting built: PR 4 confirmed `cli/__init__.py` needed zero changes for phase 5,
+since `simulator.submit()` returning a plain `concurrent.futures.Future` means the public sync
+API's shape never had to change at all.
 
 The shared building blocks (not duplicated per component):
 
@@ -128,12 +131,14 @@ The shared building blocks (not duplicated per component):
   and `submit(coro)` (**added in PR 4**: `call()`'s non-blocking counterpart - hands back the
   `concurrent.futures.Future` `asyncio.run_coroutine_threadsafe()` already gives you, instead of
   blocking on `.result()` itself, for a caller that wants a Future of its own to return).
-  `GDBTCPServer` doesn't reuse these specifically (it has its own engine room, see above) but
-  follows the identical pattern inline (`asyncio.run_coroutine_threadsafe(...).result(timeout)`
-  in `__init__`/`close()`). `StdioInteractiveRepl` (**PR 3**) reuses `Simulator.call()` directly
-  (for the one-time `add_reader`/`remove_reader` registration); `MicroPythonDevice` (**PR 4**)
-  reuses `Simulator.submit()` for its whole `start_async()`/`exec_async()` API - neither needed
-  any change to `call()`/`acall()` themselves.
+  `GDBTCPServer`'s own connection setup/`close()` doesn't reuse these (it has its own engine room,
+  see above) and follows the identical pattern inline instead
+  (`asyncio.run_coroutine_threadsafe(...).result(timeout)`) - but its **message processing** now
+  does: `StdioInteractiveRepl` (**PR 3**) reuses `Simulator.call()` directly (for the one-time
+  `add_reader`/`remove_reader` registration); `MicroPythonDevice` (**PR 4**) reuses
+  `Simulator.submit()` for its whole `start_async()`/`exec_async()` API; `GDBTCPServer` (**PR 5**)
+  reuses `Simulator.acall()` per `feed_data()` call, via a new `IGDBTarget.acall()` Protocol
+  method - none of the three needed any change to `call()`/`acall()`/`submit()` themselves.
 
 | Today (thread-based) | Becomes | File | Status |
 |---|---|---|---|
@@ -150,6 +155,7 @@ The shared building blocks (not duplicated per component):
 | `GDBServer.add_connection()`'s `_on_break` (fires on `Simulator`'s engine-room thread) writing a stop-reply directly | Per-connection `on_response` closure does `gdb_loop.call_soon_threadsafe(writer.write, ...)` instead of writing directly - the one new cross-thread hop this phase needed, localized to one closure | `gdb/gdb_tcp_server.py` | **Done** |
 | `ThreadPoolExecutor(max_workers=1)` (boot/exec queueing) | `Simulator.submit()` (new, PR 4) + one `asyncio.Lock` per device for the FIFO queueing the executor gave for free | `device/mp_device.py` | **Done** |
 | `InteractiveRepl.send()`'s blocking per-byte spin-wait (`_send_byte_blocking()`/`time.sleep(_FIFO_TIMEOUT)`) | Deleted. `send()` now just `_queue(data); return pump()` - the same non-blocking pacing `RawReplRunner` already used, reused instead of a second mechanism | `device/repl_runner.py` | **Done** |
+| `_handle_connection()` calling `connection.feed_data(data)` inline, on `GDBTCPServer`'s own engine room (touches `core`/`rp2040` state unbridged) | `await self.target.acall(_feed(data))` - `feed_data()`/`process_gdb_message()` themselves unchanged, just invoked on `Simulator`'s engine room now, per read | `gdb/gdb_tcp_server.py` | **Done** |
 
 The public synchronous API surface (`MicroPythonDevice.start()`/`.exec()`, `BaseDevice` as a
 context manager, `KalumaDevice`) still doesn't get to assume its caller is running an event loop -
@@ -215,29 +221,30 @@ checking for before starting phase 3+ too.
    `mp_device.py`'s own `Ctrl-C`/`Ctrl-A` kickoff bytes, previously sent from the executor's worker
    thread, now genuinely run on the engine room - see "Resolved during PR 4". The other
    (`gdb_server.py`'s `process_gdb_message()` touching `rp2040` state from `GDBTCPServer`'s own loop
-   with no bridge at all) stayed out of scope on purpose, deferred to its own phase - see "Phase 6 /
-   not yet started" below.
+   with no bridge at all) stayed out of scope on purpose, deferred to its own phase - see item 6
+   below.
 
-## Phase 6 / not yet started
+6. ~~**`gdb/gdb_server.py`'s `process_gdb_message()` cross-thread race**~~ **Done** (`refactor:
+   bridge process_gdb_message() onto Simulator's engine room`). Found during PR 3, explicitly
+   scoped out of PR 4 for being bigger and riskier than mp_device.py's (revisits PR 2's "GDB gets
+   its own engine room" call). Turned out **not** to actually revisit that call once built - PR 2's
+   reasoning ("connection I/O has nothing to do with CPU/peripheral state") is still true;
+   `process_gdb_message()` itself does, so only *that* got bridged
+   (`IGDBTarget.acall()`, new), while `GDBTCPServer` keeps its own engine room for
+   accept/read/write exactly as PR 2 built it. `GDBServer.process_gdb_message()`/
+   `GDBConnection.feed_data()` stayed **completely unchanged**, zero lines touched, matching PR 2's
+   own "protocol logic untouched" precedent. See "Resolved during PR 5" for the batch-latency
+   reasoning (why bridging every register read doesn't reintroduce the "front door" loop's latency
+   worries) and the new test coverage this phase added (nothing previously drove
+   `process_gdb_message()` through the real TCP/async path at all).
 
-**`gdb/gdb_server.py`'s `process_gdb_message()` cross-thread race.** Reads/writes `core`/`rp2040`
-state (`g`/`p`/`P`/`m`/`M` commands) directly from `GDBTCPServer`'s own engine-room thread, never
-bridged into `Simulator`'s - a real, pre-existing race (true even before PR 2's rewrite, under the
-old thread-per-connection design), not caused by this migration but not fixed by it either. Found
-during PR 3 (see "Resolved during PR 3" there), explicitly scoped out of PR 4 by user decision (see
-that PR's own plan) because it's materially bigger and riskier than either: it revisits PR 2's
-"GDB gets its own engine room, not `Simulator`'s" decision, needs `IGDBTarget`'s `Protocol`
-extended with `call()`/`acall()` (and every fake target in `test_gdb_tcp_server.py` updated to
-match), and needs `GDBServer.process_gdb_message()`/`GDBConnection.feed_data()` turned
-async-compatible - a redesign in its own right, not a byproduct of another PR. No implementation
-plan written yet; whoever picks this up next should start there, not assume PR 4's shape transfers.
-
-Each phase lands as its own PR with its own full test-suite-green checkpoint - this was explicitly
-*not* a stop-the-world rewrite; the codebase stayed shippable after every phase (confirmed after
-every PR so far: 450+/450+ tests × 10 runs, mypy/ruff clean, live pty-based SIGTERM/Ctrl+X and GDB
-continue/Ctrl-C/continue smoke tests, plus PR 4's own real-firmware exec/interactive/large-paste
-smoke tests - see each PR's own commit message for exact numbers), with threads and asyncio
-coexisting in between.
+This closes every migration target this document ever named. Each phase landed as its own PR with
+its own full test-suite-green checkpoint - this was explicitly *not* a stop-the-world rewrite; the
+codebase stayed shippable after every phase (confirmed after every PR: 450+/450+ tests × 10 runs,
+mypy/ruff clean, live pty-based SIGTERM/Ctrl+X and GDB continue/Ctrl-C/continue smoke tests, PR 4's
+real-firmware exec/interactive/large-paste smoke tests, PR 5's real-firmware "interrupt a live
+target and immediately read registers" stress smoke test - see each PR's own commit message for
+exact numbers), with threads and asyncio coexisting in between throughout.
 
 ## Resolved during PR 1
 
@@ -373,6 +380,44 @@ coexisting in between.
   either, matching what PR 1-3 already found independently for their own components.
 - **No `pytest-asyncio` needed here either**, matching every prior PR's finding.
 
+## Resolved during PR 5
+
+- **Bridging `process_gdb_message()` doesn't reopen PR 2's "GDB gets its own engine room" decision
+  - it just adds one bridge point on top of it.** PR 2's reasoning ("connection I/O has nothing to
+  do with CPU/peripheral state") is still correct; what changed is recognizing that
+  `process_gdb_message()` *itself* (not the connection handling around it) does touch that state.
+  Fixed by wrapping the one call that needs it (`connection.feed_data(chunk)`, invoked from
+  `_handle_connection()`) in `await self.target.acall(_feed(chunk))` - `GDBTCPServer` keeps its own
+  engine room for accept/read/write exactly as PR 2 built it; only message *processing* moved.
+  `GDBServer.process_gdb_message()`/`GDBConnection.feed_data()` needed zero changes, matching PR
+  2's own "protocol logic untouched" precedent for the second time.
+- **`acall()`, not `call()`, is the only correct bridge from inside `_handle_connection()`.**
+  `Simulator.call()` blocks the calling thread until the bridged coroutine finishes -
+  `_handle_connection()` already runs as a coroutine on `GDBTCPServer`'s own loop, so `call()`
+  there would freeze that whole loop, stalling every other connection on the same server while one
+  waits. `acall()` (built in PR 1, never actually used until now) is the non-blocking, cooperative
+  bridge for a caller that already has its own running loop - exactly this case.
+- **The "front door" discussion's batch-latency worry doesn't apply here in practice.**
+  `Simulator.execute()` only yields between batches of up to 1,000,000 instructions - if `g`/`p`/`m`
+  had to wait for a batch boundary, that's up to ~370ms of GDB latency per register read (at PR 1's
+  measured ~2.7M instr/sec). Not actually paid: GDB only sends register/memory queries while the
+  target is *stopped*, and `stop()` ends `execute()`'s task (its `while not self.stopped` loop
+  exits) almost immediately, leaving the engine room idle until the next bridged call - picked up
+  on the very next loop iteration, no batch to wait through. Confirmed live: 30 iterations of
+  "interrupt a live target with `\x03`, immediately read all registers via `g`, resume with `c`"
+  against a real, actively-running MicroPython image completed cleanly with plausible, varying PC
+  values each time - no hang, no exception, no stale/torn state.
+- **`on_response()`'s existing `call_soon_threadsafe` (built in PR 2 for `_on_break`) needed zero
+  changes**, despite `feed_data()` - and therefore every `on_response()` call inside it - now
+  running on a different thread than before. It already treated "called from a foreign thread" as
+  the normal case, not a new one; PR 5 just added a second caller that happens to also be foreign.
+- **No coverage gap left unaddressed**: `tests/test_gdb_tcp_server.py` never actually drove
+  `process_gdb_message()` through the real TCP/async path before this phase (`_FakeTarget`'s
+  `rp2040` was never driven) - a bridge that silently no-op'd wouldn't have been caught by the
+  existing suite. Added two new tests against a **real** `Simulator()`: a `g` register read and a
+  `P`-write-then-`p`-read round trip, both over a real socket connection.
+- **No `pytest-asyncio` needed here either**, matching every prior PR's finding.
+
 ## Open questions / not decided
 
 - **Windows stdin.** `loop.add_reader()` on `ProactorEventLoop` (asyncio's default on Windows)
@@ -386,9 +431,18 @@ coexisting in between.
   whichever loop suits their own state-touching pattern - two with their own engine room, two
   sharing `Simulator`'s - with zero cross-loop coordination problems, and `cli/__init__.py` never
   needed to become an `asyncio.run()`-hosting entry point at all. See "Resolved during PR 4".
-- **`gdb_server.py`'s `process_gdb_message()` cross-thread race** - the one item left. See "Phase 6
-  / not yet started" above for the full writeup (why it's out of scope for PR 4, what fixing it
-  would actually require).
+- **Could `GDBTCPServer` drop its own engine-room thread entirely and run
+  `asyncio.start_server()` directly on `Simulator`'s loop, the same way `StdioInteractiveRepl`
+  shares it via `add_reader()`?** Raised while building PR 5, not resolved there on purpose (PR 5's
+  scope was bridging `process_gdb_message()`, not re-litigating PR 2's loop-ownership choice).
+  Would remove one background thread (down to one shared engine room for everything) and the
+  `IGDBTarget.acall()` bridge PR 5 just added, since `feed_data()` would already be running on the
+  right thread directly. The blocker isn't state-touching, it's lifecycle: `GDBTCPServer`'s thread
+  is deliberately non-daemon (a listening GDB server keeps the process alive by itself, matching
+  Node's `net.Server.listen()`), while `Simulator`'s engine room is daemon - merging them means
+  deciding how a `Simulator` with a GDB server attached keeps the process alive without a
+  non-daemon thread of its own, which isn't a one-line change. Worth a dedicated look if another
+  reason to touch `GDBTCPServer`'s loop ownership comes up; not proposed as its own phase for now.
 
 ## Considered and rejected (for now)
 

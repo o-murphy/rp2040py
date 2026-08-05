@@ -13,10 +13,13 @@ class GDBTCPServer(GDBServer):
     def __init__(self, target: IGDBTarget, port: int = 3333):
         super().__init__(target)
         # Own dedicated loop/thread, not shared with `target`'s (Simulator's own engine room, see
-        # simulator.py): connection I/O has nothing to do with CPU/peripheral state, so there's no
-        # shared-state reason to put it on the same loop, and keeping this self-contained means
-        # IGDBTarget doesn't need to grow an async-capable interface just for this. NOT a daemon
-        # thread on purpose - a listening GDB server should keep the process alive by itself,
+        # simulator.py): connection I/O (accepting a socket, reading bytes) has nothing to do with
+        # CPU/peripheral state, so there's no shared-state reason to put it on the same loop.
+        # Message *processing* (process_gdb_message(), touching core/rp2040 state) does need
+        # Simulator's engine room though - bridged per-message via target.acall() in
+        # _handle_connection() below instead, rather than moving this whole loop onto
+        # Simulator's - see docs/ASYNCIO_MIGRATION_BACKLOG.md's "Resolved during PR 5". NOT a
+        # daemon thread on purpose - a listening GDB server should keep the process alive by itself,
         # matching Node's `net.Server.listen()` semantics in upstream rp2040js. That means a plain
         # `sys.exit()`/return from main() hangs interpreter shutdown forever joining this thread
         # unless something first tells it to stop - see close().
@@ -87,12 +90,24 @@ class GDBTCPServer(GDBServer):
         assert task is not None  # always run as a Task, by start_server()'s own contract
         self._connection_tasks.add(task)
 
+        async def _feed(chunk: str) -> None:
+            # Bridges onto the target's own engine room (Simulator.acall(), not call() - this
+            # coroutine already runs on GDBTCPServer's own loop, and call() would block it,
+            # stalling every other connection on this server while this one waits).
+            # process_gdb_message() (invoked synchronously from inside feed_data()) reads/writes
+            # core.registers/memory directly - the same class of race PR 3/PR 4 already found and
+            # fixed for stdin and raw-REPL exec, just not bridged here until now. on_response()
+            # (above) already does call_soon_threadsafe() unconditionally, treating being called
+            # from a foreign thread as the normal case - built for _on_break in PR 2 - so nothing
+            # there needs to change just because feed_data() itself now runs on a different thread.
+            connection.feed_data(chunk)
+
         try:
             while True:
                 data = await reader.read(4096)
                 if not data:
                     break
-                connection.feed_data(data.decode("utf-8"))
+                await self.target.acall(_feed(data.decode("utf-8")))
         except OSError as err:
             self.remove_connection(connection)
             self.error(f"GDB socket error {err}")
