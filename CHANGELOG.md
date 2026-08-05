@@ -53,7 +53,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   128-block littlefs image loaded where MicroPython's 352-block one is expected) - the loader had no
   bounds check of its own before this.
 
+### Changed
+- `StdioInteractiveRepl(on_quit=...)` is now a required constructor argument (**breaking** for any
+  caller constructing it without one) - collapses the class down to a single shutdown mode instead
+  of two. It previously also supported a standalone mode (`on_quit=None`) where Ctrl+X/SIGTERM
+  called `self.stop()` and `os._exit()` directly from whichever thread noticed; nothing in this
+  repo's own CLI ever used that mode (`_cmd_micropython`/`_cmd_kaluma` always pass
+  `on_quit=shutdown.request`), and it was the source of several follow-up bugs - a "don't join
+  myself" special case needed only because standalone Ctrl+X called `stop()` from inside the
+  stdin-reader thread itself, a module-global `_active_raw_repl` + exported `os_exit()` function
+  (removed, along with its `"Pythonista3.app"`/`"Python IDE.app"` special-case) that existed purely
+  so a raw `os._exit()` call could still find a terminal to restore, and a real fd-reuse race
+  between sequential test runs (see Fixed, below). Every quit trigger now only ever calls
+  `on_quit(code)` - never `sys.exit()`/`os._exit()` itself - leaving exactly one place in the
+  codebase responsible for actually exiting the process: whatever thread drives the caller's own
+  `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
+
 ### Fixed
+- `StdioInteractiveRepl`'s stdin-reader thread wasn't joined on `stop()` - it stayed blocked in
+  `os.read()` until its fd eventually went away, so its own `finally`-triggered terminal restore
+  could fire *after* a later `StdioInteractiveRepl` instance (e.g. the next test in the same
+  process) had already opened a new pty that reused the same fd number, corrupting that instance's
+  termios state instead of its own. Fixed with a self-pipe the reader thread also selects on, so
+  `stop()` can wake and join it deterministically before returning - closing the target fd itself to
+  cancel the pending read was considered and rejected as no safer (another thread's fd reuse could
+  get redirected onto it mid-syscall, the same failure mode this fixes).
 - A plain `SIGTERM` (e.g. from `timeout`, or `kill` without `-9`) while `micropython`/`kaluma`'s
   interactive REPL had the terminal in raw mode left the real terminal stuck raw after the process
   died - no echo, no line buffering, looking like "the keyboard stopped working" until `stty sane`.

@@ -1116,6 +1116,22 @@ its own (no `StdioInteractiveRepl` there) - an external `SIGTERM` against `run` 
 default disposition unchanged. Not a regression (that was already true before this work), just not
 extended to a command that doesn't own a terminal to protect.
 
+**Update - the standalone (no `on_quit`) fallback was later removed entirely.** Option (b) above
+("replace `os._exit()` with a main-thread `sys.exit()`") turned out not to be separate, larger work
+after all: `StdioInteractiveRepl` still carried a second shutdown mode alongside the coordinated one
+- `on_quit=None` meant Ctrl+X/SIGTERM called `self.stop()` + `os._exit()` directly, from whichever
+thread noticed. Nothing in this repo ever constructed it that way (`_cmd_micropython`/`_cmd_kaluma`
+always pass `on_quit=shutdown.request`), but that second mode was the actual source of several
+follow-up bugs: a "don't join myself" special case in `stop()` (needed only because standalone
+Ctrl+X called `stop()` from inside the reader thread itself), a module-global `_active_raw_repl` +
+`os_exit()` function purely so a raw `os._exit()` call could still find a terminal to restore, a
+`"Pythonista3.app"` special-case inside that function, and a real fd-reuse race between sequential
+test runs (a lingering reader thread's own termios-restore firing against a *different* test's pty
+after fd numbers got recycled). `on_quit` is now a required constructor argument - every quit
+trigger only ever signals it, never exits the process itself - and `os_exit()`/`_active_raw_repl`
+are gone. `_cmd_mklittlefs`'s unrelated PyPy-finalization `os._exit(0)` (never coupled to
+`_active_raw_repl` in the first place) now just calls `os._exit()` directly.
+
 ## Bootrom B0/B2 support (issue #11) — DONE
 
 Landed in `cf4eed8` (#16) + follow-up `#17`. Design rationale (ELF `PT_LOAD` extraction,

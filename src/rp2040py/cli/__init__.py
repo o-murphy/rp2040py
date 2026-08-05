@@ -34,6 +34,7 @@ import argparse
 import contextlib
 import importlib.util
 import logging
+import os
 import struct
 import sys
 import time
@@ -47,7 +48,6 @@ from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
-from rp2040py.cli.stdio_repl import os_exit as _os_exit
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
     CIRCUITPYTHON_FS_BLOCKCOUNT,
@@ -516,20 +516,21 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
     _logger.info("Wrote littlefs image: %s", args.output)
 
     if sys.implementation.name == "pypy":
-        # _os_exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
+        # os._exit(), not a normal return: under PyPy, littlefs-python's LittleFS/file C objects
         # can get finalized out of order during interpreter shutdown - even after an explicit
         # lfs.unmount() and gc.collect() - crashing the process with "lfs_file_sync: Assertion
         # `lfs_mlist_isopen(...)` failed" (SIGABRT) despite the image already having been written
         # correctly. Confirmed with `uv tool install --python pypy-3.10 rp2040py[fs]`; not
         # reproducible under CPython, hence gating this rather than doing it unconditionally - an
-        # unconditional _os_exit() here would also kill the whole process if _cmd_mklittlefs (or
+        # unconditional os._exit() here would also kill the whole process if _cmd_mklittlefs (or
         # main()) is ever called in-process rather than as the actual entry point, e.g. from a test
         # suite. The image on disk is already complete and correct at this point, so skipping the
         # rest of shutdown is safe for the *pypy CLI* case specifically - it doesn't help a
         # long-running PyPy program that calls build_littlefs_image() as a library and keeps
         # running afterwards, which is a real upstream littlefs-python/PyPy limitation, not
-        # something rp2040py can fully paper over.
-        _os_exit(0)
+        # something rp2040py can fully paper over. Unrelated to StdioInteractiveRepl/terminal
+        # state - no REPL is ever active in this command - so it needs no shutdown coordination.
+        os._exit(0)
 
 
 _IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"

@@ -59,6 +59,14 @@ ignore = []
 mypy_path = "src"
 files = ["src"]
 disable_error_code = ["annotation-unchecked"]
+# Pinned rather than left to default to sys.platform: mypy's own `termios`/`tty` stubs are
+# near-empty on win32 (those modules are genuinely POSIX-only), so leaving this unpinned makes
+# analysis results depend on which OS runs the lint job - the CI matrix added in `e9af01a` started
+# running this on windows-latest too, which then flagged `cli/stdio_repl.py`'s termios/tty usage as
+# missing attributes even though it's correctly gated behind `try: import termios / except
+# ImportError: termios = None` for exactly that platform. Pinning to linux makes the check
+# consistent everywhere and matches every other POSIX-only import pattern in this codebase.
+platform = "linux"
 
 # rp2040py.native's compiled extension modules aren't always built (see setup.py's soft fallback
 # when Cython/a C compiler isn't available), so mypy can't reliably resolve them here. The
