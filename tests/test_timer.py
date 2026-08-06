@@ -1,5 +1,4 @@
 from rp2040py.clock.mock_clock import MockClock
-from rp2040py.rp2040 import RP2040
 
 ALARM1 = 0x40054014
 ALARM2 = 0x40054018
@@ -12,23 +11,23 @@ INTF = 0x4005403C
 INTS = 0x40054040
 
 
-def test_alarm1_armed_on_write():
-    rp2040 = RP2040(MockClock())
+def test_alarm1_armed_on_write(rp2040_factory):
+    rp2040 = rp2040_factory(MockClock())
     rp2040.write_uint32(ALARM1, 0x1000)
     assert rp2040.read_uint32(ARMED) == 0x2
 
 
-def test_disarm_alarm2_via_armed_register():
-    rp2040 = RP2040()
+def test_disarm_alarm2_via_armed_register(rp2040_factory):
+    rp2040 = rp2040_factory()
     rp2040.write_uint32(ALARM2, 0x1000)
     assert rp2040.read_uint32(ARMED) == 0x4
     rp2040.write_uint32(ARMED, 0xFF)
     assert rp2040.read_uint32(ARMED) == 0
 
 
-def test_alarm3_fires_irq3():
+def test_alarm3_fires_irq3(rp2040_factory):
     clock = MockClock()
-    rp2040 = RP2040(clock)
+    rp2040 = rp2040_factory(clock)
     # Arm the alarm
     rp2040.write_uint32(ALARM3, 1000)
     assert rp2040.read_uint32(ARMED) == 0x8
@@ -50,9 +49,9 @@ def test_alarm3_fires_irq3():
     assert rp2040.core.pending_interrupts == 0
 
 
-def test_intf_forces_interrupt_even_when_inte_is_zero():
+def test_intf_forces_interrupt_even_when_inte_is_zero(rp2040_factory):
     clock = MockClock()
-    rp2040 = RP2040(clock)
+    rp2040 = rp2040_factory(clock)
     assert rp2040.read_uint32(INTS) == 0
     assert rp2040.read_uint32(INTE) == 0
     rp2040.write_uint32(INTF, 0x4)
