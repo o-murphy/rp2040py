@@ -151,7 +151,7 @@ jobs:
           # container-based builds (e.g. manylinux via Docker) — only Windows/macOS/Android
           # inherit the full host environment automatically.
           SETUPTOOLS_SCM_OVERRIDES: ${{ (github.event_name == 'push' || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
-          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION
+          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION SETUPTOOLS_SCM_OVERRIDES
         run: |
           uvx cibuildwheel \
             --output-dir wheelhouse \
