@@ -35,6 +35,14 @@ jobs:
       # itself). This job's whole point is a pure-Python sdist + universal wheel.
       RP2040PY_SKIP_NATIVE_BUILD: "1"
       SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+      # setuptools_scm/vcs_versioning first tries SETUPTOOLS_SCM_OVERRIDES_FOR_<DIST>
+      # (dist name canonicalized, e.g. PY_BALLISTICCALC / PY_BALLISTICCALC_EXTS), then
+      # falls back to this un-scoped SETUPTOOLS_SCM_OVERRIDES for any dist without its
+      # own var. Both py_ballisticcalc and py_ballisticcalc.exts need the same override,
+      # so one shared var covers both instead of a _FOR_<DIST> var per package.
+      # Only strip the local version (+g<hash>) when this run will actually publish —
+      # PyPI/TestPyPI reject local version segments; build-only runs keep it for traceability.
+      SETUPTOOLS_SCM_OVERRIDES: ${{ (github.event_name == 'push' || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -138,8 +146,11 @@ jobs:
       - name: Build binary python package
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
-          # cibuildwheel builds in an isolated environment per platform and doesn't inherit
-          # arbitrary host env vars by default - this whitelists the version override through.
+          # see SETUPTOOLS_SCM_OVERRIDES comment in build-sdist / "Build pure python package".
+          # Must also be listed in CIBW_ENVIRONMENT_PASS below, otherwise it never reaches
+          # container-based builds (e.g. manylinux via Docker) — only Windows/macOS/Android
+          # inherit the full host environment automatically.
+          SETUPTOOLS_SCM_OVERRIDES: ${{ (github.event_name == 'push' || inputs.testpypi) && '{local_scheme = "no-local-version"}' || '' }}
           CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION
         run: |
           uvx cibuildwheel \
