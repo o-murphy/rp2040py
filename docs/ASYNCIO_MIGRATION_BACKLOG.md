@@ -6,6 +6,35 @@
 every item this document ever named. There is no more open migration work tracked here; new
 findings (if any) get their own section rather than reopening this list.
 
+**Post-"done" findings, from live-testing this branch (real firmware, real pty, real GDB-remote
+connections, not just the unit-test suite) rather than from a bug report:**
+
+- **A real, measured interactive-REPL latency regression, not caught by this migration's own
+  testing.** `StdioInteractiveRepl` sharing `Simulator`'s engine-room loop (PR 3's design, see
+  "Target shape" below) turned out to have a real cost the design discussion didn't account for: an
+  idle batch is free to run its full 1,000,000-iteration ceiling in *real* time before yielding,
+  which CPython (unlike V8, which hits the identical ceiling upstream) takes ~0.9-1.8s to clear -
+  during which `add_reader()`'s callback, sharing that same loop, can't run at all. Two fix
+  attempts; the first shipped without measuring against real hardware and turned out to fix
+  nothing (see CHANGELOG.md's `[Unreleased]` entry and docs/BACKLOG.md's CDC section for the full
+  story). Worth remembering for any future component added to this same shared-loop pattern: a
+  synthetic/unit-level test of "does the bound exist" is not the same as verifying it actually
+  fires under realistic load.
+- **`GDBTCPServer.close()` could hang the whole process indefinitely** if `_aclose()` itself ever
+  stalled past its timeout - confirmed on real CI (a ~6-hour wheel-build hang on a macOS +
+  free-threaded-Python runner, force-cancelled by GitHub's own outer timeout, not this project's).
+  `close()`'s `.result(timeout)` raising skipped `loop.stop()`/`thread.join()` entirely, leaving the
+  deliberately non-daemon engine-room thread running forever. Fixed - see CHANGELOG.md. A reminder
+  that every "own engine room, own non-daemon thread" component this migration introduced
+  (`GDBTCPServer` is the only one so far) needs its shutdown path to degrade gracefully under a
+  stuck cleanup, not just under the happy path a unit test exercises.
+- **`Simulator.wait_for_shutdown()` cannot distinguish a GDB-initiated pause from a genuine "done,
+  exit the process" signal** - not introduced by this migration (inherited from the same
+  pre-migration commit that added `wait_for_shutdown()` itself, and reproduces identically on the
+  pre-migration threading model too), but only found by live-testing GDB against this branch. See
+  docs/BACKLOG.md's CDC section for the full writeup and why a fix isn't as simple as deleting the
+  check. Left open, tracked there rather than here since it isn't specific to this migration.
+
 ## Why this document exists
 
 Upstream rp2040js is single-threaded: Node's event loop makes `process.stdin.on('data', ...)`,

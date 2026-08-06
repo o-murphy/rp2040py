@@ -244,14 +244,46 @@ This cost was always there, in both the pure-Python and native builds - it just 
 fraction of a much slower pure-Python run, and native dispatch being ~4x (or more, per this) faster
 made a *fixed* per-batch cost dominate wall time instead.
 
-**Not yet changed in the actual code** - `execute()`'s batch-size/reschedule shape is exactly the
-"overall scheduling model" its own NOTE already flags as unsettled, and removing the
-`threading.Timer` chain in favor of one persistent worker thread is a real change to that model
-(`stop()`/Ctrl+C responsiveness should be unaffected - `self.stopped` is already checked every
-single loop iteration, not just at batch boundaries - but every caller of `Simulator.execute()`
-currently relies on it returning almost immediately and rescheduling itself in the background,
-which a single persistent-thread design would change). Left as a scoped-out follow-up rather than
-bundled into this investigation.
+**Update: done, via the full `asyncio` migration** (see
+[docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md)) - `execute()`'s
+`threading.Timer` reschedule-per-batch chain is gone, replaced by `Simulator`'s persistent
+engine-room thread + `await asyncio.sleep(0)` between batches, exactly the "one persistent worker
+thread" follow-up this section originally scoped out. That migration's own measurements confirm
+the per-batch thread-handoff removal accounts for the CLI-path gap noted above, with no
+instruction-throughput regression (`await asyncio.sleep(0)` vs. `threading.Timer(0, fn)`: under 1%
+difference, noise-level).
+
+One new, *different* real-time cost this surfaced, not present in the analysis above: an idle
+(WFI'd) batch is exactly as free to run the full 1,000,000-iteration ceiling as a busy one once
+nothing weights it down (see this document's own idle-tick fix, right above) - and CPython takes
+~0.9-1.8s wall-clock to clear that many idle iterations (upstream rp2040js hits the identical
+ceiling but V8 clears it in low milliseconds). That's invisible to a headless `rp2040py bench` run
+or to the old threading model (where stdin lived on its own real OS thread, decoupled from
+whatever `execute()`'s batch was doing) - it only became externally visible once `asyncio`
+migration put `StdioInteractiveRepl`'s `add_reader()` callback on this same engine-room loop,
+turning "the shared loop is busy clearing an idle batch" into "a keystroke sits unread for up to
+~1-2 real seconds." Fixed in the same migration (`_BATCH_YIELD_BUDGET_SECONDS`) - see
+CHANGELOG.md's `[Unreleased]` entry for the full before/after numbers, including why the first fix
+attempt (bounding only an uninterrupted idle run) shipped without actually fixing anything.
+
+**New, found live-testing this branch post-"migration complete," not yet decided whether to
+fix — `Simulator.wait_for_shutdown()` cannot currently distinguish "the target stopped because a
+GDB client paused it" from "the target stopped because it's genuinely done and the process should
+exit."** `wait_for_shutdown()`'s poll loop (`while self.executing: ...`, added well before the
+`asyncio` migration, in the same PR as `ShutdownRequest`) exits - and the caller's `main()`
+consequently returns, ending the whole process - the moment `self.executing` goes false for *any*
+reason, not just `shutdown_request`/`KeyboardInterrupt`. A GDB client's raw Ctrl-C interrupt
+(`gdb_connection.py`'s `feed_data()`) calls `target.stop()` exactly like a natural firmware halt
+does; if it takes longer than one ~100ms poll tick for the human at the other end of the debugger
+to send `c`/`continue`, `wait_for_shutdown()` has already concluded "done" and exited by then -
+confirmed live, end to end, over a real GDB-remote-protocol connection against real firmware, on
+**both** the threading model and this `asyncio` branch equally (this predates the migration
+entirely, inherited from the same commit that added `wait_for_shutdown()` itself). Not fixed here:
+the loop's "exit when the target naturally stops" behavior is load-bearing for `rp2040py run`
+against bare-metal `.hex`/`.uf2` firmware that halts itself via a `bkpt`-based convention with no
+debugger attached (likely what `ci-pico-sdk.yml` exercises) - a fix needs to distinguish "a GDB
+session is actively attached and expected to resume this" from "nothing is ever going to resume
+this," not just delete the check.
 
 ## MicroPython 1.21-vs-1.28 instruction-count gap — one real fix landed, root cause still not isolated
 
