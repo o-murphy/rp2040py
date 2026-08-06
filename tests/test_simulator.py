@@ -79,3 +79,49 @@ def test_idle_core_yields_within_a_bounded_wall_clock_budget():
     # without making this flaky - still an order of magnitude below the ~0.9-1.8s the unbounded
     # loop took.
     assert elapsed < 0.1
+
+
+def test_batch_yields_within_budget_even_after_switching_from_idle_to_busy():
+    """A real device idling at the REPL isn't purely WFI'd end to end - a periodic timer
+    interrupt (SysTick, watchdog, ...) briefly flips core.waiting False before it eventually goes
+    back to waiting. An earlier version of this bound tracked only an *uninterrupted* idle run's
+    own elapsed time: the moment the core stopped waiting even once, that tracker reset to None
+    and - since a real core rarely returns to waiting within the same batch once it starts
+    executing real instructions - never got a chance to fire again for the rest of the batch,
+    silently falling back to the full 1,000,000-iteration ceiling (confirmed: a batch that flips
+    busy partway through still took ~0.95s wall time with that version). The budget must be
+    tracked from the start of the whole batch instead, regardless of idle/busy transitions.
+
+    core.pc is pointed at zeroed SRAM (matches test_instructions.py's own pattern) so the busy
+    branch's real execute_instruction() call decodes a harmless all-zero opcode
+    (`movs r0, r0`) instead of needing a fake."""
+    simulator = Simulator()
+    rp2040 = simulator.rp2040
+    rp2040.core.pc = 0x20000000
+    rp2040.core.waiting = True
+
+    period_nanos = 1_000_000  # 1ms, matching USBCTRL's SOF period
+    fire_count = 0
+
+    def _on_alarm() -> None:
+        nonlocal fire_count
+        fire_count += 1
+        if fire_count == 50:
+            # From here on the core stays busy (harmless no-ops through zeroed SRAM) rather than
+            # ever going back to waiting - the worst case for an idle-run-only budget, and exactly
+            # what a real interrupt handler that doesn't re-arm WFI mid-batch looks like from this
+            # loop's perspective.
+            rp2040.core.waiting = False
+        else:
+            alarm.schedule(period_nanos)
+
+    alarm = simulator.clock.create_alarm(_on_alarm)
+    alarm.schedule(period_nanos)
+
+    simulator.stopped = False
+    t0 = time.monotonic()
+    simulator._execute_batch()
+    elapsed = time.monotonic() - t0
+    simulator.stop()
+
+    assert elapsed < 0.1

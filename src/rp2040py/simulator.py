@@ -22,12 +22,16 @@ _T = TypeVar("_T")
 # access/function-call overhead was measured (see docs/BACKLOG.md) taking ~0.9-1.8s for the same
 # ceiling - long enough to stall anything sharing this Simulator's engine-room loop (e.g.
 # StdioInteractiveRepl's add_reader() callback - a keystroke could sit unread for the entire
-# batch). Bounding idle time isn't free either (a real WFI'd device should still advance as far as
-# it can per batch for throughput), so this is checked only every _IDLE_TIME_CHECK_INTERVAL idle
-# iterations, not every one - time.monotonic() itself must not become the hot-path cost this is
-# trying to avoid.
-_IDLE_YIELD_BUDGET_SECONDS = 0.005
-_IDLE_TIME_CHECK_INTERVAL = 256
+# batch). Bounding this isn't free either (a real WFI'd device should still advance as far as it
+# can per batch for throughput), so this is checked only every _TIME_CHECK_INTERVAL iterations,
+# not every one - time.monotonic() itself must not become the hot-path cost this is trying to
+# avoid. Tracked from the start of the whole batch, unconditionally - not just during an
+# uninterrupted idle run - since a real device idling at the REPL isn't purely WFI'd end to end
+# (a periodic timer interrupt briefly flips core.waiting False for a handful of instructions
+# before going back to waiting); an idle-run-only version of this check kept getting reset by
+# those interludes and never fired in practice, see git history for the confirmed repro.
+_BATCH_YIELD_BUDGET_SECONDS = 0.005
+_TIME_CHECK_INTERVAL = 256
 
 
 class ShutdownRequest:
@@ -112,17 +116,38 @@ class Simulator:
         return asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
 
     def _execute_batch(self) -> None:
-        """Runs up to 1,000,000 instructions/idle-jumps, or until stop() is called, or until an
-        idle run alone has eaten its own real-time budget (_IDLE_YIELD_BUDGET_SECONDS) - whichever
+        """Runs up to 1,000,000 instructions/idle-jumps, or until stop() is called, or until the
+        batch itself has eaten its own real-time budget (_BATCH_YIELD_BUDGET_SECONDS) - whichever
         comes first. Synchronous and self-contained (no `await` anywhere in here) so it can be
         driven directly, e.g. from a test that wants deterministic single-batch behavior without
         depending on asyncio scheduling order - see tests/test_simulator.py."""
         rp2040, clock = self.rp2040, self.clock
         cycle_nanos = 1e9 / 125_000_000  # 125 MHz
         i: float = 0
-        idle_run_start: float | None = None
-        idle_ticks_since_check = 0
+        batch_start = time.monotonic()
+        ticks_since_check = 0
         while i < 1000000 and not self.stopped:
+            # Checked every _TIME_CHECK_INTERVAL iterations regardless of idle/busy - not just
+            # during an uninterrupted idle run. A real device idling at the REPL isn't purely
+            # WFI'd end to end: a periodic timer interrupt (SysTick, watchdog, ...) briefly flips
+            # core.waiting False for a handful of instructions before it goes back to waiting -
+            # an earlier version of this check reset its clock whenever that happened, so it
+            # never accumulated enough uninterrupted idle time to fire and the batch fell back to
+            # running the full 1,000,000-iteration ceiling anyway (confirmed: a batch with a
+            # busy interlude every ~50 idle ticks still took ~0.95s wall time with that version).
+            # Tracking one clock from the start of the whole batch, unconditionally, doesn't have
+            # that gap.
+            ticks_since_check += 1
+            if ticks_since_check >= _TIME_CHECK_INTERVAL:
+                ticks_since_check = 0
+                if time.monotonic() - batch_start > _BATCH_YIELD_BUDGET_SECONDS:
+                    # Free to keep going indefinitely in simulated time (see below) but not in
+                    # real time - stdio_repl.py's add_reader() callback shares this same
+                    # engine-room loop and only gets a turn between batches, so a batch that never
+                    # ends is indistinguishable from a hung keyboard. Breaking here just ends this
+                    # batch early; execute()'s own loop immediately starts the next one after
+                    # yielding, so nothing about idle state or instruction execution is lost.
+                    break
             if rp2040.core.waiting:
                 # Jumping straight to the next alarm costs ~nothing in real time no matter how far
                 # away it is (no instructions execute), so it must not be weighted by the simulated
@@ -134,24 +159,8 @@ class Simulator:
                 # avoidable yields - each one exposed to real scheduler jitter - which is what
                 # actually produced the wildly variable wall-clock times noted in
                 # docs/BACKLOG.md's CDC investigation, not anything USB-specific.
-                if idle_run_start is None:
-                    idle_run_start = time.monotonic()
-                    idle_ticks_since_check = 0
-                idle_ticks_since_check += 1
-                if idle_ticks_since_check >= _IDLE_TIME_CHECK_INTERVAL:
-                    idle_ticks_since_check = 0
-                    if time.monotonic() - idle_run_start > _IDLE_YIELD_BUDGET_SECONDS:
-                        # An uninterrupted idle run is free to keep going indefinitely in
-                        # simulated time (see above) but not in real time - stdio_repl.py's
-                        # add_reader() callback shares this same engine-room loop and only gets a
-                        # turn between batches, so an idle batch that never ends is
-                        # indistinguishable from a hung keyboard. Breaking here just ends this
-                        # batch early; execute()'s own loop immediately starts the next one after
-                        # yielding, so nothing about idle state is lost.
-                        break
                 clock.tick(clock.nanos_to_next_alarm)
             else:
-                idle_run_start = None
                 cycles = rp2040.core.execute_instruction()
                 clock.tick(cycles * cycle_nanos)
             i += 1
