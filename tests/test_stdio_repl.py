@@ -17,6 +17,7 @@ from rp2040py.simulator import Simulator
 # involved to test here), so skipping the whole module is correct, not just expedient.
 pty = pytest.importorskip("pty")
 termios = pytest.importorskip("termios")
+is_android = hasattr(sys, "getandroidapilevel") or "android" in sys.platform
 
 
 class _FakeFifo:
@@ -182,6 +183,7 @@ def test_typed_bytes_are_forwarded_to_the_device(pty_stdin):
         repl.stop()
 
 
+@pytest.mark.skipif(is_android, reason="PTY devices are not supported on Android")
 def test_paste_larger_than_the_fifo_is_not_truncated(pty_stdin):
     """The race this migration actually closes: sending used to happen directly from the reader
     thread, unsynchronized with whatever thread drains cdc.tx_fifo - structurally the same bug
