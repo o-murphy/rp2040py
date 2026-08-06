@@ -12,6 +12,8 @@ Drives `_execute_batch()` directly rather than the `async def execute()` wrapper
 deterministic single-batch behavior without depending on asyncio scheduling order.
 """
 
+import time
+
 from rp2040py.simulator import Simulator
 
 
@@ -44,3 +46,36 @@ def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batc
     # un-interrupted batch should cover far more firings than that.
     assert fire_count > 1000
     assert simulator.clock.nanos > 1000 * period_nanos
+
+
+def test_idle_core_yields_within_a_bounded_wall_clock_budget():
+    """A purely-idle batch must return to execute()'s `await asyncio.sleep(0)` within roughly
+    _IDLE_YIELD_BUDGET_SECONDS of real time, not whenever the 1,000,000-iteration ceiling happens
+    to be reached - anything sharing this Simulator's engine-room loop (e.g.
+    StdioInteractiveRepl's add_reader() callback) only gets a turn between batches, and CPython's
+    per-iteration overhead makes 1,000,000 idle iterations take ~0.9-1.8s wall-clock (measured;
+    upstream rp2040js hits the same 1,000,000 ceiling but V8 clears it in low milliseconds) -
+    long enough that a keystroke typed during one batch would sit unread for the whole thing.
+    See docs/BACKLOG.md's REPL keystroke-latency finding."""
+    simulator = Simulator()
+    rp2040 = simulator.rp2040
+    rp2040.core.waiting = True
+
+    period_nanos = 1_000_000  # 1ms, matching USBCTRL's SOF period
+
+    def _on_alarm() -> None:
+        alarm.schedule(period_nanos)
+
+    alarm = simulator.clock.create_alarm(_on_alarm)
+    alarm.schedule(period_nanos)
+
+    simulator.stopped = False
+    t0 = time.monotonic()
+    simulator._execute_batch()
+    elapsed = time.monotonic() - t0
+    simulator.stop()
+
+    # Generous upper bound (budget is 5ms) to absorb scheduler jitter on a loaded CI runner
+    # without making this flaky - still an order of magnitude below the ~0.9-1.8s the unbounded
+    # loop took.
+    assert elapsed < 0.1
