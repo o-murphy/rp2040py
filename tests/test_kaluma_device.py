@@ -5,7 +5,6 @@ import pytest
 
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import KALUMA_PROG_FLASH_START, KALUMA_PROG_MAX_SIZE, load_kaluma_program
-from rp2040py.rp2040 import RP2040
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -108,10 +107,10 @@ def test_no_program_by_default(garbage_image, monkeypatch):
     assert calls == []
 
 
-def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_region(tmp_path):
+def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_region(tmp_path, rp2040_factory):
     script = tmp_path / "index.js"
     script.write_text('console.log("hi");')
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
 
     load_kaluma_program(str(script), rp2040)
 
@@ -119,10 +118,10 @@ def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_regio
     assert written == b'console.log("hi");\x00'
 
 
-def test_load_kaluma_program_rejects_a_source_too_large_for_the_prog_region(tmp_path):
+def test_load_kaluma_program_rejects_a_source_too_large_for_the_prog_region(tmp_path, rp2040_factory):
     script = tmp_path / "huge.js"
     script.write_bytes(b"x" * KALUMA_PROG_MAX_SIZE)  # +1 for the NUL terminator tips it over
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
 
     with pytest.raises(ValueError, match="exceeds Kaluma's"):
         load_kaluma_program(str(script), rp2040)
