@@ -63,33 +63,58 @@ jobs:
           retention-days: 14
 
   build-wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels on ${{ matrix.os }} / ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - name: Linux x64 / x86
+            artifact_key: linux-x64-x86
+            os: ubuntu-latest
             cibw_archs: "i686,x86_64" # x64 native, i686 over QEMU
+            cibw_platform: linux
             needs_qemu: true
 
-          - os: ubuntu-24.04-arm
-            cibw_archs: "aarch64,armv7l" # aarch64
+          - name: Linux ARM64 / ARMv7
+            artifact_key: linux-arm64-armv7
+            os: ubuntu-24.04-arm
+            cibw_archs: "aarch64,armv7l"
+            cibw_platform: linux
             needs_qemu: false
 
-          - os: windows-latest
+          - name: Windows x64 / x86
+            artifact_key: windows-x64-x86
+            os: windows-latest
             cibw_archs: "x86,AMD64"
+            cibw_platform: windows
             needs_qemu: false
 
-          - os: windows-11-arm
+          - name: Windows ARM64
+            artifact_key: windows-arm64
+            os: windows-11-arm
             cibw_archs: "ARM64"
+            cibw_platform: windows
             needs_qemu: false
 
-          - os: macos-15
+          - name: macOS Apple Silicon
+            artifact_key: macos-arm64
+            os: macos-26
             cibw_archs: "arm64,universal2"
+            cibw_platform: macos
             needs_qemu: false
 
-          - os: macos-15-intel
-            cibw_archs: "x86_64,universal2"
+          - name: macOS Intel
+            artifact_key: macos-x86_64
+            os: macos-26-intel
+            cibw_archs: "x86_64"
+            cibw_platform: macos
+            needs_qemu: false
+
+          - name: Android ARM64 / x64
+            artifact_key: android-arm64_v8a-x86_64
+            os: ubuntu-latest
+            cibw_archs: "arm64_v8a,x86_64"
+            cibw_platform: android
             needs_qemu: false
 
     runs-on: ${{ matrix.os }}
@@ -117,7 +142,11 @@ jobs:
           # cibuildwheel builds in an isolated environment per platform and doesn't inherit
           # arbitrary host env vars by default - this whitelists the version override through.
           CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION
-        run: uvx cibuildwheel --output-dir dist --platform auto --archs ${{ matrix.cibw_archs }}
+        run: |
+          uvx cibuildwheel \
+            --output-dir wheelhouse \
+            --platform ${{ matrix.cibw_platform || 'auto' }} \
+            --archs ${{ matrix.cibw_archs }}
         shell: bash
 
       - name: list ./dist
@@ -127,7 +156,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: dist-wheels-${{ matrix.os }}
+          name: dist-wheels-${{ matrix.artifact_key }}
           path: ./dist
           retention-days: 14
 

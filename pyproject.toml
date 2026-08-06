@@ -100,6 +100,17 @@ test-requires = "pytest"
 # wheel's contents are ever imported - {project} is substituted with the repo root so pytest can
 # still find the test suite itself (tests/ isn't part of the wheel).
 test-command = "pytest {project}/tests"
+test-skip = "*-pyodide_*"
+
+[tool.cibuildwheel.android]
+test-extras = ""
+test-sources = ["tests", "pyproject.toml"]
+test-command = "python -m pytest tests"
+build = "cp313-android_* cp314-android_*"
+
+# pthread is not allowed 
+# [tool.cibuildwheel.pyodide]
+# build = "cp313-pyodide_* cp314-pyodide_*"
 
 [dependency-groups]
 dev = [
