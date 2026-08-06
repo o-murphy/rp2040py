@@ -1,4 +1,4 @@
-# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True, freethreading_compatible=True
 """Real, fully-typed Cython port of rp2040py._cortex_m0_core.CortexM0Core.
 
 Every method parameter and local that's on the per-instruction hot path is genuinely C-typed

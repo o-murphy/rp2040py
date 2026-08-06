@@ -1,4 +1,4 @@
-# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True, freethreading_compatible=True
 """Real, fully-typed Cython port of rp2040py.utils.bit - the same public API, genuinely typed
 this time (not the field-only .py+.pxd approach the main package briefly carried)."""
 
