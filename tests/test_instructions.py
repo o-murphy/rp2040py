@@ -5,7 +5,6 @@ from utils.create_test_driver import create_test_driver
 from utils.rp2040_test_driver import RP2040TestDriver
 
 from rp2040py.memory_map import RAM_START_ADDRESS
-from rp2040py.rp2040 import RP2040
 from rp2040py.utils.assembler import (
     opcode_adcs,
     opcode_add_reg,
@@ -992,9 +991,9 @@ def test_should_execute_an_ldrsh_r5_r3_r5_instruction(cpu):
     assert registers.r5 == 0xFFFFF055
 
 
-def test_should_execute_a_udf_1_instruction():
+def test_should_execute_a_udf_1_instruction(rp2040_factory):
     break_mock = Mock()
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
     rp2040.core.pc = 0x20000000
     rp2040.write_uint16(0x20000000, opcode_udf(0x1))
     rp2040.on_break = break_mock
@@ -1003,9 +1002,9 @@ def test_should_execute_a_udf_1_instruction():
     break_mock.assert_called_with(1)
 
 
-def test_should_execute_a_udf_w_0_t2_encoding_instruction():
+def test_should_execute_a_udf_w_0_t2_encoding_instruction(rp2040_factory):
     break_mock = Mock()
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
     rp2040.core.pc = 0x20000000
     rp2040.write_uint32(0x20000000, opcode_udf2(0))
     rp2040.on_break = break_mock

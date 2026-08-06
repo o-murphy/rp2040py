@@ -6,7 +6,10 @@ Note: rp2040py.utils.pio_assembler's pio_jmp/pio_mov take (address, cond, ...)/(
   test_pio_assembler.py for the already-ported unit tests of the encoding itself.
 """
 
+import asyncio
+
 import pytest
+from utils.cortex_test_driver import ICortexTestDriver
 from utils.create_test_driver import create_test_driver
 
 from rp2040py.utils.pio_assembler import (
@@ -106,12 +109,52 @@ OUT_COUNT_SHIFT = 20
 VALID_PINS_MASK = 0x3FFFFFFF
 
 
+class _LoopBoundDriver:
+    """Wraps an ICortexTestDriver so every call runs inside `loop.run_until_complete()` on the
+    test's own thread - RPPIO.write_uint32()'s CTRL branch (peripherals/pio.py) needs a running
+    loop to schedule a long program's continuation onto (`asyncio.get_running_loop()`) - true
+    automatically via Simulator's own permanent loop for every real caller, but a bare RP2040
+    driven directly by these tests has no Simulator at all.
+
+    Deliberately `run_until_complete()`, not a persistent background `run_forever()` thread: a
+    background loop would let a long-running/never-self-stopping PIO continuation (e.g. a state
+    machine parked on `wait irq`, which only ever needs to be re-checked when something explicit
+    like an IRQ register write happens - see `RPPIO.irq_updated()`, called synchronously from
+    `write_uint32()` itself) spin at full speed between test statements for no reason - measured
+    multiple *seconds* of pure waste per such test. `run_until_complete()` gives the continuation
+    task only as many turns as it takes for the awaited call to finish, then stops - no state is
+    lost (each explicit write still synchronously re-checks whatever it needs to), it just doesn't
+    keep grinding on its own between statements the way production's real Simulator loop
+    legitimately does (there, unlike here, that's correct: real emulation should run as fast as
+    possible)."""
+
+    def __init__(self, driver: ICortexTestDriver, loop: asyncio.AbstractEventLoop) -> None:
+        self._driver = driver
+        self._loop = loop
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._driver, name)
+        if not callable(attr):
+            return attr
+
+        def _call(*args, **kwargs):
+            async def _run():
+                return attr(*args, **kwargs)
+
+            return self._loop.run_until_complete(_run())
+
+        return _call
+
+
 @pytest.fixture
 def cpu():
     driver = create_test_driver()
-    driver.init()
-    yield driver
-    driver.tear_down()
+    loop = asyncio.new_event_loop()
+    wrapped = _LoopBoundDriver(driver, loop)
+    wrapped.init()
+    yield wrapped
+    wrapped.tear_down()
+    loop.close()
 
 
 def reset_state_machines(cpu) -> None:

@@ -1,5 +1,4 @@
 from rp2040py.clock.mock_clock import MockClock
-from rp2040py.rp2040 import RP2040
 from rp2040py.utils.bit import bit
 
 CH2_WRITE_ADDR = 0x50000084
@@ -27,9 +26,9 @@ BUSY = bit(24)
 TREQ_PERMANENT = 0x3F
 
 
-def test_dma_channel_chaining():
+def test_dma_channel_chaining(rp2040_factory):
     clock = MockClock()
-    cpu = RP2040(clock)
+    cpu = rp2040_factory(clock)
 
     # This test uses DMA to copy 4 chunks of 8-byte data, located in different memory areas,
     # into a single memory area. We use two DMA channels, 2 and 6 (numbers are arbitrary).
@@ -97,9 +96,9 @@ def test_dma_channel_chaining():
     assert cpu.read_uint16(dest_addr + 32) == 0x0
 
 
-def test_offset_past_channels_does_not_dispatch_to_nonexistent_channel():
+def test_offset_past_channels_does_not_dispatch_to_nonexistent_channel(rp2040_factory):
     clock = MockClock()
-    cpu = RP2040(clock)
+    cpu = rp2040_factory(clock)
 
     # Offset 0x300 is the first address after the 12 channel register blocks.
     # It must not be routed to channel index 12 (0x300 >> 6), which does not exist.

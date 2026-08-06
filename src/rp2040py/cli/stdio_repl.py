@@ -5,9 +5,9 @@ CLI subcommand and demo/kaluma_run.py (any USB-CDC-console firmware, not just Mi
 CircuitPython).
 """
 
+import asyncio
 import atexit
 import os
-import select
 import signal
 import sys
 import threading
@@ -33,11 +33,16 @@ except ImportError:
     tty = None  # type: ignore[assignment]
 
 from rp2040py.device.repl_runner import InteractiveRepl
+from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
 
 __all__ = ("StdioInteractiveRepl", "buf_write")
 
 _CTRL_X = 24
+# Matches mp_device.py's _exec_blocking pacing: 1ms of simulated time between repeat pump()
+# attempts while the tx_fifo is still full, giving the simulator loop room to actually drain it
+# between tries instead of busy-looping.
+_PUMP_PERIOD_NANOS = 1_000_000
 
 
 def buf_write(buf, data: "int | bytes | bytearray") -> None:
@@ -55,8 +60,14 @@ def buf_write(buf, data: "int | bytes | bytearray") -> None:
 
 class StdioInteractiveRepl(InteractiveRepl):
     """Interactive bridge between a device's USB-CDC console and this process's stdin/stdout.
-    `start()` puts the terminal (if any) into raw mode and spawns a daemon thread forwarding
-    stdin to the device; `stop()` restores the terminal. Quit by typing Ctrl+X.
+    `start()` puts the terminal (if any) into raw mode and starts forwarding stdin to the device;
+    `stop()` restores the terminal. Quit by typing Ctrl+X.
+
+    `simulator` is the `Simulator` that owns `cdc` - stdin is read via `asyncio.loop.add_reader()`
+    on `simulator`'s own engine-room loop (`Simulator._ensure_loop()`), the same thread
+    `execute()`/`USBCDC` state already only ever runs on, so forwarding bytes to the device never
+    needs a cross-thread bridge for the common case: the read callback already *is* on the right
+    thread.
 
     `on_data`, if given, is called with every chunk of device output in addition to it being
     echoed to stdout - e.g. for the CLI's `--expect-text` test-harness hook.
@@ -72,22 +83,23 @@ class StdioInteractiveRepl(InteractiveRepl):
     def __init__(
         self,
         cdc: USBCDC,
+        simulator: Simulator,
         on_quit: "Callable[[int], None]",
         on_data: "Callable[[bytes | bytearray], None] | None" = None,
     ) -> None:
         super().__init__(cdc, on_data=self._dispatch)
+        self._simulator = simulator
         self._extra_on_data = on_data
         self._on_quit = on_quit
         self._stdin_fd: int | None = None
         self._old_termios: list[Any] | None = None
         self._old_sigterm_handler: Any = None
-        self._reader_thread: threading.Thread | None = None
-        # Self-pipe so stop() can unblock the reader thread's select()/os.read() deterministically
-        # instead of relying on the fd it's reading from eventually going away. Closing the target
-        # fd itself to cancel a pending read would be racy: another thread's fd reuse could get
-        # redirected onto it mid-syscall (this is precisely the bug this fixes - see _on_stop()).
-        self._wake_r: int | None = None
-        self._wake_w: int | None = None
+        self._pump_alarm: Any = None
+        # Only used for the non-tty/Windows fallback (no fd to add_reader() on) - a small
+        # dedicated thread for the one thing that still has to block: sys.stdin.read() itself.
+        # Each chunk it reads is still forwarded onto the engine-room loop via simulator.call(),
+        # not sent directly from this thread - see _fallback_read_loop().
+        self._fallback_thread: threading.Thread | None = None
 
     def _dispatch(self, data: "bytes | bytearray") -> None:
         buf_write(sys.stdout, data)
@@ -115,37 +127,35 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # -9): Python's default SIGTERM disposition kills the process at the OS level
                 # before the interpreter ever gets to run atexit callbacks - confirmed empirically
                 # (a bare `atexit.register(...)` + `kill -TERM` never fires it). Needs its own
-                # signal handler, routed through the same _request_quit() as Ctrl+X.
+                # signal handler, routed through the same _request_quit() as Ctrl+X. This can only
+                # be installed on the actual process main thread (a signal-module restriction, not
+                # an asyncio one) - `_on_start()` itself always runs there today (nothing async
+                # calls it), so this is unaffected by simulator's own engine-room thread.
                 atexit.register(self._restore_termios)
                 self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
         except AttributeError:
             self._stdin_fd = None
 
         if self._stdin_fd is not None:
-            self._wake_r, self._wake_w = os.pipe()
-        self._reader_thread = threading.Thread(target=self._read_stdin_loop, daemon=True)
-        self._reader_thread.start()
+            self._simulator.call(self._register_reader())
+        else:
+            self._fallback_thread = threading.Thread(target=self._fallback_read_loop, daemon=True)
+            self._fallback_thread.start()
+
+    async def _register_reader(self) -> None:
+        assert self._stdin_fd is not None
+        asyncio.get_running_loop().add_reader(self._stdin_fd, self._on_stdin_readable)
+
+    async def _unregister_reader(self) -> None:
+        assert self._stdin_fd is not None
+        asyncio.get_running_loop().remove_reader(self._stdin_fd)
 
     def _on_stop(self) -> None:
-        if self._wake_w is not None:
-            try:
-                os.write(self._wake_w, b"x")
-            except OSError:
-                pass
-        # Guard against joining ourselves: _request_quit() only ever signals via on_quit and never
-        # calls stop() itself, but a contract-violating on_quit that calls repl.stop() synchronously
-        # from within itself would run on this reader thread for Ctrl+X - joining here would then
-        # deadlock (Thread.join() on the current thread raises RuntimeError).
-        if self._reader_thread is not None and threading.current_thread() is not self._reader_thread:
-            self._reader_thread.join(timeout=1.0)
+        if self._stdin_fd is not None:
+            self._simulator.call(self._unregister_reader())
+        if self._fallback_thread is not None:
+            self._fallback_thread.join(timeout=1.0)
         self._restore_termios()
-        for fd in (self._wake_r, self._wake_w):
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        self._wake_r = self._wake_w = None
 
     def _on_sigterm(self, signum: int, _frame: Any) -> None:
         # 128+signum matches the convention the shell/`timeout` itself would otherwise report for
@@ -154,9 +164,10 @@ class StdioInteractiveRepl(InteractiveRepl):
 
     def _request_quit(self, code: int) -> None:
         # Just flag it - the caller's Simulator.wait_for_shutdown loop does the actual
-        # repl.stop()/gdb_server.close()/sys.exit(). This runs from the stdin-reader thread
-        # (Ctrl+X) or the main thread via a signal handler (SIGTERM) - either way, it must not
-        # block or do teardown itself, since on_quit just sets an Event and returns.
+        # repl.stop()/gdb_server.close()/sys.exit(). This can run from the engine-room loop
+        # (Ctrl+X, via _on_stdin_readable) or the main thread via a signal handler (SIGTERM) -
+        # either way, it must not block or do teardown itself, since on_quit just sets an Event
+        # and returns.
         self._on_quit(code)
 
     def _restore_termios(self) -> None:
@@ -171,59 +182,82 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # already closed).
                 pass
         if self._old_sigterm_handler is not None and threading.current_thread() is threading.main_thread():
-            # signal.signal() only works from the main thread - this can also run from
-            # _read_stdin_loop's daemon thread (its own `finally`), where restoring is skipped
-            # rather than raising; the process is tearing down either way at that point.
+            # signal.signal() only works from the main thread - this can also run from the
+            # non-tty fallback's own daemon thread (its own `finally`), where restoring is
+            # skipped rather than raising; the process is tearing down either way at that point.
             try:
                 signal.signal(signal.SIGTERM, self._old_sigterm_handler)
             except ValueError:
                 pass
             self._old_sigterm_handler = None
 
-    def _read_stdin_loop(self) -> None:
+    def _on_stdin_readable(self) -> None:
+        # Registered via loop.add_reader() - always called on simulator's own engine-room loop,
+        # the same thread execute()/USBCDC state already only ever runs on, so self.send() below
+        # (touching cdc.tx_fifo) is already safe here with no bridging needed.
+        assert self._stdin_fd is not None
         try:
-            if self._stdin_fd is not None:
-                # _on_start() always pairs _wake_r/_wake_w with a non-None _stdin_fd.
-                assert self._wake_r is not None
-                while True:
-                    try:
-                        ready, _, _ = select.select([self._stdin_fd, self._wake_r], [], [])
-                    except OSError:
-                        break
-                    if self._wake_r in ready:
-                        # stop() woke us up via the self-pipe - unrelated to stdin having data.
-                        break
-                    try:
-                        chunk = os.read(self._stdin_fd, 4096)
-                    except OSError:
-                        # The read side going away out from under us (e.g. a real terminal
-                        # disconnecting, or - relevant for a future --pty mode - the pty's other
-                        # end closing) is not fundamentally different from a clean EOF here: this
-                        # thread's only job is forwarding bytes, and there's nothing left to
-                        # forward. Treated as EOF rather than left to propagate and print an
-                        # unhandled-thread-exception traceback for what's really just "the other
-                        # end hung up."
-                        break
-                    if not chunk:
-                        break
-                    if chunk[0] == _CTRL_X:
-                        # _request_quit(), not sys.exit(): this runs on the dedicated stdin
-                        # reader thread, not the main thread, so sys.exit() would only terminate
-                        # that thread instead of the whole process.
-                        self._request_quit(0)
-                        return
-                    self.send(chunk)
-            else:
-                while True:
-                    data = sys.stdin.read()
-                    if not data:
-                        break
-                    byte_data = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
-                    for byte in byte_data:
-                        if byte == _CTRL_X:
-                            self._request_quit(0)
-                            return
-                        self._send_byte_blocking(byte)
-                    self._send_byte_blocking(13)
+            chunk = os.read(self._stdin_fd, 4096)
+        except OSError:
+            # The read side going away out from under us (e.g. a real terminal disconnecting, or
+            # - relevant for a future --pty mode - the pty's other end closing) is not
+            # fundamentally different from a clean EOF here: this callback's only job is
+            # forwarding bytes, and there's nothing left to forward.
+            chunk = b""
+        if not chunk:
+            asyncio.get_running_loop().remove_reader(self._stdin_fd)
+            self._restore_termios()
+            return
+        if chunk[0] == _CTRL_X:
+            asyncio.get_running_loop().remove_reader(self._stdin_fd)
+            self._request_quit(0)
+            return
+        self._send_and_pace(chunk)
+
+    def _send_and_pace(self, data: bytes) -> None:
+        """send()s `data`, scheduling a repeat-pump alarm if the tx_fifo didn't have room for all
+        of it. Must only be called from simulator's own engine-room thread - same requirement as
+        send()/pump() themselves (they touch cdc.tx_fifo)."""
+        if not self.send(data):
+            self._schedule_pump()
+
+    def _schedule_pump(self) -> None:
+        if self._pump_alarm is None:
+            self._pump_alarm = self._simulator.clock.create_alarm(self._pump_tick)
+        self._pump_alarm.schedule(_PUMP_PERIOD_NANOS)
+
+    def _pump_tick(self) -> None:
+        # A clock alarm callback always fires from Clock.tick()'s own call chain, i.e. already on
+        # the engine-room thread - no bridging needed here either, matching mp_device.py's
+        # _exec_blocking's identical _pump_until_sent pattern.
+        if not self.pump():
+            self._schedule_pump()
+
+    async def _send_async(self, data: bytes) -> None:
+        self._send_and_pace(data)
+
+    def _fallback_read_loop(self) -> None:
+        # No raw mode / no Ctrl+X-without-Enter here (Windows, or stdin isn't a real tty at all -
+        # e.g. piped input) - sys.stdin.read() is genuinely blocking with no portable non-thread
+        # alternative, so this keeps its own small dedicated thread. Each chunk is still forwarded
+        # through simulator.call() rather than sent directly from here, though: this thread is not
+        # the engine room, and cdc.tx_fifo isn't safe to touch from anywhere else.
+        try:
+            while True:
+                data = sys.stdin.read()
+                if not data:
+                    break
+                byte_data = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
+                ctrl_x_index = byte_data.find(_CTRL_X)
+                if ctrl_x_index != -1:
+                    to_send = byte_data[:ctrl_x_index]
+                    if to_send:
+                        self._simulator.call(self._send_async(to_send))
+                    self._request_quit(0)
+                    return
+                # Matches the original line-buffered fallback's behavior: a trailing CR after
+                # each read, since a canonical-mode stdin read already stripped/consumed the
+                # newline that would otherwise represent pressing Enter.
+                self._simulator.call(self._send_async(byte_data + bytes([13])))
         finally:
             self._restore_termios()

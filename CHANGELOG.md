@@ -8,15 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `GDBTCPServer.close()`: stops and joins the accept thread so the process can actually exit. That
-  thread is deliberately non-daemon ("a listening GDB server should keep the process alive by
+- **Full `asyncio` migration**: `Simulator` now owns one persistent background thread hosting a
+  real `asyncio` event loop (its "engine room") instead of the ad hoc mix of `threading.Timer`
+  reschedule chains, dedicated reader threads, and a `ThreadPoolExecutor` this replaces. `execute()`
+  is now `async def`, yielding via `await asyncio.sleep(0)` between batches (upstream rp2040js's
+  direct analogue of `setTimeout(fn, 0)`) instead of rescheduling itself through a brand-new OS
+  thread every batch. `RPPIO.run()` (`peripherals/pio.py`) schedules its continuation as a task on
+  the same loop instead of a `threading.Timer` + `RLock`. `StdioInteractiveRepl` forwards stdin via
+  `loop.add_reader()` registered directly on `Simulator`'s own engine-room loop rather than a
+  separate reader thread, so `send_serial_byte()` is a plain synchronous call with no cross-thread
+  bridge needed per keystroke. `GDBTCPServer` is rewritten on `asyncio.start_server()` with its own
+  independent engine room (connection I/O doesn't touch CPU/peripheral state, so it doesn't share
+  `Simulator`'s), bridging only `process_gdb_message()` per received chunk via
+  `Simulator.acall()`/a new `IGDBTarget.acall()` Protocol method. `MicroPythonDevice`'s
+  boot/`exec()` queueing moved from `ThreadPoolExecutor(max_workers=1)` to `Simulator.submit()` (new
+  - `call()`'s non-blocking counterpart, returning the same `concurrent.futures.Future` type the
+  executor did) + one `asyncio.Lock` per device. Three new bridge primitives on `Simulator` make
+  every one of the above possible without bespoke locking per component: `call(coro, timeout=None)`
+  (blocking), `acall(coro)` (async), `submit(coro)` (non-blocking, returns a `Future`) - all reused
+  as-is by every migrated component, none needed changes to add the next one. Closes several real,
+  independently-found `USBCDC.tx_fifo` races between whatever thread was driving `execute()` and a
+  separate thread touching CDC state directly (interactive stdin, GDB's `process_gdb_message()`) -
+  the same class of bug that once corrupted a raw-REPL upload
+  (see [docs/ASYNCIO_MIGRATION_BACKLOG.md](docs/ASYNCIO_MIGRATION_BACKLOG.md) for the full,
+  phase-by-phase writeup and every race found along the way). No public sync API changed shape:
+  `Simulator.submit()`/`call()` return/accept the same types their threading predecessors did, and
+  `cli/__init__.py` needed zero changes.
+- `GDBTCPServer.close()`: stops and joins its engine-room thread so the process can actually exit.
+  That thread is deliberately non-daemon ("a listening GDB server should keep the process alive by
   itself", matching Node's `net.Server.listen()`), which is exactly why nothing previously called a
   plain `sys.exit()`/return while `--gdb` was active - every exit path used `os._exit()` instead,
-  which works but skips the terminal restore and other cleanup below. Uses a short (`0.2s`)
-  `socket.settimeout()` poll rather than closing the listening socket out from under a blocked
-  `accept()` call on another thread - the latter doesn't reliably unblock `accept()` on Linux (a
-  known glibc/kernel gotcha) and is undefined on Windows/macOS too, so the poll avoids the platform
-  question entirely instead of relying on a Linux-specific trick.
+  which works but skips the terminal restore and other cleanup below.
 - `Simulator.shutdown_request` / `Simulator.wait_for_shutdown(cleanup=...)`: a shared, thread-safe
   way for a REPL's Ctrl+X handler, a `--expect-text` watcher, a SIGTERM handler, or (later) a `--pty`
   disconnect handler to request a clean process exit instead of calling `os._exit()` itself.
@@ -54,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounds check of its own before this.
 
 ### Changed
+- `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor
+  argument (**breaking**, on top of the `on_quit` change below). Needed so stdin forwarding can
+  register `loop.add_reader()` on `Simulator`'s own engine-room loop (see "Full `asyncio` migration"
+  above) - the one-time registration itself goes through `simulator.call()`, everything after that
+  runs directly on the right thread with no further bridging.
 - `StdioInteractiveRepl(on_quit=...)` is now a required constructor argument (**breaking** for any
   caller constructing it without one) - collapses the class down to a single shutdown mode instead
   of two. It previously also supported a standalone mode (`on_quit=None`) where Ctrl+X/SIGTERM
@@ -70,6 +97,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
 
 ### Fixed
+- Typing at the interactive REPL while the device sat idle (the common case, once booted) could
+  take up to ~1-2 real seconds per keystroke to even reach the emulated device - a regression from
+  the `asyncio` migration above, not present before it. Root cause:
+  `Simulator._execute_batch()`'s idle branch could legitimately run its full 1,000,000-iteration
+  ceiling before yielding back to the event loop, and `StdioInteractiveRepl`'s `add_reader()`
+  callback (sharing that same loop) only gets a turn between batches - upstream rp2040js hits the
+  identical 1,000,000-iteration ceiling per batch, but V8 clears it in low milliseconds; CPython's
+  per-iteration overhead measured ~0.9-1.8s wall-clock for the same ceiling. A first fix attempt
+  bounded only an *uninterrupted* idle run's own elapsed time and shipped with no measured
+  real-world improvement - a real device idling at the REPL isn't purely WFI'd end to end (a
+  periodic timer interrupt briefly wakes it before it goes back to waiting), and that reset the
+  idle-run tracker on every such interruption, so the bound rarely actually fired. Fixed by tracking
+  one wall-clock budget (`_BATCH_YIELD_BUDGET_SECONDS`, 5ms) from the start of the whole batch,
+  unconditionally, checked every `_TIME_CHECK_INTERVAL` iterations rather than every one so
+  `time.monotonic()` itself doesn't become the hot-path cost this avoids. Verified against a real
+  pty-driven MicroPython session with a simulated periodic interrupt: ~1.6-1.8s per keystroke before
+  the second fix, ~0.01-0.05s after - matching the pre-`asyncio` threading model's own latency, with
+  no measured change to boot-to-prompt throughput (idle time is still uncapped in simulated units;
+  only one uninterrupted batch's real-world length is bounded).
+- `GDBTCPServer.close()` could hang the whole process indefinitely (confirmed on real CI: one
+  wheel-build job sat for ~6 hours before GitHub's own outer timeout force-cancelled it, on a
+  macOS + free-threaded-Python runner). `_aclose()`'s `await self._server.wait_closed()`/
+  `gather(*self._connection_tasks)` could stall past `close()`'s own `timeout`, and
+  `run_coroutine_threadsafe(...).result(timeout)` raising `TimeoutError` in that case used to skip
+  `loop.stop()`/`_loop_thread.join()` entirely - leaving that thread (deliberately **non-daemon**,
+  so a listening GDB server keeps the process alive by itself) running forever. `close()` now stops
+  the loop and joins the thread unconditionally, even if `_aclose()` times out or raises; `_aclose()`
+  itself also bounds each of its two stages to its own slice of the timeout instead of one
+  unbounded `await` each, so a single stuck connection no longer consumes the entire budget and
+  leaves nothing for the rest of cleanup.
+- `test_stdio_repl.py`'s `_stable()` helper (used by the SIGTERM/termios regression test) compared
+  the *entire* raw `c_cc` array from `tcgetattr()`, including slots past the last named control
+  character - confirmed flaky specifically inside cibuildwheel's containerized Linux runners (two
+  `tcgetattr()` snapshots of the same untouched pty differed in that unused tail, looking like
+  uninitialized/padding memory rather than real terminal state; not reproducible outside that
+  container). `_stable()` now narrows its `c_cc` comparison to the named `V*` control-char indices
+  only.
 - `StdioInteractiveRepl`'s stdin-reader thread wasn't joined on `stop()` - it stayed blocked in
   `os.read()` until its fd eventually went away, so its own `finally`-triggered terminal restore
   could fire *after* a later `StdioInteractiveRepl` instance (e.g. the next test in the same

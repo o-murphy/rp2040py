@@ -65,7 +65,8 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `gdb/gdb-target.ts` → `gdb/gdb_target.py`
 - [x] `gdb/gdb-server.ts` → `gdb/gdb_server.py`
 - [x] `gdb/gdb-connection.ts` → `gdb/gdb_connection.py`
-- [x] `gdb/gdb-tcp-server.ts` → `gdb/gdb_tcp_server.py` (Node `net` → Python `socket`+`threading`)
+- [x] `gdb/gdb-tcp-server.ts` → `gdb/gdb_tcp_server.py` (Node `net` → Python `asyncio.start_server()`,
+  its own dedicated engine-room thread - see "Threading model" below)
 
 ### usb
 - [x] `usb/interfaces.ts` → `usb/interfaces.py`
@@ -187,8 +188,8 @@ lifecycle `MicroPythonDevice` and the newer `KalumaDevice` (`device/kaluma_devic
 load the image, create the `USBCDC` console, block `start()`/`stop()` around actually running the
 emulator - which used to be duplicated between `MicroPythonDevice.__init__` and
 `demo/kaluma_run.py`'s hand-rolled boot sequence before the `kaluma` subcommand existed.
-`MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `ThreadPoolExecutor` on
-top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
+`MicroPythonDevice(BaseDevice)` layers the raw-REPL `exec()` family and its `Simulator`-engine-room
+queueing on top; `KalumaDevice(BaseDevice)` stays thin - Kaluma has no raw-REPL-equivalent protocol (see
 "CLI packaging" above), so there's no `exec()` to add, just optional `littlefs`/`program` loading.
 
 `KalumaDevice(program=...)`/`load_kaluma_program()` (`device/load_flash.py`) stage a local `.js`
@@ -232,20 +233,47 @@ for exactly the GP22 case this fixes. See `tests/test_gpio_pin.py`.
 
 `start()`/`exec()`/`exec_file()` block the calling thread; each has an `_async` twin
 (`start_async()`/`exec_async()`/`exec_file_async()`) returning a `concurrent.futures.Future`, plus
-`astart()`/`aexec()`/`aexec_file()` for asyncio. All of these submit the same plain blocking
-implementation (`threading.Event.wait()`) to one `ThreadPoolExecutor(max_workers=1)` per device -
-deliberately reusing the standard library's own executor/Future machinery rather than hand-rolling
-a queue: the device only has one REPL channel and can't run two `exec()`s at once, so a
-single-worker executor gets FIFO queueing of overlapping calls, `Future.add_done_callback()` for
-callback style, and cancellation of not-yet-started calls, all for free. (An earlier version of
-this hand-rolled the queue with a `deque` + a `Future`-per-call + a `threading.Timer` timeout
-watchdog; it worked, but was substantially more code for the same guarantees the stdlib already
-provides.) `concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class,
-distinct from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in
-`mp_device.py` normalize all three to the builtin one so `except TimeoutError` behaves the same
-everywhere on the 3.10 floor this project supports.
+`astart()`/`aexec()`/`aexec_file()` for asyncio. All of these run as coroutines on the
+`Simulator`'s own engine-room loop (`simulator.submit()`, `run_coroutine_threadsafe()` under the
+hood - already returns a plain `concurrent.futures.Future`, no extra wrapping needed), serialized
+by one `asyncio.Lock` per device: the device only has one REPL channel and can't run two `exec()`s
+at once, so the lock gets FIFO queueing of overlapping calls the same way
+`ThreadPoolExecutor(max_workers=1)` used to, for free. (Two earlier versions of this: first a
+hand-rolled `deque` + a `Future`-per-call + a `threading.Timer` timeout watchdog; then a
+`ThreadPoolExecutor(max_workers=1)` submitting plain blocking `threading.Event.wait()` calls -
+replaced once `Simulator` got its own engine-room loop, see
+`docs/ASYNCIO_MIGRATION_BACKLOG.md`'s phase 5: running on a worker thread neither of those first
+two designs actually needed to exist raced `USBCDC.tx_fifo` against whatever thread was really
+driving the simulator, the same class of bug PR 3 found and fixed for `cli/stdio_repl.py`.)
+`concurrent.futures.TimeoutError` and `asyncio.TimeoutError` are each their own class, distinct
+from the builtin `TimeoutError`, until Python 3.10 - `_result()`/`_await()` in `mp_device.py`
+normalize all three to the builtin one so `except TimeoutError` behaves the same everywhere on the
+3.10 floor this project supports.
 
 ### Threading model (`Simulator.execute()` / `RPPIO.run()`)
+
+**Superseded - this section described the pre-`asyncio` port; kept below for historical context
+(the reasoning explains *why* the current design looks the way it does), but none of the advice
+here reflects current code.** See
+[docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md) for the full migration writeup.
+Current shape, in short: `Simulator` owns one persistent background thread hosting a real
+`asyncio` event loop (its "engine room"), created lazily on first use
+(`Simulator._ensure_loop()`). `execute()` is `async def`, yielding via `await asyncio.sleep(0)`
+between batches instead of rescheduling itself through a new OS thread every time
+(`threading.Timer(0, self.execute)` is gone). Callers that used to call `simulator.execute()`
+directly now call `simulator.start_execution()` (schedules `execute()` as a task on the engine
+room and returns immediately) and `simulator.wait_for_shutdown()` to block until it's done - both
+already used throughout `cli/__init__.py`; nothing outside this file needs the raw `threading`
+patterns below anymore. Three bridge primitives make cross-thread calls into the engine room safe
+without bespoke locking per caller: `Simulator.call(coro, timeout=None)` (blocking),
+`Simulator.acall(coro)` (async, for a caller with its own running loop), `Simulator.submit(coro)`
+(non-blocking, returns a `concurrent.futures.Future`) - `os._exit()`/raw `threading.Timer`
+scheduling from inside a simulation callback (the old advice below) should no longer be necessary;
+use `Simulator.shutdown_request.request(code)` and `simulator.clock.create_alarm(...)` instead, as
+the old advice already recommended over the *other* raw-thread alternatives.
+
+<details>
+<summary>Original pre-<code>asyncio</code> analysis (historical)</summary>
 
 Upstream JS yields back to Node's single-threaded event loop every N steps via
 `setTimeout(() => this.execute(), 0)`, so an external `stop()` call (or the process exiting)
@@ -314,11 +342,15 @@ thread doesn't starve the main thread the way single-threaded JS would - this po
 pattern over without needing it, and each handoff's cost (new thread creation, GIL contention
 against the main thread's own periodic poll) was always there, just dwarfed by how slow pure-Python
 instruction dispatch was until `rp2040py.native` made dispatch itself ~4x+ faster. See
-`docs/BACKLOG.md`'s CDC investigation follow-up for the full numbers. Not yet fixed - a single
-persistent worker thread (no `threading.Timer` rescheduling) is the likely direction, but every
-caller of `Simulator.execute()` currently relies on it returning almost immediately and continuing
-in the background, so this is a real change to the scheduling model this section already flags as
-unsettled, not a drop-in fix.
+`docs/BACKLOG.md`'s CDC investigation follow-up for the full numbers.
+
+**This section used to end here with "not yet fixed."** It's fixed now, via the full `asyncio`
+migration linked at the top of this section - `execute()`'s `threading.Timer` reschedule is gone,
+replaced by the persistent-engine-room-thread design that section describes. That in turn
+surfaced a *different* real-time cost specific to idle batches under the new model - see
+`docs/BACKLOG.md`'s CDC section and CHANGELOG.md's `[Unreleased]` entry for that follow-up.
+
+</details>
 
 ### Raw-REPL uploads and cross-thread `USBCDC.tx_fifo` access (a real, previously undiscovered bug)
 
@@ -360,12 +392,14 @@ thread to race in the first place. `MicroPythonDevice._exec_blocking()` now take
 repeatably clean.
 
 The same unbounded-burst pattern existed in `micropython`'s interactive-mode stdin-forwarding loop
-(`cli/__init__.py`) and `demo/kaluma_run.py`'s: `os.read()` can return up to 4096 bytes in one
-chunk from a single large paste into the terminal, comfortably over the 512-byte FIFO. Both now
-retry with a short sleep while the FIFO's full instead of assuming `send_serial_byte()` always has
-room - safe as a plain blocking retry here (no clock-alarm scheduling needed) because this loop
-runs on its own dedicated stdin-reader thread, not the simulator's; blocking it briefly doesn't
-race anything.
+(`cli/stdio_repl.py`) and `demo/kaluma_run.py`'s: `os.read()` can return up to 4096 bytes in one
+chunk from a single large paste into the terminal, comfortably over the 512-byte FIFO. **Updated
+for the `asyncio` migration**: `StdioInteractiveRepl`'s `add_reader()` callback now runs directly
+on `Simulator`'s own engine-room loop (not a separate stdin-reader thread - that design predates
+the migration), so a plain blocking retry-with-sleep would stall the same loop `execute()` needs to
+keep advancing. It uses the same `simulator.clock.create_alarm(...)`-based pacing this section's
+`RawReplRunner` fix above already established (`_queue()`/`pump()`, re-armed via a clock alarm
+instead of a blocking sleep) rather than reinventing a third mechanism.
 
 ### `pio_assembler.py`'s `pio_jmp`/`pio_mov` argument order differs from upstream
 

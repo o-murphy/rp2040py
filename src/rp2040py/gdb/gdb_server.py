@@ -123,7 +123,7 @@ class GDBServer:
                 return gdb_message("vCont;c;C;s;S")
             if cmd.startswith("vCont;c"):
                 if not self.target.executing:
-                    self.target.execute()
+                    self.target.start_execution()
                 return None
             if cmd.startswith("vCont;s"):
                 rp2040.step()
@@ -136,7 +136,7 @@ class GDBServer:
 
         if head == "c":
             if not self.target.executing:
-                self.target.execute()
+                self.target.start_execution()
             return gdb_message("OK")
 
         if head == "g":

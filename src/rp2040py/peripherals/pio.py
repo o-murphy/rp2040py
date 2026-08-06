@@ -1,4 +1,4 @@
-import threading
+import asyncio
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
@@ -799,19 +799,14 @@ class RPPIO(BasePeripheral):
         self.dreq_tx = DREQ_TX1 if self.index else DREQ_TX0
         self.machines = [StateMachine(self.rp2040, self, i) for i in range(4)]
 
-        # run() (see below) hands off to a background threading.Timer after its first synchronous
-        # batch of steps, so machine/self state (waiting, pc, irq, ...) can be mutated from that
-        # background thread *and* from whatever thread calls write_uint32() (a bus write forcing
-        # SMx_INSTR execution, an IRQ/IRQ_FORCE write, a CTRL write) at the same time, unguarded -
-        # a real, reproduced race (test_program_with_a_wait_irq_7_instruction flaked in CI: the
-        # background loop's own check_wait() for a waiting machine interleaved with a same-instant
-        # write_uint32()-triggered irq_updated()/check_wait() for that same machine, sometimes
-        # losing an update). RLock (not Lock): write_uint32()'s own CTRL branch can call run(),
-        # which synchronously calls step() (also lock-guarded, see below) before ever spawning the
-        # background thread - same-thread reentry into the same lock, which a plain Lock would
-        # deadlock on. Scoped to RPPIO (this class), not StateMachine - the machines don't have
-        # their own lock, they're always reached through this instance's step()/write_uint32().
-        self._lock = threading.RLock()
+        # No lock needed here (there used to be one - see git history / CHANGELOG for the real,
+        # reproduced race a background threading.Timer caused): run()'s continuation is now an
+        # asyncio coroutine scheduled on Simulator's own engine-room event loop
+        # (rp2040py.simulator.Simulator._ensure_loop()), the same loop write_uint32() itself always
+        # runs on (it's only ever called from execute_instruction()'s bus dispatch, which only ever
+        # runs inside Simulator.execute() on that loop). Exactly one thread can reach this state
+        # now, by construction - not "races are unlikely," structurally impossible.
+        self._run_task: asyncio.Task[None] | None = None
 
         self.stopped = True
         self.fdebug = 0
@@ -823,7 +818,6 @@ class RPPIO(BasePeripheral):
         self.pin_directions = 0
         self.old_pin_values = 0
         self.old_pin_directions = 0
-        self._run_timer: threading.Timer | None = None
 
         self.irq0_int_enable = 0
         self.irq0_int_force = 0
@@ -927,77 +921,89 @@ class RPPIO(BasePeripheral):
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
-        with self._lock:
-            if INSTR_MEM0 <= offset <= INSTR_MEM31:
-                index = (offset - INSTR_MEM0) >> 2
-                self.instructions[index] = value & 0xFFFF
-                return
-            if SM0_CLKDIV <= offset <= SM0_PINCTRL:
-                self.machines[0].write_uint32(offset - SM0_CLKDIV, value)
-                return
-            if SM1_CLKDIV <= offset <= SM1_PINCTRL:
-                self.machines[1].write_uint32(offset - SM1_CLKDIV, value)
-                return
-            if SM2_CLKDIV <= offset <= SM2_PINCTRL:
-                self.machines[2].write_uint32(offset - SM2_CLKDIV, value)
-                return
-            if SM3_CLKDIV <= offset <= SM3_PINCTRL:
-                self.machines[3].write_uint32(offset - SM3_CLKDIV, value)
-                return
+        if INSTR_MEM0 <= offset <= INSTR_MEM31:
+            index = (offset - INSTR_MEM0) >> 2
+            self.instructions[index] = value & 0xFFFF
+            return
+        if SM0_CLKDIV <= offset <= SM0_PINCTRL:
+            self.machines[0].write_uint32(offset - SM0_CLKDIV, value)
+            return
+        if SM1_CLKDIV <= offset <= SM1_PINCTRL:
+            self.machines[1].write_uint32(offset - SM1_CLKDIV, value)
+            return
+        if SM2_CLKDIV <= offset <= SM2_PINCTRL:
+            self.machines[2].write_uint32(offset - SM2_CLKDIV, value)
+            return
+        if SM3_CLKDIV <= offset <= SM3_PINCTRL:
+            self.machines[3].write_uint32(offset - SM3_CLKDIV, value)
+            return
 
-            if offset == CTRL:
-                for index in range(4):
-                    self.machines[index].enabled = bool(value & (1 << index))
-                    if value & (1 << (4 + index)):
-                        self.machines[index].restart()
-                    if value & (1 << (8 + index)):
-                        self.machines[index].clk_div_restart()
-                should_run = value & 0xF
-                if self.stopped and should_run:
-                    self.stopped = False
-                    self.run()
-                if not should_run:
-                    self.stopped = True
+        if offset == CTRL:
+            for index in range(4):
+                self.machines[index].enabled = bool(value & (1 << index))
+                if value & (1 << (4 + index)):
+                    self.machines[index].restart()
+                if value & (1 << (8 + index)):
+                    self.machines[index].clk_div_restart()
+            should_run = value & 0xF
+            if self.stopped and should_run:
+                self.stopped = False
+                # First batch runs synchronously inline, same as always (most PIO programs are
+                # short enough that a caller reading FIFO/register state right after this write
+                # already sees the result, with no yield in between). Only the continuation - if
+                # the program is still going after 1000 steps, e.g. it wraps/waits - needs
+                # scheduling as a task: write_uint32() itself can't `await` (it's called
+                # synchronously from execute_instruction()'s bus dispatch, which must stay
+                # synchronous), so run() picks up from here instead. get_running_loop() always
+                # resolves to Simulator's own engine-room loop here, since that's the only place
+                # write_uint32() is ever called from (see __init__'s _run_task comment) - except
+                # tests driving RPPIO directly with no Simulator at all, which need their own loop
+                # running for this specific case (see tests/test_pio.py's fixture).
+                self._step_batch()
+                if not self.stopped:
+                    self._run_task = asyncio.get_running_loop().create_task(self.run())
+            if not should_run:
+                self.stopped = True
 
-            elif offset == FDEBUG:
-                self.fdebug &= ~self.raw_write_value
-                self.fdebug |= self.tx_stall | self.rx_stall
+        elif offset == FDEBUG:
+            self.fdebug &= ~self.raw_write_value
+            self.fdebug |= self.tx_stall | self.rx_stall
 
-            elif offset == TXF0:
-                self.machines[0].write_fifo(value)
-            elif offset == TXF1:
-                self.machines[1].write_fifo(value)
-            elif offset == TXF2:
-                self.machines[2].write_fifo(value)
-            elif offset == TXF3:
-                self.machines[3].write_fifo(value)
+        elif offset == TXF0:
+            self.machines[0].write_fifo(value)
+        elif offset == TXF1:
+            self.machines[1].write_fifo(value)
+        elif offset == TXF2:
+            self.machines[2].write_fifo(value)
+        elif offset == TXF3:
+            self.machines[3].write_fifo(value)
 
-            elif offset == IRQ:
-                self.irq &= ~self.raw_write_value
-                self.irq_updated()
+        elif offset == IRQ:
+            self.irq &= ~self.raw_write_value
+            self.irq_updated()
 
-            elif offset == INPUT_SYNC_BYPASS:
-                self.input_sync_bypass = value
+        elif offset == INPUT_SYNC_BYPASS:
+            self.input_sync_bypass = value
 
-            elif offset == IRQ_FORCE:
-                self.irq |= value
-                self.irq_updated()
+        elif offset == IRQ_FORCE:
+            self.irq |= value
+            self.irq_updated()
 
-            elif offset == IRQ0_INTE:
-                self.irq0_int_enable = value & 0xFFF
-                self.check_interrupts()
-            elif offset == IRQ0_INTF:
-                self.irq0_int_force = value & 0xFFF
-                self.check_interrupts()
-            elif offset == IRQ1_INTE:
-                self.irq1_int_enable = value & 0xFFF
-                self.check_interrupts()
-            elif offset == IRQ1_INTF:
-                self.irq1_int_force = value & 0xFFF
-                self.check_interrupts()
+        elif offset == IRQ0_INTE:
+            self.irq0_int_enable = value & 0xFFF
+            self.check_interrupts()
+        elif offset == IRQ0_INTF:
+            self.irq0_int_force = value & 0xFFF
+            self.check_interrupts()
+        elif offset == IRQ1_INTE:
+            self.irq1_int_enable = value & 0xFFF
+            self.check_interrupts()
+        elif offset == IRQ1_INTF:
+            self.irq1_int_force = value & 0xFFF
+            self.check_interrupts()
 
-            else:
-                super().write_uint32(offset, value)
+        else:
+            super().write_uint32(offset, value)
 
     def pin_values_changed(self, value: int, first_pin: int, count: int) -> None:
         # TODO: wrapping after pin 31
@@ -1034,40 +1040,33 @@ class RPPIO(BasePeripheral):
                     gpio[gpio_index].check_for_updates()
 
     def step(self) -> None:
-        with self._lock:
-            for machine in self.machines:
-                machine.step()
-            self.check_changed_pins()
+        for machine in self.machines:
+            machine.step()
+        self.check_changed_pins()
 
-    def run(self) -> None:
-        # NOTE: upstream rp2040js uses `setTimeout(() => this.run(), 0)` here to yield back to
-        # the single-threaded JS event loop every 1000 steps, so that external stop() calls
-        # (which arrive via other event handlers) get a chance to run. Python has no equivalent
-        # implicit event loop, so this uses a real background thread (threading.Timer) to get
-        # the same "keep making progress without blocking the caller" effect. Unlike the JS
-        # version this introduces genuine concurrency: self.stopped and self.instructions are
-        # now touched from a worker thread as well as the caller's thread.
-        #
-        # The state that actually matters for correctness (waiting/pc/irq/... on self and each
-        # StateMachine) is guarded by self._lock (step() and write_uint32() both take it) - see
-        # __init__'s comment on that field for the race this fixed (a real, reproduced CI flake).
-        # self.stopped itself is deliberately left unguarded: it's a single bool read/written
-        # without a compound invariant across other fields, so the only possible races are "one
-        # extra 1000-step batch runs after stop() was requested" or "the background thread takes
-        # one more tick to notice a pending write_uint32(CTRL, 0)" - benign staleness, not
-        # corruption, so it doesn't need the same lock as the actual simulated state.
+    def _step_batch(self) -> None:
         i = 0
         while i < 1000 and not self.stopped:
             self.step()
             i += 1
-        if not self.stopped:
-            self._run_timer = threading.Timer(0, self.run)
-            self._run_timer.start()
+
+    async def run(self) -> None:
+        # Continuation of the first batch write_uint32()'s CTRL branch already ran synchronously -
+        # this only exists to keep making progress past that first 1000 steps without blocking
+        # whatever's driving Simulator.execute() (the only thing that ever schedules this, see
+        # __init__'s _run_task comment). Upstream rp2040js uses `setTimeout(() => this.run(), 0)`
+        # for the same reason, to yield back to the single-threaded JS event loop every 1000 steps
+        # so external stop() calls get a chance to run - `await asyncio.sleep(0)` is the direct
+        # analogue here, on Simulator's own engine-room loop rather than JS's single process-wide
+        # one.
+        while not self.stopped:
+            await asyncio.sleep(0)
+            self._step_batch()
 
     def stop(self) -> None:
         for machine in self.machines:
             machine.enabled = False
         self.stopped = True
-        if self._run_timer:
-            self._run_timer.cancel()
-            self._run_timer = None
+        # No task cancellation needed - run() notices self.stopped on its next iteration, same
+        # "benign staleness, not corruption" tradeoff this always made (one extra scheduled batch
+        # may still run).

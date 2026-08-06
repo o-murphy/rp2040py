@@ -168,7 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     mcu.uart[0].on_byte = _on_byte
 
     mcu.core.pc = 0x10000000
-    simulator.execute()
+    simulator.start_execution()
     # gdb_server.close() as the cleanup hook: its accept thread is deliberately non-daemon (see
     # its own docstring), so a plain sys.exit() below would otherwise hang forever joining it.
     simulator.wait_for_shutdown(cleanup=gdb_server.close)
@@ -284,7 +284,10 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
         repl = StdioInteractiveRepl(
-            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+            cdc,
+            device.simulator,
+            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
+            on_quit=shutdown.request,
         )
         repl.start()
         cleanup.callback(repl.stop)
@@ -341,7 +344,10 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
         repl = StdioInteractiveRepl(
-            cdc, on_data=_make_expect_text_watcher(args.expect_text, shutdown), on_quit=shutdown.request
+            cdc,
+            device.simulator,
+            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
+            on_quit=shutdown.request,
         )
         repl.start()
         cleanup.callback(repl.stop)

@@ -216,11 +216,13 @@ class _FakeKalumaDevice:
 
 class _FakeStdioInteractiveRepl:
     """Stands in for StdioInteractiveRepl - _cmd_kaluma has no non-interactive escape hatch (no
-    -c/-m/<filename> like _cmd_micropython), so the real class (raw termios, a stdin-reading
-    thread, wait_for_shutdown's loop) would otherwise block these tests."""
+    -c/-m/<filename> like _cmd_micropython), so the real class (raw termios, an add_reader()
+    callback on the engine-room loop, wait_for_shutdown's loop) would otherwise block these
+    tests."""
 
-    def __init__(self, cdc, on_data=None, on_quit=None):
+    def __init__(self, cdc, simulator, on_data=None, on_quit=None):
         self.cdc = cdc
+        self.simulator = simulator
 
     def start(self):
         pass

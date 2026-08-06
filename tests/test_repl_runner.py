@@ -53,23 +53,6 @@ def test_feed_safe_reraises_when_no_on_error_given():
         cdc.on_serial_data(b"x")
 
 
-def test_send_byte_blocking_waits_for_fifo_room(monkeypatch):
-    cdc = _FakeCdc(size=1)
-    cdc.tx_fifo.item_count = 1  # full
-    runner = InteractiveRepl(cdc, on_data=lambda data: None)
-
-    sleeps: list[float] = []
-
-    def _fake_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        cdc.tx_fifo.item_count = 0  # pretend the device drained it
-
-    monkeypatch.setattr("rp2040py.device.repl_runner.time.sleep", _fake_sleep)
-    runner._send_byte_blocking(ord("a"))
-    assert sleeps
-    assert bytes(cdc.sent) == b"a"
-
-
 def test_queue_and_pump_paces_by_free_space():
     cdc = _FakeCdc(size=4)
     runner = InteractiveRepl(cdc, on_data=lambda data: None)
@@ -91,13 +74,15 @@ def test_interactive_repl_feed_forwards_to_on_data():
     assert received == [b"hello"]
 
 
-def test_interactive_repl_send_paces_via_blocking_backpressure(monkeypatch):
+def test_interactive_repl_send_queues_and_paces_via_pump():
     cdc = _FakeCdc(size=2)
     runner = InteractiveRepl(cdc, on_data=lambda data: None)
 
-    def _fake_sleep(seconds: float) -> None:
-        cdc.tx_fifo.item_count = 0
+    # Only 2 bytes' worth of room - send() queues all 4 but can only pump what fits right now,
+    # same "call pump() again while it returns False" contract as pump() itself.
+    assert runner.send(b"abcd") is False
+    assert bytes(cdc.sent) == b"ab"
 
-    monkeypatch.setattr("rp2040py.device.repl_runner.time.sleep", _fake_sleep)
-    runner.send(b"abcd")
+    cdc.tx_fifo.item_count = 0  # the "device" consumes what's in flight
+    assert runner.pump() is True
     assert bytes(cdc.sent) == b"abcd"

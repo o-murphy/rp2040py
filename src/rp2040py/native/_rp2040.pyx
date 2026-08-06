@@ -1,4 +1,4 @@
-# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True, freethreading_compatible=True
 """Real, fully-typed Cython port of rp2040py._rp2040.RP2040 - see that file for the semantic
 reference and inline commentary.
 

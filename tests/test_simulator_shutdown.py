@@ -1,7 +1,7 @@
 """Integration coverage for Simulator's shutdown coordinator: ShutdownRequest +
 Simulator.wait_for_shutdown() + a real GDBTCPServer together - the actual failure mode this
 exists to prevent is a plain sys.exit() hanging forever on GDBTCPServer's deliberately non-daemon
-accept thread (see its own docstring), which unit tests for each piece in isolation wouldn't
+loop thread (see its own docstring), which unit tests for each piece in isolation wouldn't
 catch."""
 
 import pytest
@@ -41,7 +41,7 @@ def test_wait_for_shutdown_exits_via_shutdown_request_and_runs_cleanup():
 
 def test_wait_for_shutdown_closes_a_real_gdb_server_instead_of_hanging():
     """The actual regression this whole coordinator exists to prevent: a real GDBTCPServer's
-    accept thread is non-daemon, so without closing it first, sys.exit() below would hang the
+    own loop thread is non-daemon, so without closing it first, sys.exit() below would hang the
     test (and the real CLI) forever instead of returning."""
     simulator = Simulator()
     gdb_server = GDBTCPServer(_FakeTarget(), port=0)
@@ -51,6 +51,6 @@ def test_wait_for_shutdown_closes_a_real_gdb_server_instead_of_hanging():
         with pytest.raises(SystemExit) as exc_info:
             simulator.wait_for_shutdown(cleanup=gdb_server.close)
         assert exc_info.value.code == 0
-        assert not gdb_server._accept_thread.is_alive()
+        assert not gdb_server._loop_thread.is_alive()
     finally:
         gdb_server.close()  # no-op if the test body already closed it - idempotent by design

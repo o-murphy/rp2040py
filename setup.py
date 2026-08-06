@@ -35,8 +35,44 @@ from pathlib import Path
 
 from setuptools import Extension, setup
 
+# Cross-compiled target detection.
+# NOTE: platform.system() reports the *host* OS under cross-compilation
+# (pyodide-build, Android, and iOS builds all run setup.py with the host
+# interpreter and only patch sysconfig to describe the target), so it cannot
+# be used to detect these targets. sysconfig.get_platform() is the correct
+# signal, since the cross-build tooling overrides the host's sysconfig data
+# to reflect the target platform.
+_SYSCONFIG_PLATFORM = sysconfig.get_platform()
+IS_EMSCRIPTEN = "emscripten" in _SYSCONFIG_PLATFORM
+IS_ANDROID = "android" in _SYSCONFIG_PLATFORM
+IS_IOS = "ios" in _SYSCONFIG_PLATFORM
+
+# Stable ABI target: build once per platform, compatible with Python 3.11+.
+# Disabled when:
+#   - coverage tracing is requested (CYTHON_TRACE uses internal CPython APIs)
+#   - building on free-threaded Python (Py_GIL_DISABLED conflicts with Py_LIMITED_API)
+#   - targeting Emscripten: each Pyodide release pins one exact
+#     CPython+Emscripten build with no forward-ABI guarantee between
+#     versions, and wheel resolution there requires an exact cp3XX match
+#     rather than abi3.
+#   - targeting Android: extensions must link libpythonX.Y.so explicitly,
+#     because Bionic's dlopen requires every dependency to resolve to a
+#     literal file at load time (no lazy/implicit symbol resolution from the
+#     host process the way glibc allows for stable-ABI extensions). This
+#     hardcodes a runtime dependency on one specific CPython point release
+#     regardless of the abi3 tag on the wheel, so stable ABI buys nothing
+#     here and only hides a real version pin (confirmed empirically: a
+#     cp311-abi3-android wheel built against the cp313 Android crossenv
+#     failed to import on a 3.14 runtime with
+#     "library libpython3.13.so not found").
+#   - targeting iOS: same rationale as Android, app runtimes typically embed
+#     one specific CPython build.
 _ABI3_FLOOR = (3, 11)
 _ABI3_HEX = "0x030B0000"
+_GIL_DISABLED = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+USE_LIMITED_API = (
+    sys.version_info >= _ABI3_FLOOR and not _GIL_DISABLED and not IS_EMSCRIPTEN and not IS_ANDROID and not IS_IOS
+)
 
 # Relative to setup.py's own directory, not Path(__file__).parent (absolute) - setuptools
 # rejects absolute paths in Extension sources ("setup() arguments must *always* be /-separated
@@ -55,6 +91,10 @@ _NATIVE_DIR = Path("src/rp2040py/native")
 # the shipped wheel, only symbols the (much larger, unstripped) sdist->local rebuild path needs.
 _DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
 
+# Platform-specific compiler flags
+is_msvc = platform.system() == "Windows"
+is_macos = platform.system() == "Darwin"
+
 # -O3, not -O0: an earlier version of this project's sibling (py_ballisticcalc.exts/setup.py, the
 # pattern this file mirrors) shipped exactly this list with -O0 instead - debug flags left in from
 # a troubleshooting session and never reverted, silently building its C extensions fully
@@ -63,10 +103,10 @@ _DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
 # isolated Cython-vs-boxing win this module depends on (see docs/BACKLOG.md) wants every
 # optimization pass available, and this is a small, self-contained extension where -O3's usual
 # risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
-if platform.system() == "Windows":
+if is_msvc:
     _EXTRA_COMPILE_ARGS = ["/O2", "/W3"]
     _EXTRA_LINK_ARGS: list[str] = []
-elif platform.system() == "Darwin":
+elif is_macos:
     _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
     # No -Wl,-strip-all here: that's GNU ld syntax (see the Linux branch below) - Apple's linker
     # rejects it outright ("ld: unknown options: -strip-all"), which broke every macOS wheel build
@@ -77,6 +117,15 @@ elif platform.system() == "Darwin":
     # have (confirmed no speed difference on Linux), not worth a second unverified platform-specific
     # guess.
     _EXTRA_LINK_ARGS = []
+elif IS_EMSCRIPTEN:
+    # pyodide-build already sets CC=emcc/CXX=em++ and its own CFLAGS/CXXFLAGS/
+    # LDFLAGS (typically -Oz for size) before invoking setup.py -- don't
+    # override CC/CXX here, and keep flags minimal so we don't fight or
+    # duplicate what the cross-build environment already applies.
+    # "-Wl,-strip-all" is dropped: em++'s linker wrapper does not reliably
+    # support arbitrary native-ld passthrough flags for stripping.
+    _EXTRA_COMPILE_ARGS = ["-std=c99"]
+    _EXTRA_LINK_ARGS = []
 else:
     _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
     # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
@@ -85,14 +134,6 @@ else:
     # syntax specifically - verified Linux-only, see the Darwin branch above for why it isn't
     # shared with macOS.
     _EXTRA_LINK_ARGS = [] if _DISABLE_STRIP else ["-Wl,-strip-all"]
-
-
-def _use_abi3() -> bool:
-    if sys.version_info < _ABI3_FLOOR:
-        return False
-    # Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible (PEP 703) - free-threaded
-    # builds always get a normal, version-specific extension instead.
-    return not sysconfig.get_config_var("Py_GIL_DISABLED")
 
 
 def _build_ext_modules() -> list[Extension]:
@@ -113,13 +154,12 @@ def _build_ext_modules() -> list[Extension]:
     except ImportError:
         return []
 
-    use_abi3 = _use_abi3()
     ext_modules = [
         Extension(
             f"rp2040py.native.{path.stem}",
             [str(path)],
-            py_limited_api=use_abi3,
-            define_macros=[("Py_LIMITED_API", _ABI3_HEX)] if use_abi3 else [],
+            py_limited_api=USE_LIMITED_API,
+            define_macros=[("Py_LIMITED_API", _ABI3_HEX)] if USE_LIMITED_API else [],
             extra_compile_args=_EXTRA_COMPILE_ARGS,
             extra_link_args=_EXTRA_LINK_ARGS,
             # If the compiler/toolchain is genuinely missing, build_ext skips this extension
@@ -137,7 +177,7 @@ def _build_ext_modules() -> list[Extension]:
 
 
 cmdclass = {}
-if _use_abi3():
+if USE_LIMITED_API:
     from wheel.bdist_wheel import bdist_wheel
 
     # py_limited_api=True on the Extension above tells Cython/the compiler to build against the

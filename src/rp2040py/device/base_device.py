@@ -22,7 +22,7 @@ def connect_blocking(cdc: USBCDC, simulator: Simulator, mcu: RP2040, timeout: "f
     connected = threading.Event()
     cdc.on_device_connected = connected.set
     mcu.core.pc = FLASH_START_ADDRESS
-    threading.Thread(target=simulator.execute, daemon=True).start()
+    simulator.start_execution()
     if not connected.wait(timeout):
         raise TimeoutError(f"device did not enumerate over USB within {timeout}s")
 
