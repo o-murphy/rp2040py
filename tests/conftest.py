@@ -1,12 +1,12 @@
 import gc
-import struct
 import threading
 
 import pytest
+from utils.is32bit import IS32BIT
 
 from rp2040py.rp2040 import RP2040
 
-rp2040_semaphore = threading.Semaphore(4 if struct.calcsize("P") * 8 <= 32 else 8)
+rp2040_semaphore = threading.Semaphore(4 if IS32BIT else 8)
 
 
 @pytest.fixture

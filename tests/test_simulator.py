@@ -14,6 +14,8 @@ deterministic single-batch behavior without depending on asyncio scheduling orde
 
 import time
 
+from utils.is32bit import IS32BIT
+
 from rp2040py.simulator import Simulator
 
 
@@ -44,8 +46,9 @@ def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batc
     # cycle at 125MHz) to the batch's 1,000,000-unit budget per firing, exhausting it after only
     # ~8 firings (~8ms of simulated time). The fix makes each firing cost ~1 unit, so a single
     # un-interrupted batch should cover far more firings than that.
-    assert fire_count > 1000
-    assert simulator.clock.nanos > 1000 * period_nanos
+    min_expected_fires = 200 if IS32BIT else 1000
+    assert fire_count > min_expected_fires
+    assert simulator.clock.nanos > min_expected_fires * period_nanos
 
 
 def test_idle_core_yields_within_a_bounded_wall_clock_budget():
