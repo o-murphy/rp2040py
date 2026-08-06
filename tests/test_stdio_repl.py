@@ -52,8 +52,43 @@ def pty_stdin(monkeypatch):
     os.close(master_fd)
 
 
+# c_cc (tcgetattr()'s 7th element) is NCCS slots long (32 on Linux/macOS), but only these are ever
+# assigned a meaning - everything past the highest one (VEOL2) is a reserved/padding slot the
+# kernel makes no round-trip guarantee about. Confirmed flaky specifically inside cibuildwheel's
+# containerized Linux runners: two back-to-back tcgetattr() calls on the same untouched pty
+# differed in those tail slots (looked like uninitialized memory, not real terminal state) - not
+# reproducible locally, only under that container. Comparing the whole raw list turned that kernel
+# implementation detail into a test failure; naming just the real control chars avoids it.
+_NAMED_CC_INDICES = sorted(
+    {
+        getattr(termios, name)
+        for name in (
+            "VINTR",
+            "VQUIT",
+            "VERASE",
+            "VKILL",
+            "VEOF",
+            "VTIME",
+            "VMIN",
+            "VSWTC",
+            "VSTART",
+            "VSTOP",
+            "VSUSP",
+            "VEOL",
+            "VREPRINT",
+            "VDISCARD",
+            "VWERASE",
+            "VLNEXT",
+            "VEOL2",
+        )
+        if hasattr(termios, name)
+    }
+)
+
+
 def _stable(attrs):
-    """Masks PENDIN out of a termios snapshot before comparing two of them for equality. PENDIN
+    """Masks PENDIN out of a termios snapshot before comparing two of them for equality, and
+    narrows c_cc down to its named control-char slots (see _NAMED_CC_INDICES above). PENDIN
     ("retype pending input at next read") is kernel-managed bookkeeping, not application state -
     tcsetattr() restoring every field this code actually controls doesn't guarantee PENDIN round-
     trips identically, and it has no bearing on whether the terminal is actually back in
@@ -61,6 +96,7 @@ def _stable(attrs):
     different bit position per platform, hence getattr() rather than a hardcoded mask."""
     normalized = list(attrs)
     normalized[3] &= ~getattr(termios, "PENDIN", 0)
+    normalized[6] = [normalized[6][i] for i in _NAMED_CC_INDICES if i < len(normalized[6])]
     return normalized
 
 
