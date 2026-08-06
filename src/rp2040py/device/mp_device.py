@@ -33,7 +33,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TypeVar
 
 from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
-from rp2040py.device.load_flash import load_circuitpython_flash_image, load_micropython_flash_image
+from rp2040py.device.load_flash import dump_circuitpython_flash_image, dump_micropython_flash_image, load_circuitpython_flash_image, load_micropython_flash_image
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.utils.logging import LogLevel
@@ -242,3 +242,11 @@ class MicroPythonDevice(BaseDevice):
 
     async def __aexit__(self, *exc_info: object) -> None:
         self.stop()  # synchronous and quick - no need for an async variant
+
+    def dump_flash_image(self, filename: str) -> None:
+        """Dump the device's flash filesystem image (LittleFS for MicroPython, FAT12 for CircuitPython)
+        to a local file."""
+        if self.circuitpython:
+            dump_circuitpython_flash_image(filename, self.mcu)
+        else:
+            dump_micropython_flash_image(filename, self.mcu)
