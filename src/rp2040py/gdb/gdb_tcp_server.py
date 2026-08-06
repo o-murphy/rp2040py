@@ -52,20 +52,49 @@ class GDBTCPServer(GDBServer):
         """Stops the listening server and joins its loop thread, so the process can exit normally
         afterward (a plain `sys.exit()`/return would otherwise hang forever joining that
         non-daemon thread - see its own NOTE). Idempotent - safe to call more than once (e.g. once
-        from the CLI's normal shutdown path, once from a `finally`)."""
+        from the CLI's normal shutdown path, once from a `finally`).
+
+        Stopping the loop and joining the thread happen unconditionally, even if `_aclose()`
+        itself times out or raises - confirmed the hard way (a real ~6-hour CI hang, macOS +
+        free-threaded Python): `_aclose()`'s own `await self._server.wait_closed()`/
+        `gather(*self._connection_tasks)` can stall past `timeout` on a loaded/unusual runtime
+        (observed alongside signs of a leftover event loop from an earlier test being finalized
+        late), and `.result(timeout)` raising `TimeoutError` used to skip `loop.stop()`/`join()`
+        entirely - leaving this **non-daemon** thread (see its own NOTE on why it isn't a daemon)
+        running forever, which blocks the whole process from ever exiting. Whatever state
+        `_aclose()` left half-done at that point (an unclosed socket, an uncancelled task) gets
+        reclaimed when the process actually exits either way, so abandoning a stuck `_aclose()` in
+        favor of guaranteed forward progress here is strictly better than hanging."""
         if not self._loop_thread.is_alive():
             return
-        asyncio.run_coroutine_threadsafe(self._aclose(), self._loop).result(timeout)
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._loop_thread.join(timeout=timeout)
+        try:
+            asyncio.run_coroutine_threadsafe(self._aclose(), self._loop).result(timeout)
+        except Exception:  # noqa: BLE001, S110 - deliberately unconditional, see docstring above
+            pass
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=timeout)
 
     async def _aclose(self) -> None:
+        # Each stage gets its own bounded slice of close()'s overall timeout instead of one
+        # unbounded await each - a single stuck connection task (or a slow wait_closed() on an
+        # unusual platform) used to be able to consume the *entire* budget on its own, leaving
+        # nothing for the other stage and needlessly stalling close() right up to its own
+        # TimeoutError even though giving up early here (see close()'s own docstring for what
+        # happens after) would have recovered just as well.
         self._server.close()
-        await self._server.wait_closed()
+        try:
+            await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
+        except TimeoutError:
+            pass
         for task in self._connection_tasks:
             task.cancel()
         if self._connection_tasks:
-            await asyncio.gather(*self._connection_tasks, return_exceptions=True)
+            try:
+                pending = asyncio.gather(*self._connection_tasks, return_exceptions=True)
+                await asyncio.wait_for(pending, timeout=2.0)
+            except TimeoutError:
+                pass
 
     async def _handle_connection(self, reader: "asyncio.StreamReader", writer: "asyncio.StreamWriter") -> None:
         self.info("GDB connected")

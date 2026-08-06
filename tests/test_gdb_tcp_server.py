@@ -1,5 +1,7 @@
+import asyncio
 import socket
 import struct
+import time
 
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.gdb.gdb_utils import decode_hex_buf, decode_hex_uint32, gdb_message
@@ -51,6 +53,32 @@ def test_close_actually_lets_a_plain_process_exit_join_cleanly():
     server = GDBTCPServer(_FakeTarget(), port=0)
     thread = server._loop_thread
     server.close()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+
+def test_close_does_not_hang_forever_if_aclose_stalls():
+    """Reproduces the real ~6-hour CI hang this fix closes (macOS + free-threaded Python build):
+    `_aclose()` timing out used to make `.result(timeout)` raise inside close(), which skipped
+    `loop.stop()`/`_loop_thread.join()` entirely - leaving this deliberately **non-daemon** thread
+    (see GDBTCPServer.__init__'s own NOTE on why) running forever, blocking the whole process from
+    ever exiting. close() must still stop the loop and join the thread even when `_aclose()`
+    itself never finishes."""
+    server = GDBTCPServer(_FakeTarget(), port=0)
+    thread = server._loop_thread
+
+    async def _stuck_aclose() -> None:
+        await asyncio.sleep(10)
+
+    server._aclose = _stuck_aclose
+
+    t0 = time.monotonic()
+    server.close(timeout=0.3)
+    elapsed = time.monotonic() - t0
+
+    # Bounded by close()'s own timeout (0.3s for _aclose() + 0.3s for the join), not _aclose()'s
+    # 10s sleep - the whole point of this test.
+    assert elapsed < 3.0
     thread.join(timeout=2.0)
     assert not thread.is_alive()
 
