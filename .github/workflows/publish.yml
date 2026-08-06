@@ -153,7 +153,7 @@ jobs:
         shell: bash
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7c
+        uses: actions/upload-artifact@v7
         with:
           name: dist-wheels-${{ matrix.artifact_key }}
           path: ./wheelhouse
