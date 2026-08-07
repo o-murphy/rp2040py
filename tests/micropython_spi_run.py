@@ -81,7 +81,7 @@ def main() -> None:
     mcu.spi[0].on_transmit = _on_transmit
 
     mcu.core.pc = 0x10000000
-    simulator.execute()  # FIXME: Value of type "Coroutine[Any, Any, None]" must be used  [unused-coroutine]
+    simulator.execute()  # TODO: mypy: Value of type "Coroutine[Any, Any, None]" must be used  [unused-coroutine]
 
     # simulator.execute() only runs the first burst synchronously and then
     # reschedules itself via threading.Timer, so main() would otherwise return

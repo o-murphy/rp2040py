@@ -49,6 +49,7 @@ from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
+from rp2040py.device.base_device import BaseDevice
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
     CIRCUITPYTHON_FS_BLOCKCOUNT,
@@ -111,6 +112,15 @@ def _load_image(image_name: PathLike, rp2040: RP2040) -> None:
     else:
         _logger.error("Unsupported file type: %s", extension)
         sys.exit(1)
+
+
+def _mk_dump_fs_callback(filename: PathLike | None, device: BaseDevice) -> Callable[[], None]:
+    def dump_fs_callback() -> None:
+        if filename is not None:
+            _logger.info("Dumping flash image to: %s", filename)
+            device.dump_flash_image(filename)
+
+    return dump_fs_callback
 
 
 def _resolve_bootrom_words(source: "str | None") -> "list[int]":
@@ -253,6 +263,8 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     with contextlib.ExitStack() as cleanup:
         cleanup.callback(device.stop)
 
+        cleanup.callback(_mk_dump_fs_callback(args.dump_fs, device))
+
         gdb_server: GDBTCPServer | None = None
         if args.gdb:
             gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -333,6 +345,8 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
     with contextlib.ExitStack() as cleanup:
         cleanup.callback(device.stop)
 
+        cleanup.callback(_mk_dump_fs_callback(args.dump_fs, device))
+
         gdb_server: GDBTCPServer | None = None
         if args.gdb:
             gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
@@ -362,10 +376,6 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         # banner, confirmed empirically).
 
         device.simulator.wait_for_shutdown()
-
-        if args.dump_fs is not None:
-            _logger.info("Dumping filesystem to: %s", args.dump_fs)
-            device.dump_flash_image(args.dump_fs)
 
 
 def _interpreter_label() -> str:

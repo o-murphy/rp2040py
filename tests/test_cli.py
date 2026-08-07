@@ -16,6 +16,7 @@ def _mp_args(**overrides):
         "circuitpython": False,
         "littlefs": "littlefs.img",
         "fat12": "fat12.img",
+        "dump_fs": None,
         # -c mode, so _cmd_micropython exits right after exec() instead of dropping into an
         # interactive REPL that would block the test.
         "command": "pass",

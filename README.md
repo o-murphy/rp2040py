@@ -12,6 +12,26 @@ Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](
 
 See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
 
+## Table of Contents
+
+- [rp2040py](#rp2040py)
+  - [Table of Contents](#table-of-contents)
+  - [Installation](#installation)
+    - [Environments without compiled-extension support (Pythonista, other iOS apps)](#environments-without-compiled-extension-support-pythonista-other-ios-apps)
+  - [Run the demo project](#run-the-demo-project)
+    - [Native code](#native-code)
+    - [MicroPython code](#micropython-code)
+      - [Filesystem support](#filesystem-support)
+    - [CircuitPython code](#circuitpython-code)
+      - [Filesystem support](#filesystem-support-1)
+    - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
+    - [Bootrom revisions](#bootrom-revisions)
+    - [Library API](#library-api)
+  - [Performance](#performance)
+  - [Used by](#used-by)
+  - [Learn more](#learn-more)
+  - [License](#license)
+
 ## Installation
 
 ```sh
@@ -64,12 +84,12 @@ The commands below assume `rp2040py` is installed (`pip install rp2040py` / `uv 
 instead, each maps 1:1 onto `uv run python demo/*.py` (`demo/*.py` are thin wrappers around the
 same [src/rp2040py/cli](src/rp2040py/cli) code):
 
-| `rp2040py` subcommand | Checkout equivalent |
-|---|---|
-| `rp2040py run ...` | `uv run python demo/emulator_run.py ...` |
+| `rp2040py` subcommand      | Checkout equivalent                         |
+| -------------------------- | ------------------------------------------- |
+| `rp2040py run ...`         | `uv run python demo/emulator_run.py ...`    |
 | `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
-| `rp2040py kaluma ...` | `uv run python demo/kaluma_run.py ...` |
-| `rp2040py bench ...` | `uv run python demo/benchmark.py ...` |
+| `rp2040py kaluma ...`      | `uv run python demo/kaluma_run.py ...`      |
+| `rp2040py bench ...`       | `uv run python demo/benchmark.py ...`       |
 
 ### Native code
 
@@ -218,6 +238,10 @@ MicroPython/CircuitPython's.
 The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
 SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
 hardware uses to erase/program flash.
+
+<!-- TODO: explain how to use --dump-fs command to create an compatible to --image target littlefs/fatfs directly from an emulator -->
+<!-- > [!TIP]
+>  -->
 
 ### CircuitPython code
 
