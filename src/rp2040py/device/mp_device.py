@@ -30,6 +30,7 @@ that drives `execute_instruction()`'s own USBCDC FIFO access - by construction, 
 import asyncio
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from os import PathLike
 from typing import TypeVar
 
 from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
@@ -45,10 +46,7 @@ from rp2040py.utils.logging import LogLevel
 
 _T = TypeVar("_T")
 
-__all__ = (
-    "DEFAULT_TIMEOUT",
-    "MicroPythonDevice",
-)
+__all__ = ("MicroPythonDevice",)
 
 
 def _result(future: "Future[_T]", timeout: "float | None") -> _T:
@@ -80,10 +78,10 @@ class MicroPythonDevice(BaseDevice):
 
     def __init__(
         self,
-        image: str,
+        image: PathLike,
         *,
-        littlefs: "str | None" = None,
-        fat12: "str | None" = None,
+        littlefs: "PathLike | None" = None,
+        fat12: "PathLike | None" = None,
         circuitpython: bool = False,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
@@ -225,15 +223,17 @@ class MicroPythonDevice(BaseDevice):
         """asyncio version of `exec_async()` (see `exec()` re: `timeout` covering queue time too)."""
         return await _await(self.exec_async(code, timeout), timeout)
 
-    def exec_file_async(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[tuple[bytes, bytes]]":
+    def exec_file_async(
+        self, path: PathLike, timeout: "float | None" = DEFAULT_TIMEOUT
+    ) -> "Future[tuple[bytes, bytes]]":
         with open(path) as f:
             return self.exec_async(f.read(), timeout=timeout)
 
-    def exec_file(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
+    def exec_file(self, path: PathLike, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """Blocking version of `exec_file_async()`."""
         return _result(self.exec_file_async(path, timeout=timeout), timeout)
 
-    async def aexec_file(self, path: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
+    async def aexec_file(self, path: PathLike, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """asyncio version of `exec_file_async()`."""
         return await _await(self.exec_file_async(path, timeout=timeout), timeout)
 
@@ -248,7 +248,7 @@ class MicroPythonDevice(BaseDevice):
     async def __aexit__(self, *exc_info: object) -> None:
         self.stop()  # synchronous and quick - no need for an async variant
 
-    def dump_flash_image(self, filename: str) -> None:
+    def dump_flash_image(self, filename: PathLike) -> None:
         """Dump the device's flash filesystem image (LittleFS for MicroPython, FAT12 for CircuitPython)
         to a local file."""
         if self.circuitpython:

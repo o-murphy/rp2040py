@@ -107,7 +107,7 @@ def _resolve_version(spec: FirmwareSpec, tag: str) -> str:
     return tag
 
 
-def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
+def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "Path | None":
     """
     Args:
         spec: which firmware to resolve (MICROPYTHON/CIRCUITPYTHON/KALUMA/BOOTROM).
@@ -118,8 +118,8 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
 
     local_image = Path(image)
     if local_image.exists():
-        _logger.info("Found local image: %s", local_image)
-        return str(local_image)
+        _logger.info("Found local image: %s", str(local_image))
+        return local_image
 
     version = _resolve_version(spec, image)
     filename = spec.filename_template.format(version=version)
@@ -127,8 +127,8 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
     cached_path = _cache_dir() / filename
 
     if cached_path.exists():
-        _logger.info("Found local image: %s", cached_path)
-        return str(cached_path)
+        _logger.info("Found local image: %s", str(cached_path))
+        return cached_path
 
     from urllib.error import HTTPError
     from urllib.request import urlopen
@@ -147,5 +147,5 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None) -> "str | None":
         # already "exists()" and hand back a truncated, corrupt image instead of re-downloading.
         cached_path.unlink(missing_ok=True)
         return None
-    _logger.info("Download complete: file saved to: %s", cached_path)
-    return str(cached_path)
+    _logger.info("Download complete: file saved to: %s", str(cached_path))
+    return cached_path

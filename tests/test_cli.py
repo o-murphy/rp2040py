@@ -171,6 +171,7 @@ def _kaluma_args(**overrides):
         "gdb_port": 3333,
         "bootrom": None,
         "littlefs": "kaluma_littlefs.img",
+        "dump_fs": None,
         "filename": None,
         "log_level": None,
     }

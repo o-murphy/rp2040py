@@ -5,6 +5,7 @@ raw-REPL `exec()` API, ...) on top.
 """
 
 import threading
+from os import PathLike
 
 from rp2040py.device.load_flash import load_uf2
 from rp2040py.memory_map import FLASH_START_ADDRESS
@@ -32,7 +33,7 @@ class BaseDevice:
     call `start()`/`stop()` directly for more control over the lifecycle."""
 
     def __init__(
-        self, image: str, *, bootrom_words: "list[int] | None" = None, log_level: LogLevel = LogLevel.ERROR
+        self, image: PathLike, *, bootrom_words: "list[int] | None" = None, log_level: LogLevel = LogLevel.ERROR
     ) -> None:
         self.simulator = Simulator()
         self.mcu: RP2040 = self.simulator.rp2040
@@ -66,3 +67,6 @@ class BaseDevice:
 
     def __exit__(self, *exc_info: object) -> None:
         self.stop()
+
+    def dump_flash_image(self, filename: PathLike) -> None:
+        raise NotImplementedError

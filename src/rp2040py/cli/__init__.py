@@ -40,6 +40,7 @@ import sys
 import time
 from collections.abc import Callable
 from importlib.metadata import version
+from os import PathLike
 from pathlib import Path
 from typing import Any
 
@@ -98,13 +99,13 @@ def _console_log_level(args: argparse.Namespace) -> LogLevel:
     return _CONSOLE_LOG_LEVEL[args.log_level] if args.log_level else LogLevel.ERROR
 
 
-def _load_image(image_name: str, rp2040: RP2040) -> None:
-    extension = image_name.rsplit(".", 1)[-1]
-    if extension == "hex":
+def _load_image(image_name: PathLike, rp2040: RP2040) -> None:
+    extension = Path(image_name).suffix
+    if extension == ".hex":
         _logger.info("Loading hex image: %s", image_name)
         with open(image_name) as f:
             load_hex(f.read(), rp2040.flash, 0x10000000)
-    elif extension == "uf2":
+    elif extension == ".uf2":
         _logger.info("Loading uf2 image: %s", image_name)
         load_uf2(image_name, rp2040)
     else:
@@ -126,8 +127,8 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
         _logger.error("Could not find bootrom: %s", source)
         sys.exit(1)
 
-    extension = path.rsplit(".", 1)[-1].lower()
-    if extension == "elf":
+    extension = path.suffix
+    if extension == ".elf":
         from elftools.elf.elffile import ELFFile
 
         _logger.info("Loading bootrom elf: %s", path)
@@ -362,6 +363,10 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
 
         device.simulator.wait_for_shutdown()
 
+        if args.dump_fs is not None:
+            _logger.info("Dumping filesystem to: %s", args.dump_fs)
+            device.dump_flash_image(args.dump_fs)
+
 
 def _interpreter_label() -> str:
     impl = sys.implementation.name
@@ -402,8 +407,8 @@ def _bench_synthetic(instruction_count: int, block_size: int, log_level: LogLeve
 
 
 def _bench_firmware(
-    image: str,
-    littlefs: str | None,
+    image: PathLike,
+    littlefs: PathLike | None,
     expect_text: str | None,
     timeout: float,
     bootrom: str | None,
@@ -544,6 +549,7 @@ _IMAGE_PATH_HELP = "local .hex/.uf2 image path"
 _BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the default (B1, bundled - no download)"
 _EXPECT_TEXT_HELP = "stop once this text appears on the device's serial console"
 _LITTLEFS_HELP = "optional littlefs.img to load"
+_DUMP_FS_HELP = "path to save filesystem state on exit (can be the same as --littlefs for persistence)"
 
 
 def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
@@ -559,6 +565,7 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "bootrom": {"help": _BOOTROM_HELP},
         "expect-text": {"help": _EXPECT_TEXT_HELP},
         "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
+        "dump-fs": {"type": Path, "help": _DUMP_FS_HELP},
     }
     shared = argparse.ArgumentParser(add_help=False)
     for name in names:
@@ -593,7 +600,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     mp_parser = subparsers.add_parser(
         "micropython",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs")],
         help="run a MicroPython/CircuitPython UF2 image",
     )
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
@@ -616,7 +623,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     kaluma_parser = subparsers.add_parser(
         "kaluma",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs")],
         help="run a Kaluma UF2 image (interactive REPL only)",
     )
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)

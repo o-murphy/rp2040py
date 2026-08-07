@@ -1,3 +1,4 @@
+from os import PathLike
 from pathlib import Path
 
 import pytest
@@ -80,13 +81,13 @@ def _isolated_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
 
-def _cache_path(filename: str) -> str:
+def _cache_path(filename: PathLike) -> str:
     """Where `retrieve()` would look for/write `filename` once resolved by tag, given the
     isolated `HOME` above - pre-creating a file here (rather than in the cwd) is what makes a test
     exercise the "already cached, don't re-download" path."""
     path = Path.home() / ".cache" / "rp2040py" / filename
     path.parent.mkdir(parents=True, exist_ok=True)
-    return str(path)
+    return path
 
 
 class _FakeResponse:
@@ -121,7 +122,7 @@ def _fake_urlopen(monkeypatch: pytest.MonkeyPatch, calls: list, data: bytes = b"
 
 @pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA, BOOTROM])
 def test_returns_existing_local_path_without_touching_the_network(spec, monkeypatch):
-    local = "my_image.uf2"
+    local = Path("my_image.uf2")
     with open(local, "wb") as f:
         f.write(b"fake uf2 contents")
 
