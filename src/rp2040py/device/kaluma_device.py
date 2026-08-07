@@ -6,7 +6,7 @@ only `start()`/`stop()`/`.cdc` (inherited from `BaseDevice`).
 """
 
 from rp2040py.device.base_device import BaseDevice
-from rp2040py.device.load_flash import  dump_kaluma_flash_image, load_kaluma_flash_image, load_kaluma_program
+from rp2040py.device.load_flash import dump_kaluma_flash_image, load_kaluma_flash_image, load_kaluma_program
 from rp2040py.utils.logging import LogLevel
 
 __all__ = ("KalumaDevice",)

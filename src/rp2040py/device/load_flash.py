@@ -99,7 +99,7 @@ def _load_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_siz
     check_flash_image_size(filename, block_size, block_count)
     flash_end = flash_start + block_size * block_count
     with open(filename, "rb") as f:
-        rp2040.flash[flash_start : flash_end] = f.read()
+        rp2040.flash[flash_start:flash_end] = f.read()
 
 
 def load_micropython_flash_image(filename: str, rp2040: RP2040) -> None:
@@ -143,8 +143,8 @@ def load_uf2(filename: str, rp2040: RP2040) -> None:
 
 def _dump_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_size: int, block_count: int) -> None:
     flash_end = flash_start + block_size * block_count
-    with open(filename, 'wb') as f:
-        f.write(rp2040.flash[flash_start : flash_end])
+    with open(filename, "wb") as f:
+        f.write(rp2040.flash[flash_start:flash_end])
 
 
 def dump_micropython_flash_image(filename: str, rp2040: RP2040) -> None:
