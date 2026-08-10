@@ -13,21 +13,14 @@ socket://127.0.0.1:<port>` talks directly to `SocketInteractiveRepl` below with 
 
 import asyncio
 import contextlib
-import signal
 import socket
-import threading
 from collections.abc import Callable
-from typing import Any
 
-from rp2040py.device.repl_runner import InteractiveRepl
+from rp2040py.cli.process_repl import ProcessInteractiveRepl
 from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
 
 __all__ = ("SocketInteractiveRepl",)
-
-# Matches stdio_repl.py's own _PUMP_PERIOD_NANOS - 1ms of simulated time between repeat pump()
-# attempts while the tx_fifo is still full.
-_PUMP_PERIOD_NANOS = 1_000_000
 
 # Upper bound on how long _handle_connection() waits for a still-occupied slot's previous
 # connection to actually finish tearing down before concluding it's genuinely still active - see
@@ -38,7 +31,7 @@ _PUMP_PERIOD_NANOS = 1_000_000
 _STALE_CONNECTION_GRACE_SECONDS = 1.0
 
 
-class SocketInteractiveRepl(InteractiveRepl):
+class SocketInteractiveRepl(ProcessInteractiveRepl):
     """Headless bridge between a device's USB-CDC console and one TCP client at a time - a raw
     byte pipe in both directions, with no framing or escape sequences of its own. Unlike
     `StdioInteractiveRepl`'s Ctrl+X, no in-band byte here can be reserved to mean "quit": a real
@@ -47,16 +40,11 @@ class SocketInteractiveRepl(InteractiveRepl):
     protocol. Quit via Ctrl+C/SIGTERM/`--expect-text` at the process level instead - see
     `cli/__init__.py`. Ctrl+C is free: `Simulator.wait_for_shutdown()`'s own polling loop already
     turns a plain `KeyboardInterrupt` into a clean shutdown, since nothing here ever puts the real
-    terminal in raw mode the way `StdioInteractiveRepl` does. SIGTERM is not free, though - and
-    silently doing nothing about it would be a real correctness gap for `--tcp-port` specifically,
-    a headless mode whose whole point is running unattended (a background service, CI, a plain
-    `docker stop`) where SIGTERM, not Ctrl+C, is the *expected* way to ask it to stop: Python's
-    default disposition for SIGTERM is immediate OS-level process termination, bypassing every
-    `finally`/context-manager exit in the interpreter (confirmed empirically, see CHANGELOG.md) -
-    including `--dump-fs`'s own cleanup callback. `on_quit`, mirroring `StdioInteractiveRepl`'s own
-    constructor, is what `start()`/`stop()` install/restore an explicit `SIGTERM` handler around to
-    close that gap - called with `128 + signal.SIGTERM`, the same convention `StdioInteractiveRepl`
-    uses, whenever this instance owns the handler when the signal arrives.
+    terminal in raw mode the way `StdioInteractiveRepl` does. SIGTERM is handled explicitly by
+    `ProcessInteractiveRepl` (`cli/process_repl.py`) - see its own docstring for why that's needed
+    at all for a headless mode like this one, whose whole point is running unattended (a background
+    service, CI, a plain `docker stop`) where SIGTERM, not Ctrl+C, is the *expected* way to ask it
+    to stop.
 
     Listens for this instance's whole `start()`-to-`stop()` lifetime, accepting one client at a
     time; a second connection while one is already active is closed immediately rather than
@@ -84,17 +72,13 @@ class SocketInteractiveRepl(InteractiveRepl):
         port: int = 0,
         on_data: "Callable[[bytes | bytearray], None] | None" = None,
     ) -> None:
-        super().__init__(cdc, on_data=self._dispatch)
-        self._simulator = simulator
-        self._on_quit = on_quit
+        super().__init__(cdc, simulator, on_quit, on_data=self._dispatch)
         self._host = host
         self._requested_port = port
         self._extra_on_data = on_data
         self._server: asyncio.Server | None = None
         self._client_writer: asyncio.StreamWriter | None = None
         self._connection_task: asyncio.Task[None] | None = None
-        self._pump_alarm: Any = None
-        self._old_sigterm_handler: Any = None
         # Resolved once the server is actually listening (self._requested_port may be 0, meaning
         # "OS picks a free port") - None until then.
         self.port: int | None = None
@@ -109,32 +93,13 @@ class SocketInteractiveRepl(InteractiveRepl):
             self._extra_on_data(data)
 
     def _on_start(self) -> None:
-        # signal.signal() only works from the main thread - `start()` always runs there today
-        # (nothing async calls it, matching StdioInteractiveRepl._on_start()'s identical
-        # reasoning), so this is unaffected by simulator's own engine-room thread.
-        self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
+        super()._on_start()
         self._server = self._simulator.call(self._start_server())
         assert self._server.sockets
         self.port = self._server.sockets[0].getsockname()[1]
 
-    def _on_sigterm(self, signum: int, _frame: Any) -> None:
-        # Just flag it - whatever handles self._on_quit (Simulator.wait_for_shutdown, for every
-        # current caller) does the actual repl.stop()/device teardown/sys.exit(); this must not
-        # block or tear the process down itself. 128+signum matches the convention the
-        # shell/`timeout` itself would otherwise report for a signal-terminated process - same as
-        # StdioInteractiveRepl._on_sigterm().
-        self._on_quit(128 + signum)
-
     def _on_stop(self) -> None:
-        if self._old_sigterm_handler is not None and threading.current_thread() is threading.main_thread():
-            # signal.signal() only works from the main thread - stop() could in principle run
-            # elsewhere (e.g. a test's own cleanup), where restoring is skipped rather than
-            # raising; matches StdioInteractiveRepl._restore_termios()'s identical guard.
-            try:
-                signal.signal(signal.SIGTERM, self._old_sigterm_handler)
-            except ValueError:
-                pass
-            self._old_sigterm_handler = None
+        super()._on_stop()
         if self._server is not None:
             self._simulator.call(self._stop_server())
             self._server = None
@@ -213,20 +178,3 @@ class SocketInteractiveRepl(InteractiveRepl):
                 self._client_writer = None
                 self._connection_task = None
             writer.close()
-
-    def _send_and_pace(self, data: bytes) -> None:
-        """Mirrors `StdioInteractiveRepl`'s own helper: `send()`s `data`, scheduling a repeat pump
-        if the tx_fifo didn't have room for all of it yet."""
-        if not self.send(data):
-            self._schedule_pump()
-
-    def _schedule_pump(self) -> None:
-        if self._pump_alarm is None:
-            self._pump_alarm = self._simulator.clock.create_alarm(self._pump_tick)
-        self._pump_alarm.schedule(_PUMP_PERIOD_NANOS)
-
-    def _pump_tick(self) -> None:
-        # A clock alarm callback always fires from Clock.tick()'s own call chain, i.e. already on
-        # the engine-room thread - no bridging needed here either.
-        if not self.pump():
-            self._schedule_pump()

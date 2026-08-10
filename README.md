@@ -228,10 +228,16 @@ mpremote connect socket://127.0.0.1:4321 exec "print(1 + 1)"
 mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
 ```
 
-See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details, how to quit
-the emulator when `mpremote` owns the console, and an explicit list of which `mpremote` commands
-are verified working against this transport (`exec`, `fs`, `mount`, `run`, `reset`/`bootloader`,
-...) versus the two genuine, documented limitations (the bare interactive REPL, and `df` on
+`--pty` (POSIX only) is the alternative: a real pseudo-terminal instead of a TCP socket, whose
+slave side (e.g. `/dev/pts/3`) is a genuine POSIX serial device path - everything `--tcp-port`
+supports also works here, *plus* `mpremote`'s own bare interactive REPL, which does not work over
+`--tcp-port`'s `socket://` transport (see below).
+
+See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details for both
+flags, how to quit the emulator when `mpremote` owns the console, and an explicit list of which
+`mpremote` commands are verified working against each transport (`exec`, `fs`, `mount`, `run`,
+`reset`/`bootloader`, the interactive `repl` over `--pty`, ...) versus the remaining documented
+limitations (`--tcp-port`'s own bare interactive REPL, `--pty` on Windows, and `df` on
 MicroPython ≤1.21).
 
 #### Filesystem support
@@ -390,9 +396,9 @@ through (no `-c`/`<filename>` raw-REPL equivalent, see above), so the `mklittlef
 `littlefs-python` trick above doesn't apply the same way; use it interactively via `require('fs')`
 at the REPL instead, or stick with `mklittlefs`.
 
-`--tcp-port <port>` also works here, same as `micropython` - see [mpremote](#mpremote) above (that
-section is `mpremote`-specific, but the underlying mechanism, a plain socket serving the console
-instead of this process's own stdio, is not).
+`--tcp-port <port>`/`--pty` also work here, same as `micropython` - see [mpremote](#mpremote) above
+(that section is `mpremote`-specific, but the underlying mechanism, a plain socket/pty serving the
+console instead of this process's own stdio, is not).
 
 > [!NOTE]
 > Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block

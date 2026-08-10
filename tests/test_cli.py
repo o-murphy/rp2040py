@@ -19,6 +19,7 @@ def _mp_args(**overrides):
         "fat12": "fat12.img",
         "dump_fs": None,
         "tcp_port": None,
+        "pty": False,
         # -c mode, so _cmd_micropython exits right after exec() instead of dropping into an
         # interactive REPL that would block the test.
         "command": "pass",
@@ -332,6 +333,7 @@ def _kaluma_args(**overrides):
         "littlefs": "kaluma_littlefs.img",
         "dump_fs": None,
         "tcp_port": None,
+        "pty": False,
         "filename": None,
         "log_level": None,
     }

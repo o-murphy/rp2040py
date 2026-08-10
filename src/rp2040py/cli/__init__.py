@@ -52,6 +52,8 @@ from typing import Any
 from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
+from rp2040py.cli.pty_repl import PtyInteractiveRepl
+from rp2040py.cli.pty_repl import pty as _pty_module
 from rp2040py.cli.socket_repl import SocketInteractiveRepl
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
@@ -279,11 +281,14 @@ def _make_expect_text_watcher(
 def _start_console_repl(
     args: argparse.Namespace, cdc: USBCDC, simulator: Simulator, on_data: "Callable[[bytes | bytearray], None]"
 ) -> BaseReplRunner:
-    """Starts (and returns, already `start()`ed) whichever console bridge `--tcp-port` selects:
-    the normal interactive `StdioInteractiveRepl` (unset), or a headless `SocketInteractiveRepl`
-    listening on that port instead - for driving the device from tools like `mpremote` that expect
-    a serial port but can't get one (see `cli/socket_repl.py`). Caller is responsible for
-    registering `.stop` with its own cleanup - this only starts it."""
+    """Starts (and returns, already `start()`ed) whichever console bridge `--tcp-port`/`--pty`
+    selects: the normal interactive `StdioInteractiveRepl` (neither given), a headless
+    `SocketInteractiveRepl` listening on `--tcp-port` (see `cli/socket_repl.py`), or a headless
+    `PtyInteractiveRepl` (see `cli/pty_repl.py`) - both for driving the device from tools like
+    `mpremote` that expect a serial port but can't get one, `--pty` specifically for the ones that
+    additionally need a *real* one (see its own module docstring for why `--tcp-port` alone isn't
+    always enough). Caller is responsible for registering `.stop` with its own cleanup - this only
+    starts it."""
     if args.tcp_port is not None:
         socket_repl = SocketInteractiveRepl(
             cdc, simulator, on_quit=simulator.shutdown_request.request, port=args.tcp_port, on_data=on_data
@@ -296,20 +301,42 @@ def _start_console_repl(
         )
         return socket_repl
 
+    if args.pty:
+        pty_repl = PtyInteractiveRepl(cdc, simulator, on_quit=simulator.shutdown_request.request, on_data=on_data)
+        pty_repl.start()
+        _logger.info("PTY REPL listening on %s - e.g. `mpremote connect %s`", pty_repl.slave_path, pty_repl.slave_path)
+        return pty_repl
+
     stdio_repl = StdioInteractiveRepl(cdc, simulator, on_data=on_data, on_quit=simulator.shutdown_request.request)
     stdio_repl.start()
     return stdio_repl
 
 
+def _validate_console_mode(args: argparse.Namespace) -> None:
+    """Shared `--tcp-port`/`--pty` validation for `micropython`/`kaluma`: mutually exclusive with
+    each other (each replaces the console with a different transport - only one can), and `--pty`
+    needs actual POSIX pty support (`cli/pty_repl.py`'s own `pty is None` gate) to mean anything."""
+    if args.tcp_port is not None and args.pty:
+        _logger.error("--tcp-port and --pty are mutually exclusive")
+        sys.exit(1)
+    if args.pty and _pty_module is None:
+        _logger.error("--pty is not supported on this platform (no POSIX pty support)")
+        sys.exit(1)
+
+
 def _cmd_micropython(args: argparse.Namespace) -> None:
+    _validate_console_mode(args)
     # -c/-m/<filename> ("exec mode") runs one device.exec() call and exits based on its own
-    # stdout/stderr (see below) - it never reaches the interactive/--tcp-port console loop that
-    # --tcp-port replaces or that --expect-text's on_data watcher is wired into, so combining
-    # either with exec mode wouldn't do anything (previously accepted and silently ignored,
-    # confirmed - not what a caller passing both would reasonably expect).
+    # stdout/stderr (see below) - it never reaches the interactive/--tcp-port/--pty console loop
+    # that either replaces, or that --expect-text's on_data watcher is wired into, so combining any
+    # of them with exec mode wouldn't do anything (previously accepted and silently ignored for
+    # --expect-text, confirmed - not what a caller passing both would reasonably expect).
     if args.command is not None or args.module is not None or args.filename is not None:
         if args.tcp_port is not None:
             _logger.error("--tcp-port cannot be combined with -c/-m/<filename>")
+            sys.exit(1)
+        if args.pty:
+            _logger.error("--pty cannot be combined with -c/-m/<filename>")
             sys.exit(1)
         if args.expect_text is not None:
             _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
@@ -403,6 +430,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
 
 def _cmd_kaluma(args: argparse.Namespace) -> None:
+    _validate_console_mode(args)
     image_name = retrieve(KALUMA, args.image)
     if image_name is None:
         _logger.error("Could not find kaluma image: %s", args.image)
@@ -653,7 +681,14 @@ _TCP_PORT_HELP = (
     "serve the console over this TCP port instead of this process's own stdio (0 for an "
     "OS-assigned port - see the logged 'listening on' message) - for tools expecting a serial "
     "port that can't get one (e.g. mpremote via `connect socket://host:port`, pySerial's own "
-    "built-in URL scheme); mutually exclusive with -c/-m/<filename> on `micropython`"
+    "built-in URL scheme); mutually exclusive with -c/-m/<filename> on `micropython` and with --pty"
+)
+_PTY_HELP = (
+    "serve the console over a real pseudo-terminal (POSIX only) instead of this process's own "
+    "stdio - like --tcp-port, but a *real* POSIX serial-like device path (see the logged "
+    "'listening on' message), for tools that need one (e.g. mpremote's own interactive REPL, which "
+    "does not work over --tcp-port's socket:// transport - see docs/mpremote.md); mutually "
+    "exclusive with -c/-m/<filename> on `micropython` and with --tcp-port"
 )
 
 
@@ -673,6 +708,7 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
         "dump-fs": {"type": Path, "help": _DUMP_FS_HELP},
         "tcp-port": {"type": int, "default": None, "help": _TCP_PORT_HELP},
+        "pty": {"action": "store_true", "help": _PTY_HELP},
     }
     shared = argparse.ArgumentParser(add_help=False)
     for name in names:
@@ -709,7 +745,7 @@ def main(argv: "list[str] | None" = None) -> None:
         "micropython",
         parents=[
             _shared_arg_parser(
-                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port"
+                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port", "pty"
             )
         ],
         help="run a MicroPython/CircuitPython UF2 image",
@@ -736,7 +772,7 @@ def main(argv: "list[str] | None" = None) -> None:
         "kaluma",
         parents=[
             _shared_arg_parser(
-                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port"
+                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port", "pty"
             )
         ],
         help="run a Kaluma UF2 image (interactive REPL only)",

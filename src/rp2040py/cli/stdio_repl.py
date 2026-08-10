@@ -8,7 +8,6 @@ CircuitPython).
 import asyncio
 import atexit
 import os
-import signal
 import sys
 import threading
 from collections.abc import Callable
@@ -32,17 +31,13 @@ except ImportError:
     termios = None  # type: ignore[assignment]
     tty = None  # type: ignore[assignment]
 
-from rp2040py.device.repl_runner import InteractiveRepl
+from rp2040py.cli.process_repl import ProcessInteractiveRepl
 from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
 
 __all__ = ("StdioInteractiveRepl", "buf_write")
 
 _CTRL_X = 24
-# Matches mp_device.py's _exec_blocking pacing: 1ms of simulated time between repeat pump()
-# attempts while the tx_fifo is still full, giving the simulator loop room to actually drain it
-# between tries instead of busy-looping.
-_PUMP_PERIOD_NANOS = 1_000_000
 
 
 def buf_write(buf, data: "int | bytes | bytearray") -> None:
@@ -58,7 +53,7 @@ def buf_write(buf, data: "int | bytes | bytearray") -> None:
     buf.flush()
 
 
-class StdioInteractiveRepl(InteractiveRepl):
+class StdioInteractiveRepl(ProcessInteractiveRepl):
     """Interactive bridge between a device's USB-CDC console and this process's stdin/stdout.
     `start()` puts the terminal (if any) into raw mode and starts forwarding stdin to the device;
     `stop()` restores the terminal. Quit by typing Ctrl+X.
@@ -87,14 +82,10 @@ class StdioInteractiveRepl(InteractiveRepl):
         on_quit: "Callable[[int], None]",
         on_data: "Callable[[bytes | bytearray], None] | None" = None,
     ) -> None:
-        super().__init__(cdc, on_data=self._dispatch)
-        self._simulator = simulator
+        super().__init__(cdc, simulator, on_quit, on_data=self._dispatch)
         self._extra_on_data = on_data
-        self._on_quit = on_quit
         self._stdin_fd: int | None = None
         self._old_termios: list[Any] | None = None
-        self._old_sigterm_handler: Any = None
-        self._pump_alarm: Any = None
         # Only used for the non-tty/Windows fallback (no fd to add_reader() on) - a small
         # dedicated thread for the one thing that still has to block: sys.stdin.read() itself.
         # Each chunk it reads is still forwarded onto the engine-room loop via simulator.call(),
@@ -107,6 +98,7 @@ class StdioInteractiveRepl(InteractiveRepl):
             self._extra_on_data(data)
 
     def _on_start(self) -> None:
+        super()._on_start()
         try:
             self._stdin_fd = sys.stdin.fileno()
             if termios is not None and sys.stdin.isatty():
@@ -117,22 +109,17 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # letting Ctrl+C interrupt whatever's running on the emulated device rather than
                 # this process). That means the normal `except KeyboardInterrupt` path in
                 # `Simulator.wait_for_shutdown` can never fire from the keyboard while raw mode is
-                # active, so it's no longer a reliable place to restore the terminal - _request_quit()
+                # active, so it's no longer a reliable place to restore the terminal - on_quit()
                 # (Ctrl+X, --expect-text, SIGTERM) is. atexit here is the last-resort net for
                 # anything that still bypasses that (an uncaught exception) - otherwise the real
                 # terminal is left raw (no echo/line-buffering) after exit, which looks like "the
                 # keyboard stopped working" until `stty sane`.
                 #
                 # atexit does NOT cover a plain SIGTERM (e.g. from `timeout`, or `kill` without
-                # -9): Python's default SIGTERM disposition kills the process at the OS level
-                # before the interpreter ever gets to run atexit callbacks - confirmed empirically
-                # (a bare `atexit.register(...)` + `kill -TERM` never fires it). Needs its own
-                # signal handler, routed through the same _request_quit() as Ctrl+X. This can only
-                # be installed on the actual process main thread (a signal-module restriction, not
-                # an asyncio one) - `_on_start()` itself always runs there today (nothing async
-                # calls it), so this is unaffected by simulator's own engine-room thread.
+                # -9) - that's what super()._on_start() above installs a real signal handler for
+                # (unconditionally, not just here in the tty branch - ProcessInteractiveRepl's own
+                # docstring covers why).
                 atexit.register(self._restore_termios)
-                self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
         except AttributeError:
             self._stdin_fd = None
 
@@ -157,19 +144,6 @@ class StdioInteractiveRepl(InteractiveRepl):
             self._fallback_thread.join(timeout=1.0)
         self._restore_termios()
 
-    def _on_sigterm(self, signum: int, _frame: Any) -> None:
-        # 128+signum matches the convention the shell/`timeout` itself would otherwise report for
-        # a signal-terminated process.
-        self._request_quit(128 + signum)
-
-    def _request_quit(self, code: int) -> None:
-        # Just flag it - the caller's Simulator.wait_for_shutdown loop does the actual
-        # repl.stop()/gdb_server.close()/sys.exit(). This can run from the engine-room loop
-        # (Ctrl+X, via _on_stdin_readable) or the main thread via a signal handler (SIGTERM) -
-        # either way, it must not block or do teardown itself, since on_quit just sets an Event
-        # and returns.
-        self._on_quit(code)
-
     def _restore_termios(self) -> None:
         atexit.unregister(self._restore_termios)
         if self._stdin_fd is not None and self._old_termios is not None:
@@ -181,15 +155,11 @@ class StdioInteractiveRepl(InteractiveRepl):
                 # the fd can legitimately go bad before this runs (e.g. the pty's other end
                 # already closed).
                 pass
-        if self._old_sigterm_handler is not None and threading.current_thread() is threading.main_thread():
-            # signal.signal() only works from the main thread - this can also run from the
-            # non-tty fallback's own daemon thread (its own `finally`), where restoring is
-            # skipped rather than raising; the process is tearing down either way at that point.
-            try:
-                signal.signal(signal.SIGTERM, self._old_sigterm_handler)
-            except ValueError:
-                pass
-            self._old_sigterm_handler = None
+        # signal.signal() only works from the main thread - this can also run from the non-tty
+        # fallback's own daemon thread (its own `finally`), where ProcessInteractiveRepl's own
+        # thread guard skips restoring rather than raising; the process is tearing down either way
+        # at that point.
+        self._restore_sigterm_handler()
 
     def _on_stdin_readable(self) -> None:
         # Registered via loop.add_reader() - always called on simulator's own engine-room loop,
@@ -210,28 +180,9 @@ class StdioInteractiveRepl(InteractiveRepl):
             return
         if chunk[0] == _CTRL_X:
             asyncio.get_running_loop().remove_reader(self._stdin_fd)
-            self._request_quit(0)
+            self._on_quit(0)
             return
         self._send_and_pace(chunk)
-
-    def _send_and_pace(self, data: bytes) -> None:
-        """send()s `data`, scheduling a repeat-pump alarm if the tx_fifo didn't have room for all
-        of it. Must only be called from simulator's own engine-room thread - same requirement as
-        send()/pump() themselves (they touch cdc.tx_fifo)."""
-        if not self.send(data):
-            self._schedule_pump()
-
-    def _schedule_pump(self) -> None:
-        if self._pump_alarm is None:
-            self._pump_alarm = self._simulator.clock.create_alarm(self._pump_tick)
-        self._pump_alarm.schedule(_PUMP_PERIOD_NANOS)
-
-    def _pump_tick(self) -> None:
-        # A clock alarm callback always fires from Clock.tick()'s own call chain, i.e. already on
-        # the engine-room thread - no bridging needed here either, matching mp_device.py's
-        # _exec_blocking's identical _pump_until_sent pattern.
-        if not self.pump():
-            self._schedule_pump()
 
     async def _send_async(self, data: bytes) -> None:
         self._send_and_pace(data)
@@ -253,7 +204,7 @@ class StdioInteractiveRepl(InteractiveRepl):
                     to_send = byte_data[:ctrl_x_index]
                     if to_send:
                         self._simulator.call(self._send_async(to_send))
-                    self._request_quit(0)
+                    self._on_quit(0)
                     return
                 # Matches the original line-buffered fallback's behavior: a trailing CR after
                 # each read, since a canonical-mode stdin read already stripped/consumed the

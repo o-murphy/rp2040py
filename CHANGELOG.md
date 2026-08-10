@@ -138,14 +138,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   patching. `exec`/`fs cp`/`mount` (including running a script straight out of a mounted local
   directory) have also all been verified by hand against real MicroPython 1.21.0/1.28.0 firmware
   over this same transport.
-- `docs/mpremote.md`: concrete `mpremote`/`--tcp-port` usage examples plus an explicit table of
-  which `mpremote` commands are verified working against this transport (`exec`, `fs`, `mount`,
-  `run`, `reset`/`bootloader`, ...) versus the two genuine, non-rp2040py limitations found while
-  testing this by hand - the bare interactive REPL (pySerial's `socket://` handler never defines
-  the `.fd` attribute `mpremote`'s own terminal code requires) and `df` on MicroPython ≤1.21 (runs
-  `import vfs`, a module that doesn't exist that early - VFS was still bundled directly in `os`
-  then). README.md's own "mpremote" section is now a short summary linking here instead of
-  duplicating all of this inline.
+- `docs/mpremote.md`: concrete `mpremote`/`--tcp-port`/`--pty` usage examples plus an explicit table
+  of which `mpremote` commands are verified working against each transport (`exec`, `fs`, `mount`,
+  `run`, `reset`/`bootloader`, the interactive `repl` over `--pty`, ...) versus the remaining
+  documented limitations - `--tcp-port`'s own bare interactive REPL (pySerial's `socket://` handler
+  never defines the `.fd` attribute `mpremote`'s own terminal code requires - fixed by `--pty`
+  below, not by rp2040py patching `mpremote`/pySerial), `--pty` on Windows, and `df` on
+  MicroPython ≤1.21 (runs `import vfs`, a module that doesn't exist that early - VFS was still
+  bundled directly in `os` then). README.md's own "mpremote" section is now a short summary linking
+  here instead of duplicating all of this inline.
+- `--pty` on `micropython`/`kaluma` (POSIX only): serves the console over a real pseudo-terminal
+  pair instead of this process's own stdio or `--tcp-port`'s TCP socket - `cli/pty_repl.py`'s new
+  `PtyInteractiveRepl`. Unlike `--tcp-port`, the slave side it opens (e.g. `/dev/pts/3`) is a
+  genuine POSIX serial device path, which is specifically what unlocks `mpremote`'s own bare
+  interactive REPL (`mpremote repl`) - that crashes over `--tcp-port`'s `socket://` transport with
+  `AttributeError: 'Serial' object has no attribute 'fd'` (pySerial's `socket://` handler never
+  provides one; its POSIX serial backend, which a real pty's slave side goes through, does) - see
+  `docs/mpremote.md` for the full writeup, including the exact traceback. Sets the pty into raw
+  mode itself (`tty.setraw()` on the slave fd) rather than relying on every possible client to do
+  so - a freshly opened pty otherwise defaults to cooked/echoing mode (ECHO, ICRNL, ONLCR, ...),
+  which would silently mangle CR/LF and echo bytes back exactly the way a raw byte pipe like
+  `--tcp-port`'s socket never does. Mutually exclusive with `--tcp-port` (only one console
+  transport can be active) and, like `--tcp-port`, with `-c`/`-m`/`<filename>` on `micropython`.
+  Verified against real MicroPython 1.28.0 firmware: `mpremote`'s bare interactive `repl` now works
+  end-to-end (typed commands execute and echo results correctly, Ctrl+X exits cleanly), including
+  across repeated reconnects to the same long-running process.
+- `cli/process_repl.py`'s new `ProcessInteractiveRepl` (`InteractiveRepl` subclass): SIGTERM
+  handling and the queue-then-repeat-pump backpressure loop for forwarding input bytes to the
+  device, both previously duplicated verbatim between `StdioInteractiveRepl` and
+  `SocketInteractiveRepl` - pulled out once implementing `PtyInteractiveRepl` would have made it a
+  third copy. `StdioInteractiveRepl`/`SocketInteractiveRepl` now both derive from it with no
+  behavior change (all existing tests pass unmodified) - `StdioInteractiveRepl`'s SIGTERM handler
+  is now installed unconditionally in `_on_start()` rather than only inside its raw-tty branch,
+  which also happens to close a latent gap: its own non-tty/Windows fallback path previously had no
+  SIGTERM handling at all (the same class of `--dump-fs`-skipped-on-`kill` bug `SocketInteractiveRepl`
+  was fixed for earlier - now closed here too, for free, as a consequence of the shared base rather
+  than a separately-diagnosed fix).
 - `RPWatchdog.on_watchdog_trigger` now has a real implementation, wired up by `BaseDevice.__init__`
   (covers both `MicroPythonDevice` and `KalumaDevice`): a real `machine.reset()`/
   `machine.bootloader()` (`mpremote reset`/`mpremote bootloader`) writes the watchdog's TRIGGER bit
