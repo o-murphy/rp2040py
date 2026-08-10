@@ -74,6 +74,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the flash region into whatever comes after it (image larger than expected - e.g. Kaluma's
   128-block littlefs image loaded where MicroPython's 352-block one is expected) - the loader had no
   bounds check of its own before this.
+- `--dump-fs <path>` on `micropython`/`kaluma`: dumps the device's filesystem flash region (littlefs
+  for MicroPython/Kaluma, FAT12 for CircuitPython) back out to a local file when the subcommand
+  exits - Ctrl+X, `--expect-text` firing, or the end of a `-c`/`-m`/script run. `BaseDevice.
+  dump_flash_image()` (`NotImplementedError` in the base class, overridden per device) plus
+  `dump_micropython_flash_image()`/`dump_circuitpython_flash_image()`/`dump_kaluma_flash_image()`
+  (`device/load_flash.py`) are the mirror image of the existing `load_*_flash_image()` functions -
+  same flash regions/block layouts, opposite direction. Can point at the same path as `--littlefs`/
+  `--fat12` for read-modify-write persistence across runs, or at a fresh path to capture whatever
+  filesystem state a run produced. Doubles as a `littlefs-python`-free way to build a littlefs
+  image in the first place: boot against blank flash, write files to it the normal way from device
+  code, and dump the result - see README.md's "Filesystem support" section and the new
+  `demo/mklittlefs_dump.py` below.
+- `demo/mklittlefs_dump.py`: generates a raw-REPL script that writes a list of local files into
+  MicroPython's filesystem via plain `open()`/`write()` calls (mirroring `mklittlefs`'s own
+  basename/`--main`/collision handling, without needing `littlefs-python` to do it) - for use as
+  the positional `<filename>` argument to `micropython --dump-fs <path> <script>`. Lets the actual
+  on-device littlefs (whatever a given firmware bundles) build the image instead of a
+  separately-installed host library.
+- CI: a "flash dump is deterministic" check (`scripts/ci-common.sh`'s `run_micropython_dump_test()`,
+  wired into `.github/workflows/ci-micropython.yml`) boots MicroPython against blank flash with
+  `--dump-fs`, then boots again with that dump loaded via `--littlefs` and dumped again, asserting
+  the two dumps are byte-identical - a regression test for `--dump-fs`/`--littlefs` round-tripping
+  without silently drifting (e.g. reformatting instead of mounting cleanly).
 
 ### Changed
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor

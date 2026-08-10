@@ -239,9 +239,33 @@ The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a 
 SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
 hardware uses to erase/program flash.
 
-<!-- TODO: explain how to use --dump-fs command to create an compatible to --image target littlefs/fatfs directly from an emulator -->
-<!-- > [!TIP]
->  -->
+`--dump-fs <path>` dumps the device's filesystem flash region back out to a local file when the
+`micropython`/`kaluma` subcommand exits (Ctrl+X, `--expect-text`, or the end of a `-c`/`-m`/script
+run) - the same layout `--littlefs path/to/littlefs.img` reads back in, so a dump can be fed
+straight back with `--littlefs`/`--dump-fs` pointing at the same path for persistence across runs:
+
+```sh
+rp2040py micropython --littlefs littlefs.img --dump-fs littlefs.img -c "open('log.txt', 'a').write('run\n')"
+```
+
+> [!TIP]
+> This makes `--dump-fs` a `littlefs-python`-free alternative to `mklittlefs`: instead of building
+> the image on the host with `littlefs-python`, boot the real emulated MicroPython firmware
+> against blank flash, write files to it the normal way (`open(path, "wb").write(data)`, exactly
+> as code running on a real Pico would), and dump the resulting filesystem - built by MicroPython's
+> own bundled littlefs, not a separately-installed library. [demo/mklittlefs_dump.py](demo/mklittlefs_dump.py)
+> generates such a script from a list of local files (mirroring `mklittlefs`'s own `--main`
+> semantics) for use as the positional `<filename>` argument:
+>
+> ```sh
+> python demo/mklittlefs_dump.py your_main.py your.py files.py here.py --main your_main.py \
+>     --output flash_script.py
+> rp2040py micropython --dump-fs littlefs.img flash_script.py
+> ```
+>
+> Useful when the `fs` extra isn't installed, or to build against exactly the same littlefs
+> version/behavior a given firmware boots with instead of whatever `littlefs-python` happens to
+> bundle.
 
 ### CircuitPython code
 
@@ -334,6 +358,12 @@ rp2040py kaluma --littlefs kaluma_littlefs.img
 `--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` for a known
 firmware's filesystem layout (mutually exclusive with passing them explicitly) - omit both for
 MicroPython's own defaults.
+
+`--dump-fs <path>` works here too, dumping the same littlefs-formatted region back out on exit -
+but unlike `micropython`, `kaluma` has no non-interactive exec mode to script filesystem writes
+through (no `-c`/`<filename>` raw-REPL equivalent, see above), so the `mklittlefs`-without-
+`littlefs-python` trick above doesn't apply the same way; use it interactively via `require('fs')`
+at the REPL instead, or stick with `mklittlefs`.
 
 > [!NOTE]
 > Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
