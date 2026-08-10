@@ -231,14 +231,19 @@ mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
 `--pty` (POSIX only) is the alternative: a real pseudo-terminal instead of a TCP socket, whose
 slave side (e.g. `/dev/pts/3`) is a genuine POSIX serial device path - everything `--tcp-port`
 supports also works here, *plus* `mpremote`'s own bare interactive REPL, which does not work over
-`--tcp-port`'s `socket://` transport (see below).
+`--tcp-port`'s `socket://` transport through the real `mpremote` binary (see below) - though
+`rp2040py mpremote` (a thin proxy subcommand, same arguments as `mpremote` itself) patches around
+that specific crash, so `rp2040py mpremote connect socket://host:port repl` works too, no `--pty`
+needed.
 
 See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details for both
-flags, how to quit the emulator when `mpremote` owns the console, and an explicit list of which
-`mpremote` commands are verified working against each transport (`exec`, `fs`, `mount`, `run`,
-`reset`/`bootloader`, the interactive `repl` over `--pty`, ...) versus the remaining documented
-limitations (`--tcp-port`'s own bare interactive REPL, `--pty` on Windows, and `df` on
-MicroPython ≤1.21).
+flags, the `rp2040py mpremote` proxy and the upstream bug it patches around
+([micropython#18660](https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170)),
+how to quit the emulator when `mpremote` owns the console, and an explicit list of which `mpremote`
+commands are verified working against each transport (`exec`, `fs`, `mount`, `run`,
+`reset`/`bootloader`, the interactive `repl` over `--pty` or `rp2040py mpremote`, ...) versus the
+remaining documented limitations (the real `mpremote` binary's own bare interactive REPL over
+`--tcp-port`, `--pty` on Windows, and `df` on MicroPython ≤1.21).
 
 #### Filesystem support
 

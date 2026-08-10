@@ -773,6 +773,7 @@ wheels = [
 name = "rp2040py"
 source = { editable = "." }
 dependencies = [
+    { name = "mpremote" },
     { name = "pyelftools" },
     { name = "semver" },
 ]
@@ -786,7 +787,6 @@ fs = [
 dev = [
     { name = "cython" },
     { name = "littlefs-python" },
-    { name = "mpremote" },
     { name = "mypy", marker = "implementation_name != 'pypy'" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -798,6 +798,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "littlefs-python", marker = "extra == 'fs'", specifier = ">=0.18.0" },
+    { name = "mpremote", specifier = ">=1.28.0" },
     { name = "pyelftools", specifier = ">=0.33" },
     { name = "semver", specifier = ">=3.0.4" },
 ]
@@ -807,7 +808,6 @@ provides-extras = ["fs"]
 dev = [
     { name = "cython", specifier = ">=3.2.9" },
     { name = "littlefs-python", specifier = ">=0.18.0" },
-    { name = "mpremote", specifier = ">=1.28.0" },
     { name = "mypy", marker = "implementation_name != 'pypy'", specifier = ">=2.3.0" },
     { name = "pre-commit", specifier = ">=4.6.1" },
     { name = "pytest", specifier = ">=9.1.1" },
