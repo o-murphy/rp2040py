@@ -256,9 +256,18 @@ def _start_console_repl(
 
 
 def _cmd_micropython(args: argparse.Namespace) -> None:
-    if args.tcp_port is not None and (args.command is not None or args.module is not None or args.filename is not None):
-        _logger.error("--tcp-port cannot be combined with -c/-m/<filename>")
-        sys.exit(1)
+    # -c/-m/<filename> ("exec mode") runs one device.exec() call and exits based on its own
+    # stdout/stderr (see below) - it never reaches the interactive/--tcp-port console loop that
+    # --tcp-port replaces or that --expect-text's on_data watcher is wired into, so combining
+    # either with exec mode wouldn't do anything (previously accepted and silently ignored,
+    # confirmed - not what a caller passing both would reasonably expect).
+    if args.command is not None or args.module is not None or args.filename is not None:
+        if args.tcp_port is not None:
+            _logger.error("--tcp-port cannot be combined with -c/-m/<filename>")
+            sys.exit(1)
+        if args.expect_text is not None:
+            _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
+            sys.exit(1)
 
     image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:

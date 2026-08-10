@@ -159,6 +159,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on_quit(code)` - never `sys.exit()`/`os._exit()` itself - leaving exactly one place in the
   codebase responsible for actually exiting the process: whatever thread drives the caller's own
   `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
+- **Breaking:** `micropython --expect-text` combined with `-c`/`-m`/`<filename>` (exec mode) is now
+  a clear error (`sys.exit(1)`) instead of being silently accepted and ignored. Exec mode runs one
+  `device.exec()` call and exits based on its own stdout/stderr - it never reaches the console loop
+  `--expect-text`'s `on_data` watcher is wired into, so the combination never did anything a caller
+  passing both would reasonably expect. Same treatment `--tcp-port` already got for the identical
+  reason (see Added, above).
 
 ### Fixed
 - `tests/test_simulator.py::test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch`

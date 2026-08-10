@@ -192,6 +192,33 @@ def test_tcp_port_rejects_combination_with_filename_mode(caplog):
     assert "--tcp-port" in caplog.text
 
 
+def test_expect_text_rejects_combination_with_exec_mode(caplog):
+    # -c/-m/<filename> runs one device.exec() call and exits based on its own stdout/stderr - it
+    # never reaches the console loop --expect-text's on_data watcher is wired into, so it used to
+    # be silently ignored rather than doing anything a caller passing it would expect.
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text="ready", command="pass"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
+def test_expect_text_rejects_combination_with_module_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text="ready", command=None, module="sys"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
+def test_expect_text_rejects_combination_with_filename_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text="ready", command=None, filename="script.py"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
 def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, monkeypatch):
     started = {}
 
