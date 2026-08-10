@@ -67,16 +67,29 @@ class _FakeRawReplDevice:
         self._globals = self._make_globals()
 
     def _make_globals(self) -> dict:
+        # Remote paths mpremote sends (e.g. "uploaded.py", never a host path) are POSIX-flavored,
+        # like a real MicroPython device's own filesystem - resolved here against self._workdir
+        # rather than the real process cwd, so relative remote paths land in the test's own
+        # tmp_path regardless of what this host process's actual cwd happens to be.
+        workdir = self._workdir
+        real_open = open
+
+        def _resolve(path):
+            return str(path) if _real_os.path.isabs(path) else str(workdir / path)
+
+        def _fake_open(path, *args, **kwargs):
+            return real_open(_resolve(path), *args, **kwargs)
+
         class _FakeOsModule:
             @staticmethod
             def stat(path):
-                st = _real_os.stat(path)
+                st = _real_os.stat(_resolve(path))
                 return (st.st_mode, 0, 0, 0, 0, 0, st.st_size, 0, 0, 0)
 
             def __getattr__(self, name):
                 return getattr(_real_os, name)
 
-        return {"os": _FakeOsModule(), "__name__": "__main__"}
+        return {"open": _fake_open, "os": _FakeOsModule(), "__name__": "__main__"}
 
     def _reply(self, data: bytes) -> None:
         if self.on_serial_data is not None:
@@ -191,9 +204,13 @@ def test_mpremote_fs_cp_uploads_a_file_through_the_tcp_transport(fake_device_rep
 
     local = tmp_path / "hello.py"
     local.write_text("print('hello from device')\n")
-    remote_path = tmp_path / "uploaded.py"
+    # A bare relative filename, like a real remote MicroPython path (e.g. "/uploaded.py") - never
+    # the host's own absolute path, which on Windows contains backslashes that would corrupt the
+    # Python source mpremote embeds it into (fs_writefile()'s "f=open('%s','wb')" % dest).
+    # _FakeRawReplDevice resolves it against tmp_path itself (see _make_globals()).
+    remote_name = "uploaded.py"
 
-    result = _run_mpremote(repl.port, "fs", "cp", str(local), f":{remote_path}", cwd=tmp_path)
+    result = _run_mpremote(repl.port, "fs", "cp", str(local), f":{remote_name}", cwd=tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert remote_path.read_text() == "print('hello from device')\n"
+    assert (tmp_path / remote_name).read_text() == "print('hello from device')\n"
