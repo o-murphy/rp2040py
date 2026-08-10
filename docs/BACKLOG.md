@@ -183,6 +183,12 @@ the budget - it now costs the same 1 unit as everything else (the loop's existin
 code, passes - covering >1000 firings in one batch, exactly one `threading.Timer` construction -
 after). Full suite: 436/436 (435 + this new test), no regressions.
 
+(Later, post-`asyncio`-migration follow-up: that regression test's own firing-count floor turned
+out to depend on real wall-clock CPU speed - since `_execute_batch()`'s successor to this budget is
+itself time-bounded - and was observed flaky on CI as a result; see CHANGELOG.md's `[Unreleased]`
+Fixed section for the fake-`time.monotonic()` fix that made it deterministic without weakening what
+it actually checks.)
+
 **Root cause #2 (separate, not fixed, not really fixable here) — raw Thumb-interpretation
 throughput for CPU-bound guest code.** Once the guest is actively executing (not WFI'd) - e.g.
 MicroPython's `time.sleep()` busy-polls a hardware timer register in a tight loop rather than
