@@ -39,6 +39,7 @@ import contextlib
 import importlib.util
 import logging
 import os
+import re
 import struct
 import sys
 import time
@@ -202,21 +203,66 @@ def _raw_repl_source(args: argparse.Namespace) -> "str | None":
     return None
 
 
+def _regex_matcher(pattern: "re.Pattern[str]") -> "Callable[[str], bool]":
+    return lambda line: pattern.search(line) is not None
+
+
+def _substring_matcher(substring: str) -> "Callable[[str], bool]":
+    return lambda line: substring in line
+
+
+class _ExpectTextTracker:
+    """Tracks however many `--expect-text` patterns were given (plain substrings by default, or
+    Python `re` patterns via `--expect-regex`) across arbitrarily many lines of device output.
+    `found` flips to True once every pattern has matched *some* line - not necessarily the same
+    one, and not necessarily in the order given, mirroring how a human skimming a log for several
+    expected messages would judge "did they all show up" (deliberately not a single-line or
+    sliding-window cross-line match - see docs/mpremote.md's discussion of why). Shared by the
+    `micropython`/`kaluma` console watcher below and `bench`'s own firmware-mode loop, since both
+    subcommands expose the same `--expect-text`/`--expect-regex` shared arguments."""
+
+    def __init__(self, expect_text: "list[str] | None", expect_regex: bool) -> None:
+        patterns = expect_text or []
+        if expect_regex:
+            compiled = [re.compile(pattern) for pattern in patterns]
+            self._matches: list[Callable[[str], bool]] = [_regex_matcher(c) for c in compiled]
+        else:
+            self._matches = [_substring_matcher(p) for p in patterns]
+        self._pending = set(range(len(self._matches)))
+
+    @property
+    def active(self) -> bool:
+        return bool(self._matches)
+
+    @property
+    def found(self) -> bool:
+        return self.active and not self._pending
+
+    def feed_line(self, line: str) -> None:
+        for index in list(self._pending):
+            if self._matches[index](line):
+                self._pending.discard(index)
+
+
 def _make_expect_text_watcher(
-    expect_text: "str | None", shutdown: "ShutdownRequest"
+    expect_text: "list[str] | None", expect_regex: bool, shutdown: "ShutdownRequest"
 ) -> "Callable[[bytes | bytearray], None]":
-    """Returns an `on_data` callback for `StdioInteractiveRepl` that scans serial output for
-    `expect_text` and requests a clean process exit once found - the `--expect-text`
-    CI-test-harness hook shared by `micropython` and `kaluma`."""
+    """Returns an `on_data` callback for `StdioInteractiveRepl` that scans serial output against
+    `_ExpectTextTracker` and requests a clean process exit once every `--expect-text` pattern has
+    matched - the CI-test-harness hook shared by `micropython` and `kaluma`."""
+    tracker = _ExpectTextTracker(expect_text, expect_regex)
     current_line = ""
+    triggered = False
 
     def _watch(value: bytes | bytearray) -> None:
-        nonlocal current_line
+        nonlocal current_line, triggered
         for byte in value:
             char = chr(byte)
             if char == "\n":
-                if expect_text and expect_text in current_line:
-                    print(f'Expected text found: "{expect_text}"')
+                tracker.feed_line(current_line)
+                if not triggered and tracker.found:
+                    triggered = True
+                    print(f"Expected text found: {expect_text!r}")
                     print("TEST PASSED.")
                     # shutdown.request(), not os._exit(): this callback runs on a Simulator
                     # worker thread (threading.Timer), so it can't safely tear the process down
@@ -340,7 +386,9 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = _start_console_repl(args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, shutdown))
+        repl = _start_console_repl(
+            args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, args.expect_regex, shutdown)
+        )
         cleanup.callback(repl.stop)
 
         device.start(timeout=None)
@@ -396,7 +444,9 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = _start_console_repl(args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, shutdown))
+        repl = _start_console_repl(
+            args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, args.expect_regex, shutdown)
+        )
         cleanup.callback(repl.stop)
 
         device.start(timeout=None)
@@ -451,7 +501,8 @@ def _bench_synthetic(instruction_count: int, block_size: int, log_level: LogLeve
 def _bench_firmware(
     image: PathLike,
     littlefs: PathLike | None,
-    expect_text: str | None,
+    expect_text: "list[str] | None",
+    expect_regex: bool,
     timeout: float,
     bootrom: str | None,
     log_level: LogLevel,
@@ -477,7 +528,7 @@ def _bench_firmware(
             sys.exit(1)
 
     current_line = ""
-    found = False
+    tracker = _ExpectTextTracker(expect_text, expect_regex)
 
     cdc = USBCDC(rp2040.usb_ctrl)
 
@@ -489,12 +540,11 @@ def _bench_firmware(
     cdc.on_device_connected = _on_device_connected
 
     def _on_serial_data(value: bytes | bytearray) -> None:
-        nonlocal current_line, found
+        nonlocal current_line
         for byte in value:
             char = chr(byte)
             if char == "\n":
-                if expect_text and expect_text in current_line:
-                    found = True
+                tracker.feed_line(current_line)
                 current_line = ""
             else:
                 current_line += char
@@ -509,7 +559,7 @@ def _bench_firmware(
     start = time.perf_counter()
     step_batch = 1_000_000
     executed = 0
-    while not found and (time.perf_counter() - start) < timeout:
+    while not tracker.found and (time.perf_counter() - start) < timeout:
         for _ in range(step_batch):
             if rp2040.core.waiting:
                 clock.tick(clock.nanos_to_next_alarm)
@@ -519,18 +569,20 @@ def _bench_firmware(
         executed += step_batch
     elapsed = time.perf_counter() - start
 
-    status = "found expected text" if found else ("timed out" if expect_text else "step budget reached")
+    status = "found expected text" if tracker.found else ("timed out" if expect_text else "step budget reached")
     print(
         f"{status}: executed {executed:,} instructions in {elapsed:.2f}s -> {executed / elapsed:,.0f} instructions/sec"
     )
-    if expect_text and not found:
+    if expect_text and not tracker.found:
         sys.exit(1)
 
 
 def _cmd_bench(args: argparse.Namespace) -> None:
     log_level = _console_log_level(args)
     if args.image:
-        _bench_firmware(args.image, args.littlefs, args.expect_text, args.timeout, args.bootrom, log_level)
+        _bench_firmware(
+            args.image, args.littlefs, args.expect_text, args.expect_regex, args.timeout, args.bootrom, log_level
+        )
     else:
         _bench_synthetic(args.instructions, args.block_size, log_level)
 
@@ -589,7 +641,12 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
 _IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"
 _IMAGE_PATH_HELP = "local .hex/.uf2 image path"
 _BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the default (B1, bundled - no download)"
-_EXPECT_TEXT_HELP = "stop once this text appears on the device's serial console"
+_EXPECT_TEXT_HELP = (
+    "stop once this text appears on the device's serial console (any line, not necessarily the "
+    "same one) - repeatable: with --expect-text given more than once, every one of them must be "
+    "found before stopping"
+)
+_EXPECT_REGEX_HELP = "treat each --expect-text value as a Python `re` pattern (re.search) instead of a plain substring"
 _LITTLEFS_HELP = "optional littlefs.img to load"
 _DUMP_FS_HELP = "path to save filesystem state on exit (can be the same as --littlefs for persistence)"
 _TCP_PORT_HELP = (
@@ -611,7 +668,8 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "gdb-port": {"type": int, "default": 3333},
         "gdb": {"action": "store_true"},
         "bootrom": {"help": _BOOTROM_HELP},
-        "expect-text": {"help": _EXPECT_TEXT_HELP},
+        "expect-text": {"action": "append", "help": _EXPECT_TEXT_HELP},
+        "expect-regex": {"action": "store_true", "help": _EXPECT_REGEX_HELP},
         "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
         "dump-fs": {"type": Path, "help": _DUMP_FS_HELP},
         "tcp-port": {"type": int, "default": None, "help": _TCP_PORT_HELP},
@@ -649,7 +707,11 @@ def main(argv: "list[str] | None" = None) -> None:
 
     mp_parser = subparsers.add_parser(
         "micropython",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs", "tcp-port")],
+        parents=[
+            _shared_arg_parser(
+                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port"
+            )
+        ],
         help="run a MicroPython/CircuitPython UF2 image",
     )
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
@@ -672,7 +734,11 @@ def main(argv: "list[str] | None" = None) -> None:
 
     kaluma_parser = subparsers.add_parser(
         "kaluma",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs", "tcp-port")],
+        parents=[
+            _shared_arg_parser(
+                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port"
+            )
+        ],
         help="run a Kaluma UF2 image (interactive REPL only)",
     )
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
@@ -683,7 +749,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     bench_parser = subparsers.add_parser(
         "bench",
-        parents=[_shared_arg_parser("bootrom", "expect-text", "littlefs")],
+        parents=[_shared_arg_parser("bootrom", "expect-text", "expect-regex", "littlefs")],
         help="benchmark instruction-dispatch throughput",
     )
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")

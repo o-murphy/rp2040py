@@ -136,9 +136,53 @@ class CortexM0Core:
         return self.rp2040.logger
 
     def reset(self) -> None:
+        """Full architectural reset: every field here goes back to the same value `__init__`
+        gives it (registers[0:12]/lr included - real hardware leaves those unpredictable after
+        reset, but zeroing them is a safe, deterministic superset firmware can't tell apart from
+        that), then SP/PC load from the vector table like before. Used both for construction-time
+        setup (registers already at these defaults there, so this is a no-op) and for a live,
+        mid-execution reset (RPWatchdog.on_watchdog_trigger, via a real machine.reset()/
+        machine.bootloader()) - the latter is why this can no longer just touch sp/pc/cycles."""
+        for i in range(16):
+            self.registers[i] = 0
+        self.banked_sp = 0
+        self.cycles = 0
+
+        self.event_registered = False
+        self.waiting = False
+
+        self.n = False
+        self.c = False
+        self.z = False
+        self.v = False
+
+        self.break_rewind = 0
+
+        self.pm = False
+
+        self.sp_sel = StackPointerBank.SP_MAIN
+        self.n_priv = False
+
+        self.current_mode = ExecutionMode.MODE_THREAD
+        self.ipsr = 0
+        self.interrupt_nmi_mask = 0
+        self.pending_interrupts = 0
+        self.enabled_interrupts = 0
+        self.interrupt_priorities[0] = 0xFFFFFFFF
+        self.interrupt_priorities[1] = 0x0
+        self.interrupt_priorities[2] = 0x0
+        self.interrupt_priorities[3] = 0x0
+        self.pending_nmi = False
+        self.pending_pend_sv = False
+        self.pending_svcall = False
+        self.pending_systick = False
+        self.interrupts_updated = False
+        self.vtor = 0
+        self.shpr2 = 0
+        self.shpr3 = 0
+
         self.sp = self.rp2040.read_uint32(self.vtor)
         self.pc = self.rp2040.read_uint32(self.vtor + 4) & 0xFFFFFFFE
-        self.cycles = 0
 
     @property
     def sp(self) -> int:

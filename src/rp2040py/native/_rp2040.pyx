@@ -151,6 +151,7 @@ cdef class RP2040:
             RPPIO(self, "PIO1", IRQ.PIO1_IRQ0, 1),
         ]
         self.usb_ctrl = RPUSBController(self, "USB")
+        self.watchdog = RPWatchdog(self, "WATCHDOG_BASE")
         self.spi = [
             RPSPI(self, "SPI0", IRQ.SPI0, ISPIDMAChannels(rx=DREQChannel.DREQ_SPI0_RX, tx=DREQChannel.DREQ_SPI0_TX)),
             RPSPI(self, "SPI1", IRQ.SPI1, ISPIDMAChannels(rx=DREQChannel.DREQ_SPI1_RX, tx=DREQChannel.DREQ_SPI1_TX)),
@@ -182,7 +183,7 @@ cdef class RP2040:
             0x4004C: self.adc,
             0x40050: self.pwm,
             0x40054: RPTimer(self, "TIMER_BASE"),
-            0x40058: RPWatchdog(self, "WATCHDOG_BASE"),
+            0x40058: self.watchdog,
             0x4005C: RP2040RTC(self, "RTC_BASE"),
             0x40060: UnimplementedPeripheral(self, "ROSC_BASE"),
             0x40064: UnimplementedPeripheral(self, "VREG_AND_CHIP_RESET_BASE"),
@@ -234,12 +235,17 @@ cdef class RP2040:
         self._bootrom[: len(bootrom_data)] = materialized
         self.reset()
 
-    def reset(self) -> None:
+    def reset(self, *, preserve_flash: bool = False) -> None:
+        # preserve_flash=True is for a live reset (RPWatchdog.on_watchdog_trigger, via a real
+        # machine.reset()/machine.bootloader()) - see _rp2040.py's reset() docstring.
         cdef unsigned char[:] filler
         self.core.reset()
         self.pwm.reset()
-        filler = bytearray(b"\xff" * len(self._flash))
-        self._flash[:] = filler
+        self.dma.reset()
+        self.ppb.reset()
+        if not preserve_flash:
+            filler = bytearray(b"\xff" * len(self._flash))
+            self._flash[:] = filler
 
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)

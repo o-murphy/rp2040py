@@ -201,7 +201,7 @@ A GDB server on port 3333 can be enabled by specifying the `--gdb` flag:
 rp2040py micropython --gdb
 ```
 
-For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
+For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. It's repeatable (`--expect-text foo --expect-text bar` stops once *both* have appeared, on any line, not necessarily the same one or in that order) and, with `--expect-regex`, each `--expect-text` value is matched as a Python `re` pattern (via `re.search`) instead of a plain substring. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
 
 For one-shot, non-interactive runs (like `micropython`'s own CLI), pass one of `-c <command>`, `-m <module>`, or a script `<filename>` - mutually exclusive, matching `[-c <command> | -m <module> | <filename>]`. Instead of dropping into the REPL, rp2040py boots the device, runs it via the raw-REPL protocol, prints its stdout/stderr, and exits with the device's exit status (0 on success, 1 if it raised):
 
@@ -218,11 +218,8 @@ stdio - for tools that expect a serial port but can't open one, notably
 [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
 environment with no serial support at all (e.g.
 [Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps), see
-above). No client-side patching needed: `mpremote`'s own transport opens its connection via
-pySerial's `serial.serial_for_url()`, which ships built-in support for `socket://host:port` URLs -
-a raw byte pipe over TCP with nothing layered on top (unlike `rfc2217://`, which does Telnet option
-negotiation) - so `mpremote connect socket://host:port` just talks directly to rp2040py with no
-adapter in between:
+above). No client-side patching needed - `mpremote connect socket://host:port` just talks directly
+to rp2040py, via pySerial's own built-in `socket://` URL support:
 
 ```sh
 rp2040py micropython --tcp-port 4321
@@ -231,24 +228,11 @@ mpremote connect socket://127.0.0.1:4321 exec "print(1 + 1)"
 mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
 ```
 
-`--tcp-port 0` asks the OS for a free port instead of a fixed one - watch the logged "TCP socket
-REPL listening on ..." line for which port it picked. Mutually exclusive with `-c`/`-m`/`<filename>`
-(those already run once and exit; `--tcp-port` replaces the console for the device's whole
-lifetime instead). Only one client is served at a time, matching a real serial port's exclusive-
-access semantics - a second connection while one is already active is closed immediately (once the
-first disconnects, the next one is accepted normally, so repeated `mpremote` invocations against
-the same long-running `rp2040py micropython --tcp-port ...` process work as expected). Unlike the
-interactive REPL, Ctrl+X isn't intercepted here - a real client like `mpremote` runs its own
-protocol over this byte stream (raw-REPL's own Ctrl-A/Ctrl-C/Ctrl-D among them), and stealing a
-byte meant for it would corrupt that protocol - so quit the `rp2040py` process itself instead
-(Ctrl+C, SIGTERM, or `--expect-text` matching, same as every other subcommand).
-
-`exec` and `fs cp` are covered by an automated regression test
-(`tests/test_mpremote_integration.py`, a real `mpremote` subprocess driven over a real `socket://`
-connection against a scripted stand-in for firmware, since CI can't always assume a network
-download); `exec`, `fs cp`, and `mount` (including running a script straight out of a mounted local
-directory) have all also been verified by hand against real MicroPython firmware over this exact
-transport.
+See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details, how to quit
+the emulator when `mpremote` owns the console, and an explicit list of which `mpremote` commands
+are verified working against this transport (`exec`, `fs`, `mount`, `run`, `reset`/`bootloader`,
+...) versus the two genuine, documented limitations (the bare interactive REPL, and `df` on
+MicroPython ≤1.21).
 
 #### Filesystem support
 

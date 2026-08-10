@@ -138,6 +138,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   patching. `exec`/`fs cp`/`mount` (including running a script straight out of a mounted local
   directory) have also all been verified by hand against real MicroPython 1.21.0/1.28.0 firmware
   over this same transport.
+- `docs/mpremote.md`: concrete `mpremote`/`--tcp-port` usage examples plus an explicit table of
+  which `mpremote` commands are verified working against this transport (`exec`, `fs`, `mount`,
+  `run`, `reset`/`bootloader`, ...) versus the two genuine, non-rp2040py limitations found while
+  testing this by hand - the bare interactive REPL (pySerial's `socket://` handler never defines
+  the `.fd` attribute `mpremote`'s own terminal code requires) and `df` on MicroPython ≤1.21 (runs
+  `import vfs`, a module that doesn't exist that early - VFS was still bundled directly in `os`
+  then). README.md's own "mpremote" section is now a short summary linking here instead of
+  duplicating all of this inline.
+- `RPWatchdog.on_watchdog_trigger` now has a real implementation, wired up by `BaseDevice.__init__`
+  (covers both `MicroPythonDevice` and `KalumaDevice`): a real `machine.reset()`/
+  `machine.bootloader()` (`mpremote reset`/`mpremote bootloader`) writes the watchdog's TRIGGER bit
+  to force a hardware reset, which previously just logged a warning and did nothing - the emulated
+  CPU spun forever waiting for a reset that never happened (100% CPU, permanently unresponsive;
+  found while checking which `mpremote` commands work over `--tcp-port`). The handler now performs
+  an in-place reset - CPU core state (including interrupt/exception state, not just the previous
+  `RP2040.reset()`'s sp/pc/cycles - see `CortexM0Core.reset()`, both the pure-Python and
+  `rp2040py.native` Cython ports), PWM/DMA/PPB peripheral state (`RPPWM.reset()` already existed;
+  `RPDMA.reset()` is new), and USB-CDC enumeration state (`USBCDC.reset()`/
+  `RPUSBController.reset()`, both new) - then jumps back to flash's entry point, mirroring
+  `connect_blocking()`'s own cold-boot sequence. Flash content is preserved
+  (`RP2040.reset(preserve_flash=True)`, a new parameter - existing callers unaffected, still wipe
+  flash by default) and every externally-referenced peripheral object keeps its identity (notably
+  `mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct reference to) rather
+  than being reconstructed. Verified against real MicroPython 1.21.0/1.28.0 firmware: `mpremote
+  reset`/`mpremote bootloader` (the latter performs the same reset rather than actually entering
+  BOOTSEL USB mass-storage mode, which this emulator doesn't implement) both return promptly
+  instead of hanging, a fresh `mpremote` invocation reconnects successfully afterward, and a file
+  uploaded before a reset survives it and still runs.
+- `--expect-text` is now repeatable (e.g. `--expect-text foo --expect-text bar`): with more than
+  one given, every one of them must be found - each on any line of device output, not necessarily
+  the same line or in the order given - before the emulator stops, instead of only ever checking a
+  single string.
+- `--expect-regex`: a new boolean flag that changes how each `--expect-text` value is interpreted -
+  as a Python `re` pattern (matched per line via `re.search`) instead of a plain substring. Default
+  behavior (no `--expect-regex`) is unchanged - still a plain substring check. Deliberately *not*
+  cross-line/sliding-window matching (a pattern spanning multiple lines of output) - considered and
+  rejected as unnecessary complexity next to "repeat the flag and require all of them", which covers
+  the same practical need (multiple expected messages) with much simpler, more predictable
+  semantics. Shared by `micropython`, `kaluma`, and `bench` (all three already shared
+  `--expect-text` via the same `_shared_arg_parser` helper).
 
 ### Changed
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor

@@ -147,3 +147,15 @@ class USBCDC:
 
     def send_serial_byte(self, data: int) -> None:
         self.tx_fifo.push(data)
+
+    def reset(self) -> None:
+        """For RPWatchdog.on_watchdog_trigger's live device reset (see base_device.py) - `self.usb`
+        (the RP2040 object's own usb_ctrl) is reset in place rather than reconstructed, since this
+        object holds a direct reference to it that must stay valid across the reset."""
+        self.tx_fifo.reset()
+        self._initialized = False
+        self._descriptors_size = None
+        self._descriptors = []
+        self._out_endpoint = -1
+        self._in_endpoint = -1
+        self.usb.reset()
