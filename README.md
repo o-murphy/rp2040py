@@ -82,11 +82,18 @@ To confirm you actually got it:
 **Tested:**
 - iOS
   - [Pythonista](http://omz-software.com/pythonista/) - full support (no `[fs]` optional
-    dependency, no `mpremote` support for now)
+    dependency, `mpremote` untested - pySerial's `list_ports` likely has no iOS backend either,
+    same as confirmed on Android below; `rp2040py mpremote` should patch around it there too, but
+    that's unverified on an actual device - see
+    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
   - [PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - full support (no `[fs]`
-    optional dependency, no `mpremote` support for now)
+    optional dependency, `mpremote` untested - same caveat as Pythonista above)
 - Android
-  - [Termux](https://github.com/termux) - full support (`mpremote` untested, work in progress)
+  - [Termux](https://github.com/termux) - full support, including `mpremote` via `rp2040py
+    mpremote` (the real `mpremote` binary alone still fails - pySerial's `list_ports` has no
+    Android backend and raises `ImportError` at import time regardless of which subcommand you
+    run; `rp2040py mpremote` patches around it - see
+    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
   - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
     not supported for now (testing in progress)
 

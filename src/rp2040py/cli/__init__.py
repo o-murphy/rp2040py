@@ -650,8 +650,46 @@ def _patch_mpremote_console_waitchar() -> None:
     console.ConsolePosix.waitchar = _waitchar
 
 
+def _patch_serial_list_ports_missing_backend() -> None:
+    """Stubs out ``serial.tools.list_ports`` when pySerial can't provide a real implementation for
+    the current platform. ``serial.tools.list_ports_posix`` picks its backend off ``sys.platform``
+    (checking for ``'linux'``/``'darwin'``/``'cygwin'``/...) and raises ``ImportError`` for anything
+    it doesn't recognize - notably ``'android'`` (Termux) and, going by the same platform-string
+    logic, almost certainly ``'ios'`` (Pythonista/PythonIDE) too, though that's unverified on an
+    actual iOS device (see
+    https://github.com/pyserial/pyserial/blob/master/serial/tools/list_ports_posix.py). ``mpremote``
+    (``commands.py``) does ``import serial.tools.list_ports`` unconditionally at module load, so
+    without this the whole ``rp2040py mpremote`` proxy fails before it even gets to argument
+    parsing - even for e.g. ``connect /dev/pts/1 repl``, which names its port explicitly and never
+    calls ``comports()`` to enumerate anything. Detecting the affected platforms up front
+    (``sys.platform``, ``sys.getandroidapilevel``, env vars, ...) would be one option, but actually
+    attempting the real import and reacting only if it fails is more robust: it self-heals if
+    pySerial ever adds a real backend for one of them, and covers *any* platform pySerial's posix
+    dispatch doesn't recognize without needing a name for it up front. The stub's ``comports()``
+    returns no devices - correct for ``connect <explicit-port>`` (which never calls it) and merely
+    unhelpful, not wrong, for ``mpremote devs``/`--list``-style auto-detection commands, which have
+    no real device list to report on these platforms anyway."""
+    try:
+        import serial.tools.list_ports  # type: ignore[import-untyped] # noqa: F401
+
+        return
+    except ImportError:
+        pass
+
+    import types
+
+    import serial.tools as _serial_tools  # type: ignore[import-untyped]
+
+    stub = types.ModuleType("serial.tools.list_ports")
+    stub.comports = lambda include_links=False: []  # type: ignore[attr-defined]
+    stub.grep = lambda regexp, include_links=False: iter(())  # type: ignore[attr-defined]
+    sys.modules["serial.tools.list_ports"] = stub
+    _serial_tools.list_ports = stub  # type: ignore[attr-defined]
+
+
 def _cmd_mpremote(args: argparse.Namespace) -> None:
     _patch_mpremote_console_waitchar()
+    _patch_serial_list_ports_missing_backend()
 
     from mpremote.main import main as _mpremote_main  # type: ignore[import-untyped]
 

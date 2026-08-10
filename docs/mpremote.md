@@ -101,6 +101,31 @@ it also covers Windows and sandboxed/no-pty environments `--pty` can't reach.
 > Verified by hand: a typed expression echoes and evaluates correctly, and the session exits
 > cleanly with no `AttributeError`.
 
+### Android/Termux (and likely iOS): pySerial's `list_ports` `ImportError`
+
+On Android (e.g. [Termux](https://github.com/termux)), the real `mpremote` binary fails before it
+even parses its arguments - `mpremote`'s `commands.py` does `import serial.tools.list_ports`
+unconditionally at module load, and pySerial's own `serial.tools.list_ports_posix` picks its
+backend off `sys.platform` (`'linux'`, `'darwin'`, `'cygwin'`, ...), with no case for Android -
+falling into a final `else` that raises `ImportError: Sorry: no implementation for your platform
+('posix') available`. This happens even for e.g. `mpremote connect /dev/pts/1 repl`, which names
+its port explicitly and never actually calls `comports()` to enumerate anything - the crash is at
+import time, not at the point serial-port enumeration would happen. This is a real gap in
+pySerial's own platform dispatch, not an rp2040py bug. Going by the same platform-string logic,
+iOS's `sys.platform` (`'ios'`) isn't in pySerial's list either, so [Pythonista/PythonIDE](../README.md#environments-without-compiled-extension-support-iosandroid)
+almost certainly hit the identical crash - not independently confirmed on an actual iOS device,
+which is why the README still lists `mpremote` there as untested rather than fixed.
+
+`rp2040py mpremote` (the same proxy described above) also patches around this - on any platform,
+not just Android specifically: before importing `mpremote.main`, it tries `import
+serial.tools.list_ports` itself and, only if that raises `ImportError`, substitutes a stub module
+whose `comports()` returns no devices. `connect <explicit-port>` never calls `comports()` in the
+first place, so the stub is invisible there; `mpremote` subcommands that *do* enumerate devices
+(e.g. auto-detecting a lone connected board) simply see none, which is also correct - there's no
+real serial port list to report on these platforms anyway, whether real `mpremote` or the proxy is
+asking. The plain `mpremote` binary is unaffected by this patch and still crashes the same way; use
+`rp2040py mpremote` instead whenever running under Termux/Android (or, likely, iOS).
+
 ## Quitting the emulator
 
 Unlike the interactive REPL, Ctrl+X isn't intercepted on either of these transports - a real client
