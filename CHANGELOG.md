@@ -113,10 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `micropython`'s `-c`/`-m`/`<filename>`. See README.md's new "mpremote" section. A connection
   already dead on arrival (its peer closed before, or while, being accepted) could wrongly cause a
   second, genuinely live connection landing in the same window to be rejected as a duplicate -
-  `self._client_writer` stays set until the dying connection's own handler task gets a scheduling
-  turn to notice EOF and clear it, at least one event-loop iteration away, not visible to a plain
-  synchronous check. Fixed by retrying a bounded number of `await asyncio.sleep(0)` yields before
-  concluding a slot is genuinely occupied, giving an in-flight teardown a chance to finish first.
+  `self._client_writer` stays set until the dying connection's own handler task actually finishes
+  (its `reader.read()` resolving to EOF, then its own `finally` clearing it), which needs at least
+  one more event-loop iteration and isn't bounded to any fixed number of them (confirmed: an
+  earlier fix retrying a bounded number of `await asyncio.sleep(0)` yields still occasionally
+  wasn't enough on a slower CI runner). Fixed by `await`ing the previous connection's actual task
+  instead (shielded, with a generous timeout, so a genuinely-still-active connection isn't
+  cancelled by it) - resolves the instant that task truly finishes rather than guessing a count.
 - `mpremote` as a `dev` dependency group member, and `tests/test_mpremote_integration.py`: drives a
   real `mpremote` subprocess against `SocketInteractiveRepl` over an actual `socket://` connection
   (a scripted fake raw-REPL device stands in for real firmware, which needs a network download this

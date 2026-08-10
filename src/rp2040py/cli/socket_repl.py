@@ -12,6 +12,7 @@ socket://127.0.0.1:<port>` talks directly to `SocketInteractiveRepl` below with 
 """
 
 import asyncio
+import contextlib
 import socket
 from collections.abc import Callable
 from typing import Any
@@ -26,11 +27,13 @@ __all__ = ("SocketInteractiveRepl",)
 # attempts while the tx_fifo is still full.
 _PUMP_PERIOD_NANOS = 1_000_000
 
-# How many bare `await asyncio.sleep(0)` scheduling yields _handle_connection() retries before
-# concluding an occupied slot is a genuinely live connection rather than one mid-teardown - see
-# its own comment. Each is a pure yield-and-resume, not a real-time delay, so this bounds retries
-# by event-loop steps rather than wall-clock time.
-_ACCEPT_RETRY_ATTEMPTS = 50
+# Upper bound on how long _handle_connection() waits for a still-occupied slot's previous
+# connection to actually finish tearing down before concluding it's genuinely still active - see
+# its own comment. A dead connection's teardown needs no real I/O wait (just event-loop scheduling
+# turns), so this is already generous for that case; kept well under typical client-side socket
+# read timeouts (e.g. this project's own tests default to 2s) so a client legitimately waiting to
+# be rejected sees the connection close before its own timeout fires instead of racing it.
+_STALE_CONNECTION_GRACE_SECONDS = 1.0
 
 
 class SocketInteractiveRepl(InteractiveRepl):
@@ -128,23 +131,27 @@ class SocketInteractiveRepl(InteractiveRepl):
     async def _handle_connection(self, reader: "asyncio.StreamReader", writer: "asyncio.StreamWriter") -> None:
         # A connection that's already dead on arrival (its peer closed before, or while, this
         # accept()ed) still occupies self._client_writer until its own _handle_connection() task
-        # gets a turn to run its reader.read() to EOF and clear it in the finally below - at least
-        # one more event-loop iteration away, not something a single synchronous check up front can
-        # see. Retrying a bounded number of asyncio.sleep(0) yields (pure scheduling handoffs, no
-        # real delay in the common case) gives that in-flight teardown a chance to finish before
-        # concluding the slot is genuinely occupied - confirmed via a real repro: two connections
-        # opened back-to-back (the second right after the first's peer already closed) could
-        # otherwise have the second wrongly rejected purely because of task-scheduling order, even
-        # though the first was already dead by the time the second arrived.
-        for _ in range(_ACCEPT_RETRY_ATTEMPTS):
-            if self._client_writer is None:
-                break
-            await asyncio.sleep(0)
-        else:
-            # Still occupied after every retry - a genuinely live connection. One client at a
-            # time - see class docstring.
-            writer.close()
-            return
+        # actually finishes (its reader.read() resolving to EOF, then its own finally clearing
+        # self._client_writer below) - not something a single synchronous check up front can see,
+        # and not bounded by a fixed number of scheduling yields either (confirmed: a bounded
+        # `await asyncio.sleep(0)` retry loop here was still occasionally too few iterations on a
+        # slower CI runner). Waiting on the *actual* previous task instead - shielded, so timing
+        # out here doesn't cancel a connection that turns out to still be genuinely running -
+        # resolves the instant that task truly finishes, however many loop iterations that takes,
+        # rather than guessing a count. Confirmed via a real repro: two connections opened back-to-
+        # back (the second right after the first's peer already closed) could otherwise have the
+        # second wrongly rejected purely because of task-scheduling order, even though the first
+        # was already dead by the time the second arrived.
+        if self._client_writer is not None:
+            stale_task = self._connection_task
+            if stale_task is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(stale_task), timeout=_STALE_CONNECTION_GRACE_SECONDS)
+            if self._client_writer is not None:
+                # Still occupied after waiting - a genuinely live connection. One client at a
+                # time - see class docstring.
+                writer.close()
+                return
 
         client_socket = writer.get_extra_info("socket")
         if client_socket is not None:

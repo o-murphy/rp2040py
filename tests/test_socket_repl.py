@@ -124,9 +124,15 @@ def test_second_connection_is_rejected_while_one_is_active():
         first = _connect(repl.port)
         try:
             _wait_for_client(repl)
-            second = _connect(repl.port)
+            # A comfortably longer read timeout than socket_repl.py's own
+            # _STALE_CONNECTION_GRACE_SECONDS (1s): _handle_connection() waits up to that long for
+            # a still-occupied slot's previous connection to finish tearing down before concluding
+            # it's genuinely active and rejecting this one - `first` here is genuinely active for
+            # this whole test, so that full grace period always elapses before the rejection.
+            second = _connect(repl.port, timeout=5.0)
             try:
-                # Closed immediately server-side - recv() sees EOF (b""), not more data.
+                # Closed server-side (after the grace period above) - recv() sees EOF (b""), not
+                # more data.
                 assert second.recv(4096) == b""
             finally:
                 second.close()
