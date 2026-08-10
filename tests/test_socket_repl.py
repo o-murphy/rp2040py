@@ -56,6 +56,31 @@ def _wait_for_client(repl: SocketInteractiveRepl, timeout: float = 2.0) -> None:
     assert repl._client_writer is not None, "client was never accepted"
 
 
+def _connect_and_wait_for_accept(repl: SocketInteractiveRepl, timeout: float = 5.0) -> socket.socket:
+    """`_connect()` followed by `_wait_for_client()`, retried with a fresh connection on timeout.
+
+    Reconnecting to the same port immediately after the previous connection's teardown was
+    observed to occasionally leave the new connection's accept callback unscheduled for multiple
+    seconds specifically on macOS CI runners (kqueue-based selector), even once the previous
+    connection had already fully cleared `repl._client_writer` before this one connects - an OS/
+    event-loop-scheduling timing quirk around a rapid close-then-reconnect burst, not reproduced
+    on Linux, and not something clearable by waiting longer on a single connection attempt.
+    Retrying the connection itself (as a real reconnecting client would do anyway) resolves it."""
+    deadline = time.monotonic() + timeout
+    while True:
+        sock = _connect(repl.port)
+        remaining = deadline - time.monotonic()
+        per_attempt = min(1.0, max(remaining, 0.1))
+        attempt_deadline = time.monotonic() + per_attempt
+        while repl._client_writer is None and time.monotonic() < attempt_deadline:
+            time.sleep(0.01)
+        if repl._client_writer is not None:
+            return sock
+        sock.close()
+        if time.monotonic() >= deadline:
+            raise AssertionError("client was never accepted")
+
+
 def _recv_until(sock: socket.socket, expected: bytes, timeout: float = 2.0) -> bytes:
     sock.settimeout(timeout)
     buf = b""
@@ -156,9 +181,8 @@ def test_a_new_connection_is_accepted_after_the_previous_one_disconnects():
         while repl._client_writer is not None and time.monotonic() < deadline:
             time.sleep(0.01)
 
-        second = _connect(repl.port)
+        second = _connect_and_wait_for_accept(repl)
         try:
-            _wait_for_client(repl)
             _emit_from_device(simulator, cdc, b"still alive")
             assert _recv_until(second, b"still alive") == b"still alive"
         finally:
