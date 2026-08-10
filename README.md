@@ -8,7 +8,7 @@
 [![Test Pi Pico SDK]][pico-sdk-workflow]
 [![coverage]][CodecovUrl]
 
-Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](https://github.com/wokwi/rp2040js). It blinks, runs native code, and even the MicroPython REPL!
+Raspberry Pi Pico (RP2040) Emulator in Python — started as a port of [rp2040js](https://github.com/wokwi/rp2040js), now grown into its own CLI/SDK toolkit around it (see [Differences from upstream rp2040js](#differences-from-upstream-rp2040js) below). It blinks, runs native code, and even the MicroPython REPL!
 
 See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
 
@@ -21,6 +21,7 @@ See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against 
   - [Run the demo project](#run-the-demo-project)
     - [Native code](#native-code)
     - [MicroPython code](#micropython-code)
+      - [mpremote](#mpremote)
       - [Filesystem support](#filesystem-support)
     - [CircuitPython code](#circuitpython-code)
       - [Filesystem support](#filesystem-support-1)
@@ -28,6 +29,7 @@ See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against 
     - [Bootrom revisions](#bootrom-revisions)
     - [Library API](#library-api)
   - [Performance](#performance)
+  - [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
   - [Used by](#used-by)
   - [Learn more](#learn-more)
   - [License](#license)
@@ -209,6 +211,43 @@ rp2040py micropython -m sys
 rp2040py micropython path/to/script.py
 ```
 
+#### mpremote
+
+`--tcp-port <port>` serves the console over a plain TCP socket instead of this process's own
+stdio - for tools that expect a serial port but can't open one, notably
+[`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
+environment with no serial support at all (e.g.
+[Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps), see
+above). No client-side patching needed: `mpremote`'s own transport opens its connection via
+pySerial's `serial.serial_for_url()`, which ships built-in support for `socket://host:port` URLs -
+a raw byte pipe over TCP with nothing layered on top (unlike `rfc2217://`, which does Telnet option
+negotiation) - so `mpremote connect socket://host:port` just talks directly to rp2040py with no
+adapter in between:
+
+```sh
+rp2040py micropython --tcp-port 4321
+# in another terminal:
+mpremote connect socket://127.0.0.1:4321 exec "print(1 + 1)"
+mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
+```
+
+`--tcp-port 0` asks the OS for a free port instead of a fixed one - watch the logged "TCP socket
+REPL listening on ..." line for which port it picked. Mutually exclusive with `-c`/`-m`/`<filename>`
+(those already run once and exit; `--tcp-port` replaces the console for the device's whole
+lifetime instead). Only one client is served at a time, matching a real serial port's exclusive-
+access semantics - a second connection while one is already active is closed immediately (once the
+first disconnects, the next one is accepted normally, so repeated `mpremote` invocations against
+the same long-running `rp2040py micropython --tcp-port ...` process work as expected). Unlike the
+interactive REPL, Ctrl+X isn't intercepted here - a real client like `mpremote` runs its own
+protocol over this byte stream (raw-REPL's own Ctrl-A/Ctrl-C/Ctrl-D among them), and stealing a
+byte meant for it would corrupt that protocol - so quit the `rp2040py` process itself instead
+(Ctrl+C, SIGTERM, or `--expect-text` matching, same as every other subcommand).
+
+`exec` and `fs cp` are verified against this transport (`tests/test_mpremote_integration.py`, a
+real `mpremote` subprocess driven over a real `socket://` connection); other `mpremote` commands
+(e.g. `mount`) ride the same raw-REPL byte stream and are expected to work the same way, but
+weren't separately exercised.
+
 #### Filesystem support
 
 With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Build a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image (see `mklittlefs` below) and pass it with `--littlefs path/to/littlefs.img`, and your `main.py` will be automatically started from there (it's silently skipped, not an error, if the file doesn't exist - but it's never loaded unless `--littlefs` is given explicitly, even if a `littlefs.img` happens to sit in the current directory).
@@ -365,6 +404,10 @@ through (no `-c`/`<filename>` raw-REPL equivalent, see above), so the `mklittlef
 `littlefs-python` trick above doesn't apply the same way; use it interactively via `require('fs')`
 at the REPL instead, or stick with `mklittlefs`.
 
+`--tcp-port <port>` also works here, same as `micropython` - see [mpremote](#mpremote) above (that
+section is `mpremote`-specific, but the underlying mechanism, a plain socket serving the console
+instead of this process's own stdio, is not).
+
 > [!NOTE]
 > Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
 > at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on device` against the
@@ -457,6 +500,41 @@ exist for cases where you want to control this explicitly:
   extension is installed (e.g. to rule out a native-specific issue).
 - `RP2040PY_SKIP_NATIVE_BUILD=1` - skip compiling the extension at *build* time, for a
   deliberately pure-Python install/wheel.
+
+## Differences from upstream rp2040js
+
+rp2040py started as a straight port of [rp2040js](https://github.com/wokwi/rp2040js) - the core
+CPU/peripheral emulation still tracks it closely, and [docs/PORTING.md](docs/PORTING.md) keeps a
+file-by-file checklist of that. But it's grown well past a 1:1 translation into its own toolkit
+with no rp2040js equivalent, built around actually running real firmware from a shell rather than
+embedding the emulator as a library (rp2040js's own primary use case, e.g. inside Wokwi):
+
+- **A real packaged CLI** - `rp2040py`/`python -m rp2040py`, installable via `pip`/`uv`, not just a
+  checkout-only `demo/*.ts` script. Firmware (MicroPython/CircuitPython/Kaluma) is auto-downloaded
+  and cached by version tag instead of needing to be fetched and placed by hand.
+- **A filesystem toolkit**: `mklittlefs` builds a littlefs image on the host (needs
+  `littlefs-python`, the optional `fs` extra); `--dump-fs` builds one *without* that dependency
+  instead, by writing files to a booted device's real filesystem the normal way and reading the
+  resulting flash region back out - see [mpremote](#mpremote) and
+  [Filesystem support](#filesystem-support) above.
+- **A programmatic device API** (`rp2040py.device.MicroPythonDevice`/`KalumaDevice`) for driving a
+  booted device from another Python program over the raw-REPL protocol
+  (`device.exec("print(1+1)")`) - the same API `micropython -c/-m/<filename>` and `--tcp-port`
+  themselves are built on, not a separate implementation. `--tcp-port` in particular lets any
+  serial-oriented external tool (`mpremote` chief among them) drive the emulator over a real
+  socket, something rp2040js has no analogue for at all.
+- **Broader firmware coverage**: MicroPython, CircuitPython, and [Kaluma](https://kaluma.io/) (a
+  second, independent USB-CDC-console JS runtime for RP2040 - unrelated to rp2040js despite both
+  being JS) all boot and run against this emulator; a built-in GDB server (`--gdb`) works against
+  any of them.
+- **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
+  instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
+  pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
+  [Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps)).
+
+See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
+for the exhaustive, file-level breakdown (including behavioral divergences found while porting,
+not just added features).
 
 ## Used by
 

@@ -97,6 +97,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--dump-fs`, then boots again with that dump loaded via `--littlefs` and dumped again, asserting
   the two dumps are byte-identical - a regression test for `--dump-fs`/`--littlefs` round-tripping
   without silently drifting (e.g. reformatting instead of mounting cleanly).
+- `--tcp-port <port>` on `micropython`/`kaluma`: serves the device's USB-CDC console over a plain
+  TCP socket instead of this process's own stdio, for tools that expect a serial port but can't
+  open one - notably `mpremote` in a sandboxed environment with no serial support at all (e.g.
+  Pythonista). `cli/socket_repl.py`'s new `SocketInteractiveRepl` (an `InteractiveRepl`, alongside
+  `StdioInteractiveRepl`) runs its `asyncio.start_server()` on the device's own engine-room loop -
+  same requirement as `StdioInteractiveRepl`'s `add_reader()` - and needs no client-side patching:
+  pySerial's own `socket://host:port` URL support (which `mpremote`'s `SerialTransport` already
+  uses via `serial.serial_for_url()`) is a raw byte pipe with nothing layered on top, so `mpremote
+  connect socket://host:port` talks directly to it. Serves one client at a time, matching a real
+  serial port's exclusive-access semantics; unlike `StdioInteractiveRepl`, no byte is reserved as a
+  quit signal (a real client's own protocol, e.g. raw-REPL's Ctrl-A/Ctrl-C/Ctrl-D, owns this byte
+  stream) - quit the `rp2040py` process itself instead (Ctrl+C/SIGTERM/`--expect-text`, all already
+  supported since nothing here puts the real terminal in raw mode). Mutually exclusive with
+  `micropython`'s `-c`/`-m`/`<filename>`. See README.md's new "mpremote" section. A connection
+  already dead on arrival (its peer closed before, or while, being accepted) could wrongly cause a
+  second, genuinely live connection landing in the same window to be rejected as a duplicate -
+  `self._client_writer` stays set until the dying connection's own handler task gets a scheduling
+  turn to notice EOF and clear it, at least one event-loop iteration away, not visible to a plain
+  synchronous check. Fixed by retrying a bounded number of `await asyncio.sleep(0)` yields before
+  concluding a slot is genuinely occupied, giving an in-flight teardown a chance to finish first.
+- `mpremote` as a `dev` dependency group member, and `tests/test_mpremote_integration.py`: drives a
+  real `mpremote` subprocess against `SocketInteractiveRepl` over an actual `socket://` connection
+  (a scripted fake raw-REPL device stands in for real firmware, which needs a network download this
+  environment's CI can't always assume - see the test module's own docstring), verifying `mpremote
+  exec`/`mpremote fs cp` round-trip correctly through the new transport with zero pySerial/mpremote
+  patching.
 
 ### Changed
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor
