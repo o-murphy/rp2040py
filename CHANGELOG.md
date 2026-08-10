@@ -218,6 +218,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to advance a fixed amount per call instead of tracking real elapsed time, so the number of idle
   iterations that fit before the budget trips is deterministic regardless of host speed - removes
   the CI-runner-speed dependency entirely rather than just loosening the threshold.
+- `tests/test_socket_repl.py::test_a_new_connection_is_accepted_after_the_previous_one_disconnects`
+  was still flaky on macOS CI even after the previous fix's retry-with-a-fresh-socket helper
+  (`_connect_and_wait_for_accept()`). Root cause, confirmed via a real CI failure: that helper's
+  retry loop closed a connection attempt's socket client-side after giving up on it locally, but
+  the attempt's OS-level TCP handshake had often already completed and sat in the accept backlog
+  regardless - so the server could still accept that same, by-then-abandoned connection later, and
+  a subsequent attempt's `repl._client_writer is not None` check could observe *that* acceptance
+  rather than its own, misattributing which socket was actually live. The real (already-closed)
+  connection then tore down mid-test, clearing `repl._client_writer` right as the test tried to
+  read from a socket the server had never actually accepted - `assert b'' == b'still alive'`.
+  Fixed by dropping the retry-with-a-new-socket approach entirely in favor of a single connection
+  with a generous wait for acceptance - avoids the misattribution risk altogether, and still
+  tolerates the same "accept callback takes a while to get scheduled" macOS/kqueue slowness the
+  retry was originally trying to work around.
 - Typing at the interactive REPL while the device sat idle (the common case, once booted) could
   take up to ~1-2 real seconds per keystroke to even reach the emulated device - a regression from
   the `asyncio` migration above, not present before it. Root cause:

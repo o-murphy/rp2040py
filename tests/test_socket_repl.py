@@ -56,29 +56,33 @@ def _wait_for_client(repl: SocketInteractiveRepl, timeout: float = 2.0) -> None:
     assert repl._client_writer is not None, "client was never accepted"
 
 
-def _connect_and_wait_for_accept(repl: SocketInteractiveRepl, timeout: float = 5.0) -> socket.socket:
-    """`_connect()` followed by `_wait_for_client()`, retried with a fresh connection on timeout.
-
-    Reconnecting to the same port immediately after the previous connection's teardown was
-    observed to occasionally leave the new connection's accept callback unscheduled for multiple
-    seconds specifically on macOS CI runners (kqueue-based selector), even once the previous
-    connection had already fully cleared `repl._client_writer` before this one connects - an OS/
-    event-loop-scheduling timing quirk around a rapid close-then-reconnect burst, not reproduced
-    on Linux, and not something clearable by waiting longer on a single connection attempt.
-    Retrying the connection itself (as a real reconnecting client would do anyway) resolves it."""
+def _connect_and_wait_for_accept(repl: SocketInteractiveRepl, timeout: float = 10.0) -> socket.socket:
+    """`_connect()` followed by a single, generous wait for `repl._client_writer` to become
+    non-None - deliberately *not* retried with a fresh connection on a per-attempt timeout (an
+    earlier version of this helper did exactly that, to work around the new connection's accept
+    callback occasionally taking multiple seconds to get scheduled on macOS CI runners/kqueue -
+    see git history). That retry had a real, confirmed-in-CI correctness bug: closing an attempt's
+    socket client-side after giving up on it does *not* stop the server from accepting that same,
+    by-then-abandoned connection later anyway (its OS-level handshake already completed and sits
+    in the accept backlog regardless of what the client does next) - so a later attempt's own
+    `repl._client_writer is not None` check could actually be observing the *earlier*, abandoned
+    attempt having just been accepted, not the socket this call is about to return. That
+    misattribution silently made `second` in
+    `test_a_new_connection_is_accepted_after_the_previous_one_disconnects` point at a connection
+    the server had never actually accepted, while the real (already-torn-down, client already
+    closed) connection briefly - and wrongly - owned `repl._client_writer`, so bytes emitted for
+    "the current client" went nowhere. A single connection with a long enough wait avoids the
+    ambiguity entirely: if accept scheduling is merely slow, this waits it out; if a client is
+    never accepted at all, this raises a clear, correctly-attributed failure instead of guessing
+    which socket got in."""
+    sock = _connect(repl.port, timeout=timeout)
     deadline = time.monotonic() + timeout
-    while True:
-        sock = _connect(repl.port)
-        remaining = deadline - time.monotonic()
-        per_attempt = min(1.0, max(remaining, 0.1))
-        attempt_deadline = time.monotonic() + per_attempt
-        while repl._client_writer is None and time.monotonic() < attempt_deadline:
-            time.sleep(0.01)
-        if repl._client_writer is not None:
-            return sock
+    while repl._client_writer is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if repl._client_writer is None:
         sock.close()
-        if time.monotonic() >= deadline:
-            raise AssertionError("client was never accepted")
+        raise AssertionError("client was never accepted")
+    return sock
 
 
 def _recv_until(sock: socket.socket, expected: bytes, timeout: float = 2.0) -> bytes:
