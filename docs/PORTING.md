@@ -733,3 +733,62 @@ Two mitigations, worth combining:
   root-cause analysis of why the first attempt underperformed, the abi3/stable-ABI build, the PyPy
   regression this found and fixed, and the two real correctness bugs the build-then-test loop
   caught along the way).
+
+### `RPWatchdog` reset - real, not a no-op (unlike upstream)
+
+`peripherals/watchdog.py`'s `RPWatchdog.on_watchdog_trigger` (defaulted to
+`_default_watchdog_trigger`, overridden by `BaseDevice.__init__` for both `MicroPythonDevice` and
+`KalumaDevice`) performs a real in-place device reset when `machine.reset()`/`machine.bootloader()`
+write the `CTRL` register's `TRIGGER` bit: `CortexM0Core.reset()` (sp/pc/cycles plus
+interrupt/exception state, both the pure-Python and `rp2040py.native` Cython ports),
+`RPPWM.reset()`/`RPDMA.reset()`, and `USBCDC.reset()`/`RPUSBController.reset()` all run, then
+execution jumps back to flash's entry point - `RP2040.reset(preserve_flash=True)`, a new parameter
+(existing callers unaffected, still wipe flash by default). Every externally-referenced peripheral
+object (notably `mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct
+reference to) keeps its identity rather than being reconstructed.
+
+Confirmed directly against upstream's `src/peripherals/watchdog.ts`: its `RPWatchdog` has the
+identical register layout (`CTRL`/`LOAD`/`REASON`/`SCRATCH0-7`/`TICK`) and the same `TRIGGER`-bit
+detection in `writeUint32()`, but its `onWatchdogTrigger` default is just
+`this.rp2040.logger.warn(this.name, 'Watchdog triggered, but no reset handler provided')` - no
+demo script in rp2040js's own `demo/` overrides it either. `machine.reset()`/`machine.bootloader()`
+against upstream leaves the emulated CPU spinning forever waiting for a reset that never happens -
+the exact behavior rp2040py had before `docs/BACKLOG.md`'s "Unified process-shutdown coordinator"
+work wired this handler up (found while checking which `mpremote` commands work over
+`--tcp-port` - see `docs/BACKLOG.md` for the full writeup).
+
+### Configurable bootrom revisions (`--bootrom`) - upstream ships exactly one, hardcoded
+
+`device/bootrom.py` exposes `BOOTROM_B1` (used by default, unchanged from the original port) plus
+`--bootrom <b0|b1|b2|path>` (`cli/__init__.py`'s `_resolve_bootrom_words`, downloaded/cached the
+same way firmware images are via `firmware_retrieve.py`'s `BOOTROM` spec) to boot against a
+different bootrom revision's ELF or raw binary instead - see
+[README](../README.md#bootrom-revisions) and `docs/BACKLOG.md`'s "Bootrom B0/B2 support (issue
+#11)".
+
+Upstream's `demo/bootrom.ts` ships exactly one `Uint32Array` (`bootromB1`, "revision: B1"),
+imported directly by every demo script with no alternative and no CLI flag to select a different
+one - confirmed by reading the file directly, it's the same ~4,100-word data-only export
+`bootrom.py`'s `BOOTROM_B1` was ported from in the first place, just with no B0/B2 counterpart
+alongside it anywhere in the repo.
+
+### External serial-tool passthrough (`--tcp-port`/`--pty`, `rp2040py mpremote`) - no rp2040js equivalent
+
+`cli/socket_repl.py`'s `SocketInteractiveRepl` (`--tcp-port`) and `cli/pty_repl.py`'s
+`PtyInteractiveRepl` (`--pty`, POSIX only) serve the device's USB-CDC console over a real TCP
+socket or pseudo-terminal instead of this process's own stdio, so external serial-oriented tools -
+`mpremote` chief among them - can drive the emulator exactly as they would a real board, with no
+rp2040py-specific client needed for most commands (see `docs/mpremote.md`). `rp2040py mpremote
+<args...>` (`cli/__init__.py`'s `_cmd_mpremote`) goes one step further for `mpremote` specifically:
+a thin proxy that also monkeypatches around a real upstream `mpremote`/pySerial bug
+(`mpremote.console.ConsolePosix.waitchar()` unconditionally reading a `.fd` attribute pySerial's
+`socket://` backend never defines - filed at
+https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170), so `mpremote`'s
+own bare interactive REPL works over `--tcp-port` too, not just `--pty`.
+
+Confirmed by reading upstream's `src/usb/cdc.ts` and the rest of `src/`/`demo/` directly: there is
+no pty/socket-backed serial passthrough anywhere in rp2040js - `grep -rl "pty\|socket\|net\."`
+across its source turns up nothing beyond its own GDB TCP server (`src/gdb/gdb-tcp-server.ts`,
+unrelated to the USB-CDC console) and unrelated matches in PIO/FIFO/peripheral code. Every
+rp2040js demo drives the emulated console through its own process's stdio only - there is no
+built-in way for an external tool like `mpremote` to attach to it at all.

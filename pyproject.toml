@@ -26,7 +26,11 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = ["pyelftools>=0.33", "semver>=3.0.4"]
+dependencies = [
+    "mpremote>=1.28.0",
+    "pyelftools>=0.33",
+    "semver>=3.0.4",
+]
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -122,5 +126,4 @@ dev = [
     "pytest-cov>=7.1.0",
     "littlefs-python>=0.18.0",
     "cython>=3.2.9",
-    "mpremote>=1.28.0",
 ]

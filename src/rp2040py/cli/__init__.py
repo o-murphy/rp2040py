@@ -32,6 +32,13 @@ Subcommands:
   mismatched ``--block-size``/``--block-count`` against a stale image would otherwise silently
   produce a corrupted one). ``--disk-version`` selects the
   littlefs on-disk format (defaults to ``2.0``, for compatibility with MicroPython <=1.21).
+- ``mpremote``: transparent proxy to the real ``mpremote`` CLI (every argument after ``mpremote``
+  is forwarded as-is) that patches around a real upstream bug before handing off - ``mpremote``'s
+  bare interactive REPL (``console.py``'s ``waitchar()``) unconditionally reads
+  ``pyb_serial.fd``, which pySerial's ``socket://`` backend never defines (only its POSIX serial
+  backend does - see ``docs/mpremote.md``), so ``mpremote repl``/``mpremote connect
+  socket://host:port`` (no subcommand) crashes with an ``AttributeError`` there. See
+  https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170.
 """
 
 import argparse
@@ -615,6 +622,44 @@ def _cmd_bench(args: argparse.Namespace) -> None:
         _bench_synthetic(args.instructions, args.block_size, log_level)
 
 
+def _patch_mpremote_console_waitchar() -> None:
+    """Monkeypatches ``mpremote.console.ConsolePosix.waitchar`` so it tolerates a serial object
+    with no ``.fd`` - the exact crash filed at
+    https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170. Upstream's
+    own ``waitchar()`` does ``select.select([self.infd, pyb_serial.fd], [], [])``, assuming every
+    connected pySerial object exposes a raw POSIX file descriptor; true for pySerial's POSIX
+    serial backend, but pySerial's ``socket://`` URL handler
+    (``serial.urlhandler.protocol_socket.Serial``) wraps a plain ``socket.socket`` and never
+    defines ``.fd``. That socket is select()-able on its own (sockets implement ``fileno()``,
+    which is all ``select.select`` actually needs - ``.fd`` was never the only way), so falling
+    back to the wrapped socket itself (pySerial's own private ``_socket`` attribute - there's no
+    public accessor) fixes it without touching pySerial. ``ConsoleWindows`` (the other half of
+    ``mpremote.console.Console``) never reads ``.fd`` in the first place - it polls
+    ``pyb_serial.inWaiting()`` instead - so there's nothing to patch when ``select`` is unavailable
+    (i.e. on Windows, where ``console.select`` is ``None``)."""
+    from mpremote import console  # type: ignore[import-untyped]
+
+    if console.select is None:
+        return
+
+    def _waitchar(self, pyb_serial):  # type: ignore[no-untyped-def]
+        fd = getattr(pyb_serial, "fd", None)
+        selectable = fd if fd is not None else getattr(pyb_serial, "_socket", pyb_serial)
+        console.select.select([self.infd, selectable], [], [])
+
+    console.ConsolePosix.waitchar = _waitchar
+
+
+def _cmd_mpremote(args: argparse.Namespace) -> None:
+    _patch_mpremote_console_waitchar()
+
+    from mpremote.main import main as _mpremote_main  # type: ignore[import-untyped]
+
+    # mpremote's own main() reads sys.argv directly rather than taking an argv parameter.
+    sys.argv = ["mpremote", *args.mpremote_args]
+    sys.exit(_mpremote_main())
+
+
 _TARGET_FS_LAYOUTS = {
     "micropython": (MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT),
     "circuitpython": (CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT),
@@ -717,6 +762,20 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
 
 
 def main(argv: "list[str] | None" = None) -> None:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    # Bypassed around argparse entirely (rather than relying on the `mpremote` subparser's own
+    # REMAINDER positional registered below): argparse.REMAINDER has a well-known quirk where it
+    # fails to capture a *leading* option-looking token (e.g. `rp2040py mpremote --version` -
+    # REMAINDER never sees `--version`, argparse reports it as unrecognized instead) - fine for
+    # plain positional mpremote commands (`mpremote repl`, `mpremote connect ...`), but breaks
+    # forwarding mpremote's own `-h`/`--help`/`--version`. This handles the common invocation
+    # (`mpremote` as the very first argument) perfectly instead; the registered subparser remains
+    # only as a fallback for the rare case of a global flag before it (e.g. `--log-level debug
+    # mpremote ...`) and so `--help` still lists it as a subcommand.
+    if raw_argv[:1] == ["mpremote"]:
+        _cmd_mpremote(argparse.Namespace(mpremote_args=raw_argv[1:]))
+        return
+
     prolog, _ = __doc__.split("\n", 1)
     parser = argparse.ArgumentParser(prog="rp2040py", description=prolog)
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {version('rp2040py')}")
@@ -793,6 +852,17 @@ def main(argv: "list[str] | None" = None) -> None:
     bench_parser.add_argument("--image", help=f"firmware mode: {_IMAGE_PATH_HELP}")
     bench_parser.add_argument("--timeout", type=float, default=60.0, help="firmware mode: seconds before giving up")
     bench_parser.set_defaults(func=_cmd_bench)
+
+    # add_help=False + a bare REMAINDER positional: every argument (including `-h`/`--help`) is
+    # forwarded to the real `mpremote` untouched rather than intercepted by this parser - `rp2040py
+    # mpremote --help` should show mpremote's own help, not rp2040py's.
+    mpremote_parser = subparsers.add_parser(
+        "mpremote",
+        add_help=False,
+        help="run the real mpremote, patched to work around its socket:// bare-REPL crash (see docs/mpremote.md)",
+    )
+    mpremote_parser.add_argument("mpremote_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    mpremote_parser.set_defaults(func=_cmd_mpremote)
 
     if _HAS_LITTLEFS:
         mklittlefs_parser = subparsers.add_parser(

@@ -147,6 +147,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MicroPython ≤1.21 (runs `import vfs`, a module that doesn't exist that early - VFS was still
   bundled directly in `os` then). README.md's own "mpremote" section is now a short summary linking
   here instead of duplicating all of this inline.
+- `rp2040py mpremote <args...>`: a thin proxy subcommand that forwards every argument verbatim to
+  the real `mpremote`, after monkeypatching `mpremote.console.ConsolePosix.waitchar()`
+  (`cli/__init__.py`'s `_patch_mpremote_console_waitchar`) to fix the `.fd`
+  `AttributeError` above at the source instead of only working around it via `--pty`. The crash is
+  a genuine upstream `mpremote`/pySerial bug (filed at
+  https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170), not an
+  rp2040py one, and `mpremote` is pure Python - nothing stops a wrapper CLI from patching it before
+  handing off. The patch falls back to the wrapped socket itself (`pyb_serial._socket`, pySerial's
+  own private attribute - there's no public accessor) when `.fd` isn't there: a raw
+  `socket.socket` is select()-able on its own (it implements `fileno()`, all `select.select()`
+  actually needs), so `.fd` was never the only way. `ConsoleWindows` never reads `.fd` in the first
+  place (it polls `inWaiting()` instead), so nothing is patched, or needed, on Windows. `mpremote`
+  moved from a `dev`-only dependency group member to a normal `pyproject.toml` runtime dependency,
+  since the subcommand needs it importable outside a dev checkout. Verified against the running
+  emulator: `rp2040py mpremote connect socket://host:port repl`, driven over a real pty to
+  simulate an interactive terminal, connects, executes a typed command, and exits cleanly with no
+  `AttributeError` - the bare interactive REPL now works over `--tcp-port` too, not just `--pty`.
+  See `docs/mpremote.md`'s "mpremote proxy" section for the up-to-date picture of when to reach for
+  this versus `--pty`.
 - `--pty` on `micropython`/`kaluma` (POSIX only): serves the console over a real pseudo-terminal
   pair instead of this process's own stdio or `--tcp-port`'s TCP socket - `cli/pty_repl.py`'s new
   `PtyInteractiveRepl`. Unlike `--tcp-port`, the slave side it opens (e.g. `/dev/pts/3`) is a

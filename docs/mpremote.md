@@ -3,14 +3,18 @@
 [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) is the official
 MicroPython remote-control tool. rp2040py has two flags that serve the device's USB-CDC console
 over something other than this process's own stdio, so `mpremote` (or anything else built on
-pySerial) can drive an emulated device the same way it drives a real board:
+pySerial) can drive an emulated device the same way it drives a real board, plus an `rp2040py
+mpremote` proxy subcommand (see "mpremote proxy" below) that patches around a real upstream
+`mpremote` bug so its bare interactive REPL works over `--tcp-port` too, not just `--pty`:
 
 - **`--tcp-port`**: a plain TCP socket, via pySerial's built-in `socket://host:port` URL support -
   no serial port or pty needed on the host at all, useful for CI, scripting, and environments with
   no serial support (e.g.
-  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-pythonista-other-ios-apps)).
-  `exec`/`fs`/`run`/... all work fine over it, but `mpremote`'s own **bare interactive REPL does
-  not** - see "What doesn't work" below.
+  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-iosandroid)).
+  `exec`/`fs`/`run`/... all work fine over it; the real (unpatched) `mpremote` binary's own **bare
+  interactive REPL does not** - see "What doesn't work" below - but `rp2040py mpremote` (see
+  "mpremote proxy" below) patches around exactly that, so use it instead if you want the
+  interactive REPL over `--tcp-port` specifically.
 - **`--pty`** (POSIX only): a real pseudo-terminal pair, whose slave side is a genuine POSIX serial
   device path (e.g. `/dev/pts/3` on Linux). Everything `--tcp-port` supports also works here,
   *plus* the bare interactive REPL - see "Why `--pty` exists" below for why that specifically needs
@@ -34,6 +38,12 @@ rp2040py micropython --pty
 # logs e.g. "PTY REPL listening on /dev/pts/3 - e.g. `mpremote connect /dev/pts/3`"
 # in another terminal:
 mpremote connect /dev/pts/3 repl
+```
+
+```sh
+rp2040py micropython --tcp-port 4321
+# in another terminal - rp2040py mpremote instead of plain mpremote, same arguments otherwise:
+rp2040py mpremote connect socket://127.0.0.1:4321 repl
 ```
 
 `--tcp-port 0` asks the OS for a free port instead of a fixed one - watch the logged "listening
@@ -61,6 +71,35 @@ to expose a `.fd` attribute - something pySerial's `socket://` URL handler never
 POSIX serial backend does). A real pty's slave side *is* a normal POSIX tty device that pySerial
 opens via that POSIX backend, `.fd` included - so the same REPL code works against it exactly as it
 would against a real board. See "What doesn't work" below for the exact traceback this avoids.
+
+## mpremote proxy
+
+`rp2040py mpremote <args...>` runs the real `mpremote` with every argument forwarded verbatim
+(`rp2040py mpremote connect socket://host:port repl` is exactly `mpremote connect
+socket://host:port repl`, argument for argument - including `-h`/`--help`/`--version`), but first
+monkeypatches `mpremote.console.ConsolePosix.waitchar()` to fall back to the wrapped socket itself
+(pySerial's own private `_socket` attribute - there's no public accessor) when `.fd` isn't there. A
+raw `socket.socket` is select()-able on its own (it implements `fileno()`, all `select.select()`
+actually needs) - `.fd` was never the only way to make this work, `mpremote` just never falls back
+to it. This is a real bug in `mpremote`/pySerial, not in rp2040py; filed upstream at
+https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170. `ConsoleWindows`
+(the other half of `mpremote.console.Console`) never reads `.fd` in the first place - it polls
+`pyb_serial.inWaiting()` instead - so nothing is patched, or needed, there.
+
+Use this instead of the real `mpremote` binary whenever you want the bare interactive REPL over
+`--tcp-port` specifically - or as a drop-in replacement for `mpremote` generally, since every other
+command works identically either way (the patch only changes `waitchar()`'s behavior, and only when
+`.fd` is actually missing). `--pty` (above) is still the better choice for anything besides
+`mpremote` itself that needs a *real* serial device path (Thonny, `screen`, `minicom`, ...) - this
+proxy is `mpremote`-specific and doesn't help those - but it needs no POSIX pty support at all, so
+it also covers Windows and sandboxed/no-pty environments `--pty` can't reach.
+
+> [!TIP]
+> `rp2040py mpremote connect socket://host:port repl` also works against `rp2040py kaluma
+> --tcp-port ...`, not just `micropython` - the patch is entirely inside `mpremote`'s own terminal
+> code (`waitchar()`), with no dependency on which firmware is on the other end of the socket.
+> Verified by hand: a typed expression echoes and evaluates correctly, and the session exits
+> cleanly with no `AttributeError`.
 
 ## Quitting the emulator
 
@@ -95,7 +134,7 @@ combination outside what CI can assume either):
 | `mpremote connect ... run script.py` | ✅ | |
 | `mpremote connect ... fs cp/ls/cat/mkdir/rmdir/rm/touch/tree/sha256sum ...` | ✅ | `fs cp` over `socket://` is covered by an automated test. |
 | `mpremote connect ... mount ./local_dir` | ✅ | Including running a script straight out of the mounted directory. |
-| `mpremote connect ... repl` (bare interactive REPL) | ✅ over `--pty` only | Does **not** work over `--tcp-port`'s `socket://` transport - see "Why `--pty` exists" and "What doesn't work" below. |
+| `mpremote connect ... repl` (bare interactive REPL) | ✅ over `--pty`; ✅ over `--tcp-port` via `rp2040py mpremote` | The real `mpremote` binary crashes over `--tcp-port`'s `socket://` transport - see "What doesn't work" below - unless run through `rp2040py mpremote` (see "mpremote proxy" above), which patches around it. |
 | `mpremote connect ... soft-reset` / Ctrl-D at the raw-REPL prompt | ✅ | Handled entirely by firmware's own soft-reset code - no emulator-side reset needed. |
 | `mpremote connect ... resume` | ✅ | |
 | `mpremote connect ... rtc` | ✅ | |
@@ -112,19 +151,22 @@ forever (the behavior before this was implemented).
 
 ## What doesn't work
 
-- **Bare interactive REPL over `--tcp-port`** (`mpremote repl`, or `mpremote connect
-  socket://host:port` with no subcommand) - **not supported over `socket://`**, and not fixable
-  from rp2040py's side - use `--pty` instead (see above), which does support it. `mpremote`'s
-  interactive console (`console.py`'s `waitchar()`) does
+- **Bare interactive REPL over `--tcp-port`, through the real (unpatched) `mpremote` binary**
+  (`mpremote repl`, or `mpremote connect socket://host:port` with no subcommand) - **not
+  supported over `socket://`** this way; use `rp2040py mpremote` instead (see "mpremote proxy"
+  above), which patches around it, or switch to `--pty` (see above), which sidesteps it entirely.
+  `mpremote`'s interactive console (`console.py`'s `waitchar()`) does
   `select.select([self.infd, pyb_serial.fd], [], [])`, which requires the serial object to expose a
   `.fd` attribute - but pySerial's `socket://` URL handler
   (`serial.urlhandler.protocol_socket.Serial`) never defines `.fd` (only its POSIX serial
   implementation does, which is exactly what a real pty's slave side is). This is a genuine gap in
-  `mpremote`/pySerial's own `socket://` support, not an rp2040py bug: the underlying connection and
-  raw-REPL command execution both work fine over `socket://` too (confirmed by driving a real pty
-  by hand and typing commands through it - the crash only happens in `mpremote`'s own
-  terminal-multiplexing code, after the connection is already up). Use `exec`/`run`/one-shot
-  commands (or switch to `--pty`) instead of the interactive REPL when driving rp2040py through
+  `mpremote`/pySerial's own `socket://` support, not an rp2040py bug (filed upstream at
+  https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170): the underlying
+  connection and raw-REPL command execution both work fine over `socket://` too (confirmed by
+  driving a real pty by hand and typing commands through it - the crash only happens in
+  `mpremote`'s own terminal-multiplexing code, after the connection is already up). Use
+  `exec`/`run`/one-shot commands, `rp2040py mpremote` instead of plain `mpremote`, or switch to
+  `--pty`, instead of the real `mpremote` binary's interactive REPL when driving rp2040py through
   `mpremote` over `--tcp-port`.
 - **`--pty` on Windows** - not supported (`pty.openpty()`/`os.ttyname()` have no Windows
   equivalent); `rp2040py micropython --pty` exits with a clear error there instead of a crash. Use
