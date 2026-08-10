@@ -56,10 +56,15 @@ below for the checkout-equivalent commands.
 
 `rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
 [Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
-handful of environments, notably iOS apps like [Pythonista](http://omz-software.com/pythonista/)
-and some Android Python apps, sandboxed by the OS, can't load compiled `.so` extensions or import
-native code dynamically at all. A plain `pip install rp2040py` there resolves to a
-platform-specific wheel that simply won't load. Force the pure-Python universal wheel instead:
+handful of environments, fully sandboxed by the OS with no dynamic-library loading at all, can't
+load compiled `.so` extensions or import native code dynamically. So far that's confirmed only for
+iOS app runtimes like [Pythonista](http://omz-software.com/pythonista/) and
+[PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - **not** Android: both
+[Termux](https://github.com/termux) and [Python 3 IDE (Pydroid
+3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) load the compiled
+`rp2040py.native` extension fine, confirmed by hand (see "Tested" below). A plain `pip install
+rp2040py` in one of the affected iOS environments resolves to a platform-specific wheel that simply
+won't load. Force the pure-Python universal wheel instead:
 
 ```sh
 pip download rp2040py --only-binary=:all: --platform any --abi none
@@ -69,15 +74,6 @@ pip install rp2040py-*.whl --upgrade
 This is the exact same artifact `rp2040py`'s own release pipeline builds and publishes for every
 release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
 not a degraded or unsupported build, just the emulator without the compiled speedup.
-
-> [!NOTE]
-> "some Android Python apps" above is deliberately narrow - confirmed by hand, the compiled
-> `rp2040py.native` extension loads and runs fine on Android under both
-> [Termux](https://github.com/termux) and [Python 3 IDE (Pydroid
-> 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) (see "Tested" below), so
-> most Android environments need no fallback at all. The pure-Python wheel is only confirmed
-> necessary for fully sandboxed app runtimes with no dynamic-library loading - so far that means
-> iOS apps (Pythonista, PythonIDE) - not Android generally.
 
 To confirm you actually got it:
 - **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
