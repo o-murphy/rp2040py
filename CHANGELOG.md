@@ -125,7 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a scripted fake raw-REPL device stands in for real firmware, which needs a network download this
   environment's CI can't always assume - see the test module's own docstring), verifying `mpremote
   exec`/`mpremote fs cp` round-trip correctly through the new transport with zero pySerial/mpremote
-  patching.
+  patching. `exec`/`fs cp`/`mount` (including running a script straight out of a mounted local
+  directory) have also all been verified by hand against real MicroPython 1.21.0/1.28.0 firmware
+  over this same transport.
 
 ### Changed
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor

@@ -243,10 +243,12 @@ protocol over this byte stream (raw-REPL's own Ctrl-A/Ctrl-C/Ctrl-D among them),
 byte meant for it would corrupt that protocol - so quit the `rp2040py` process itself instead
 (Ctrl+C, SIGTERM, or `--expect-text` matching, same as every other subcommand).
 
-`exec` and `fs cp` are verified against this transport (`tests/test_mpremote_integration.py`, a
-real `mpremote` subprocess driven over a real `socket://` connection); other `mpremote` commands
-(e.g. `mount`) ride the same raw-REPL byte stream and are expected to work the same way, but
-weren't separately exercised.
+`exec` and `fs cp` are covered by an automated regression test
+(`tests/test_mpremote_integration.py`, a real `mpremote` subprocess driven over a real `socket://`
+connection against a scripted stand-in for firmware, since CI can't always assume a network
+download); `exec`, `fs cp`, and `mount` (including running a script straight out of a mounted local
+directory) have all also been verified by hand against real MicroPython firmware over this exact
+transport.
 
 #### Filesystem support
 
