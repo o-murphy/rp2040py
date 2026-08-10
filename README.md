@@ -535,13 +535,27 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **A programmatic device API** (`rp2040py.device.MicroPythonDevice`/`KalumaDevice`) for driving a
   booted device from another Python program over the raw-REPL protocol
   (`device.exec("print(1+1)")`) - the same API `micropython -c/-m/<filename>` and `--tcp-port`
-  themselves are built on, not a separate implementation. `--tcp-port` in particular lets any
-  serial-oriented external tool (`mpremote` chief among them) drive the emulator over a real
-  socket, something rp2040js has no analogue for at all.
+  themselves are built on, not a separate implementation. `--tcp-port`/`--pty` in particular let
+  any serial-oriented external tool - `mpremote` chief among them, including its own bare
+  interactive REPL via `rp2040py mpremote` (see [mpremote](#mpremote)) - drive the emulator over a
+  real socket or pty, something rp2040js has no analogue for at all (no pty/socket-backed USB-CDC
+  passthrough anywhere in its source, only stdio-driven demo scripts).
 - **Broader firmware coverage**: MicroPython, CircuitPython, and [Kaluma](https://kaluma.io/) (a
   second, independent USB-CDC-console JS runtime for RP2040 - unrelated to rp2040js despite both
   being JS) all boot and run against this emulator; a built-in GDB server (`--gdb`) works against
   any of them.
+- **`machine.reset()`/`machine.bootloader()` actually reset the device**: rp2040js's own
+  `RPWatchdog.onWatchdogTrigger` (`src/peripherals/watchdog.ts`) defaults to logging "Watchdog
+  triggered, but no reset handler provided" and does nothing else - the emulated CPU spins forever
+  waiting for a reset that never happens. rp2040py's `RPWatchdog.on_watchdog_trigger` performs a
+  real in-place reset (CPU core, PWM/DMA/USB-CDC peripheral state) and jumps back to flash's entry
+  point, preserving flash/filesystem content and every externally-referenced peripheral object's
+  identity - `mpremote reset`/`mpremote bootloader` (the latter performs the same reset rather than
+  entering actual BOOTSEL mode, which isn't implemented) both return promptly instead of hanging.
+- **Configurable bootrom revision** (`--bootrom b0`/`b1`/`b2`, or a local `.elf`/`.bin`) - see
+  [Bootrom revisions](#bootrom-revisions) below - auto-downloaded and cached the same way firmware
+  images are. rp2040js ships exactly one hardcoded bootrom build (`demo/bootrom.ts`, revision B1),
+  with no way to select a different revision at all.
 - **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
