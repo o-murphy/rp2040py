@@ -8,6 +8,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# Every test here shells out to a real `python demo/mklittlefs_dump.py` via
+# [sys.executable, str(SCRIPT), ...] (see _run() below) - on Android's testbed sys.executable is
+# "" (there's no standalone python binary; it's embedded in the app), so Popen([""...]) fails with
+# PermissionError before the script even runs. Same root cause/fix as test_mpremote_integration.py.
+is_android = hasattr(sys, "getandroidapilevel") or "android" in sys.platform
+if is_android:
+    pytest.skip("subprocess-driven CLI tests need sys.executable, which is empty on Android", allow_module_level=True)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "demo" / "mklittlefs_dump.py"
 
