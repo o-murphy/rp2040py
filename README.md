@@ -17,7 +17,7 @@ See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against 
 - [rp2040py](#rp2040py)
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
-    - [Environments without compiled-extension support (iOS/Android)](#environments-without-compiled-extension-support-iosandroid)
+    - [Environments without compiled-extension support (sandboxed app runtimes)](#environments-without-compiled-extension-support-sandboxed-app-runtimes)
   - [Run the demo project](#run-the-demo-project)
     - [Native code](#native-code)
     - [MicroPython code](#micropython-code)
@@ -52,7 +52,7 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
-### Environments without compiled-extension support (iOS/Android)
+### Environments without compiled-extension support (sandboxed app runtimes)
 
 `rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
 [Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
@@ -252,7 +252,7 @@ rp2040py micropython path/to/script.py
 stdio - for tools that expect a serial port but can't open one, notably
 [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
 environment with no serial support at all (e.g.
-[Pythonista](#environments-without-compiled-extension-support-iosandroid), see above). No
+[Pythonista](#environments-without-compiled-extension-support-sandboxed-app-runtimes), see above). No
 client-side patching needed - `mpremote connect socket://host:port` just talks directly
 to rp2040py, via pySerial's own built-in `socket://` URL support:
 
@@ -583,7 +583,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
-  [Pythonista](#environments-without-compiled-extension-support-iosandroid)).
+  [Pythonista](#environments-without-compiled-extension-support-sandboxed-app-runtimes)).
 
 See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,

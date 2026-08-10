@@ -10,7 +10,7 @@ mpremote` proxy subcommand (see "mpremote proxy" below) that patches around a re
 - **`--tcp-port`**: a plain TCP socket, via pySerial's built-in `socket://host:port` URL support -
   no serial port or pty needed on the host at all, useful for CI, scripting, and environments with
   no serial support (e.g.
-  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-iosandroid)).
+  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-sandboxed-app-runtimes)).
   `exec`/`fs`/`run`/... all work fine over it; the real (unpatched) `mpremote` binary's own **bare
   interactive REPL does not** - see "What doesn't work" below - but `rp2040py mpremote` (see
   "mpremote proxy" below) patches around exactly that, so use it instead if you want the
@@ -113,7 +113,7 @@ its port explicitly and never actually calls `comports()` to enumerate anything 
 import time, not at the point serial-port enumeration would happen. This is a real gap in
 pySerial's own platform dispatch, not an rp2040py bug. Going by the same platform-string logic,
 iOS's `sys.platform` (`'ios'`) isn't in pySerial's list either, so
-[Pythonista/PythonIDE](../README.md#environments-without-compiled-extension-support-iosandroid)
+[Pythonista/PythonIDE](../README.md#environments-without-compiled-extension-support-sandboxed-app-runtimes)
 hit the identical crash - confirmed on-device now, not just inferred from the platform-string logic
 (see the README's "Tested" list).
 
