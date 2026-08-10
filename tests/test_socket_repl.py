@@ -1,3 +1,4 @@
+import signal
 import socket
 import time
 
@@ -71,7 +72,7 @@ def _recv_until(sock: socket.socket, expected: bytes, timeout: float = 2.0) -> b
 
 
 def test_start_listens_on_a_resolved_port():
-    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), port=0)
+    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None, port=0)
     assert repl.port is None
     repl.start()
     try:
@@ -83,7 +84,7 @@ def test_start_listens_on_a_resolved_port():
 def test_device_output_is_forwarded_to_the_connected_client():
     cdc = _FakeCdc()
     simulator = Simulator()
-    repl = SocketInteractiveRepl(cdc, simulator, port=0)
+    repl = SocketInteractiveRepl(cdc, simulator, on_quit=lambda code: None, port=0)
     repl.start()
     try:
         client = _connect(repl.port)
@@ -99,7 +100,7 @@ def test_device_output_is_forwarded_to_the_connected_client():
 
 def test_bytes_from_client_are_forwarded_to_the_device():
     cdc = _FakeCdc()
-    repl = SocketInteractiveRepl(cdc, Simulator(), port=0)
+    repl = SocketInteractiveRepl(cdc, Simulator(), on_quit=lambda code: None, port=0)
     repl.start()
     try:
         client = _connect(repl.port)
@@ -118,7 +119,7 @@ def test_bytes_from_client_are_forwarded_to_the_device():
 
 
 def test_second_connection_is_rejected_while_one_is_active():
-    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), port=0)
+    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None, port=0)
     repl.start()
     try:
         first = _connect(repl.port)
@@ -145,7 +146,7 @@ def test_second_connection_is_rejected_while_one_is_active():
 def test_a_new_connection_is_accepted_after_the_previous_one_disconnects():
     cdc = _FakeCdc()
     simulator = Simulator()
-    repl = SocketInteractiveRepl(cdc, simulator, port=0)
+    repl = SocketInteractiveRepl(cdc, simulator, on_quit=lambda code: None, port=0)
     repl.start()
     try:
         first = _connect(repl.port)
@@ -172,7 +173,7 @@ def test_on_data_sees_output_even_without_a_connected_client():
     cdc = _FakeCdc()
     simulator = Simulator()
     seen = bytearray()
-    repl = SocketInteractiveRepl(cdc, simulator, port=0, on_data=seen.extend)
+    repl = SocketInteractiveRepl(cdc, simulator, on_quit=lambda code: None, port=0, on_data=seen.extend)
     repl.start()
     try:
         _emit_from_device(simulator, cdc, b"nobody listening yet")
@@ -186,7 +187,7 @@ def test_paced_send_for_a_full_fifo():
     queued and pumped through, not silently truncated."""
     cdc = _FakeCdc(fifo_size=4)
     simulator = Simulator()
-    repl = SocketInteractiveRepl(cdc, simulator, port=0)
+    repl = SocketInteractiveRepl(cdc, simulator, on_quit=lambda code: None, port=0)
     repl.start()
     try:
         client = _connect(repl.port)
@@ -211,7 +212,7 @@ def test_paced_send_for_a_full_fifo():
 
 
 def test_stop_closes_the_listening_socket():
-    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), port=0)
+    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None, port=0)
     repl.start()
     port = repl.port
     repl.stop()
@@ -223,3 +224,33 @@ def test_stop_closes_the_listening_socket():
         pass
     else:
         raise AssertionError("expected the listening socket to be closed after stop()")
+
+
+def test_sigterm_signals_quit():
+    """Regression test: Python's default SIGTERM disposition is immediate OS-level process
+    termination, bypassing every finally/context-manager exit in the interpreter - so without an
+    explicit handler here, a plain `kill <pid>` (no -9) on a `--tcp-port` process would skip
+    --dump-fs's own cleanup entirely, unlike Ctrl+C (a catchable KeyboardInterrupt) or a client
+    disconnect. Mirrors test_stdio_repl.py's identical SIGTERM test for StdioInteractiveRepl."""
+    quit_calls = []
+
+    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), on_quit=quit_calls.append, port=0)
+    repl.start()
+    try:
+        handler = signal.getsignal(signal.SIGTERM)
+        assert handler == repl._on_sigterm
+
+        handler(signal.SIGTERM, None)
+
+        assert quit_calls == [128 + signal.SIGTERM]
+    finally:
+        repl.stop()
+
+
+def test_stop_restores_the_previous_sigterm_handler():
+    original_handler = signal.getsignal(signal.SIGTERM)
+    repl = SocketInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None, port=0)
+    repl.start()
+    assert signal.getsignal(signal.SIGTERM) == repl._on_sigterm
+    repl.stop()
+    assert signal.getsignal(signal.SIGTERM) == original_handler

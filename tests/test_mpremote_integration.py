@@ -178,7 +178,7 @@ def _run_mpremote(port: int, *args: str, cwd: Path, timeout: float = 15.0) -> "s
 @pytest.fixture
 def fake_device_repl(tmp_path):
     device = _FakeRawReplDevice(tmp_path)
-    repl = SocketInteractiveRepl(device, Simulator(), port=0)
+    repl = SocketInteractiveRepl(device, Simulator(), on_quit=lambda code: None, port=0)
     repl.start()
     try:
         yield repl, tmp_path

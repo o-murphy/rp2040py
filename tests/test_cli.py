@@ -196,7 +196,7 @@ def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, mon
     started = {}
 
     class _FakeSocketRepl:
-        def __init__(self, cdc, simulator, port=0, on_data=None):
+        def __init__(self, cdc, simulator, on_quit, port=0, on_data=None):
             started["port"] = port
             self.port = 12345
 

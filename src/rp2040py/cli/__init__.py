@@ -239,7 +239,9 @@ def _start_console_repl(
     a serial port but can't get one (see `cli/socket_repl.py`). Caller is responsible for
     registering `.stop` with its own cleanup - this only starts it."""
     if args.tcp_port is not None:
-        socket_repl = SocketInteractiveRepl(cdc, simulator, port=args.tcp_port, on_data=on_data)
+        socket_repl = SocketInteractiveRepl(
+            cdc, simulator, on_quit=simulator.shutdown_request.request, port=args.tcp_port, on_data=on_data
+        )
         socket_repl.start()
         _logger.info(
             "TCP socket REPL listening on 127.0.0.1:%d - e.g. `mpremote connect socket://127.0.0.1:%d`",

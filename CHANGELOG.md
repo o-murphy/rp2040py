@@ -108,11 +108,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connect socket://host:port` talks directly to it. Serves one client at a time, matching a real
   serial port's exclusive-access semantics; unlike `StdioInteractiveRepl`, no byte is reserved as a
   quit signal (a real client's own protocol, e.g. raw-REPL's Ctrl-A/Ctrl-C/Ctrl-D, owns this byte
-  stream) - quit the `rp2040py` process itself instead (Ctrl+C/SIGTERM/`--expect-text`, all already
-  supported since nothing here puts the real terminal in raw mode). Mutually exclusive with
-  `micropython`'s `-c`/`-m`/`<filename>`. See README.md's new "mpremote" section. A connection
-  already dead on arrival (its peer closed before, or while, being accepted) could wrongly cause a
-  second, genuinely live connection landing in the same window to be rejected as a duplicate -
+  stream) - quit the `rp2040py` process itself instead. Mutually exclusive with `micropython`'s
+  `-c`/`-m`/`<filename>`. See README.md's new "mpremote" section.
+  Ctrl+C is free (nothing here puts the real terminal in raw mode, so
+  `Simulator.wait_for_shutdown()`'s own `KeyboardInterrupt` handling already covers it), but SIGTERM
+  needed its own explicit handler - confirmed the hard way (`kill <pid>` on an early build exited
+  the process at code 143 with `--dump-fs`'s cleanup callback never having run at all): Python's
+  default SIGTERM disposition is immediate OS-level termination, bypassing every `finally`/context-
+  manager exit in the interpreter, the same behavior `StdioInteractiveRepl`'s own SIGTERM handler
+  exists to work around. `SocketInteractiveRepl` now takes the same `on_quit` constructor argument
+  and installs/restores a `SIGTERM` handler around `start()`/`stop()`, mirroring
+  `StdioInteractiveRepl`'s handler exactly - `--dump-fs` (and everything else `on_quit` gates) now
+  actually runs on a plain `kill`, verified against real MicroPython firmware, not just
+  `--expect-text`/a client disconnect.
+- A connection already dead on arrival (its peer closed before, or while, being accepted) could
+  wrongly cause a second, genuinely live connection landing in the same window to be rejected -
   `self._client_writer` stays set until the dying connection's own handler task actually finishes
   (its `reader.read()` resolving to EOF, then its own `finally` clearing it), which needs at least
   one more event-loop iteration and isn't bounded to any fixed number of them (confirmed: an
