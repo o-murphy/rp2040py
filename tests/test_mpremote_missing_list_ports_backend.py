@@ -23,6 +23,14 @@ import pytest
 
 pytest.importorskip("mpremote", reason="needs the optional mpremote dev dependency")
 
+# Both tests here shell out via [sys.executable, "-c", ...] - on Android's testbed sys.executable
+# is "" (there's no standalone python binary; it's embedded in the app), so Popen([""...]) fails
+# with PermissionError before the script even runs. Same root cause/fix as
+# test_mpremote_integration.py and test_demo_mklittlefs_dump.py.
+is_android = hasattr(sys, "getandroidapilevel") or "android" in sys.platform
+if is_android:
+    pytest.skip("subprocess-driven CLI tests need sys.executable, which is empty on Android", allow_module_level=True)
+
 _SCRIPT = """
 import sys
 sys.modules["serial.tools.list_ports"] = None  # simulate pySerial's ImportError on an unrecognized platform

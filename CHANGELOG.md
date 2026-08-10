@@ -254,6 +254,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reason (see Added, above).
 
 ### Fixed
+- `tests/test_mpremote_missing_list_ports_backend.py` failed on real Android CI
+  (`cibuildwheel`'s `android_x86_64` job, both `test_patch_serial_list_ports_missing_backend_*`
+  cases) with `PermissionError: [Errno 13] Permission denied: ''` - it shells out via
+  `subprocess.run([sys.executable, "-c", ...])`, but `sys.executable` is `""` on Android's testbed
+  (there's no standalone `python` binary; it's embedded in the app), so `Popen([""...])` fails
+  before the script under test even runs. Same root cause already worked around in
+  `test_mpremote_integration.py` and `test_demo_mklittlefs_dump.py`; this module now skips for the
+  same reason (`is_android` check, `allow_module_level=True`) instead of failing.
 - `tests/test_simulator.py::test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch`
   was flaky on CI: it asserts a WFI'd core's idle alarm fires more than a hardcoded floor
   (1000/200 for 64/32-bit) within one `_execute_batch()` call, but that batch is itself bounded by
