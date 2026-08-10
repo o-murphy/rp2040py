@@ -27,6 +27,15 @@ import pytest
 
 mpremote = pytest.importorskip("mpremote", reason="needs the optional mpremote dev dependency")
 
+# Every test here shells out to a real `mpremote` via [sys.executable, "-m", "mpremote", ...]
+# (see _run_mpremote() below) - on Android's testbed sys.executable is "" (there's no standalone
+# python binary; it's embedded in the app), so Popen([""...]) fails with PermissionError before
+# mpremote even runs. Nothing about the TCP transport under test is Android-specific, just this
+# subprocess-spawning mechanism, so skip the whole module rather than the "real mpremote" premise.
+is_android = hasattr(sys, "getandroidapilevel") or "android" in sys.platform
+if is_android:
+    pytest.skip("mpremote-subprocess tests need sys.executable, which is empty on Android", allow_module_level=True)
+
 from rp2040py.cli.socket_repl import SocketInteractiveRepl
 from rp2040py.simulator import Simulator
 
