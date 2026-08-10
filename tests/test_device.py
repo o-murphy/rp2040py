@@ -82,7 +82,8 @@ def _reply(device: MicroPythonDevice, *chunks: bytes) -> None:
     # on_serial_data from this thread directly.
     async def _send() -> None:
         for chunk in chunks:
-            device.cdc.on_serial_data(chunk)
+            if device.cdc.on_serial_data is not None:
+                device.cdc.on_serial_data(chunk)
 
     device.simulator.call(_send())
 

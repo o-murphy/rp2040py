@@ -504,6 +504,48 @@ class RPUSBController(BasePeripheral):
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.USBCTRL, bool(self.int_status))
 
+    def reset(self) -> None:
+        """Callbacks (on_usb_enabled etc.), the alarm objects themselves, and read/write_delay
+        tuning are left alone - only the register/transaction state a real RESETS-block reset
+        would clear. Used by USBCDC.reset() (RPWatchdog.on_watchdog_trigger's live device reset -
+        see base_device.py), where this controller object survives the reset in place rather than
+        being reconstructed, unlike a fresh boot where a new one is simply constructed instead."""
+        self._addr_endp = 0
+        self._main_ctrl = 0
+        self._int_raw = 0
+        self._int_enable = 0
+        self._int_force = 0
+        self._sie_status = 0
+        self._buff_status = 0
+
+        self._sie_ctrl = 0
+        self._sof_frame_number = 0
+        self._dev_addr_ctrl = 0
+        for i in range(len(self._int_ep_addr_ctrl)):
+            self._int_ep_addr_ctrl[i] = 0
+        self._int_ep_ctrl = 0
+        self._usb_pwr = 0
+        self._nak_poll = 0
+        self._ep_abort = 0
+        self._ep_abort_done = 0
+        self._ep_stall_arm = 0
+        self._ep_status_stall_nak = 0
+
+        self._host_mode = False
+        self._sof_enabled = False
+        self.connected_device = None
+        self._pending_setup_response = None
+        self._control_data_pid = 1
+        self._expecting_status_phase = False
+
+        for alarm in (self.reset_alarm, self.sof_alarm, self.host_transaction_alarm):
+            alarm.cancel()
+        for endpoint_alarm in (*self.endpoint_read_alarms, *self.endpoint_write_alarms):
+            endpoint_alarm.alarm.cancel()
+            endpoint_alarm.buffers = []
+
+        self.check_interrupts()
+
     def reset_device(self) -> None:
         self.reset_alarm.schedule(10_000_000)  # USB reset takes ~10ms
 

@@ -1,4 +1,4 @@
-from machine import Pin, SPI
+from machine import Pin, SPI  # type: ignore[import-not-found]
 
 spi = SPI(0)
 cs = Pin(5, Pin.OUT)

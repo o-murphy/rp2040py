@@ -154,9 +154,50 @@ cdef class CortexM0Core:
         return self.rp2040.logger
 
     cpdef reset(self):
+        # Full architectural reset - mirrors _cortex_m0_core.py's reset() 1:1 (see its docstring
+        # for why this now resets more than sp/pc/cycles: RPWatchdog.on_watchdog_trigger reuses
+        # this for a live, mid-execution reset, not just construction-time setup).
+        cdef int i
+        for i in range(16):
+            self.registers[i] = 0
+        self.banked_sp = 0
+        self.cycles = 0
+
+        self.event_registered = False
+        self.waiting = False
+
+        self.n = False
+        self.c = False
+        self.z = False
+        self.v = False
+
+        self.break_rewind = 0
+
+        self.pm = False
+
+        self.sp_sel = SP_MAIN
+        self.n_priv = False
+
+        self.current_mode = MODE_THREAD
+        self.ipsr = 0
+        self.interrupt_nmi_mask = 0
+        self.pending_interrupts = 0
+        self.enabled_interrupts = 0
+        self.interrupt_priorities[0] = 0xFFFFFFFFU
+        self.interrupt_priorities[1] = 0
+        self.interrupt_priorities[2] = 0
+        self.interrupt_priorities[3] = 0
+        self.pending_nmi = False
+        self.pending_pend_sv = False
+        self.pending_svcall = False
+        self.pending_systick = False
+        self.interrupts_updated = False
+        self.vtor = 0
+        self.shpr2 = 0
+        self.shpr3 = 0
+
         self.registers[13] = (<unsigned int> self.rp2040.read_uint32(self.vtor)) & 0xFFFFFFFCU
         self.registers[15] = (<unsigned int> self.rp2040.read_uint32(self.vtor + 4)) & 0xFFFFFFFEU
-        self.cycles = 0
 
     @property
     def sp(self):

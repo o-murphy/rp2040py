@@ -42,8 +42,8 @@ def main() -> None:
     print(f"Loading uf2 image {image_name}")
     load_uf2(image_name, mcu)
 
-    littlefs = "littlefs-spi.img"
-    if Path(littlefs).exists():
+    littlefs = Path("littlefs-spi.img")
+    if littlefs.exists():
         print(f"Loading littlefs image {littlefs}")
         load_micropython_flash_image(littlefs, mcu)
 
@@ -81,7 +81,7 @@ def main() -> None:
     mcu.spi[0].on_transmit = _on_transmit
 
     mcu.core.pc = 0x10000000
-    simulator.execute()
+    simulator.execute()  # TODO: mypy: Value of type "Coroutine[Any, Any, None]" must be used  [unused-coroutine]
 
     # simulator.execute() only runs the first burst synchronously and then
     # reschedules itself via threading.Timer, so main() would otherwise return

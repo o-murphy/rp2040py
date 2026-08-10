@@ -14,15 +14,30 @@ deterministic single-batch behavior without depending on asyncio scheduling orde
 
 import time
 
-from utils.is32bit import IS32BIT
-
 from rp2040py.simulator import Simulator
 
 
-def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch():
+def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch(monkeypatch):
     """A WFI'd core with only a short recurring alarm (matching USB SOF's 1ms period) must not
     exhaust its step budget after just a handful of alarm firings - each idle jump should cost the
     same ~1 unit as a real instruction, not `nanos_jumped / cycle_nanos`."""
+    # _execute_batch() bounds itself by real wall-clock time (_BATCH_YIELD_BUDGET_SECONDS,
+    # checked via time.monotonic() every _TIME_CHECK_INTERVAL iterations) - exactly right for its
+    # own job, but it means how many idle iterations fit in one batch depends on the host's CPU
+    # speed/load, not on the thing this test actually checks (idle jump cost). Left as real
+    # time.monotonic(), this was observed to intermittently fail on GitHub-hosted CI runners
+    # (e.g. 767 firings on one run, below a hardcoded 1000 floor) despite the fix under test being
+    # correct - a flaky threshold, not a real regression. Faking time.monotonic() to advance a
+    # fixed amount per call removes the host-speed dependency entirely: every run sees the exact
+    # same "elapsed" progression, so the number of firings before the budget trips is deterministic
+    # regardless of how fast this machine happens to execute the loop body.
+    fake_elapsed = iter(t * 0.0001 for t in range(1, 10_000))
+
+    def _fake_monotonic() -> float:
+        return next(fake_elapsed)
+
+    monkeypatch.setattr(time, "monotonic", _fake_monotonic)
+
     simulator = Simulator()
     rp2040 = simulator.rp2040
     rp2040.core.waiting = True
@@ -45,8 +60,10 @@ def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batc
     # Before the fix, the idle branch added `period_nanos / cycle_nanos` (=125,000, for an 8ns
     # cycle at 125MHz) to the batch's 1,000,000-unit budget per firing, exhausting it after only
     # ~8 firings (~8ms of simulated time). The fix makes each firing cost ~1 unit, so a single
-    # un-interrupted batch should cover far more firings than that.
-    min_expected_fires = 200 if IS32BIT else 1000
+    # un-interrupted batch should cover far more firings than that - the fake clock above trips
+    # the budget after ~50 checks (50 * 0.0001s > _BATCH_YIELD_BUDGET_SECONDS=0.005s), i.e. after
+    # ~50 * _TIME_CHECK_INTERVAL(256) = 12,800 idle iterations, deterministically.
+    min_expected_fires = 1000
     assert fire_count > min_expected_fires
     assert simulator.clock.nanos > min_expected_fires * period_nanos
 

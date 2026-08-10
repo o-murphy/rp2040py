@@ -7,6 +7,7 @@ external package, since rp2040py otherwise has zero runtime dependencies.
 
 import struct
 from dataclasses import dataclass
+from os import PathLike
 from pathlib import Path
 
 from rp2040py.memory_map import FLASH_START_ADDRESS
@@ -16,6 +17,9 @@ __all__ = (
     "UF2Block",
     "check_flash_image_size",
     "decode_block",
+    "dump_circuitpython_flash_image",
+    "dump_kaluma_flash_image",
+    "dump_micropython_flash_image",
     "load_circuitpython_flash_image",
     "load_kaluma_flash_image",
     "load_kaluma_program",
@@ -75,7 +79,7 @@ def decode_block(buffer: bytes) -> UF2Block:
     return UF2Block(flash_address=target_addr, payload=buffer[32 : 32 + payload_size])
 
 
-def check_flash_image_size(filename: str, block_size: int, block_count: int) -> None:
+def check_flash_image_size(filename: PathLike, block_size: int, block_count: int) -> None:
     """Raises `ValueError` unless `filename` is exactly `block_size * block_count` bytes - the
     size `build_littlefs_image()` always produces (see `mklittlefs.py`'s `UserContext(buffsize=
     block_size * block_count)`). A mismatch means either a truncated/corrupted file, or an image
@@ -92,33 +96,28 @@ def check_flash_image_size(filename: str, block_size: int, block_count: int) -> 
         )
 
 
-def _load_flash_image(filename: str, rp2040: RP2040, flash_start: int, block_size: int, block_count: int) -> None:
+def _load_flash_image(filename: PathLike, rp2040: RP2040, flash_start: int, block_size: int, block_count: int) -> None:
     check_flash_image_size(filename, block_size, block_count)
+    flash_end = flash_start + block_size * block_count
     with open(filename, "rb") as f:
-        flash_address = flash_start
-        while True:
-            buffer = f.read(block_size)
-            if len(buffer) != block_size:
-                break
-            rp2040.flash[flash_address : flash_address + len(buffer)] = buffer
-            flash_address += len(buffer)
+        rp2040.flash[flash_start:flash_end] = f.read()
 
 
-def load_micropython_flash_image(filename: str, rp2040: RP2040) -> None:
+def load_micropython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
     _load_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT)
 
 
-def load_circuitpython_flash_image(filename: str, rp2040: RP2040) -> None:
+def load_circuitpython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
     _load_flash_image(
         filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT
     )
 
 
-def load_kaluma_flash_image(filename: str, rp2040: RP2040) -> None:
+def load_kaluma_flash_image(filename: PathLike, rp2040: RP2040) -> None:
     _load_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT)
 
 
-def load_kaluma_program(filename: str, rp2040: RP2040) -> None:
+def load_kaluma_program(filename: PathLike, rp2040: RP2040) -> None:
     with open(filename, "rb") as f:
         source = f.read()
     # km_prog_end() (src/prog.c) appends this NUL terminator on real hardware too -
@@ -132,7 +131,7 @@ def load_kaluma_program(filename: str, rp2040: RP2040) -> None:
     rp2040.flash[KALUMA_PROG_FLASH_START : KALUMA_PROG_FLASH_START + len(data)] = data
 
 
-def load_uf2(filename: str, rp2040: RP2040) -> None:
+def load_uf2(filename: PathLike, rp2040: RP2040) -> None:
     with open(filename, "rb") as f:
         while True:
             buffer = f.read(UF2_BLOCK_SIZE)
@@ -141,3 +140,23 @@ def load_uf2(filename: str, rp2040: RP2040) -> None:
             block = decode_block(buffer)
             offset = block.flash_address - FLASH_START_ADDRESS
             rp2040.flash[offset : offset + len(block.payload)] = block.payload
+
+
+def _dump_flash_image(filename: PathLike, rp2040: RP2040, flash_start: int, block_size: int, block_count: int) -> None:
+    flash_end = flash_start + block_size * block_count
+    with open(filename, "wb") as f:
+        f.write(rp2040.flash[flash_start:flash_end])
+
+
+def dump_micropython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
+    _dump_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT)
+
+
+def dump_circuitpython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
+    _dump_flash_image(
+        filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT
+    )
+
+
+def dump_kaluma_flash_image(filename: PathLike, rp2040: RP2040) -> None:
+    _dump_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT)

@@ -74,6 +74,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the flash region into whatever comes after it (image larger than expected - e.g. Kaluma's
   128-block littlefs image loaded where MicroPython's 352-block one is expected) - the loader had no
   bounds check of its own before this.
+- `--dump-fs <path>` on `micropython`/`kaluma`: dumps the device's filesystem flash region (littlefs
+  for MicroPython/Kaluma, FAT12 for CircuitPython) back out to a local file when the subcommand
+  exits - Ctrl+X, `--expect-text` firing, or the end of a `-c`/`-m`/script run. `BaseDevice.
+  dump_flash_image()` (`NotImplementedError` in the base class, overridden per device) plus
+  `dump_micropython_flash_image()`/`dump_circuitpython_flash_image()`/`dump_kaluma_flash_image()`
+  (`device/load_flash.py`) are the mirror image of the existing `load_*_flash_image()` functions -
+  same flash regions/block layouts, opposite direction. Can point at the same path as `--littlefs`/
+  `--fat12` for read-modify-write persistence across runs, or at a fresh path to capture whatever
+  filesystem state a run produced. Doubles as a `littlefs-python`-free way to build a littlefs
+  image in the first place: boot against blank flash, write files to it the normal way from device
+  code, and dump the result - see README.md's "Filesystem support" section and the new
+  `demo/mklittlefs_dump.py` below.
+- `demo/mklittlefs_dump.py`: generates a raw-REPL script that writes a list of local files into
+  MicroPython's filesystem via plain `open()`/`write()` calls (mirroring `mklittlefs`'s own
+  basename/`--main`/collision handling, without needing `littlefs-python` to do it) - for use as
+  the positional `<filename>` argument to `micropython --dump-fs <path> <script>`. Lets the actual
+  on-device littlefs (whatever a given firmware bundles) build the image instead of a
+  separately-installed host library.
+- CI: a "flash dump is deterministic" check (`scripts/ci-common.sh`'s `run_micropython_dump_test()`,
+  wired into `.github/workflows/ci-micropython.yml`) boots MicroPython against blank flash with
+  `--dump-fs`, then boots again with that dump loaded via `--littlefs` and dumped again, asserting
+  the two dumps are byte-identical - a regression test for `--dump-fs`/`--littlefs` round-tripping
+  without silently drifting (e.g. reformatting instead of mounting cleanly).
+- `--tcp-port <port>` on `micropython`/`kaluma`: serves the device's USB-CDC console over a plain
+  TCP socket instead of this process's own stdio, for tools that expect a serial port but can't
+  open one - notably `mpremote` in a sandboxed environment with no serial support at all (e.g.
+  Pythonista). `cli/socket_repl.py`'s new `SocketInteractiveRepl` (an `InteractiveRepl`, alongside
+  `StdioInteractiveRepl`) runs its `asyncio.start_server()` on the device's own engine-room loop -
+  same requirement as `StdioInteractiveRepl`'s `add_reader()` - and needs no client-side patching:
+  pySerial's own `socket://host:port` URL support (which `mpremote`'s `SerialTransport` already
+  uses via `serial.serial_for_url()`) is a raw byte pipe with nothing layered on top, so `mpremote
+  connect socket://host:port` talks directly to it. Serves one client at a time, matching a real
+  serial port's exclusive-access semantics; unlike `StdioInteractiveRepl`, no byte is reserved as a
+  quit signal (a real client's own protocol, e.g. raw-REPL's Ctrl-A/Ctrl-C/Ctrl-D, owns this byte
+  stream) - quit the `rp2040py` process itself instead. Mutually exclusive with `micropython`'s
+  `-c`/`-m`/`<filename>`. See README.md's new "mpremote" section.
+  Ctrl+C is free (nothing here puts the real terminal in raw mode, so
+  `Simulator.wait_for_shutdown()`'s own `KeyboardInterrupt` handling already covers it), but SIGTERM
+  needed its own explicit handler - confirmed the hard way (`kill <pid>` on an early build exited
+  the process at code 143 with `--dump-fs`'s cleanup callback never having run at all): Python's
+  default SIGTERM disposition is immediate OS-level termination, bypassing every `finally`/context-
+  manager exit in the interpreter, the same behavior `StdioInteractiveRepl`'s own SIGTERM handler
+  exists to work around. `SocketInteractiveRepl` now takes the same `on_quit` constructor argument
+  and installs/restores a `SIGTERM` handler around `start()`/`stop()`, mirroring
+  `StdioInteractiveRepl`'s handler exactly - `--dump-fs` (and everything else `on_quit` gates) now
+  actually runs on a plain `kill`, verified against real MicroPython firmware, not just
+  `--expect-text`/a client disconnect.
+- A connection already dead on arrival (its peer closed before, or while, being accepted) could
+  wrongly cause a second, genuinely live connection landing in the same window to be rejected -
+  `self._client_writer` stays set until the dying connection's own handler task actually finishes
+  (its `reader.read()` resolving to EOF, then its own `finally` clearing it), which needs at least
+  one more event-loop iteration and isn't bounded to any fixed number of them (confirmed: an
+  earlier fix retrying a bounded number of `await asyncio.sleep(0)` yields still occasionally
+  wasn't enough on a slower CI runner). Fixed by `await`ing the previous connection's actual task
+  instead (shielded, with a generous timeout, so a genuinely-still-active connection isn't
+  cancelled by it) - resolves the instant that task truly finishes rather than guessing a count.
+- `mpremote` as a `dev` dependency group member, and `tests/test_mpremote_integration.py`: drives a
+  real `mpremote` subprocess against `SocketInteractiveRepl` over an actual `socket://` connection
+  (a scripted fake raw-REPL device stands in for real firmware, which needs a network download this
+  environment's CI can't always assume - see the test module's own docstring), verifying `mpremote
+  exec`/`mpremote fs cp` round-trip correctly through the new transport with zero pySerial/mpremote
+  patching. `exec`/`fs cp`/`mount` (including running a script straight out of a mounted local
+  directory) have also all been verified by hand against real MicroPython 1.21.0/1.28.0 firmware
+  over this same transport.
+- `docs/mpremote.md`: concrete `mpremote`/`--tcp-port`/`--pty` usage examples plus an explicit table
+  of which `mpremote` commands are verified working against each transport (`exec`, `fs`, `mount`,
+  `run`, `reset`/`bootloader`, the interactive `repl` over `--pty`, ...) versus the remaining
+  documented limitations - `--tcp-port`'s own bare interactive REPL (pySerial's `socket://` handler
+  never defines the `.fd` attribute `mpremote`'s own terminal code requires - fixed by `--pty`
+  below, not by rp2040py patching `mpremote`/pySerial), `--pty` on Windows, and `df` on
+  MicroPython ≤1.21 (runs `import vfs`, a module that doesn't exist that early - VFS was still
+  bundled directly in `os` then). README.md's own "mpremote" section is now a short summary linking
+  here instead of duplicating all of this inline.
+- `--pty` on `micropython`/`kaluma` (POSIX only): serves the console over a real pseudo-terminal
+  pair instead of this process's own stdio or `--tcp-port`'s TCP socket - `cli/pty_repl.py`'s new
+  `PtyInteractiveRepl`. Unlike `--tcp-port`, the slave side it opens (e.g. `/dev/pts/3`) is a
+  genuine POSIX serial device path, which is specifically what unlocks `mpremote`'s own bare
+  interactive REPL (`mpremote repl`) - that crashes over `--tcp-port`'s `socket://` transport with
+  `AttributeError: 'Serial' object has no attribute 'fd'` (pySerial's `socket://` handler never
+  provides one; its POSIX serial backend, which a real pty's slave side goes through, does) - see
+  `docs/mpremote.md` for the full writeup, including the exact traceback. Sets the pty into raw
+  mode itself (`tty.setraw()` on the slave fd) rather than relying on every possible client to do
+  so - a freshly opened pty otherwise defaults to cooked/echoing mode (ECHO, ICRNL, ONLCR, ...),
+  which would silently mangle CR/LF and echo bytes back exactly the way a raw byte pipe like
+  `--tcp-port`'s socket never does. Mutually exclusive with `--tcp-port` (only one console
+  transport can be active) and, like `--tcp-port`, with `-c`/`-m`/`<filename>` on `micropython`.
+  Verified against real MicroPython 1.28.0 firmware: `mpremote`'s bare interactive `repl` now works
+  end-to-end (typed commands execute and echo results correctly, Ctrl+X exits cleanly), including
+  across repeated reconnects to the same long-running process.
+- `cli/process_repl.py`'s new `ProcessInteractiveRepl` (`InteractiveRepl` subclass): SIGTERM
+  handling and the queue-then-repeat-pump backpressure loop for forwarding input bytes to the
+  device, both previously duplicated verbatim between `StdioInteractiveRepl` and
+  `SocketInteractiveRepl` - pulled out once implementing `PtyInteractiveRepl` would have made it a
+  third copy. `StdioInteractiveRepl`/`SocketInteractiveRepl` now both derive from it with no
+  behavior change (all existing tests pass unmodified) - `StdioInteractiveRepl`'s SIGTERM handler
+  is now installed unconditionally in `_on_start()` rather than only inside its raw-tty branch,
+  which also happens to close a latent gap: its own non-tty/Windows fallback path previously had no
+  SIGTERM handling at all (the same class of `--dump-fs`-skipped-on-`kill` bug `SocketInteractiveRepl`
+  was fixed for earlier - now closed here too, for free, as a consequence of the shared base rather
+  than a separately-diagnosed fix).
+- `RPWatchdog.on_watchdog_trigger` now has a real implementation, wired up by `BaseDevice.__init__`
+  (covers both `MicroPythonDevice` and `KalumaDevice`): a real `machine.reset()`/
+  `machine.bootloader()` (`mpremote reset`/`mpremote bootloader`) writes the watchdog's TRIGGER bit
+  to force a hardware reset, which previously just logged a warning and did nothing - the emulated
+  CPU spun forever waiting for a reset that never happened (100% CPU, permanently unresponsive;
+  found while checking which `mpremote` commands work over `--tcp-port`). The handler now performs
+  an in-place reset - CPU core state (including interrupt/exception state, not just the previous
+  `RP2040.reset()`'s sp/pc/cycles - see `CortexM0Core.reset()`, both the pure-Python and
+  `rp2040py.native` Cython ports), PWM/DMA/PPB peripheral state (`RPPWM.reset()` already existed;
+  `RPDMA.reset()` is new), and USB-CDC enumeration state (`USBCDC.reset()`/
+  `RPUSBController.reset()`, both new) - then jumps back to flash's entry point, mirroring
+  `connect_blocking()`'s own cold-boot sequence. Flash content is preserved
+  (`RP2040.reset(preserve_flash=True)`, a new parameter - existing callers unaffected, still wipe
+  flash by default) and every externally-referenced peripheral object keeps its identity (notably
+  `mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct reference to) rather
+  than being reconstructed. Verified against real MicroPython 1.21.0/1.28.0 firmware: `mpremote
+  reset`/`mpremote bootloader` (the latter performs the same reset rather than actually entering
+  BOOTSEL USB mass-storage mode, which this emulator doesn't implement) both return promptly
+  instead of hanging, a fresh `mpremote` invocation reconnects successfully afterward, and a file
+  uploaded before a reset survives it and still runs.
+- `--expect-text` is now repeatable (e.g. `--expect-text foo --expect-text bar`): with more than
+  one given, every one of them must be found - each on any line of device output, not necessarily
+  the same line or in the order given - before the emulator stops, instead of only ever checking a
+  single string.
+- `--expect-regex`: a new boolean flag that changes how each `--expect-text` value is interpreted -
+  as a Python `re` pattern (matched per line via `re.search`) instead of a plain substring. Default
+  behavior (no `--expect-regex`) is unchanged - still a plain substring check. Deliberately *not*
+  cross-line/sliding-window matching (a pattern spanning multiple lines of output) - considered and
+  rejected as unnecessary complexity next to "repeat the flag and require all of them", which covers
+  the same practical need (multiple expected messages) with much simpler, more predictable
+  semantics. Shared by `micropython`, `kaluma`, and `bench` (all three already shared
+  `--expect-text` via the same `_shared_arg_parser` helper).
 
 ### Changed
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor
@@ -95,8 +227,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on_quit(code)` - never `sys.exit()`/`os._exit()` itself - leaving exactly one place in the
   codebase responsible for actually exiting the process: whatever thread drives the caller's own
   `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
+- **Breaking:** `micropython --expect-text` combined with `-c`/`-m`/`<filename>` (exec mode) is now
+  a clear error (`sys.exit(1)`) instead of being silently accepted and ignored. Exec mode runs one
+  `device.exec()` call and exits based on its own stdout/stderr - it never reaches the console loop
+  `--expect-text`'s `on_data` watcher is wired into, so the combination never did anything a caller
+  passing both would reasonably expect. Same treatment `--tcp-port` already got for the identical
+  reason (see Added, above).
 
 ### Fixed
+- `tests/test_simulator.py::test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch`
+  was flaky on CI: it asserts a WFI'd core's idle alarm fires more than a hardcoded floor
+  (1000/200 for 64/32-bit) within one `_execute_batch()` call, but that batch is itself bounded by
+  a *real* wall-clock budget (`_BATCH_YIELD_BUDGET_SECONDS`, checked via `time.monotonic()`) - so
+  how many idle iterations fit before the batch cuts itself off depends on the runner's CPU
+  speed/load, not on the correctness this test actually checks (an idle jump costs ~1 iteration,
+  not `nanos_jumped / cycle_nanos`). Confirmed failing for real on a GitHub-hosted CI runner (767
+  firings, under the 1000 floor) despite no actual regression. Fixed by faking `time.monotonic()`
+  to advance a fixed amount per call instead of tracking real elapsed time, so the number of idle
+  iterations that fit before the budget trips is deterministic regardless of host speed - removes
+  the CI-runner-speed dependency entirely rather than just loosening the threshold.
+- `tests/test_socket_repl.py::test_a_new_connection_is_accepted_after_the_previous_one_disconnects`
+  was still flaky on macOS CI even after the previous fix's retry-with-a-fresh-socket helper
+  (`_connect_and_wait_for_accept()`). Root cause, confirmed via a real CI failure: that helper's
+  retry loop closed a connection attempt's socket client-side after giving up on it locally, but
+  the attempt's OS-level TCP handshake had often already completed and sat in the accept backlog
+  regardless - so the server could still accept that same, by-then-abandoned connection later, and
+  a subsequent attempt's `repl._client_writer is not None` check could observe *that* acceptance
+  rather than its own, misattributing which socket was actually live. The real (already-closed)
+  connection then tore down mid-test, clearing `repl._client_writer` right as the test tried to
+  read from a socket the server had never actually accepted - `assert b'' == b'still alive'`.
+  Fixed by dropping the retry-with-a-new-socket approach entirely in favor of a single connection
+  with a generous wait for acceptance - avoids the misattribution risk altogether, and still
+  tolerates the same "accept callback takes a while to get scheduled" macOS/kqueue slowness the
+  retry was originally trying to work around.
 - Typing at the interactive REPL while the device sat idle (the common case, once booted) could
   take up to ~1-2 real seconds per keystroke to even reach the emulated device - a regression from
   the `asyncio` migration above, not present before it. Root cause:

@@ -5,6 +5,7 @@ lazily here so the rest of the CLI stays usable without it.
 """
 
 from collections.abc import Sequence
+from os import PathLike
 from pathlib import Path
 
 from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKCOUNT, MICROPYTHON_FS_BLOCKSIZE
@@ -24,8 +25,8 @@ LITTLEFS_DEFAULT_DISK_VERSION = "2.0"
 
 
 def build_littlefs_image(
-    output: str,
-    files: "Sequence[str]",
+    output: PathLike,
+    files: "Sequence[PathLike]",
     block_size: int = MICROPYTHON_FS_BLOCKSIZE,
     block_count: int = MICROPYTHON_FS_BLOCKCOUNT,
     disk_version: str = LITTLEFS_DEFAULT_DISK_VERSION,
@@ -69,7 +70,7 @@ def build_littlefs_image(
     # Two files landing on the same littlefs destination (two same-named files in different host
     # directories, or a file already named main.py colliding with --main's target) would otherwise
     # silently overwrite one another - whichever gets written last wins, with no warning.
-    dest_names: dict[str, str] = {}
+    dest_names: dict[str, PathLike] = {}
     for filename in files:
         dest_name = "main.py" if Path(filename).name == main else Path(filename).name
         if dest_name in dest_names:

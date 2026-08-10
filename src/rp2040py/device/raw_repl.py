@@ -8,7 +8,14 @@ from collections.abc import Callable
 from rp2040py.device.repl_runner import BaseReplRunner
 from rp2040py.usb.cdc import USBCDC
 
-__all__ = ("CTRL_A", "CTRL_B", "CTRL_C", "CTRL_D", "RawReplError", "RawReplRunner")
+__all__ = (
+    "CTRL_A",
+    "CTRL_B",
+    "CTRL_C",
+    "CTRL_D",
+    "RawReplError",
+    "RawReplRunner",
+)
 
 CTRL_A = 1  # enter raw REPL
 CTRL_B = 2  # exit raw REPL, back to the friendly REPL

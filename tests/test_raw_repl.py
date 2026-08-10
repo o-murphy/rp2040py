@@ -1,6 +1,9 @@
+from typing import cast
+
 import pytest
 
 from rp2040py.device.raw_repl import CTRL_A, CTRL_C, CTRL_D, RawReplError, RawReplRunner
+from rp2040py.usb.cdc import USBCDC
 
 RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 
@@ -26,8 +29,8 @@ class _FakeCdc:
 
 
 def _runner(source: bytes = b"print(1)", **kwargs) -> "tuple[RawReplRunner, _FakeCdc]":
-    cdc = _FakeCdc()
-    return RawReplRunner(cdc, source, **kwargs), cdc
+    cdc = cast(USBCDC, _FakeCdc())
+    return RawReplRunner(cdc, source, **kwargs), cast(_FakeCdc, cdc)
 
 
 def test_start_sends_interrupt_then_enter_raw_repl():

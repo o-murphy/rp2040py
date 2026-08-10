@@ -5,8 +5,10 @@ Ctrl-A/banner/OK/Ctrl-D framing - see kalumajs.org/docs/repl), so there's no `ex
 only `start()`/`stop()`/`.cdc` (inherited from `BaseDevice`).
 """
 
+from os import PathLike
+
 from rp2040py.device.base_device import BaseDevice
-from rp2040py.device.load_flash import load_kaluma_flash_image, load_kaluma_program
+from rp2040py.device.load_flash import dump_kaluma_flash_image, load_kaluma_flash_image, load_kaluma_program
 from rp2040py.utils.logging import LogLevel
 
 __all__ = ("KalumaDevice",)
@@ -23,10 +25,10 @@ class KalumaDevice(BaseDevice):
 
     def __init__(
         self,
-        image: str,
+        image: PathLike,
         *,
-        littlefs: "str | None" = None,
-        program: "str | None" = None,
+        littlefs: "PathLike | None" = None,
+        program: "PathLike | None" = None,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
@@ -35,3 +37,8 @@ class KalumaDevice(BaseDevice):
             load_kaluma_flash_image(littlefs, self.mcu)
         if program is not None:
             load_kaluma_program(program, self.mcu)
+
+    def dump_flash_image(self, filename: PathLike) -> None:
+        """Dump the device's flash filesystem image (LittleFS for Kaluma)
+        to a local file."""
+        dump_kaluma_flash_image(filename, self.mcu)

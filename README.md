@@ -8,9 +8,31 @@
 [![Test Pi Pico SDK]][pico-sdk-workflow]
 [![coverage]][CodecovUrl]
 
-Raspberry Pi Pico (RP2040) Emulator in Python — a faithful port of [rp2040js](https://github.com/wokwi/rp2040js). It blinks, runs native code, and even the MicroPython REPL!
+Raspberry Pi Pico (RP2040) Emulator in Python — started as a port of [rp2040js](https://github.com/wokwi/rp2040js), now grown into its own CLI/SDK toolkit around it (see [Differences from upstream rp2040js](#differences-from-upstream-rp2040js) below). It blinks, runs native code, and even the MicroPython REPL!
 
 See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
+
+## Table of Contents
+
+- [rp2040py](#rp2040py)
+  - [Table of Contents](#table-of-contents)
+  - [Installation](#installation)
+    - [Environments without compiled-extension support (Pythonista, other iOS apps)](#environments-without-compiled-extension-support-pythonista-other-ios-apps)
+  - [Run the demo project](#run-the-demo-project)
+    - [Native code](#native-code)
+    - [MicroPython code](#micropython-code)
+      - [mpremote](#mpremote)
+      - [Filesystem support](#filesystem-support)
+    - [CircuitPython code](#circuitpython-code)
+      - [Filesystem support](#filesystem-support-1)
+    - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
+    - [Bootrom revisions](#bootrom-revisions)
+    - [Library API](#library-api)
+  - [Performance](#performance)
+  - [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
+  - [Used by](#used-by)
+  - [Learn more](#learn-more)
+  - [License](#license)
 
 ## Installation
 
@@ -64,12 +86,12 @@ The commands below assume `rp2040py` is installed (`pip install rp2040py` / `uv 
 instead, each maps 1:1 onto `uv run python demo/*.py` (`demo/*.py` are thin wrappers around the
 same [src/rp2040py/cli](src/rp2040py/cli) code):
 
-| `rp2040py` subcommand | Checkout equivalent |
-|---|---|
-| `rp2040py run ...` | `uv run python demo/emulator_run.py ...` |
+| `rp2040py` subcommand      | Checkout equivalent                         |
+| -------------------------- | ------------------------------------------- |
+| `rp2040py run ...`         | `uv run python demo/emulator_run.py ...`    |
 | `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
-| `rp2040py kaluma ...` | `uv run python demo/kaluma_run.py ...` |
-| `rp2040py bench ...` | `uv run python demo/benchmark.py ...` |
+| `rp2040py kaluma ...`      | `uv run python demo/kaluma_run.py ...`      |
+| `rp2040py bench ...`       | `uv run python demo/benchmark.py ...`       |
 
 ### Native code
 
@@ -179,7 +201,7 @@ A GDB server on port 3333 can be enabled by specifying the `--gdb` flag:
 rp2040py micropython --gdb
 ```
 
-For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
+For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. It's repeatable (`--expect-text foo --expect-text bar` stops once *both* have appeared, on any line, not necessarily the same one or in that order) and, with `--expect-regex`, each `--expect-text` value is matched as a Python `re` pattern (via `re.search`) instead of a plain substring. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
 
 For one-shot, non-interactive runs (like `micropython`'s own CLI), pass one of `-c <command>`, `-m <module>`, or a script `<filename>` - mutually exclusive, matching `[-c <command> | -m <module> | <filename>]`. Instead of dropping into the REPL, rp2040py boots the device, runs it via the raw-REPL protocol, prints its stdout/stderr, and exits with the device's exit status (0 on success, 1 if it raised):
 
@@ -188,6 +210,35 @@ rp2040py micropython -c "print(1 + 1)"
 rp2040py micropython -m sys
 rp2040py micropython path/to/script.py
 ```
+
+#### mpremote
+
+`--tcp-port <port>` serves the console over a plain TCP socket instead of this process's own
+stdio - for tools that expect a serial port but can't open one, notably
+[`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
+environment with no serial support at all (e.g.
+[Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps), see
+above). No client-side patching needed - `mpremote connect socket://host:port` just talks directly
+to rp2040py, via pySerial's own built-in `socket://` URL support:
+
+```sh
+rp2040py micropython --tcp-port 4321
+# in another terminal:
+mpremote connect socket://127.0.0.1:4321 exec "print(1 + 1)"
+mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
+```
+
+`--pty` (POSIX only) is the alternative: a real pseudo-terminal instead of a TCP socket, whose
+slave side (e.g. `/dev/pts/3`) is a genuine POSIX serial device path - everything `--tcp-port`
+supports also works here, *plus* `mpremote`'s own bare interactive REPL, which does not work over
+`--tcp-port`'s `socket://` transport (see below).
+
+See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details for both
+flags, how to quit the emulator when `mpremote` owns the console, and an explicit list of which
+`mpremote` commands are verified working against each transport (`exec`, `fs`, `mount`, `run`,
+`reset`/`bootloader`, the interactive `repl` over `--pty`, ...) versus the remaining documented
+limitations (`--tcp-port`'s own bare interactive REPL, `--pty` on Windows, and `df` on
+MicroPython ≤1.21).
 
 #### Filesystem support
 
@@ -218,6 +269,34 @@ MicroPython/CircuitPython's.
 The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
 SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
 hardware uses to erase/program flash.
+
+`--dump-fs <path>` dumps the device's filesystem flash region back out to a local file when the
+`micropython`/`kaluma` subcommand exits (Ctrl+X, `--expect-text`, or the end of a `-c`/`-m`/script
+run) - the same layout `--littlefs path/to/littlefs.img` reads back in, so a dump can be fed
+straight back with `--littlefs`/`--dump-fs` pointing at the same path for persistence across runs:
+
+```sh
+rp2040py micropython --littlefs littlefs.img --dump-fs littlefs.img -c "open('log.txt', 'a').write('run\n')"
+```
+
+> [!TIP]
+> This makes `--dump-fs` a `littlefs-python`-free alternative to `mklittlefs`: instead of building
+> the image on the host with `littlefs-python`, boot the real emulated MicroPython firmware
+> against blank flash, write files to it the normal way (`open(path, "wb").write(data)`, exactly
+> as code running on a real Pico would), and dump the resulting filesystem - built by MicroPython's
+> own bundled littlefs, not a separately-installed library. [demo/mklittlefs_dump.py](demo/mklittlefs_dump.py)
+> generates such a script from a list of local files (mirroring `mklittlefs`'s own `--main`
+> semantics) for use as the positional `<filename>` argument:
+>
+> ```sh
+> python demo/mklittlefs_dump.py your_main.py your.py files.py here.py --main your_main.py \
+>     --output flash_script.py
+> rp2040py micropython --dump-fs littlefs.img flash_script.py
+> ```
+>
+> Useful when the `fs` extra isn't installed, or to build against exactly the same littlefs
+> version/behavior a given firmware boots with instead of whatever `littlefs-python` happens to
+> bundle.
 
 ### CircuitPython code
 
@@ -311,6 +390,16 @@ rp2040py kaluma --littlefs kaluma_littlefs.img
 firmware's filesystem layout (mutually exclusive with passing them explicitly) - omit both for
 MicroPython's own defaults.
 
+`--dump-fs <path>` works here too, dumping the same littlefs-formatted region back out on exit -
+but unlike `micropython`, `kaluma` has no non-interactive exec mode to script filesystem writes
+through (no `-c`/`<filename>` raw-REPL equivalent, see above), so the `mklittlefs`-without-
+`littlefs-python` trick above doesn't apply the same way; use it interactively via `require('fs')`
+at the REPL instead, or stick with `mklittlefs`.
+
+`--tcp-port <port>`/`--pty` also work here, same as `micropython` - see [mpremote](#mpremote) above
+(that section is `mpremote`-specific, but the underlying mechanism, a plain socket/pty serving the
+console instead of this process's own stdio, is not).
+
 > [!NOTE]
 > Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
 > at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on device` against the
@@ -403,6 +492,41 @@ exist for cases where you want to control this explicitly:
   extension is installed (e.g. to rule out a native-specific issue).
 - `RP2040PY_SKIP_NATIVE_BUILD=1` - skip compiling the extension at *build* time, for a
   deliberately pure-Python install/wheel.
+
+## Differences from upstream rp2040js
+
+rp2040py started as a straight port of [rp2040js](https://github.com/wokwi/rp2040js) - the core
+CPU/peripheral emulation still tracks it closely, and [docs/PORTING.md](docs/PORTING.md) keeps a
+file-by-file checklist of that. But it's grown well past a 1:1 translation into its own toolkit
+with no rp2040js equivalent, built around actually running real firmware from a shell rather than
+embedding the emulator as a library (rp2040js's own primary use case, e.g. inside Wokwi):
+
+- **A real packaged CLI** - `rp2040py`/`python -m rp2040py`, installable via `pip`/`uv`, not just a
+  checkout-only `demo/*.ts` script. Firmware (MicroPython/CircuitPython/Kaluma) is auto-downloaded
+  and cached by version tag instead of needing to be fetched and placed by hand.
+- **A filesystem toolkit**: `mklittlefs` builds a littlefs image on the host (needs
+  `littlefs-python`, the optional `fs` extra); `--dump-fs` builds one *without* that dependency
+  instead, by writing files to a booted device's real filesystem the normal way and reading the
+  resulting flash region back out - see [mpremote](#mpremote) and
+  [Filesystem support](#filesystem-support) above.
+- **A programmatic device API** (`rp2040py.device.MicroPythonDevice`/`KalumaDevice`) for driving a
+  booted device from another Python program over the raw-REPL protocol
+  (`device.exec("print(1+1)")`) - the same API `micropython -c/-m/<filename>` and `--tcp-port`
+  themselves are built on, not a separate implementation. `--tcp-port` in particular lets any
+  serial-oriented external tool (`mpremote` chief among them) drive the emulator over a real
+  socket, something rp2040js has no analogue for at all.
+- **Broader firmware coverage**: MicroPython, CircuitPython, and [Kaluma](https://kaluma.io/) (a
+  second, independent USB-CDC-console JS runtime for RP2040 - unrelated to rp2040js despite both
+  being JS) all boot and run against this emulator; a built-in GDB server (`--gdb`) works against
+  any of them.
+- **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
+  instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
+  pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
+  [Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps)).
+
+See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
+for the exhaustive, file-level breakdown (including behavioral divergences found while porting,
+not just added features).
 
 ## Used by
 
