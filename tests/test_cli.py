@@ -17,6 +17,7 @@ def _mp_args(**overrides):
         "littlefs": "littlefs.img",
         "fat12": "fat12.img",
         "dump_fs": None,
+        "tcp_port": None,
         # -c mode, so _cmd_micropython exits right after exec() instead of dropping into an
         # interactive REPL that would block the test.
         "command": "pass",
@@ -164,6 +165,66 @@ def test_exec_mode_exits_nonzero_when_device_writes_to_stderr(fake_device, monke
     assert exc_info.value.code == 1
 
 
+def test_tcp_port_rejects_combination_with_exec_mode(caplog):
+    # --tcp-port replaces the interactive console with a headless TCP one - it has no defined
+    # meaning combined with -c/-m/<filename> (run-once-then-exit mode), so this must error out
+    # clearly instead of e.g. silently ignoring --tcp-port or the exec source.
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command="pass"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_tcp_port_rejects_combination_with_module_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command=None, module="sys"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_tcp_port_rejects_combination_with_filename_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command=None, filename="script.py"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, monkeypatch):
+    started = {}
+
+    class _FakeSocketRepl:
+        def __init__(self, cdc, simulator, port=0, on_data=None):
+            started["port"] = port
+            self.port = 12345
+
+        def start(self):
+            started["started"] = True
+
+        def stop(self):
+            started["stopped"] = True
+
+    class _FakeCdc:
+        def send_serial_byte(self, byte):
+            pass
+
+    class _Device(_FakeMicroPythonDevice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cdc = _FakeCdc()
+            self.simulator = Simulator()
+
+    monkeypatch.setattr(cli, "MicroPythonDevice", _Device)
+    monkeypatch.setattr(cli, "SocketInteractiveRepl", _FakeSocketRepl)
+    monkeypatch.setattr(cli.Simulator, "wait_for_shutdown", lambda self: None)
+
+    cli._cmd_micropython(_mp_args(tcp_port=54321, command=None, module=None, filename=None))
+
+    assert started == {"port": 54321, "started": True, "stopped": True}
+
+
 def _kaluma_args(**overrides):
     defaults = {
         "image": None,
@@ -173,6 +234,7 @@ def _kaluma_args(**overrides):
         "bootrom": None,
         "littlefs": "kaluma_littlefs.img",
         "dump_fs": None,
+        "tcp_port": None,
         "filename": None,
         "log_level": None,
     }

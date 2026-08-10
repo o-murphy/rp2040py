@@ -12,6 +12,10 @@ Subcommands:
   instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
   known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
   missing firmware is downloaded automatically (see ``rp2040py.cli.firmware_retrieve``).
+  ``--tcp-port`` serves the console over a plain TCP socket instead of this process's own stdio -
+  for tools expecting a serial port that can't get one (e.g. ``mpremote``, via pySerial's built-in
+  ``socket://host:port`` URL support - see ``rp2040py.cli.socket_repl``); mutually exclusive with
+  ``-c``/``-m``/``<filename>``.
 - ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
   only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
   ``-c``/``-m``/``<filename>`` exec mode. ``--image`` accepts a version tag, a local file path, or
@@ -47,6 +51,7 @@ from typing import Any
 from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
+from rp2040py.cli.socket_repl import SocketInteractiveRepl
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.device.base_device import BaseDevice
@@ -63,6 +68,7 @@ from rp2040py.device.load_flash import (
 )
 from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.device.raw_repl import RawReplError
+from rp2040py.device.repl_runner import BaseReplRunner
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.memory_map import RAM_START_ADDRESS
 from rp2040py.rp2040 import RP2040
@@ -224,7 +230,34 @@ def _make_expect_text_watcher(
     return _watch
 
 
+def _start_console_repl(
+    args: argparse.Namespace, cdc: USBCDC, simulator: Simulator, on_data: "Callable[[bytes | bytearray], None]"
+) -> BaseReplRunner:
+    """Starts (and returns, already `start()`ed) whichever console bridge `--tcp-port` selects:
+    the normal interactive `StdioInteractiveRepl` (unset), or a headless `SocketInteractiveRepl`
+    listening on that port instead - for driving the device from tools like `mpremote` that expect
+    a serial port but can't get one (see `cli/socket_repl.py`). Caller is responsible for
+    registering `.stop` with its own cleanup - this only starts it."""
+    if args.tcp_port is not None:
+        socket_repl = SocketInteractiveRepl(cdc, simulator, port=args.tcp_port, on_data=on_data)
+        socket_repl.start()
+        _logger.info(
+            "TCP socket REPL listening on 127.0.0.1:%d - e.g. `mpremote connect socket://127.0.0.1:%d`",
+            socket_repl.port,
+            socket_repl.port,
+        )
+        return socket_repl
+
+    stdio_repl = StdioInteractiveRepl(cdc, simulator, on_data=on_data, on_quit=simulator.shutdown_request.request)
+    stdio_repl.start()
+    return stdio_repl
+
+
 def _cmd_micropython(args: argparse.Namespace) -> None:
+    if args.tcp_port is not None and (args.command is not None or args.module is not None or args.filename is not None):
+        _logger.error("--tcp-port cannot be combined with -c/-m/<filename>")
+        sys.exit(1)
+
     image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
         _logger.error("Could not find micropython image: %s", args.image)
@@ -296,13 +329,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = StdioInteractiveRepl(
-            cdc,
-            device.simulator,
-            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
-            on_quit=shutdown.request,
-        )
-        repl.start()
+        repl = _start_console_repl(args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, shutdown))
         cleanup.callback(repl.stop)
 
         device.start(timeout=None)
@@ -358,13 +385,7 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = StdioInteractiveRepl(
-            cdc,
-            device.simulator,
-            on_data=_make_expect_text_watcher(args.expect_text, shutdown),
-            on_quit=shutdown.request,
-        )
-        repl.start()
+        repl = _start_console_repl(args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, shutdown))
         cleanup.callback(repl.stop)
 
         device.start(timeout=None)
@@ -560,6 +581,12 @@ _BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the 
 _EXPECT_TEXT_HELP = "stop once this text appears on the device's serial console"
 _LITTLEFS_HELP = "optional littlefs.img to load"
 _DUMP_FS_HELP = "path to save filesystem state on exit (can be the same as --littlefs for persistence)"
+_TCP_PORT_HELP = (
+    "serve the console over this TCP port instead of this process's own stdio (0 for an "
+    "OS-assigned port - see the logged 'listening on' message) - for tools expecting a serial "
+    "port that can't get one (e.g. mpremote via `connect socket://host:port`, pySerial's own "
+    "built-in URL scheme); mutually exclusive with -c/-m/<filename> on `micropython`"
+)
 
 
 def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
@@ -576,6 +603,7 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "expect-text": {"help": _EXPECT_TEXT_HELP},
         "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
         "dump-fs": {"type": Path, "help": _DUMP_FS_HELP},
+        "tcp-port": {"type": int, "default": None, "help": _TCP_PORT_HELP},
     }
     shared = argparse.ArgumentParser(add_help=False)
     for name in names:
@@ -610,7 +638,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     mp_parser = subparsers.add_parser(
         "micropython",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs", "tcp-port")],
         help="run a MicroPython/CircuitPython UF2 image",
     )
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
@@ -633,7 +661,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     kaluma_parser = subparsers.add_parser(
         "kaluma",
-        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs")],
+        parents=[_shared_arg_parser("gdb-port", "gdb", "bootrom", "expect-text", "littlefs", "dump-fs", "tcp-port")],
         help="run a Kaluma UF2 image (interactive REPL only)",
     )
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
