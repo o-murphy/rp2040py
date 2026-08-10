@@ -10,7 +10,7 @@ mpremote` proxy subcommand (see "mpremote proxy" below) that patches around a re
 - **`--tcp-port`**: a plain TCP socket, via pySerial's built-in `socket://host:port` URL support -
   no serial port or pty needed on the host at all, useful for CI, scripting, and environments with
   no serial support (e.g.
-  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-pythonista-other-ios-apps)).
+  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-iosandroid)).
   `exec`/`fs`/`run`/... all work fine over it; the real (unpatched) `mpremote` binary's own **bare
   interactive REPL does not** - see "What doesn't work" below - but `rp2040py mpremote` (see
   "mpremote proxy" below) patches around exactly that, so use it instead if you want the
@@ -93,6 +93,13 @@ command works identically either way (the patch only changes `waitchar()`'s beha
 `mpremote` itself that needs a *real* serial device path (Thonny, `screen`, `minicom`, ...) - this
 proxy is `mpremote`-specific and doesn't help those - but it needs no POSIX pty support at all, so
 it also covers Windows and sandboxed/no-pty environments `--pty` can't reach.
+
+> [!TIP]
+> `rp2040py mpremote connect socket://host:port repl` also works against `rp2040py kaluma
+> --tcp-port ...`, not just `micropython` - the patch is entirely inside `mpremote`'s own terminal
+> code (`waitchar()`), with no dependency on which firmware is on the other end of the socket.
+> Verified by hand: a typed expression echoes and evaluates correctly, and the session exits
+> cleanly with no `AttributeError`.
 
 ## Quitting the emulator
 

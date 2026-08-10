@@ -17,7 +17,7 @@ See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against 
 - [rp2040py](#rp2040py)
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
-    - [Environments without compiled-extension support (Pythonista, other iOS apps)](#environments-without-compiled-extension-support-pythonista-other-ios-apps)
+    - [Environments without compiled-extension support (iOS/Android)](#environments-without-compiled-extension-support-iosandroid)
   - [Run the demo project](#run-the-demo-project)
     - [Native code](#native-code)
     - [MicroPython code](#micropython-code)
@@ -52,14 +52,14 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
-### Environments without compiled-extension support (Pythonista, other iOS apps)
+### Environments without compiled-extension support (iOS/Android)
 
 `rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
 [Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
 handful of environments, notably iOS apps like [Pythonista](http://omz-software.com/pythonista/)
-sandboxed by the OS, can't load compiled `.so` extensions or import native code dynamically at
-all. A plain `pip install rp2040py` there resolves to a platform-specific wheel that simply won't
-load. Force the pure-Python universal wheel instead:
+and some Android Python apps, sandboxed by the OS, can't load compiled `.so` extensions or import
+native code dynamically at all. A plain `pip install rp2040py` there resolves to a
+platform-specific wheel that simply won't load. Force the pure-Python universal wheel instead:
 
 ```sh
 pip download rp2040py --only-binary=:all: --platform any --abi none
@@ -78,6 +78,17 @@ To confirm you actually got it:
   than `"rp2040py.native._rp2040"` (compiled) - equivalently, watch for the `UserWarning` ("Native
   extensions are not available...") `rp2040py.native` raises on import once the compiled backend
   isn't present, which is the expected, harmless case here rather than an error.
+
+**Tested:**
+- iOS
+  - [Pythonista](http://omz-software.com/pythonista/) - full support (no `[fs]` optional
+    dependency, no `mpremote` support for now)
+  - [PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - full support (no `[fs]`
+    optional dependency, no `mpremote` support for now)
+- Android
+  - [Termux](https://github.com/termux) - full support (`mpremote` untested, work in progress)
+  - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
+    not supported for now (testing in progress)
 
 ## Run the demo project
 
@@ -217,8 +228,8 @@ rp2040py micropython path/to/script.py
 stdio - for tools that expect a serial port but can't open one, notably
 [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
 environment with no serial support at all (e.g.
-[Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps), see
-above). No client-side patching needed - `mpremote connect socket://host:port` just talks directly
+[Pythonista](#environments-without-compiled-extension-support-iosandroid), see above). No
+client-side patching needed - `mpremote connect socket://host:port` just talks directly
 to rp2040py, via pySerial's own built-in `socket://` URL support:
 
 ```sh
@@ -509,6 +520,13 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **A real packaged CLI** - `rp2040py`/`python -m rp2040py`, installable via `pip`/`uv`, not just a
   checkout-only `demo/*.ts` script. Firmware (MicroPython/CircuitPython/Kaluma) is auto-downloaded
   and cached by version tag instead of needing to be fetched and placed by hand.
+- **A real, writeable filesystem**: `RPSSI` (the SSI peripheral MicroPython/CircuitPython's
+  `os`/`rp2.Flash` calls go through to erase/program flash) implements the actual JEDEC SPI-NOR
+  command set (`WREN`/`WRDI`, status/JEDEC-ID reads, page program, sector/block erase) - the same
+  commands real flash hardware understands - not just a register stub. rp2040js has the same gap
+  MicroPython/CircuitPython on rp2040py *used* to have (see `docs/BACKLOG.md`'s "SSI flash-write
+  support"): on-device `open(path, "w")`/`os.remove()`/... genuinely persist to the emulated flash
+  now, instead of raising/no-opping against an unimplemented peripheral.
 - **A filesystem toolkit**: `mklittlefs` builds a littlefs image on the host (needs
   `littlefs-python`, the optional `fs` extra); `--dump-fs` builds one *without* that dependency
   instead, by writing files to a booted device's real filesystem the normal way and reading the
@@ -527,7 +545,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
-  [Pythonista](#environments-without-compiled-extension-support-pythonista-other-ios-apps)).
+  [Pythonista](#environments-without-compiled-extension-support-iosandroid)).
 
 See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,
