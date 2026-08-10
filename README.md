@@ -70,6 +70,15 @@ This is the exact same artifact `rp2040py`'s own release pipeline builds and pub
 release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
 not a degraded or unsupported build, just the emulator without the compiled speedup.
 
+> [!NOTE]
+> "some Android Python apps" above is deliberately narrow - confirmed by hand, the compiled
+> `rp2040py.native` extension loads and runs fine on Android under both
+> [Termux](https://github.com/termux) and [Python 3 IDE (Pydroid
+> 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) (see "Tested" below), so
+> most Android environments need no fallback at all. The pure-Python wheel is only confirmed
+> necessary for fully sandboxed app runtimes with no dynamic-library loading - so far that means
+> iOS apps (Pythonista, PythonIDE) - not Android generally.
+
 To confirm you actually got it:
 - **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
   `rp2040py-<version>-py3-none-any.whl`, with no platform/ABI tag (e.g. no `cp310-abi3-manylinux...`)
@@ -82,20 +91,28 @@ To confirm you actually got it:
 **Tested:**
 - iOS
   - [Pythonista](http://omz-software.com/pythonista/) - full support (no `[fs]` optional
-    dependency, `mpremote` untested - pySerial's `list_ports` likely has no iOS backend either,
-    same as confirmed on Android below; `rp2040py mpremote` should patch around it there too, but
-    that's unverified on an actual device - see
-    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
+    dependency); `mpremote` itself now confirmed to work over `--tcp-port`, but running the
+    emulator and `mpremote` **at the same time** did not work on-device - the app's sandbox appears
+    to only run one Python process per app instance, with no real subprocess/multi-process support,
+    so there's no way to have `rp2040py micropython --tcp-port ...` and a separate `mpremote`
+    invocation running concurrently the way this works on a normal OS. This is a constraint of the
+    app sandbox itself, not something `rp2040py`/`rp2040py mpremote` can patch around (unlike the
+    `list_ports` `ImportError` below).
   - [PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - full support (no `[fs]`
-    optional dependency, `mpremote` untested - same caveat as Pythonista above)
+    optional dependency); same `mpremote`-works-but-not-concurrently-with-the-emulator caveat as
+    Pythonista above.
 - Android
   - [Termux](https://github.com/termux) - full support, including `mpremote` via `rp2040py
     mpremote` (the real `mpremote` binary alone still fails - pySerial's `list_ports` has no
     Android backend and raises `ImportError` at import time regardless of which subcommand you
     run; `rp2040py mpremote` patches around it - see
-    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
+    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-ios-pyserials-list_ports-importerror)).
+    The compiled `rp2040py.native` (Cython) extension loads and runs fine here too - confirmed by
+    hand, no pure-Python fallback needed.
   - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
-    not supported for now (testing in progress)
+    full support, including `mpremote` via `rp2040py mpremote` over `--tcp-port` (same caveat and
+    same fix as Termux above) and the compiled `rp2040py.native` (Cython) extension, both confirmed
+    by hand.
 
 ## Run the demo project
 
