@@ -10,6 +10,7 @@ def _mp_args(**overrides):
     defaults = {
         "image": "fixed-image.uf2",
         "expect_text": None,
+        "expect_regex": False,
         "gdb": False,
         "gdb_port": 3333,
         "bootrom": None,
@@ -17,6 +18,8 @@ def _mp_args(**overrides):
         "littlefs": "littlefs.img",
         "fat12": "fat12.img",
         "dump_fs": None,
+        "tcp_port": None,
+        "pty": False,
         # -c mode, so _cmd_micropython exits right after exec() instead of dropping into an
         # interactive REPL that would block the test.
         "command": "pass",
@@ -164,15 +167,173 @@ def test_exec_mode_exits_nonzero_when_device_writes_to_stderr(fake_device, monke
     assert exc_info.value.code == 1
 
 
+def test_tcp_port_rejects_combination_with_exec_mode(caplog):
+    # --tcp-port replaces the interactive console with a headless TCP one - it has no defined
+    # meaning combined with -c/-m/<filename> (run-once-then-exit mode), so this must error out
+    # clearly instead of e.g. silently ignoring --tcp-port or the exec source.
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command="pass"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_tcp_port_rejects_combination_with_module_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command=None, module="sys"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_tcp_port_rejects_combination_with_filename_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(tcp_port=0, command=None, filename="script.py"))
+
+    assert exc_info.value.code == 1
+    assert "--tcp-port" in caplog.text
+
+
+def test_expect_text_rejects_combination_with_exec_mode(caplog):
+    # -c/-m/<filename> runs one device.exec() call and exits based on its own stdout/stderr - it
+    # never reaches the console loop --expect-text's on_data watcher is wired into, so it used to
+    # be silently ignored rather than doing anything a caller passing it would expect.
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text=["ready"], command="pass"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
+def test_expect_text_rejects_combination_with_module_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text=["ready"], command=None, module="sys"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
+def test_expect_text_rejects_combination_with_filename_mode(caplog):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(expect_text=["ready"], command=None, filename="script.py"))
+
+    assert exc_info.value.code == 1
+    assert "--expect-text" in caplog.text
+
+
+def test_expect_text_tracker_requires_every_repeated_pattern_before_reporting_found():
+    tracker = cli._ExpectTextTracker(["foo", "bar"], expect_regex=False)
+
+    tracker.feed_line("line has foo only")
+    assert not tracker.found
+
+    tracker.feed_line("line has bar only")
+    assert tracker.found
+
+
+def test_expect_text_tracker_matches_are_order_independent():
+    tracker = cli._ExpectTextTracker(["second", "first"], expect_regex=False)
+
+    tracker.feed_line("this line has first")
+    tracker.feed_line("this line has second")
+
+    assert tracker.found
+
+
+def test_expect_text_tracker_plain_substring_by_default():
+    tracker = cli._ExpectTextTracker(["a.b"], expect_regex=False)
+
+    tracker.feed_line("a.b literally")
+
+    assert tracker.found
+
+
+def test_expect_text_tracker_regex_mode_uses_re_search():
+    tracker = cli._ExpectTextTracker([r"error: \d+"], expect_regex=True)
+
+    tracker.feed_line("error: not-a-number")
+    assert not tracker.found
+
+    tracker.feed_line("error: 42")
+    assert tracker.found
+
+
+def test_expect_text_tracker_regex_mode_does_not_match_plain_substring_only():
+    tracker = cli._ExpectTextTracker(["a.b"], expect_regex=True)
+
+    # In regex mode "." matches any character, so this should NOT require a literal dot.
+    tracker.feed_line("axb")
+
+    assert tracker.found
+
+
+def test_expect_text_tracker_inactive_without_any_pattern():
+    tracker = cli._ExpectTextTracker(None, expect_regex=False)
+
+    tracker.feed_line("anything at all")
+
+    assert not tracker.active
+    assert not tracker.found
+
+
+def test_make_expect_text_watcher_requests_shutdown_once_all_patterns_are_found():
+    from rp2040py.simulator import ShutdownRequest
+
+    shutdown = ShutdownRequest()
+    watcher = cli._make_expect_text_watcher(["foo", "bar"], False, shutdown)
+
+    watcher(b"line with foo\n")
+    assert not shutdown.event.is_set()
+
+    watcher(b"line with bar\n")
+    assert shutdown.event.is_set()
+
+
+def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, monkeypatch):
+    started = {}
+
+    class _FakeSocketRepl:
+        def __init__(self, cdc, simulator, on_quit, port=0, on_data=None):
+            started["port"] = port
+            self.port = 12345
+
+        def start(self):
+            started["started"] = True
+
+        def stop(self):
+            started["stopped"] = True
+
+    class _FakeCdc:
+        def send_serial_byte(self, byte):
+            pass
+
+    class _Device(_FakeMicroPythonDevice):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cdc = _FakeCdc()
+            self.simulator = Simulator()
+
+    monkeypatch.setattr(cli, "MicroPythonDevice", _Device)
+    monkeypatch.setattr(cli, "SocketInteractiveRepl", _FakeSocketRepl)
+    monkeypatch.setattr(cli.Simulator, "wait_for_shutdown", lambda self: None)
+
+    cli._cmd_micropython(_mp_args(tcp_port=54321, command=None, module=None, filename=None))
+
+    assert started == {"port": 54321, "started": True, "stopped": True}
+
+
 def _kaluma_args(**overrides):
     defaults = {
         "image": None,
         "expect_text": None,
+        "expect_regex": False,
         "gdb": False,
         "gdb_port": 3333,
         "bootrom": None,
         "littlefs": "kaluma_littlefs.img",
         "dump_fs": None,
+        "tcp_port": None,
+        "pty": False,
         "filename": None,
         "log_level": None,
     }

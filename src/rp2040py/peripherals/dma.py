@@ -334,6 +334,22 @@ class RPDMA(BasePeripheral):
 
         self.dreq: dict[int, bool] = {}
 
+    def reset(self) -> None:
+        for channel in self.channels:
+            channel.transfer_alarm.cancel()
+            channel.reset()
+        self.int_raw = 0
+        self._int_enable0 = 0
+        self._int_force0 = 0
+        self._int_enable1 = 0
+        self._int_force1 = 0
+        self._timer0 = 0
+        self._timer1 = 0
+        self._timer2 = 0
+        self._timer3 = 0
+        self.dreq.clear()
+        self.check_interrupts()
+
     @property
     def int_status0(self) -> int:
         return (self.int_raw & self._int_enable0) | self._int_force0

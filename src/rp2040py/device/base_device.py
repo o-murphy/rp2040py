@@ -47,7 +47,20 @@ class BaseDevice:
         self.mcu.logger = ConsoleLogger(log_level)
         load_uf2(image, self.mcu)
         self.cdc = USBCDC(self.mcu.usb_ctrl)
+        self.mcu.watchdog.on_watchdog_trigger = self._on_watchdog_trigger
         self._started = False
+
+    def _on_watchdog_trigger(self) -> None:
+        """A real `machine.reset()`/`machine.bootloader()` (mpremote's `reset`/`bootloader`
+        shortcuts) writes the watchdog's TRIGGER bit to force a hardware reset - without this,
+        RPWatchdog's default handler just logs a warning and the emulated CPU spins forever
+        waiting for a reset that never happens. Mirrors connect_blocking()'s own cold-boot
+        sequence (reset then jump straight to flash's entry point), but preserving flash content
+        and resetting mcu/cdc in place rather than replacing them - external code (this object's
+        own self.cdc) holds a direct reference to mcu.usb_ctrl that must stay valid."""
+        self.mcu.reset(preserve_flash=True)
+        self.mcu.core.pc = FLASH_START_ADDRESS
+        self.cdc.reset()
 
     def start(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
         """Boot the device, blocking until it enumerates over USB, or raising `TimeoutError` after
