@@ -97,6 +97,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
 
 ### Fixed
+- `tests/test_simulator.py::test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batch`
+  was flaky on CI: it asserts a WFI'd core's idle alarm fires more than a hardcoded floor
+  (1000/200 for 64/32-bit) within one `_execute_batch()` call, but that batch is itself bounded by
+  a *real* wall-clock budget (`_BATCH_YIELD_BUDGET_SECONDS`, checked via `time.monotonic()`) - so
+  how many idle iterations fit before the batch cuts itself off depends on the runner's CPU
+  speed/load, not on the correctness this test actually checks (an idle jump costs ~1 iteration,
+  not `nanos_jumped / cycle_nanos`). Confirmed failing for real on a GitHub-hosted CI runner (767
+  firings, under the 1000 floor) despite no actual regression. Fixed by faking `time.monotonic()`
+  to advance a fixed amount per call instead of tracking real elapsed time, so the number of idle
+  iterations that fit before the budget trips is deterministic regardless of host speed - removes
+  the CI-runner-speed dependency entirely rather than just loosening the threshold.
 - Typing at the interactive REPL while the device sat idle (the common case, once booted) could
   take up to ~1-2 real seconds per keystroke to even reach the emulated device - a regression from
   the `asyncio` migration above, not present before it. Root cause:
