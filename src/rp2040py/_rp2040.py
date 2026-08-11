@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock.clock import IClock
 from rp2040py.clock.simulation_clock import SimulationClock
@@ -46,6 +47,9 @@ from rp2040py.utils.bit import (
     write_uint32_le,
 )
 from rp2040py.utils.logging import ConsoleLogger, Logger, LogLevel
+
+if TYPE_CHECKING:
+    from rp2040py.simulator import Simulator
 
 __all__ = (
     "APB_START_ADDRESS",
@@ -179,12 +183,33 @@ class RP2040:
 
         # Debugging
         self.on_break: Callable[[int], None] = self._default_on_break
+        # Set via the `simulator` property below, by the owning Simulator's own __init__ - a bare
+        # RP2040() constructed without one (tests, `rp2040py bench`'s synthetic mode driving
+        # execute_instruction() directly, ...) simply has none, and schedule_threadsafe() raises
+        # in that case rather than silently doing nothing.
+        self._simulator: Simulator | None = None
 
         self.reset()
 
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    @property
+    def simulator(self) -> "Simulator | None":
+        return self._simulator
+
+    @simulator.setter
+    def simulator(self, value: "Simulator") -> None:
+        self._simulator = value
+
+    def schedule_threadsafe(self, fn_or_coro: "Callable[[], None] | Coroutine[Any, Any, Any]") -> None:
+        """Hands `fn_or_coro` off to the engine-room loop of whichever Simulator owns this RP2040 -
+        see Simulator.schedule_threadsafe() for the full contract (docs/CYW43_WIFI_BACKLOG.md's
+        "Concurrency model" section). Raises RuntimeError if this RP2040 has no owning Simulator."""
+        if self._simulator is None:
+            raise RuntimeError("RP2040.schedule_threadsafe() called on an RP2040 with no owning Simulator")
+        self._simulator.schedule_threadsafe(fn_or_coro)
 
     def load_bootrom(self, bootrom_data: list[int]) -> None:
         self.bootrom[: len(bootrom_data)] = (value & 0xFFFFFFFF for value in bootrom_data)

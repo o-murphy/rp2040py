@@ -196,12 +196,31 @@ cdef class RP2040:
 
         # Debugging
         self.on_break = self._default_on_break
+        # Set via the `simulator` property below, by the owning Simulator's own __init__ - see
+        # _rp2040.py's identical field for the full rationale.
+        self._simulator = None
 
         self.reset()
 
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    @property
+    def simulator(self):
+        return self._simulator
+
+    @simulator.setter
+    def simulator(self, value) -> None:
+        self._simulator = value
+
+    def schedule_threadsafe(self, fn_or_coro) -> None:
+        """Hands `fn_or_coro` off to the engine-room loop of whichever Simulator owns this RP2040 -
+        see Simulator.schedule_threadsafe() for the full contract (docs/CYW43_WIFI_BACKLOG.md's
+        "Concurrency model" section). Raises RuntimeError if this RP2040 has no owning Simulator."""
+        if self._simulator is None:
+            raise RuntimeError("RP2040.schedule_threadsafe() called on an RP2040 with no owning Simulator")
+        self._simulator.schedule_threadsafe(fn_or_coro)
 
     # Wrapped in a real builtin memoryview() rather than exposed as `cdef public`: Cython's own
     # typed-memoryview-slice object doesn't support content-based `==` against bytes/bytearray

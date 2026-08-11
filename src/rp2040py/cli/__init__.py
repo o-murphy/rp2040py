@@ -58,6 +58,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
+from rp2040py.boards import BOARDS, build_rp2040
 from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
@@ -179,6 +180,24 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
     return list(struct.unpack(f"<{word_count}I", data[: word_count * 4]))
 
 
+def _maybe_exit_after_fetch(
+    args: argparse.Namespace, *, image_path: "PathLike | None" = None, bootrom_source: "str | None" = None
+) -> None:
+    """If `--fetch-fw-only` was given: makes sure `bootrom_source` (a version tag, if one was
+    given via `--bootrom`) is downloaded and cached too - `image_path`, if given, is assumed
+    already resolved/cached by the caller (mirroring how `--image` itself is resolved before this
+    runs) - logs what's cached, then exits 0 without touching the simulator at all. A no-op
+    (returns normally) when `--fetch-fw-only` wasn't passed."""
+    if not args.fetch_fw_only:
+        return
+    if bootrom_source is not None:
+        _resolve_bootrom_words(bootrom_source)  # downloads/caches as a side effect; words unused
+    if image_path is not None:
+        _logger.info("Fetched firmware image: %s", image_path)
+    _logger.info("--fetch-fw-only: firmware cached, exiting without starting the simulator")
+    sys.exit(0)
+
+
 async def _run_async(args: argparse.Namespace) -> int:
     """`run`'s real body - a coroutine driven by `_cmd_run()`'s own `asyncio.run()` call, per
     docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape": this coroutine's own task *is* the
@@ -187,7 +206,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     migrated (see that doc's "Phased plan") - `micropython`/`kaluma` still use the older
     `Simulator.start_execution()`/`wait_for_shutdown()` model via `BaseDevice`, unchanged for now.
     """
-    simulator = Simulator()
+    simulator = Simulator(rp2040=build_rp2040(args.board))
     simulator.bind_loop()
     mcu = simulator.rp2040
 
@@ -245,6 +264,7 @@ async def _run_async(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    _maybe_exit_after_fetch(args, bootrom_source=args.bootrom)
     try:
         exit_code = asyncio.run(_run_async(args))
     except KeyboardInterrupt:
@@ -430,6 +450,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
         return 1
 
     _logger.info("Loading uf2 image: %s", image_name)
+    _maybe_exit_after_fetch(args, image_path=image_name, bootrom_source=args.bootrom)
     littlefs = (
         args.littlefs if not args.circuitpython and args.littlefs is not None and Path(args.littlefs).exists() else None
     )
@@ -444,6 +465,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
     try:
         device = MicroPythonDevice(
             image_name,
+            board=args.board,
             littlefs=littlefs,
             fat12=fat12,
             circuitpython=args.circuitpython,
@@ -530,6 +552,7 @@ async def _kaluma_async(args: argparse.Namespace) -> "int | None":
         return 1
 
     _logger.info("Loading uf2 image: %s", image_name)
+    _maybe_exit_after_fetch(args, image_path=image_name, bootrom_source=args.bootrom)
     littlefs = args.littlefs if args.littlefs is not None and Path(args.littlefs).exists() else None
     if littlefs is not None:
         _logger.info("Loading littlefs image: %s", littlefs)
@@ -540,6 +563,7 @@ async def _kaluma_async(args: argparse.Namespace) -> "int | None":
     try:
         device = KalumaDevice(
             image_name,
+            board=args.board,
             littlefs=littlefs,
             program=args.filename,
             bootrom_words=_resolve_bootrom_words(args.bootrom),
@@ -599,8 +623,8 @@ def _interpreter_label() -> str:
     return f"{impl} {'.'.join(str(part) for part in sys.version_info[:3])}"
 
 
-def _bench_synthetic(instruction_count: int, block_size: int, log_level: LogLevel) -> None:
-    rp2040 = RP2040()
+def _bench_synthetic(instruction_count: int, block_size: int, board: str, log_level: LogLevel) -> None:
+    rp2040 = build_rp2040(board)
 
     from rp2040py.device.bootrom import BOOTROM_B1
 
@@ -636,13 +660,14 @@ def _bench_firmware(
     expect_regex: bool,
     timeout: float,
     bootrom: str | None,
+    board: str,
     log_level: LogLevel,
 ) -> None:
     # Uses Simulator (not a bare RP2040) so the clock actually advances: real firmware relies on
     # timer-based busy-waits during boot (e.g. hardware_timer's timer_busy_wait_until()), and those
     # spin forever if TIMERAWL/TIMERAWH never move - core.execute_instruction() alone does not tick
     # the clock, only Simulator.execute() (and this hand-rolled equivalent below) does.
-    simulator = Simulator()
+    simulator = Simulator(rp2040=build_rp2040(board))
     rp2040 = simulator.rp2040
     clock = simulator.clock
 
@@ -710,12 +735,23 @@ def _bench_firmware(
 
 def _cmd_bench(args: argparse.Namespace) -> None:
     log_level = _console_log_level(args)
+    # `--image` in bench mode is always a local path (never downloaded - see _IMAGE_PATH_HELP),
+    # so only `--bootrom` (if a version tag) is ever fetched here, in either synthetic or firmware
+    # mode.
+    _maybe_exit_after_fetch(args, bootrom_source=args.bootrom)
     if args.image:
         _bench_firmware(
-            args.image, args.littlefs, args.expect_text, args.expect_regex, args.timeout, args.bootrom, log_level
+            args.image,
+            args.littlefs,
+            args.expect_text,
+            args.expect_regex,
+            args.timeout,
+            args.bootrom,
+            args.board,
+            log_level,
         )
     else:
-        _bench_synthetic(args.instructions, args.block_size, log_level)
+        _bench_synthetic(args.instructions, args.block_size, args.board, log_level)
 
 
 def _patch_mpremote_console_waitchar() -> None:
@@ -847,6 +883,11 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
 
 _IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"
 _IMAGE_PATH_HELP = "local .hex/.uf2 image path"
+_BOARD_HELP = "which board's MCU/fixed extras to construct (default: %(default)s)"
+_FETCH_FW_ONLY_HELP = (
+    "download/cache the firmware image (and --bootrom, if a version tag) then exit, without "
+    "starting the simulator - for pre-warming the local cache (e.g. before going offline, or in CI)"
+)
 _BOOTROM_HELP = "b0/b1/b2 version tag, local .elf/.bin path, or omitted for the default (B1, bundled - no download)"
 _EXPECT_TEXT_HELP = (
     "stop once this text appears on the device's serial console (any line, not necessarily the "
@@ -879,6 +920,8 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
     passes), so the fact that e.g. `run` has no `--gdb` toggle (it always starts one) stays
     visible at the call site rather than hidden behind a single shared "boot args" bundle."""
     definitions: dict[str, dict[str, Any]] = {
+        "board": {"choices": tuple(BOARDS), "default": "pico", "help": _BOARD_HELP},
+        "fetch-fw-only": {"action": "store_true", "help": _FETCH_FW_ONLY_HELP},
         "gdb-port": {"type": int, "default": 3333},
         "gdb": {"action": "store_true"},
         "bootrom": {"help": _BOOTROM_HELP},
@@ -928,7 +971,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     run_parser = subparsers.add_parser(
         "run",
-        parents=[_shared_arg_parser("gdb-port", "bootrom")],
+        parents=[_shared_arg_parser("board", "gdb-port", "bootrom", "fetch-fw-only")],
         help="run a native .hex/.uf2 image with a GDB server",
     )
     run_parser.add_argument("--image", default="hello_uart.hex", help=f"{_IMAGE_PATH_HELP} (default: %(default)s)")
@@ -938,7 +981,17 @@ def main(argv: "list[str] | None" = None) -> None:
         "micropython",
         parents=[
             _shared_arg_parser(
-                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port", "pty"
+                "board",
+                "gdb-port",
+                "gdb",
+                "bootrom",
+                "expect-text",
+                "expect-regex",
+                "littlefs",
+                "dump-fs",
+                "tcp-port",
+                "pty",
+                "fetch-fw-only",
             )
         ],
         help="run a MicroPython/CircuitPython UF2 image",
@@ -965,7 +1018,17 @@ def main(argv: "list[str] | None" = None) -> None:
         "kaluma",
         parents=[
             _shared_arg_parser(
-                "gdb-port", "gdb", "bootrom", "expect-text", "expect-regex", "littlefs", "dump-fs", "tcp-port", "pty"
+                "board",
+                "gdb-port",
+                "gdb",
+                "bootrom",
+                "expect-text",
+                "expect-regex",
+                "littlefs",
+                "dump-fs",
+                "tcp-port",
+                "pty",
+                "fetch-fw-only",
             )
         ],
         help="run a Kaluma UF2 image (interactive REPL only)",
@@ -978,7 +1041,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     bench_parser = subparsers.add_parser(
         "bench",
-        parents=[_shared_arg_parser("bootrom", "expect-text", "expect-regex", "littlefs")],
+        parents=[_shared_arg_parser("board", "bootrom", "expect-text", "expect-regex", "littlefs", "fetch-fw-only")],
         help="benchmark instruction-dispatch throughput",
     )
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")

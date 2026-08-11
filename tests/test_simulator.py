@@ -12,6 +12,7 @@ Drives `_execute_batch()` directly rather than the `async def execute()` wrapper
 deterministic single-batch behavior without depending on asyncio scheduling order.
 """
 
+import itertools
 import time
 
 from rp2040py.simulator import Simulator
@@ -30,8 +31,17 @@ def test_idle_core_advances_far_past_a_single_recurring_alarm_period_in_one_batc
     # correct - a flaky threshold, not a real regression. Faking time.monotonic() to advance a
     # fixed amount per call removes the host-speed dependency entirely: every run sees the exact
     # same "elapsed" progression, so the number of firings before the budget trips is deterministic
-    # regardless of how fast this machine happens to execute the loop body.
-    fake_elapsed = iter(t * 0.0001 for t in range(1, 10_000))
+    # regardless of how fast this machine happens to execute the loop body. An unbounded
+    # itertools.count(), not a fixed-length range(): `time.monotonic` is a process-global
+    # monkeypatch, so a leftover background Simulator thread from an *unrelated* test that hasn't
+    # fully quiesced yet (its own in-flight `_execute_batch()` call - `simulator.stop()` only flips
+    # a flag, it doesn't wait for the batch to actually notice) can call this fake alongside this
+    # test's own calls. A finite generator raised `StopIteration` from *this* test when that
+    # happened (observed via `pre-commit run --all-files`, not a plain sequential `pytest` run -
+    # background-thread scheduling is exactly the kind of thing that varies between the two);
+    # unbounded removes the failure mode entirely rather than chasing every possible source of an
+    # extra call.
+    fake_elapsed = (t * 0.0001 for t in itertools.count(1))
 
     def _fake_monotonic() -> float:
         return next(fake_elapsed)
