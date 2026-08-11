@@ -17,7 +17,7 @@ See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against 
 - [rp2040py](#rp2040py)
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
-    - [Environments without compiled-extension support (iOS/Android)](#environments-without-compiled-extension-support-iosandroid)
+    - [Environments without compiled-extension support (iOS)](#environments-without-compiled-extension-support-ios)
   - [Run the demo project](#run-the-demo-project)
     - [Native code](#native-code)
     - [MicroPython code](#micropython-code)
@@ -52,14 +52,19 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
-### Environments without compiled-extension support (iOS/Android)
+### Environments without compiled-extension support (iOS)
 
 `rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
 [Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
-handful of environments, notably iOS apps like [Pythonista](http://omz-software.com/pythonista/)
-and some Android Python apps, sandboxed by the OS, can't load compiled `.so` extensions or import
-native code dynamically at all. A plain `pip install rp2040py` there resolves to a
-platform-specific wheel that simply won't load. Force the pure-Python universal wheel instead:
+handful of environments, fully sandboxed by the OS with no dynamic-library loading at all, can't
+load compiled `.so` extensions or import native code dynamically. So far that's confirmed only for
+iOS app runtimes like [Pythonista](http://omz-software.com/pythonista/) and
+[PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - **not** Android: both
+[Termux](https://github.com/termux) and [Python 3 IDE (Pydroid
+3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) load the compiled
+`rp2040py.native` extension fine, confirmed by hand (see "Tested" below). A plain `pip install
+rp2040py` in one of the affected iOS environments resolves to a platform-specific wheel that simply
+won't load. Force the pure-Python universal wheel instead:
 
 ```sh
 pip download rp2040py --only-binary=:all: --platform any --abi none
@@ -82,20 +87,28 @@ To confirm you actually got it:
 **Tested:**
 - iOS
   - [Pythonista](http://omz-software.com/pythonista/) - full support (no `[fs]` optional
-    dependency, `mpremote` untested - pySerial's `list_ports` likely has no iOS backend either,
-    same as confirmed on Android below; `rp2040py mpremote` should patch around it there too, but
-    that's unverified on an actual device - see
-    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
+    dependency); `mpremote` itself now confirmed to work over `--tcp-port`, but running the
+    emulator and `mpremote` **at the same time** did not work on-device - the app's sandbox appears
+    to only run one Python process per app instance, with no real subprocess/multi-process support,
+    so there's no way to have `rp2040py micropython --tcp-port ...` and a separate `mpremote`
+    invocation running concurrently the way this works on a normal OS. This is a constraint of the
+    app sandbox itself, not something `rp2040py`/`rp2040py mpremote` can patch around (unlike the
+    `list_ports` `ImportError` below).
   - [PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - full support (no `[fs]`
-    optional dependency, `mpremote` untested - same caveat as Pythonista above)
+    optional dependency); same `mpremote`-works-but-not-concurrently-with-the-emulator caveat as
+    Pythonista above.
 - Android
   - [Termux](https://github.com/termux) - full support, including `mpremote` via `rp2040py
     mpremote` (the real `mpremote` binary alone still fails - pySerial's `list_ports` has no
     Android backend and raises `ImportError` at import time regardless of which subcommand you
     run; `rp2040py mpremote` patches around it - see
-    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-likely-ios-pyserials-list_ports-importerror))
+    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-ios-pyserials-list_ports-importerror)).
+    The compiled `rp2040py.native` (Cython) extension loads and runs fine here too - confirmed by
+    hand, no pure-Python fallback needed.
   - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
-    not supported for now (testing in progress)
+    full support, including `mpremote` via `rp2040py mpremote` over `--tcp-port` (same caveat and
+    same fix as Termux above) and the compiled `rp2040py.native` (Cython) extension, both confirmed
+    by hand.
 
 ## Run the demo project
 
@@ -235,7 +248,7 @@ rp2040py micropython path/to/script.py
 stdio - for tools that expect a serial port but can't open one, notably
 [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
 environment with no serial support at all (e.g.
-[Pythonista](#environments-without-compiled-extension-support-iosandroid), see above). No
+[Pythonista](#environments-without-compiled-extension-support-ios), see above). No
 client-side patching needed - `mpremote connect socket://host:port` just talks directly
 to rp2040py, via pySerial's own built-in `socket://` URL support:
 
@@ -566,7 +579,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
-  [Pythonista](#environments-without-compiled-extension-support-iosandroid)).
+  [Pythonista](#environments-without-compiled-extension-support-ios)).
 
 See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,

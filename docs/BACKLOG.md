@@ -7,14 +7,20 @@ PORTING.md / CHANGELOG.md for those. Items large enough to need their own file:
 `threading`-based workaround - `stdio_repl.py`'s reader thread, `pio.py`'s `RLock`,
 `gdb_tcp_server.py`'s accept-thread poll, ... - with one `asyncio` event loop).
 
-## SSI flash-write support (branch `feat/ssi-rw-support`)
+## SSI flash-write support — DONE, merged to main
 
-**Goal:** implement real JEDEC SPI-NOR flash command emulation in `RPSSI` so MicroPython can
+**Update: landed.** No longer sitting staged on `feat/ssi-rw-support` - `src/rp2040py/peripherals/
+ssi.py` on `main` today has the full JEDEC command set described below (confirmed: `CMD_PAGE_PROGRAM`/
+`CMD_SECTOR_ERASE`/etc. are in the current tree, not just this branch's notes). This is also what
+made `--dump-fs` (see "littlefs persistence" below) meaningful in the first place - flash writes
+during a session are real now, `--dump-fs` just makes them durable across processes too.
+
+**Original goal:** implement real JEDEC SPI-NOR flash command emulation in `RPSSI` so MicroPython can
 actually *write* to the emulated flash (currently a register-only stub — see README's "the
 filesystem is not writeable, as the SSI peripheral required for flash writing is not implemented
 yet"). Confirmed rp2040js has the same gap — this is a new feature, not a porting bug.
 
-### Done, staged (uncommitted on top of `12249b8`)
+### Done, staged (uncommitted on top of `12249b8`) — now merged, see update above
 
 - `src/rp2040py/peripherals/ssi.py`: full JEDEC command set (WREN/WRDI, RDSR1/2, WRSR,
   PAGE_PROGRAM, SECTOR_ERASE, BLOCK_ERASE, READ_DATA, READ_JEDEC_ID). Command framing keys off
@@ -291,9 +297,27 @@ debugger attached (likely what `ci-pico-sdk.yml` exercises) - a fix needs to dis
 session is actively attached and expected to resume this" from "nothing is ever going to resume
 this," not just delete the check.
 
-## MicroPython 1.21-vs-1.28 instruction-count gap — one real fix landed, root cause still not isolated
+## MicroPython 1.21-vs-1.28 instruction-count gap — root cause identified (upstream TinyUSB, not an rp2040py bug); optimization attempts net negative
 
-**Goal:** actually root-cause README/PORTING.md's documented ~45x instruction-count gap (1.21:
+**Update: the call-stack trail below was walked all the way to its end.** 1.28's dominant `memcpy`
+callers are TinyUSB's `tu_fifo_read`/`tu_fifo_write` (confirmed field-for-field against `tu_fifo_t`
+by building MicroPython 1.28 from source with debug symbols - see "Identified with certainty"
+below), driven by a real TinyUSB submodule version bump between the two MicroPython releases, not
+by anything this project's own emulator code does differently. Two follow-up optimization attempts
+tried to exploit that finding directly - the HLE hook for bootrom `__memcpy`/`__memcpy_44` (this
+file, next section) and three separate JIT/basic-block-fusion variants targeting the same hot loop
+(byte-tail loop, branch-only detection, the 16-byte bulk-copy path - see
+[docs/JIT_BACKLOG.md](JIT_BACKLOG.md) for the full writeup) - and **all of them measured net
+negative** on the real target workload, for related but distinct reasons each time (per-instruction
+check overhead paid by the ~99.9% of instructions that never hit the pattern; PyPy's own JIT tracing
+getting disrupted by the extra call even on the branch-only variant; the bulk-copy path barely
+firing at all because this firmware's actual TinyUSB/littlefs traffic is small and
+often-misaligned, so it never leaves the byte-tail loop in the first place). So: root cause
+genuinely identified, not "still not isolated" - it's just not a gap this project's own code can
+close, and the two most direct-looking optimization angles are both confirmed dead ends, not
+untried ideas.
+
+**Original goal:** actually root-cause README/PORTING.md's documented ~45x instruction-count gap (1.21:
 1,418,835 steps vs. 1.28: 64,679,599 steps to reach the same script's first `print()`), rather than
 leave it at "not isolated further" indefinitely. User supplied both real UF2s
 (`RPI_PICO-20231005-v1.21.0.uf2`, `RPI_PICO-20260406-v1.28.0.uf2`) plus a `tests/micropython/
@@ -926,9 +950,29 @@ marking individual table entries `noexcept` changes nothing observable; it would
 itself to be `noexcept`, which isn't safe here (real bus/peripheral/`bl_taken`-callback exceptions
 need to keep propagating, not get silently swallowed).
 
-## littlefs persistence to the host `--littlefs` image file — not started
+## littlefs persistence to the host `--littlefs` image file — resolved, via `--dump-fs`
 
-**Goal:** let changes MicroPython makes to its filesystem during a session actually persist back
+**Update: shipped, but via a simpler mechanism than the design sketch below planned - `--dump-fs
+<path>` (see CHANGELOG.md's `[Unreleased]` Added section).** Rather than the sidecar-file +
+`--persistent` flag design sketched out below, the actual implementation is a direct, explicit
+`--dump-fs <path>` flag on `micropython`/`kaluma` that writes the device's flash region back out to
+that path when the subcommand exits (Ctrl+X, `--expect-text` firing, or end of a `-c`/`-m`/script
+run) - `BaseDevice.dump_flash_image()` plus per-device `dump_*_flash_image()` in
+`device/load_flash.py`, the mirror image of the existing `load_*_flash_image()` functions. Point it
+at the same path as `--littlefs` for read-modify-write persistence across runs
+(`--littlefs img --dump-fs img`), or at a fresh path to capture a run's resulting filesystem state
+without touching the original template - which covers this section's point 2 concern (never
+clobbering a template in place) without needing an actual sidecar-file scheme. Wired into the same
+unified shutdown coordinator (`on_quit`/`ShutdownRequest`) point 4 below identifies as the real
+blocker, so it fires on every real exit path, not just clean ones. A CI check
+(`scripts/ci-common.sh`'s `run_micropython_dump_test()`) boots against blank flash, dumps, reloads
+via `--littlefs`, dumps again, and asserts the two dumps are byte-identical - a regression test for
+this exact round-trip. See README.md's "Filesystem support" section for user-facing docs.
+
+Left below for historical context (the alternatives considered, and why point-4's exit-path tracing
+mattered) - not a live TODO anymore.
+
+**Original goal:** let changes MicroPython makes to its filesystem during a session actually persist back
 to the `--littlefs` image file on disk, instead of only existing in the emulated flash's in-memory
 buffer for the lifetime of that one process. Right now `load_micropython_flash_image()`
 (`src/rp2040py/device/load_flash.py`) only ever reads the image file *into* `rp2040.flash` once at
@@ -1072,9 +1116,20 @@ region.
 This is a design sketch to make the work easier to pick up, not an implementation - none of the
 above is committed yet.
 
-## PTY / real serial port passthrough for external tools — not started
+## PTY / real serial port passthrough for external tools — DONE, shipped as `--pty`
 
-**Goal:** something like `rp2040py micropython --pty` / `rp2040py kaluma --pty` (exact flag name
+**Update: shipped.** `rp2040py micropython --pty` / `rp2040py kaluma --pty` (POSIX only) -
+`src/rp2040py/cli/pty_repl.py`'s `PtyInteractiveRepl` - bridges `USBCDC`'s console to a real
+`pty.openpty()` master/slave pair and logs the slave side's path (`/dev/pts/N`) for the user to
+point an external tool at, exactly per the rough shape below. Ended up as a flag on the existing
+`micropython`/`kaluma` subcommands, as the first bullet below guessed. See
+README.md's "mpremote" section and [docs/mpremote.md](mpremote.md) ("Why `--pty` exists") for the
+user-facing picture, and CHANGELOG.md's `[Unreleased]` Added section for the implementation
+writeup. Windows has no `pty.openpty()`/`os.ttyname()` equivalent, so `--pty` there exits with a
+clear error instead - use `--tcp-port` on Windows instead (see docs/mpremote.md's "What doesn't
+work"). Left below for historical context on the original design questions.
+
+**Original goal:** something like `rp2040py micropython --pty` / `rp2040py kaluma --pty` (exact flag name
 not decided - "ttyrepl" was also floated) that exposes the emulated device's USB-CDC console as a
 real host-side pseudo-terminal, instead of only being reachable through this project's own
 `StdioInteractiveRepl`/raw-REPL API. The point is letting *external* tools that expect a real
