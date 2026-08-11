@@ -84,6 +84,21 @@ class Simulator:
                     self._loop, self._loop_thread = start_loop_thread()
         return self._loop
 
+    def bind_loop(self, loop: "asyncio.AbstractEventLoop | None" = None) -> None:
+        """Registers the loop this Simulator's `execute()` runs on, for a caller driving it
+        directly (e.g. `asyncio.create_task(simulator.execute())` inside its own `asyncio.run()`
+        - see docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") instead of via
+        `start_execution()`'s own thread+loop creation. Cross-thread bridges
+        (`call()`/`acall()`/`submit()`) use whatever loop was registered here; without this, a
+        caller reaching in from a genuinely different thread (e.g. `GDBTCPServer`'s own engine
+        room, bridging via `acall()`) would make `_ensure_loop()` spin up a second, unrelated loop
+        that nothing is actually running `execute()` on - scheduling work there via
+        `run_coroutine_threadsafe` would just sit forever, never executed. `loop=None` (the
+        default) resolves via `asyncio.get_running_loop()` - call this from inside the
+        coroutine/loop context that will drive `execute()`, before anything else might try to
+        bridge in from another thread."""
+        self._loop = loop if loop is not None else asyncio.get_running_loop()
+
     def start_execution(self) -> None:
         """Schedules execute() to start running on this Simulator's own engine-room thread and
         returns immediately - the replacement for `threading.Thread(target=simulator.execute,

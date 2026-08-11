@@ -69,7 +69,7 @@ class RawReplRunner(BaseReplRunner):
         self._stderr = bytearray()
         self.result: tuple[bytes, bytes] | None = None
 
-    def _on_start(self) -> None:
+    async def _on_start(self) -> None:
         # Ctrl-C twice first, interrupting any program already running (e.g. an auto-run main.py
         # from a littlefs image) before entering raw REPL - the same sequence
         # tools/pyboard.py's enter_raw_repl() uses, for the same reason.

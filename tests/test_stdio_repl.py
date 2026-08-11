@@ -1,3 +1,4 @@
+import asyncio
 import os
 import signal
 import sys
@@ -55,6 +56,17 @@ def pty_stdin(monkeypatch):
     os.close(master_fd)
 
 
+def _run_test(body) -> None:
+    """Runs an async test body via `asyncio.run()` on this (the main) thread - not a background
+    loop thread: `ProcessInteractiveRepl._on_start()`/`_on_stop()` call `signal.signal()`, which
+    CPython restricts to the main thread of the main interpreter, matching how a real caller only
+    ever awaits `start()`/`stop()` from `cli/__init__.py`'s own main-thread `asyncio.run()` (see
+    `process_repl.py`'s own docstring). Polling loops that used to `time.sleep()` while a dedicated
+    reader thread ran in the background now `await asyncio.sleep()` instead, so this same loop gets
+    to process the real pty's `add_reader()` callback in between polls."""
+    asyncio.run(body())
+
+
 # c_cc (tcgetattr()'s 7th element) is NCCS slots long (32 on Linux/macOS), but only these are ever
 # assigned a meaning - everything past the highest one (VEOL2) is a reserved/padding slot the
 # kernel makes no round-trip guarantee about. Confirmed flaky specifically inside cibuildwheel's
@@ -108,81 +120,98 @@ def test_sigterm_signals_quit_without_touching_terminal(pty_stdin):
     trigger - it must not restore the terminal or exit the process itself. `on_quit` is always
     just a signal; whatever handles it (e.g. Simulator.wait_for_shutdown) owns the actual
     cleanup/exit, via repl.stop()."""
-    canonical_before = termios.tcgetattr(pty_stdin.slave_fd)
-    quit_calls = []
 
-    repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=quit_calls.append)
-    repl.start()
-    try:
-        assert _stable(repl._old_termios) == _stable(canonical_before)
+    async def _body() -> None:
+        canonical_before = termios.tcgetattr(pty_stdin.slave_fd)
+        quit_calls = []
 
-        handler = signal.getsignal(signal.SIGTERM)
-        assert handler == repl._on_sigterm
+        repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=quit_calls.append)
+        await repl.start()
+        try:
+            assert _stable(repl._old_termios) == _stable(canonical_before)
 
-        handler(signal.SIGTERM, None)
+            handler = signal.getsignal(signal.SIGTERM)
+            assert handler == repl._on_sigterm
 
-        assert quit_calls == [128 + signal.SIGTERM]
-        # Terminal restore is deferred to whatever handles the quit request, not done here.
-        assert termios.tcgetattr(pty_stdin.slave_fd) != canonical_before
-    finally:
-        repl.stop()
+            handler(signal.SIGTERM, None)
+
+            assert quit_calls == [128 + signal.SIGTERM]
+            # Terminal restore is deferred to whatever handles the quit request, not done here.
+            assert termios.tcgetattr(pty_stdin.slave_fd) != canonical_before
+        finally:
+            await repl.stop()
+
+    _run_test(_body)
 
 
 def test_stop_restores_terminal(pty_stdin):
-    canonical_before = termios.tcgetattr(pty_stdin.slave_fd)
+    async def _body() -> None:
+        canonical_before = termios.tcgetattr(pty_stdin.slave_fd)
 
-    repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None)
-    repl.start()
-    assert termios.tcgetattr(pty_stdin.slave_fd) != canonical_before
+        repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None)
+        await repl.start()
+        assert termios.tcgetattr(pty_stdin.slave_fd) != canonical_before
 
-    repl.stop()
+        await repl.stop()
 
-    assert _stable(termios.tcgetattr(pty_stdin.slave_fd)) == _stable(canonical_before)
+        assert _stable(termios.tcgetattr(pty_stdin.slave_fd)) == _stable(canonical_before)
+
+    _run_test(_body)
 
 
 def test_stop_restores_previous_sigterm_handler(pty_stdin):
-    original_handler = signal.getsignal(signal.SIGTERM)
-    repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None)
-    repl.start()
-    assert signal.getsignal(signal.SIGTERM) == repl._on_sigterm
-    repl.stop()
-    assert signal.getsignal(signal.SIGTERM) == original_handler
+    async def _body() -> None:
+        original_handler = signal.getsignal(signal.SIGTERM)
+        repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=lambda code: None)
+        await repl.start()
+        assert signal.getsignal(signal.SIGTERM) == repl._on_sigterm
+        await repl.stop()
+        assert signal.getsignal(signal.SIGTERM) == original_handler
+
+    _run_test(_body)
 
 
 def test_ctrl_x_requests_quit(pty_stdin):
-    quit_calls = []
+    async def _body() -> None:
+        quit_calls = []
 
-    repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=quit_calls.append)
-    repl.start()
-    try:
-        os.write(pty_stdin.master_fd, bytes([24]))  # Ctrl+X
+        repl = StdioInteractiveRepl(_FakeCdc(), Simulator(), on_quit=quit_calls.append)
+        await repl.start()
+        try:
+            os.write(pty_stdin.master_fd, bytes([24]))  # Ctrl+X
 
-        deadline = time.monotonic() + 2.0
-        while not quit_calls and time.monotonic() < deadline:
-            time.sleep(0.01)
+            deadline = time.monotonic() + 2.0
+            while not quit_calls and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
 
-        assert quit_calls == [0]
-    finally:
-        repl.stop()
+            assert quit_calls == [0]
+        finally:
+            await repl.stop()
+
+    _run_test(_body)
 
 
 def test_typed_bytes_are_forwarded_to_the_device(pty_stdin):
     """The actual data path this whole migration touches: bytes typed at the real pty must reach
     cdc.send_serial_byte() - now via add_reader() + the engine-room loop instead of a dedicated
     reader thread calling it directly."""
-    cdc = _FakeCdc()
-    repl = StdioInteractiveRepl(cdc, Simulator(), on_quit=lambda code: None)
-    repl.start()
-    try:
-        os.write(pty_stdin.master_fd, b"hello")
 
-        deadline = time.monotonic() + 2.0
-        while bytes(cdc.sent) != b"hello" and time.monotonic() < deadline:
-            time.sleep(0.01)
+    async def _body() -> None:
+        cdc = _FakeCdc()
+        repl = StdioInteractiveRepl(cdc, Simulator(), on_quit=lambda code: None)
+        await repl.start()
+        try:
+            os.write(pty_stdin.master_fd, b"hello")
 
-        assert bytes(cdc.sent) == b"hello"
-    finally:
-        repl.stop()
+            deadline = time.monotonic() + 2.0
+            while bytes(cdc.sent) != b"hello" and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            assert bytes(cdc.sent) == b"hello"
+        finally:
+            await repl.stop()
+
+    _run_test(_body)
 
 
 def test_paste_larger_than_the_fifo_is_not_truncated(pty_stdin):
@@ -192,27 +221,28 @@ def test_paste_larger_than_the_fifo_is_not_truncated(pty_stdin):
     comment documents that incident). A tiny fake FIFO forces the "queue now, pump the rest once
     there's room" path a real device relies on for a paste bigger than USBCDC's 512-byte FIFO -
     nothing here may be silently dropped."""
-    cdc = _FakeCdc(fifo_size=4)
-    simulator = Simulator()
-    repl = StdioInteractiveRepl(cdc, simulator, on_quit=lambda code: None)
-    repl.start()
-    try:
-        payload = b"0123456789"
-        os.write(pty_stdin.master_fd, payload)
 
-        async def _pump() -> None:
-            repl.pump()
+    async def _body() -> None:
+        cdc = _FakeCdc(fifo_size=4)
+        simulator = Simulator()
+        repl = StdioInteractiveRepl(cdc, simulator, on_quit=lambda code: None)
+        await repl.start()
+        try:
+            payload = b"0123456789"
+            os.write(pty_stdin.master_fd, payload)
 
-        deadline = time.monotonic() + 2.0
-        while bytes(cdc.sent) != payload and time.monotonic() < deadline:
-            # Nothing else drains this fake FIFO on its own - simulate the device consuming what's
-            # in flight, same as test_repl_runner.py's test_queue_and_pump_paces_by_free_space,
-            # then nudge the queue along the same way the real pump alarm eventually would
-            # (bridged via simulator.call(), same requirement as every other tx_fifo touch).
-            cdc.tx_fifo.item_count = 0
-            simulator.call(_pump())
-            time.sleep(0.01)
+            deadline = time.monotonic() + 2.0
+            while bytes(cdc.sent) != payload and time.monotonic() < deadline:
+                # Nothing else drains this fake FIFO on its own - simulate the device consuming
+                # what's in flight, same as test_repl_runner.py's own
+                # test_queue_and_pump_paces_by_free_space, then nudge the queue along the same way
+                # the real pump alarm eventually would.
+                cdc.tx_fifo.item_count = 0
+                repl.pump()
+                await asyncio.sleep(0.01)
 
-        assert bytes(cdc.sent) == payload
-    finally:
-        repl.stop()
+            assert bytes(cdc.sent) == payload
+        finally:
+            await repl.stop()
+
+    _run_test(_body)

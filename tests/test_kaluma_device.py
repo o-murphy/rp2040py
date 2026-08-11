@@ -1,3 +1,4 @@
+import asyncio
 import struct
 import time
 
@@ -33,7 +34,7 @@ def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
     device = KalumaDevice(garbage_image)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        device.start(timeout=0.3)
+        device.start_async(timeout=0.3).result(timeout=5)
     elapsed = time.monotonic() - started
     assert elapsed < 5  # bounded failure, not a silent hang
     device.stop()
@@ -42,21 +43,28 @@ def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
 def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
     device = KalumaDevice(garbage_image)
     with pytest.raises(TimeoutError):
-        device.start(timeout=0.2)
+        device.start_async(timeout=0.2).result(timeout=5)
     with pytest.raises(RuntimeError):
-        device.start(timeout=0.2)
+        device.start_async(timeout=0.2)
     device.stop()
 
 
 def test_context_manager_calls_start_then_stop(garbage_image, monkeypatch):
     device = KalumaDevice(garbage_image)
     calls = []
-    monkeypatch.setattr(device, "start", lambda timeout=30.0: calls.append("start"))
+
+    async def _fake_astart(timeout=30.0) -> None:
+        calls.append("start")
+
+    monkeypatch.setattr(device, "astart", _fake_astart)
     monkeypatch.setattr(device, "stop", lambda: calls.append("stop"))
 
-    with device:
-        assert calls == ["start"]
-    assert calls == ["start", "stop"]
+    async def _body() -> None:
+        async with device:
+            assert calls == ["start"]
+        assert calls == ["start", "stop"]
+
+    asyncio.run(_body())
 
 
 def test_littlefs_image_loaded_via_load_kaluma_flash_image(garbage_image, monkeypatch):

@@ -49,10 +49,10 @@ class _FakeMicroPythonDevice:
         _FakeMicroPythonDevice.last_bootrom_words = bootrom_words
         self.simulator = None
 
-    def start(self, timeout=None):
+    async def astart(self, timeout=None):
         pass
 
-    def exec(self, source, timeout=None):
+    async def aexec(self, source, timeout=None):
         return b"", b""
 
     def stop(self):
@@ -142,7 +142,7 @@ def test_missing_image_prints_the_requested_identifier_not_none(caplog, monkeypa
 
 def test_exec_mode_writes_stdout_and_exits_zero_on_success(capsys, fake_device, monkeypatch):
     class _Device(_FakeMicroPythonDevice):
-        def exec(self, source, timeout=None):
+        async def aexec(self, source, timeout=None):
             return b"4\n", b""
 
     monkeypatch.setattr(cli, "MicroPythonDevice", _Device)
@@ -156,7 +156,7 @@ def test_exec_mode_writes_stdout_and_exits_zero_on_success(capsys, fake_device, 
 
 def test_exec_mode_exits_nonzero_when_device_writes_to_stderr(fake_device, monkeypatch):
     class _Device(_FakeMicroPythonDevice):
-        def exec(self, source, timeout=None):
+        async def aexec(self, source, timeout=None):
             return b"", b"Traceback...\n"
 
     monkeypatch.setattr(cli, "MicroPythonDevice", _Device)
@@ -297,10 +297,10 @@ def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, mon
             started["port"] = port
             self.port = 12345
 
-        def start(self):
+        async def start(self):
             started["started"] = True
 
-        def stop(self):
+        async def stop(self):
             started["stopped"] = True
 
     class _FakeCdc:
@@ -315,7 +315,9 @@ def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, mon
 
     monkeypatch.setattr(cli, "MicroPythonDevice", _Device)
     monkeypatch.setattr(cli, "SocketInteractiveRepl", _FakeSocketRepl)
-    monkeypatch.setattr(cli.Simulator, "wait_for_shutdown", lambda self: None)
+    # No wait_for_shutdown() to fake anymore - _await_shutdown() (the async replacement) returns
+    # immediately on its own here, since this fake device's real-but-never-started Simulator has
+    # `executing == False` from construction (start_execution() is never actually called).
 
     cli._cmd_micropython(_mp_args(tcp_port=54321, command=None, module=None, filename=None))
 
@@ -365,12 +367,14 @@ class _FakeKalumaDevice:
         _FakeKalumaDevice.last_bootrom_words = bootrom_words
         _FakeKalumaDevice.last_instance = self
         # A real Simulator (cheap to construct - no thread starts until .execute()) rather than
-        # None: _cmd_kaluma reads device.simulator.shutdown_request and calls
-        # device.simulator.wait_for_shutdown(), both real Simulator behavior now.
+        # None: _cmd_kaluma reads device.simulator.shutdown_request, and _await_shutdown() reads
+        # device.simulator.executing - both real Simulator behavior now. `executing` stays False
+        # (start_execution() is never actually called here), so _await_shutdown() returns
+        # immediately on its own - no need to fake it out.
         self.simulator = Simulator()
         self.cdc = _FakeKalumaCdc()
 
-    def start(self, timeout=None):
+    async def astart(self, timeout=None):
         pass
 
     def stop(self):
@@ -380,17 +384,17 @@ class _FakeKalumaDevice:
 class _FakeStdioInteractiveRepl:
     """Stands in for StdioInteractiveRepl - _cmd_kaluma has no non-interactive escape hatch (no
     -c/-m/<filename> like _cmd_micropython), so the real class (raw termios, an add_reader()
-    callback on the engine-room loop, wait_for_shutdown's loop) would otherwise block these
+    callback on the engine-room loop, _await_shutdown()'s loop) would otherwise block these
     tests."""
 
     def __init__(self, cdc, simulator, on_data=None, on_quit=None):
         self.cdc = cdc
         self.simulator = simulator
 
-    def start(self):
+    async def start(self):
         pass
 
-    def stop(self):
+    async def stop(self):
         pass
 
 
@@ -401,7 +405,6 @@ def fake_kaluma_device(monkeypatch):
     monkeypatch.setattr(cli, "KalumaDevice", _FakeKalumaDevice)
     monkeypatch.setattr(cli, "retrieve", lambda spec, image=None: "fixed-kaluma-image.uf2")
     monkeypatch.setattr(cli, "StdioInteractiveRepl", _FakeStdioInteractiveRepl)
-    monkeypatch.setattr(Simulator, "wait_for_shutdown", lambda self, cleanup=None: None)
     return _FakeKalumaDevice
 
 

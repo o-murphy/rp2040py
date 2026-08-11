@@ -42,11 +42,13 @@ Subcommands:
 """
 
 import argparse
+import asyncio
 import contextlib
 import importlib.util
 import logging
 import os
 import re
+import signal
 import struct
 import sys
 import time
@@ -177,8 +179,16 @@ def _resolve_bootrom_words(source: "str | None") -> "list[int]":
     return list(struct.unpack(f"<{word_count}I", data[: word_count * 4]))
 
 
-def _cmd_run(args: argparse.Namespace) -> None:
+async def _run_async(args: argparse.Namespace) -> int:
+    """`run`'s real body - a coroutine driven by `_cmd_run()`'s own `asyncio.run()` call, per
+    docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape": this coroutine's own task *is* the
+    engine room (`bind_loop()` registers it), on the process's actual main thread - not a
+    separate thread `wait_for_shutdown()` used to poll from the outside. First component
+    migrated (see that doc's "Phased plan") - `micropython`/`kaluma` still use the older
+    `Simulator.start_execution()`/`wait_for_shutdown()` model via `BaseDevice`, unchanged for now.
+    """
     simulator = Simulator()
+    simulator.bind_loop()
     mcu = simulator.rp2040
 
     mcu.load_bootrom(_resolve_bootrom_words(args.bootrom))
@@ -193,12 +203,56 @@ def _cmd_run(args: argparse.Namespace) -> None:
         _buf_write(sys.stdout, value)
 
     mcu.uart[0].on_byte = _on_byte
-
     mcu.core.pc = 0x10000000
-    simulator.start_execution()
-    # gdb_server.close() as the cleanup hook: its accept thread is deliberately non-daemon (see
-    # its own docstring), so a plain sys.exit() below would otherwise hang forever joining it.
-    simulator.wait_for_shutdown(cleanup=gdb_server.close)
+
+    loop = asyncio.get_running_loop()
+    stop_requested = asyncio.Event()
+    exit_code = 0
+
+    def _request_stop(code: int) -> None:
+        nonlocal exit_code
+        exit_code = code
+        stop_requested.set()
+
+    # Real signal handling, not KeyboardInterrupt/the old wait_for_shutdown() poll loop - viable
+    # now that this coroutine runs on the actual process main thread (add_signal_handler() is a
+    # CPython main-thread-only restriction - see docs/MAIN_THREAD_ASYNCIO_BACKLOG.md). Not
+    # available on Windows (ProactorEventLoop) - falls back to asyncio.run()'s own
+    # KeyboardInterrupt propagation for Ctrl+C there (SIGTERM has no graceful-shutdown path on
+    # Windows either way, matching this command's behavior before this migration).
+    with contextlib.suppress(NotImplementedError):
+        loop.add_signal_handler(signal.SIGINT, _request_stop, 130)
+        loop.add_signal_handler(signal.SIGTERM, _request_stop, 143)
+
+    execute_task = loop.create_task(simulator.execute())
+    stop_task = loop.create_task(stop_requested.wait())
+    try:
+        # gdb_server.close() here, not a `wait_for_shutdown(cleanup=...)` callback: its accept
+        # thread is deliberately non-daemon (see its own docstring), so returning without this
+        # would hang interpreter shutdown forever joining it.
+        done, _pending = await asyncio.wait({execute_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        if stop_task in done:
+            # A signal fired first - ask execute() to wind down gracefully (finish its
+            # in-flight batch) rather than just dropping the task.
+            simulator.stop()
+            await execute_task
+        else:
+            # execute() ended on its own (RP2040.on_break, e.g. a bkpt-based firmware
+            # convention) before any signal did - nothing left to wait for.
+            stop_task.cancel()
+    finally:
+        gdb_server.close()
+
+    return exit_code
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    try:
+        exit_code = asyncio.run(_run_async(args))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    if exit_code:
+        sys.exit(exit_code)
 
 
 def _raw_repl_source(args: argparse.Namespace) -> "str | None":
@@ -285,7 +339,7 @@ def _make_expect_text_watcher(
     return _watch
 
 
-def _start_console_repl(
+async def _start_console_repl(
     args: argparse.Namespace, cdc: USBCDC, simulator: Simulator, on_data: "Callable[[bytes | bytearray], None]"
 ) -> BaseReplRunner:
     """Starts (and returns, already `start()`ed) whichever console bridge `--tcp-port`/`--pty`
@@ -300,7 +354,7 @@ def _start_console_repl(
         socket_repl = SocketInteractiveRepl(
             cdc, simulator, on_quit=simulator.shutdown_request.request, port=args.tcp_port, on_data=on_data
         )
-        socket_repl.start()
+        await socket_repl.start()
         _logger.info(
             "TCP socket REPL listening on 127.0.0.1:%d - e.g. `mpremote connect socket://127.0.0.1:%d`",
             socket_repl.port,
@@ -310,12 +364,12 @@ def _start_console_repl(
 
     if args.pty:
         pty_repl = PtyInteractiveRepl(cdc, simulator, on_quit=simulator.shutdown_request.request, on_data=on_data)
-        pty_repl.start()
+        await pty_repl.start()
         _logger.info("PTY REPL listening on %s - e.g. `mpremote connect %s`", pty_repl.slave_path, pty_repl.slave_path)
         return pty_repl
 
     stdio_repl = StdioInteractiveRepl(cdc, simulator, on_data=on_data, on_quit=simulator.shutdown_request.request)
-    stdio_repl.start()
+    await stdio_repl.start()
     return stdio_repl
 
 
@@ -331,7 +385,30 @@ def _validate_console_mode(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _cmd_micropython(args: argparse.Namespace) -> None:
+async def _await_shutdown(simulator: Simulator) -> "int | None":
+    """Async equivalent of `Simulator.wait_for_shutdown()`'s poll loop, for a caller already
+    running on `simulator`'s own loop (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape").
+    Real `SIGINT`/`SIGTERM` handling via `loop.add_signal_handler()` - falls back to the caller's
+    own `except KeyboardInterrupt` (see `_cmd_micropython`/`_cmd_kaluma`) on platforms without it.
+    Returns the process exit code to `sys.exit()` explicitly with, or `None` if nothing ever
+    requested a shutdown (e.g. natural completion) - matching `wait_for_shutdown()`'s own old
+    distinction between "explicitly exit with this code" and "just let the process end normally",
+    which a plain `int` can't represent on its own (0 is a legitimate explicit exit code too)."""
+    loop = asyncio.get_running_loop()
+    shutdown_request = simulator.shutdown_request
+
+    with contextlib.suppress(NotImplementedError):
+        loop.add_signal_handler(signal.SIGINT, shutdown_request.request, 130)
+        loop.add_signal_handler(signal.SIGTERM, shutdown_request.request, 143)
+
+    while simulator.executing:
+        if shutdown_request.event.is_set():
+            break
+        await asyncio.sleep(0.1)
+    return shutdown_request.code if shutdown_request.event.is_set() else None
+
+
+async def _micropython_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
     # -c/-m/<filename> ("exec mode") runs one device.exec() call and exits based on its own
     # stdout/stderr (see below) - it never reaches the interactive/--tcp-port/--pty console loop
@@ -341,18 +418,18 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
     if args.command is not None or args.module is not None or args.filename is not None:
         if args.tcp_port is not None:
             _logger.error("--tcp-port cannot be combined with -c/-m/<filename>")
-            sys.exit(1)
+            return 1
         if args.pty:
             _logger.error("--pty cannot be combined with -c/-m/<filename>")
-            sys.exit(1)
+            return 1
         if args.expect_text is not None:
             _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
-            sys.exit(1)
+            return 1
 
     image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
     if image_name is None:
         _logger.error("Could not find micropython image: %s", args.image)
-        sys.exit(1)
+        return 1
 
     _logger.info("Loading uf2 image: %s", image_name)
     littlefs = (
@@ -377,14 +454,17 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         )
     except ValueError as exc:
         _logger.error("%s", exc)
-        sys.exit(1)
+        return 1
 
     # cleanup runs everything registered on it (in reverse order) whenever this block exits for
-    # any reason - normal fall-through, an explicit sys.exit() below, or one raised from inside
-    # wait_for_shutdown() - so each resource's teardown lives right next to where it's created,
-    # instead of a separate hand-assembled "cleanup everything" function that has to be kept in
-    # sync with whatever the rest of this function does or doesn't construct.
-    with contextlib.ExitStack() as cleanup:
+    # any reason - normal fall-through, an early `return` below, or an exception - so each
+    # resource's teardown lives right next to where it's created, instead of a separate
+    # hand-assembled "cleanup everything" function that has to be kept in sync with whatever the
+    # rest of this function does or doesn't construct. `Async`ExitStack (not plain ExitStack):
+    # `repl.stop` is itself `async def` now (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md) - the other
+    # callbacks registered here are still plain sync callables, which `.callback()` handles fine
+    # alongside `.push_async_callback()`.
+    async with contextlib.AsyncExitStack() as cleanup:
         cleanup.callback(device.stop)
 
         cleanup.callback(_mk_dump_fs_callback(args.dump_fs, device))
@@ -394,38 +474,38 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
             gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
             _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
             # Its accept thread is deliberately non-daemon (see GDBTCPServer.close()'s own
-            # docstring) - without this, any sys.exit() below would hang forever joining it.
+            # docstring) - without this, returning below would hang forever joining it.
             cleanup.callback(gdb_server.close)
 
         raw_repl_source = _raw_repl_source(args)
         if raw_repl_source is not None:
             # No timeout (unlike MicroPythonDevice's library default): matches this CLI's
             # existing philosophy elsewhere of running until done or Ctrl+C, not an arbitrary
-            # deadline.
+            # deadline. KeyboardInterrupt isn't caught here - it propagates out of asyncio.run()
+            # to _cmd_micropython()'s own try/except (no signal handler is registered for this
+            # exec-only mode, so Ctrl+C keeps its default Python disposition).
             try:
-                device.start(timeout=None)
-                stdout, stderr = device.exec(raw_repl_source, timeout=None)
-            except KeyboardInterrupt:
-                sys.exit(130)
+                await device.astart(timeout=None)
+                stdout, stderr = await device.aexec(raw_repl_source, timeout=None)
             except (TimeoutError, RawReplError) as exc:
                 _logger.error("%s", exc)
-                sys.exit(1)
+                return 1
             _buf_write(sys.stdout, stdout)
             if stderr:
                 _buf_write(sys.stderr, stderr)
-            sys.exit(1 if stderr else 0)
+            return 1 if stderr else 0
 
         cdc = device.cdc
         shutdown = device.simulator.shutdown_request
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = _start_console_repl(
+        repl = await _start_console_repl(
             args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, args.expect_regex, shutdown)
         )
-        cleanup.callback(repl.stop)
+        cleanup.push_async_callback(repl.stop)
 
-        device.start(timeout=None)
+        await device.astart(timeout=None)
         if not args.circuitpython:
             # We send a newline so the user sees the MicroPython prompt
             cdc.send_serial_byte(ord("\r"))
@@ -433,15 +513,24 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
         else:
             cdc.send_serial_byte(3)
 
-        device.simulator.wait_for_shutdown()
+        return await _await_shutdown(device.simulator)
 
 
-def _cmd_kaluma(args: argparse.Namespace) -> None:
+def _cmd_micropython(args: argparse.Namespace) -> None:
+    try:
+        exit_code = asyncio.run(_micropython_async(args))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    if exit_code is not None:
+        sys.exit(exit_code)
+
+
+async def _kaluma_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
     image_name = retrieve(KALUMA, args.image)
     if image_name is None:
         _logger.error("Could not find kaluma image: %s", args.image)
-        sys.exit(1)
+        return 1
 
     _logger.info("Loading uf2 image: %s", image_name)
     littlefs = args.littlefs if args.littlefs is not None and Path(args.littlefs).exists() else None
@@ -461,9 +550,9 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         )
     except ValueError as exc:
         _logger.error("%s", exc)
-        sys.exit(1)
+        return 1
 
-    with contextlib.ExitStack() as cleanup:
+    async with contextlib.AsyncExitStack() as cleanup:
         cleanup.callback(device.stop)
 
         cleanup.callback(_mk_dump_fs_callback(args.dump_fs, device))
@@ -479,12 +568,12 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
 
         # Constructed (and its on_serial_data wired) before start() so nothing the device prints
         # while enumerating is dropped.
-        repl = _start_console_repl(
+        repl = await _start_console_repl(
             args, cdc, device.simulator, _make_expect_text_watcher(args.expect_text, args.expect_regex, shutdown)
         )
-        cleanup.callback(repl.stop)
+        cleanup.push_async_callback(repl.stop)
 
-        device.start(timeout=None)
+        await device.astart(timeout=None)
         # No nudge sent: Kaluma's own boot-time "Welcome to Kaluma" banner is racy (gone by the
         # time the USB-CDC connection is actually up, same as real hardware racing a host
         # terminal that isn't attached yet - Kaluma's own docs: "if you cannot see the prompt,
@@ -492,7 +581,16 @@ def _cmd_kaluma(args: argparse.Namespace) -> None:
         # arrives on its own a few real seconds after connecting, no nudge needed (unlike the
         # banner, confirmed empirically).
 
-        device.simulator.wait_for_shutdown()
+        return await _await_shutdown(device.simulator)
+
+
+def _cmd_kaluma(args: argparse.Namespace) -> None:
+    try:
+        exit_code = asyncio.run(_kaluma_async(args))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    if exit_code is not None:
+        sys.exit(exit_code)
 
 
 def _interpreter_label() -> str:

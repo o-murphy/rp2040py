@@ -36,9 +36,10 @@ class ProcessInteractiveRepl(InteractiveRepl):
     interpreter (confirmed empirically - see CHANGELOG.md) - including `--dump-fs`'s own cleanup
     callback. Installed/restored around `start()`/`stop()`, called with `128 + signal.SIGTERM`, the
     convention the shell/`timeout` itself would otherwise report for a signal-terminated process.
-    `signal.signal()` only works from the main thread - every current subclass's `start()` always
-    runs there (nothing async calls it), so `_on_start()`/`_restore_sigterm_handler()` are
-    unaffected by `simulator`'s own engine-room thread; `_restore_sigterm_handler()` is still
+    `signal.signal()` only works from the main thread - `start()`/`stop()` (both `async def`, per
+    docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") are always awaited from `cli/
+    __init__.py`'s own `asyncio.run()`-hosted coroutine, i.e. the process's actual main thread, so
+    `_on_start()`/`_restore_sigterm_handler()` are unaffected here; `_restore_sigterm_handler()` is still
     thread-guarded rather than assuming that, since it can also run from a non-main-thread fallback
     cleanup path (see `StdioInteractiveRepl`'s own non-tty fallback).
     """
@@ -56,10 +57,10 @@ class ProcessInteractiveRepl(InteractiveRepl):
         self._old_sigterm_handler: Any = None
         self._pump_alarm: Any = None
 
-    def _on_start(self) -> None:
+    async def _on_start(self) -> None:
         self._old_sigterm_handler = signal.signal(signal.SIGTERM, self._on_sigterm)
 
-    def _on_stop(self) -> None:
+    async def _on_stop(self) -> None:
         self._restore_sigterm_handler()
 
     def _on_sigterm(self, signum: int, _frame: Any) -> None:

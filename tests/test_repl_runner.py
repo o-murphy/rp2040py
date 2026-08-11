@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from rp2040py.device.repl_runner import BaseReplRunner, InteractiveRepl
@@ -29,9 +31,9 @@ def test_start_wires_and_stop_unwires_on_serial_data():
     cdc = _FakeCdc()
     runner = InteractiveRepl(cdc, on_data=lambda data: None)
     assert cdc.on_serial_data is None
-    runner.start()
+    asyncio.run(runner.start())
     assert cdc.on_serial_data is not None
-    runner.stop()
+    asyncio.run(runner.stop())
     assert cdc.on_serial_data is None
 
 
@@ -39,7 +41,7 @@ def test_feed_safe_forwards_exception_to_on_error():
     cdc = _FakeCdc()
     errors = []
     runner = _RaisingRunner(cdc, on_error=errors.append)
-    runner.start()
+    asyncio.run(runner.start())
     cdc.on_serial_data(b"x")
     assert len(errors) == 1
     assert isinstance(errors[0], ValueError)
@@ -48,7 +50,7 @@ def test_feed_safe_forwards_exception_to_on_error():
 def test_feed_safe_reraises_when_no_on_error_given():
     cdc = _FakeCdc()
     runner = _RaisingRunner(cdc)
-    runner.start()
+    asyncio.run(runner.start())
     with pytest.raises(ValueError):
         cdc.on_serial_data(b"x")
 

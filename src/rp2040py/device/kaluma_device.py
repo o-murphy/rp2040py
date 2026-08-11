@@ -2,7 +2,8 @@
 use - the `KalumaDevice` equivalent of `MicroPythonDevice`. Unlike MicroPython/CircuitPython,
 Kaluma has no raw-REPL-equivalent protocol (its REPL is a plain `>` prompt plus dot-commands, no
 Ctrl-A/banner/OK/Ctrl-D framing - see kalumajs.org/docs/repl), so there's no `exec()` API here,
-only `start()`/`stop()`/`.cdc` (inherited from `BaseDevice`).
+only `astart()`/`start_async()`/`stop()`/`.cdc` (inherited from `BaseDevice`, async-native only -
+see that module's own docstring for why).
 """
 
 from os import PathLike
@@ -15,7 +16,8 @@ __all__ = ("KalumaDevice",)
 
 
 class KalumaDevice(BaseDevice):
-    """Boots a Kaluma UF2 image. Use as a context manager, or call `start()`/`stop()` directly.
+    """Boots a Kaluma UF2 image. Use as an async context manager (`async with`), or call
+    `astart()`/`stop()` directly.
 
     `program`, if given, stages a local `.js` file into Kaluma's "user program" flash region -
     the same one `kaluma flash <file>` writes to on real hardware - which Kaluma auto-executes on
