@@ -264,13 +264,14 @@ between batches instead of rescheduling itself through a new OS thread every tim
 directly now call `simulator.start_execution()` (schedules `execute()` as a task on the engine
 room and returns immediately) and `simulator.wait_for_shutdown()` to block until it's done - both
 already used throughout `cli/__init__.py`; nothing outside this file needs the raw `threading`
-patterns below anymore. Three bridge primitives make cross-thread calls into the engine room safe
-without bespoke locking per caller: `Simulator.call(coro, timeout=None)` (blocking),
-`Simulator.acall(coro)` (async, for a caller with its own running loop), `Simulator.submit(coro)`
-(non-blocking, returns a `concurrent.futures.Future`) - `os._exit()`/raw `threading.Timer`
-scheduling from inside a simulation callback (the old advice below) should no longer be necessary;
-use `Simulator.shutdown_request.request(code)` and `simulator.clock.create_alarm(...)` instead, as
-the old advice already recommended over the *other* raw-thread alternatives.
+patterns below anymore. Two bridge primitives make cross-thread calls into the engine room safe without bespoke locking
+per caller: `Simulator.call(coro, timeout=None)` (blocking), `Simulator.submit(coro)`
+(non-blocking, returns a `concurrent.futures.Future`) - a caller that already shares the engine
+room's own loop (`Simulator.bind_loop()` - see docs/MAIN_THREAD_ASYNCIO_BACKLOG.md) just `await`s
+directly instead, no bridge needed. `os._exit()`/raw `threading.Timer` scheduling from inside a
+simulation callback (the old advice below) should no longer be necessary; use
+`Simulator.shutdown_request.request(code)` and `simulator.clock.create_alarm(...)` instead, as the
+old advice already recommended over the *other* raw-thread alternatives.
 
 <details>
 <summary>Original pre-<code>asyncio</code> analysis (historical)</summary>

@@ -88,8 +88,8 @@ class Simulator:
         """Registers the loop this Simulator's `execute()` runs on, for a caller driving it
         directly (e.g. `asyncio.create_task(simulator.execute())` inside its own `asyncio.run()`
         - see docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") instead of via
-        `start_execution()`'s own thread+loop creation. Cross-thread bridges
-        (`call()`/`acall()`/`submit()`) use whatever loop was registered here; without this, a
+        `start_execution()`'s own thread+loop creation. Cross-thread bridges (`call()`/`submit()`)
+        use whatever loop was registered here; without this, a
         caller reaching in from a genuinely different thread would make `_ensure_loop()` spin up a
         second, unrelated loop that nothing is actually running `execute()` on - scheduling work
         there via `run_coroutine_threadsafe` would just sit forever, never executed. `loop=None`
@@ -111,16 +111,14 @@ class Simulator:
 
     def call(self, coro: "Coroutine[Any, Any, _T]", timeout: "float | None" = None) -> _T:
         """Runs `coro` on the engine-room thread and blocks the calling thread until it completes -
-        the bridge any synchronous, non-engine-room caller (the CLI, a test, a GDB connection
-        handler) uses to safely touch execute()/RPPIO/USBCDC state. Mirrors
-        device/mp_device.py's _result()/_await() shape, generalized here rather than reinvented
-        per caller."""
+        the bridge a caller on a genuinely different, non-engine-room thread (e.g. a test
+        simulating a device reply from its own `threading.Thread`, or `StdioInteractiveRepl`'s
+        non-tty/Windows fallback reader thread - see their own docstrings) uses to safely touch
+        execute()/RPPIO/USBCDC state. Not needed by a caller that already shares this Simulator's
+        own loop (per docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") - that caller just
+        `await`s directly instead, no bridge required."""
         future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
         return future.result(timeout)
-
-    async def acall(self, coro: "Coroutine[Any, Any, _T]") -> _T:
-        """Async equivalent of call(), for a caller that already has its own running loop."""
-        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self._ensure_loop()))
 
     def submit(self, coro: "Coroutine[Any, Any, _T]") -> "concurrent.futures.Future[_T]":
         """Runs `coro` on the engine-room thread, returning immediately with a Future rather than
