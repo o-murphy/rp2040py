@@ -262,8 +262,45 @@ firmware/GDB/REPL sessions, record what broke" shape rather than one big-bang PR
 
 ## Open questions
 
-None remaining as of 2026-08-11 - see the two resolved items below, kept for the record rather
-than deleted.
+One open as of 2026-08-12 (below) - see the two resolved items further down, kept for the record
+rather than deleted.
+
+### Open (2026-08-12): a possible `Simulator.shutdown()`, distinct from `stop()`
+
+Not designed, not started - raised while chasing a real, reproduced test hang
+(`tests/test_schedule_threadsafe.py`'s own `_stop_and_join()` helper and its docstring have the
+full incident writeup).
+
+**The gap:** `stop()` only flips `self.stopped` - it stops the `execute()` *task*, not the
+engine-room *loop* underneath it. For a `bind_loop()`-based caller this is correct and the only
+sane option (`Simulator` must never call `.stop()` on a loop it doesn't own - that loop could be
+running the caller's own REPL/GDB-server/whatever else concurrently). But for a Simulator that
+fell back to `_ensure_loop()`'s own lazily-spun background thread (`self._loop_thread is not
+None` - nobody else could possibly be using that loop, `Simulator` made it entirely for itself),
+`stop()` leaves that thread alive indefinitely - idle, not CPU-bound, once the task actually
+notices `stopped` and returns, but never actually exiting until the whole process does. A test (or
+any caller) that constructs and stops many bare `Simulator()`s over its lifetime leaks one
+permanently-idle thread per instance.
+
+**Why not just always stop the loop in `stop()` (rejected without a real design pass):** `gdb_server.py`
+(`vCont;c`/`c` command handling) calls `start_execution()` again on the *same* target after a
+breakpoint's `on_break` already called `stop()` - real, active "continue after breakpoint" GDB
+behavior on the non-`bind_loop()` model, confirmed via `grep`, not hypothetical. If `stop()` also
+tore down `_ensure_loop()`'s thread/loop, that second `start_execution()` call would try to reuse
+a dead loop and silently fail (or raise) instead of resuming - breaking GDB continue for anyone
+still on the fallback threading model. So this needs to be an opt-in, explicitly-named method a
+caller reaches for only once it knows it will never call `start_execution()` on this instance
+again - `shutdown()` (or `close()`, matching `GDBTCPServer`'s own naming) is the natural shape:
+stop the task the same way `stop()` does, then (only if `self._loop_thread is not None` - i.e.
+only ever for a loop `Simulator` spun itself, never a `bind_loop()`-registered one)
+`self._loop.call_soon_threadsafe(self._loop.stop)` and join the thread.
+
+**Not attempted yet because no real caller currently needs it:** the CLI's own Simulators live for
+the whole process and never need explicit pre-exit teardown beyond what already exists; the one
+place this would help today is test hygiene for bare, throwaway `Simulator()`s (exactly what
+`test_schedule_threadsafe.py`'s own `_stop_and_join()` does today, by hand, file-local). Worth
+promoting to a real `Simulator.shutdown()` if/when a second caller needs the same pattern, rather
+than guessing at the right shape from one data point.
 
 ### Resolved (2026-08-11): `RP2040PY_SKIP_CYTHON`/native-vs-pure-Python does not interact with any of this
 
