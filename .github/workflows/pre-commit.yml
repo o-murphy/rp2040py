@@ -24,7 +24,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
-      fail-fast: true
+      # false: a windows/macos failure must NOT cancel the ubuntu leg mid-run -- ubuntu is
+      # the only leg that commits+pushes auto-fixes (see comment below), so cancelling it
+      # early means the fix never lands and every leg just fails outright instead of
+      # getting fixed. windows/macos legs failing here is expected on the same run the fix
+      # commit is produced; they re-run clean once that push triggers a fresh workflow run.
+      fail-fast: false
       max-parallel: 10
       matrix:
         os:
