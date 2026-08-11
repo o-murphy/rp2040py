@@ -107,10 +107,10 @@ class GDBTCPServer(GDBServer):
                 data = await reader.read(4096)
                 if not data:
                     break
-                # Direct, not bridged via target.acall(): this coroutine already runs on the
+                # Direct, no cross-thread bridge needed: this coroutine already runs on the
                 # target's own engine-room loop (see the class docstring), and process_gdb_message()
                 # (invoked synchronously from within feed_data()) touching core.registers/memory
-                # is already safe here with no bridging needed.
+                # is already safe here.
                 connection.feed_data(data.decode("utf-8"))
         except OSError as err:
             self.remove_connection(connection)

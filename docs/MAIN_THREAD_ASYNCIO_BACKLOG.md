@@ -252,11 +252,13 @@ firmware/GDB/REPL sessions, record what broke" shape rather than one big-bang PR
 4. **Done (2026-08-12) - see its own progress log entry.** `GDBTCPServer` drops its own
    engine-room thread, attaches to the primary `Simulator`'s loop directly - `IGDBTarget.acall()`
    (PR 5's bridge) removed from the Protocol, `process_gdb_message()` called directly.
-5. **Still open.** `Simulator.schedule_threadsafe()`, `.call()`, `.acall()`, `.submit()`
-   re-audited: which callers still need a genuine cross-thread bridge (an instance a caller
-   deliberately put on its own thread, or a future external-device-style component reached from a
-   truly external thread) vs. which were only ever bridging because of the old CLI-thread/engine-
-   room-thread split and can become plain `await`s.
+5. **Done (2026-08-12) - see its own progress log entry.** `Simulator.call()`/`.acall()`/
+   `.submit()` re-audited (`schedule_threadsafe()` never actually existed under that name - a
+   stale reference in this bullet's own original wording, not a real method): which callers still
+   need a genuine cross-thread bridge (an instance a caller deliberately put on its own thread, or
+   a future external-device-style component reached from a truly external thread) vs. which were
+   only ever bridging because of the old CLI-thread/engine-room-thread split and can become plain
+   `await`s.
 
 ## Open questions
 
@@ -398,3 +400,39 @@ this document's history later.
   caller - `mp_device.py`'s `simulator.submit()`, `kaluma_device.py`'s inherited use, and whether
   `Simulator.call()`/`.acall()` still have any real caller left at all now that `GDBTCPServer`
   doesn't).
+
+- **2026-08-12: Phase 5, re-audit `.call()`/`.acall()`/`.submit()` - done, verified.** Grepped
+  every real (non-docstring/non-comment) call site left in `src/`/`tests/`/`demo/`:
+
+  - `.call()`: exactly two left, both genuine cross-thread bridges from a caller that is not, and
+    structurally cannot be, a coroutine sharing the engine room's own loop -
+    `StdioInteractiveRepl._fallback_read_loop()`'s dedicated fallback thread (`sys.stdin.read()`
+    on a non-tty/Windows stdin has no portable non-blocking-thread alternative), and
+    `test_device.py`'s synthetic-device-reply `threading.Thread`s. Both kept unchanged - this is
+    exactly the "What still needs a real thread" case the backlog's own intro anticipated, not a
+    relic.
+  - `.submit()`: two call sites, `base_device.py`'s `start_async()` and `mp_device.py`'s
+    `exec_async()` - the intentional Future-returning half of the dual `astart()`/`start_async()`
+    API (see `mp_device.py`'s own module docstring), not a leftover bridge - a caller without its
+    own running loop genuinely wants a `concurrent.futures.Future` back (callback style via
+    `.add_done_callback()`, or blocking via `.result()`), which is what `submit()`/`call()` are
+    *for*, independent of this migration. Kept unchanged.
+  - `.acall()`: **zero** remaining callers anywhere (source, tests, or `demo/`) - its one real
+    caller, `GDBTCPServer._handle_connection()`'s `target.acall(_feed(...))`, was removed in phase
+    4 above, and nothing else in this codebase ever called it. Deleted the method outright
+    (`Simulator.acall()`) rather than leaving it as unused public API - confirmed dead via grep,
+    not just absent from this one audit's sample. Docstrings/comments naming it as one of a
+    "three bridge primitives" trio (`bind_loop()`'s own docstring, `call()`'s own docstring,
+    `docs/PORTING.md`'s "current shape" summary) updated to describe the remaining two.
+  - `schedule_threadsafe()`, named in this bullet's own original wording (see "Phased plan"
+    above) as something to re-audit alongside the other three: never existed under that name in
+    `simulator.py` at any point - a stale/aspirational reference, not a real method that needed
+    auditing. Noted in the "Phased plan" entry above rather than silently dropped, so this
+    document's own history stays accurate.
+
+  Verified: full suite green on both builds (502 passed, unchanged - `.acall()` had no tests of
+  its own to lose), `ruff`/`mypy` clean.
+
+  **This closes every phase of this backlog's original "Phased plan".** Per the user's own
+  stated sequencing at the start of this branch ("а потім будемо думати за --board wifi та
+  external device"), CYW43/`--board`/`ExternalDevice` work can resume now.
