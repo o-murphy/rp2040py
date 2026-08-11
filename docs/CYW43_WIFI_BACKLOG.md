@@ -290,15 +290,19 @@ mechanism layered on top of a real register-based interface (`SSI`'s normal `rea
 `write_uint32`); for CYW43439 the GPIO-listener bus decode is the **only** mechanism — there is no
 backing register block to fall back on.
 
-**New subpackage `src/rp2040py/cyw43/`**, following the same pattern as `clock/`, `gdb/`, `usb/`,
-`utils/` — a real package with an `__init__.py`, not a single file:
+**New subpackage `src/rp2040py/external/cyw43/`** (relocated 2026-08-12 from a first-draft
+top-level `src/rp2040py/cyw43/` - `Cyw43439` is a concrete `ExternalDevice` implementation, same
+reasoning `external/led_mock.py` already follows, just big enough - bus/chip/nat - to want its own
+subpackage under `external/` instead of a single sibling file), following the same
+"real package with an `__init__.py`, not a single file" pattern as `clock/`, `gdb/`, `usb/`,
+`utils/`:
 
-- `cyw43/bus.py` — bit-bang gSPI decode (step 2 in "Implementation order" below, GPIO-listener
+- `external/cyw43/bus.py` — bit-bang gSPI decode (step 2 in "Implementation order" below, GPIO-listener
   level: `make_cmd()` header parsing, F0 bus register block).
-- `cyw43/chip.py` — the chip model itself: F0/F1 registers, backplane windowed addressing,
+- `external/cyw43/chip.py` — the chip model itself: F0/F1 registers, backplane windowed addressing,
   `WLC_*`/`WLC_E_*` ioctl and event handling (step 3). This is also where the `Cyw43439` class
   that implements `ExternalDevice` (see "Board composition decision" next) lives.
-- `cyw43/nat.py` — the SLIRP-style userspace NAT bridge (step 4).
+- `external/cyw43/nat.py` — the SLIRP-style userspace NAT bridge (step 4).
 
 **Wiring:** *not* baked into `RP2040.__init__()` — see "Board composition decision" next.
 `RP2040` itself stays unchanged; a board-setup step calls
@@ -356,7 +360,7 @@ callable/string dispatch table.**
       def attach(self, rp2040: "RP2040") -> None: ...
   ```
 
-  `Cyw43439` (`cyw43/chip.py`) implements this structurally, same as peripherals implement
+  `Cyw43439` (`external/cyw43/chip.py`) implements this structurally, same as peripherals implement
   `Peripheral` without explicit inheritance. Named `ExternalDevice`, deliberately not
   `Peripheral`/`PeripheralDevice` — this project's `Peripheral` already means "memory-mapped,
   `read_uint32`/`write_uint32`", and the whole point of the "Module layout decision" above is that
@@ -521,15 +525,41 @@ decision sections above that define what it actually means.
    user (2026-08-11): that branch is being kept as a plain reference for now, not pulled into this
    branch early - it gets migrated onto the `ExternalDevice` architecture as its own effort once
    `component/epd2in9g` is brought up to date and merged, not before.
-2. **Bus level — next actionable step.** A generic bit-banged half-duplex "gSPI slave" watcher hooked via plain
-   `GPIOPin.add_listener()`/`set_input_value()` on GPIO24/25/29 - the architecture confirmed by the
-   Wokwi investigation, the bit-level details (command word layout, function numbers, F0 register
-   map) from the "Authoritative protocol reference" section above, sourced directly from the local
-   `pico-sdk`/`cyw43-driver` checkout. Decode `make_cmd()`'s header on the first word after select,
-   then stream `BUS_FUNCTION` (F0) register reads/writes far enough for the driver's init handshake
-   (`SPI_READ_TEST_REGISTER`, `SPI_STATUS_REGISTER` polling, etc.) to succeed. Synchronous, in-line
-   — pure decode logic, no I/O, no need for `schedule_threadsafe()`. Lives in `cyw43/bus.py` (see
-   "Module layout decision" above).
+2. **Bus level — done (2026-08-12), unit-tested; real-firmware boot not yet attempted.**
+   `external/cyw43/bus.py`'s `GSPIBus`: a generic bit-banged half-duplex gSPI watcher hooked via plain
+   `GPIOPin.add_listener()`/`set_input_value()` on GPIO24/25/29, decoding `make_cmd()`'s header on
+   the first 32-bit word after select and dispatching `BUS_FUNCTION` (F0) register reads/writes -
+   `SPI_READ_TEST_REGISTER` fixed at `TEST_PATTERN=0xFEEDBEAD`, everything else a plain
+   byte-addressable register file. Synchronous, in-line - pure decode logic, no I/O, no
+   `schedule_threadsafe()` needed, as planned.
+
+   **Exact wire timing derived from the real source, not guessed**: read
+   `cyw43_bus_pio_spi.c`/`.pio` directly (both checked out locally - see "Authoritative protocol
+   reference" above for the paths) rather than relying on the Wokwi-investigation architecture
+   alone. Confirmed from the PIO program (`spi_gap01_sample0`, the driver's own default): every
+   real bit action (drive a TX bit, sample an RX bit) happens while `WL_CLK` is low, immediately
+   before it's raised - so this decodes as sample-on-rising-edge (host drove the bit during the
+   preceding low phase), drive-on-falling-edge (chip's own turn, so it's stable in time for the
+   host's next low-phase sample). `bus.py`'s own module docstring has the full derivation,
+   including why no explicit byte-swapping is needed on the Python side despite the C driver's own
+   `SWAP32()`/DMA-`bswap` calls (they cancel out to "wire carries the natural `make_cmd()`/register
+   value, MSB-first" - independently cross-checked against `cyw43_ll_bus_init()`'s own packed
+   multi-byte-register write, which only makes sense under that same reading).
+
+   **Verified end-to-end against a synthetic gSPI master** (`tests/test_cyw43_bus.py`'s
+   `_FakeGSPIMaster`, bit-banging GPIO24/25/29 via the same SIO-write pattern
+   `tests/test_led_mock.py` established) - all 5 tests passed on the *first* run after writing
+   them, which is real (if not conclusive) evidence the from-source protocol derivation above holds
+   together: `SPI_READ_TEST_REGISTER` returns `TEST_PATTERN`, `SPI_BUS_CONTROL` write-then-read
+   round-trips (matching `cyw43_ll_bus_init()`'s own sequence), a 1-byte write only touches its own
+   byte, CS deasserted mid-transaction cleanly discards partial state instead of corrupting the
+   next transaction, and an unimplemented function (`BACKPLANE_FUNCTION`) reads `0` rather than
+   raising. **Not yet done: booting real, unmodified MicroPython/CircuitPython Pico W firmware
+   against this** (needs step 3's `Cyw43439`/`ExternalDevice.attach()` wiring plus a real
+   `pico_w`-capable firmware image - `cli/firmware_retrieve.py` doesn't yet resolve board-specific
+   images, per "Open questions" above) - the synthetic-master tests prove the decode logic is
+   internally consistent with the documented protocol, not that a real driver's actual init
+   handshake succeeds end-to-end. Treat as a real, not yet closed, risk until that boot test runs.
 3. **Chip/backplane + SDPCM/WLC ioctl layer.** A `Cyw43439` model class: F0 bus registers, F1
    windowed backplane addressing (`SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH`), and enough of
    `handleControl()`-equivalent `WLC_*` ioctl decoding + `WLC_E_*` event delivery (exact IDs above -
@@ -539,7 +569,7 @@ decision sections above that define what it actually means.
    codes real firmware reports. Read `cyw43_ll.c`'s ioctl dispatch and event-sending functions
    directly when implementing this - it's long (2000+ lines) but is the authoritative spec for
    exactly what each ioctl/event needs to contain. Also synchronous, in-line — still pure state
-   machine, no real I/O yet. Lives in `cyw43/chip.py`; this is where `Cyw43439` implements
+   machine, no real I/O yet. Lives in `external/cyw43/chip.py`; this is where `Cyw43439` implements
    `ExternalDevice.attach()`.
 4. **Real network bridge.** Once firmware believes it's associated and starts moving IP packets,
    the userspace NAT/SLIRP layer described earlier — real `socket.getaddrinfo`/TCP/UDP via the host,
@@ -547,7 +577,7 @@ decision sections above that define what it actually means.
    the SDPCM data-frame envelope format (how an actual Ethernet/IP frame is wrapped for the F2/WLAN
    data path) - not yet extracted from `cyw43_ll.c`, see "Open questions" below. **This is where
    `schedule_threadsafe()` actually gets used** — real socket I/O is the first genuinely slow/
-   blocking work in the whole plan. Lives in `cyw43/nat.py`.
+   blocking work in the whole plan. Lives in `external/cyw43/nat.py`.
 
    *Not* the actual `libslirp` C library QEMU embeds — a SLIRP-**style** userspace NAT written in
    plain Python: ordinary unprivileged `socket.connect()`/`send()`/`recv()`/`getaddrinfo()` calls
