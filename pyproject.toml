@@ -26,11 +26,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = [
-    "mpremote>=1.28.0",
-    "pyelftools>=0.33",
-    "semver>=3.0.4",
-]
+dependencies = ["mpremote>=1.28.0", "pyelftools>=0.33", "semver>=3.0.4"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -119,7 +115,7 @@ build = "cp313-android_* cp314-android_*"
 [dependency-groups]
 dev = [
     "mypy>=2.3.0; implementation_name != 'pypy'",
-    "pre-commit>=4.6.1",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "ruff>=0.16.0",
     "rp2040py[fs]",
