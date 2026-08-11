@@ -1,8 +1,13 @@
 """Integration coverage for Simulator's shutdown coordinator: ShutdownRequest +
-Simulator.wait_for_shutdown() + a real GDBTCPServer together - the actual failure mode this
-exists to prevent is a plain sys.exit() hanging forever on GDBTCPServer's deliberately non-daemon
-loop thread (see its own docstring), which unit tests for each piece in isolation wouldn't
-catch."""
+Simulator.wait_for_shutdown() + a real GDBTCPServer together - `wait_for_shutdown()` is the
+old, still-supported "drive Simulator from a plain synchronous/background-thread caller" model
+(docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "What still needs a real thread"), so its own `cleanup`
+callback contract is still a plain synchronous callable - even though `GDBTCPServer` itself is
+async-only now (see its own class docstring), a caller integrating the two like this is
+responsible for bridging, the same way any other plain synchronous caller would be."""
+
+import asyncio
+import threading
 
 import pytest
 
@@ -40,17 +45,31 @@ def test_wait_for_shutdown_exits_via_shutdown_request_and_runs_cleanup():
 
 
 def test_wait_for_shutdown_closes_a_real_gdb_server_instead_of_hanging():
-    """The actual regression this whole coordinator exists to prevent: a real GDBTCPServer's
-    own loop thread is non-daemon, so without closing it first, sys.exit() below would hang the
-    test (and the real CLI) forever instead of returning."""
-    simulator = Simulator()
-    gdb_server = GDBTCPServer(_FakeTarget(), port=0)
-    simulator.shutdown_request.request(0)
-
+    """The actual regression this whole coordinator exists to prevent: `cleanup` must actually run
+    (and actually close the server's listening socket) before sys.exit() below, not get skipped or
+    silently dropped - which is exactly what passing `gdb_server.close` (now a coroutine function)
+    directly as `cleanup` would do, since `wait_for_shutdown()` calls it as a plain synchronous
+    callable and would just create-and-discard the coroutine without ever awaiting it."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
     try:
-        with pytest.raises(SystemExit) as exc_info:
-            simulator.wait_for_shutdown(cleanup=gdb_server.close)
-        assert exc_info.value.code == 0
-        assert not gdb_server._loop_thread.is_alive()
+        simulator = Simulator()
+        gdb_server = GDBTCPServer(_FakeTarget(), port=0)
+        asyncio.run_coroutine_threadsafe(gdb_server.start(), loop).result(timeout=5.0)
+        simulator.shutdown_request.request(0)
+
+        def _sync_close() -> None:
+            asyncio.run_coroutine_threadsafe(gdb_server.close(), loop).result(timeout=5.0)
+
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                simulator.wait_for_shutdown(cleanup=_sync_close)
+            assert exc_info.value.code == 0
+            assert gdb_server.port is None
+        finally:
+            _sync_close()  # no-op if the test body already closed it - idempotent by design
     finally:
-        gdb_server.close()  # no-op if the test body already closed it - idempotent by design
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+        loop.close()

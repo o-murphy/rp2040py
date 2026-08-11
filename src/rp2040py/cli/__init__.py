@@ -197,6 +197,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     _load_image(args.image, mcu)
 
     gdb_server = GDBTCPServer(simulator, args.gdb_port)
+    await gdb_server.start()
     _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
 
     def _on_byte(value: int) -> None:
@@ -227,9 +228,6 @@ async def _run_async(args: argparse.Namespace) -> int:
     execute_task = loop.create_task(simulator.execute())
     stop_task = loop.create_task(stop_requested.wait())
     try:
-        # gdb_server.close() here, not a `wait_for_shutdown(cleanup=...)` callback: its accept
-        # thread is deliberately non-daemon (see its own docstring), so returning without this
-        # would hang interpreter shutdown forever joining it.
         done, _pending = await asyncio.wait({execute_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
         if stop_task in done:
             # A signal fired first - ask execute() to wind down gracefully (finish its
@@ -241,7 +239,7 @@ async def _run_async(args: argparse.Namespace) -> int:
             # convention) before any signal did - nothing left to wait for.
             stop_task.cancel()
     finally:
-        gdb_server.close()
+        await gdb_server.close()
 
     return exit_code
 
@@ -472,10 +470,9 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
         gdb_server: GDBTCPServer | None = None
         if args.gdb:
             gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+            await gdb_server.start()
             _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
-            # Its accept thread is deliberately non-daemon (see GDBTCPServer.close()'s own
-            # docstring) - without this, returning below would hang forever joining it.
-            cleanup.callback(gdb_server.close)
+            cleanup.push_async_callback(gdb_server.close)
 
         raw_repl_source = _raw_repl_source(args)
         if raw_repl_source is not None:
@@ -560,8 +557,9 @@ async def _kaluma_async(args: argparse.Namespace) -> "int | None":
         gdb_server: GDBTCPServer | None = None
         if args.gdb:
             gdb_server = GDBTCPServer(device.simulator, args.gdb_port)
+            await gdb_server.start()
             _logger.info("RP2040 GDB Server ready! Listening on port %d", gdb_server.port)
-            cleanup.callback(gdb_server.close)
+            cleanup.push_async_callback(gdb_server.close)
 
         cdc = device.cdc
         shutdown = device.simulator.shutdown_request

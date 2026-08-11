@@ -244,16 +244,19 @@ firmware/GDB/REPL sessions, record what broke" shape rather than one big-bang PR
    `Simulator`-driving CLI path is on the main-thread model does it become safe to change
    `StdioInteractiveRepl`/`GDBTCPServer` uniformly (they're shared by all three subcommands, not
    swappable per caller).
-3. `StdioInteractiveRepl` (`cli/stdio_repl.py`) drops its `simulator.call()` bridge for reader
-   registration - direct `add_reader()` calls, now already on the right thread.
-4. `GDBTCPServer` drops its own engine-room thread, attaches to the primary `Simulator`'s loop
-   directly - `IGDBTarget.acall()` (PR 5's bridge) becomes unnecessary, `process_gdb_message()`
-   called directly.
-5. `Simulator.schedule_threadsafe()`, `.call()`, `.acall()`, `.submit()` re-audited: which
-   callers still need a genuine cross-thread bridge (an instance a caller deliberately put on its
-   own thread, or a future external-device-style component reached from a truly external thread)
-   vs. which were only ever bridging because of the old CLI-thread/engine-room-thread split and
-   can become plain `await`s.
+3. **Done (2026-08-12, landed as part of step 2's full scope, not on its own - see that step's
+   progress log entry).** `StdioInteractiveRepl` (`cli/stdio_repl.py`) - and, once it became clear
+   they had to move together, `SocketInteractiveRepl`/`PtyInteractiveRepl` too - drop their
+   `simulator.call()` bridge for reader/server registration: direct `add_reader()`/
+   `asyncio.start_server()`/pty registration calls, now already on the right thread.
+4. **Done (2026-08-12) - see its own progress log entry.** `GDBTCPServer` drops its own
+   engine-room thread, attaches to the primary `Simulator`'s loop directly - `IGDBTarget.acall()`
+   (PR 5's bridge) removed from the Protocol, `process_gdb_message()` called directly.
+5. **Still open.** `Simulator.schedule_threadsafe()`, `.call()`, `.acall()`, `.submit()`
+   re-audited: which callers still need a genuine cross-thread bridge (an instance a caller
+   deliberately put on its own thread, or a future external-device-style component reached from a
+   truly external thread) vs. which were only ever bridging because of the old CLI-thread/engine-
+   room-thread split and can become plain `await`s.
 
 ## Open questions
 
@@ -347,3 +350,51 @@ this document's history later.
   (`GDBTCPServer` dropping its own engine-room thread) and 5 (re-auditing every remaining
   `Simulator.call()`/`.acall()`/`.submit()` caller) are still open - `GDBTCPServer` still bridges
   every GDB message through `target.acall()` onto its own dedicated thread, unchanged.
+
+- **2026-08-12: Phase 4, `GDBTCPServer` - done, verified.** Dropped its own dedicated
+  `start_loop_thread()`-hosted loop entirely: `__init__` no longer opens a socket at all (just
+  stores `target`/the requested port), a new `async def start()` does that (`self.port` resolved
+  there, `None` until then, matching every `InteractiveRepl` subclass's own `.port`/`.slave_path`
+  convention), and `close()` became `async def` too (its old thread-stop/join half deleted
+  outright - nothing left to stop or join). `_handle_connection()`'s `_feed()` no longer bridges
+  through `target.acall()`: `process_gdb_message()` now runs directly, since `execute()` and this
+  connection handler are just two coroutines cooperatively scheduled on the *same* loop now, not
+  two independent loops on two independent threads racing each other - the exact condition
+  `acall()` existed to guard against no longer holds. `on_response()` similarly dropped its
+  `loop.call_soon_threadsafe()` wrapper for a plain `writer.write()` - `_on_break` (a real
+  breakpoint hit, firing synchronously from inside `execute()`'s own call chain) now runs on that
+  same thread too. `IGDBTarget.acall()` removed from the Protocol (nothing implements/needs it
+  for GDB anymore - `Simulator.acall()` itself stays, as a still-generically-useful bridge for
+  other callers, per phase 5's still-open scope).
+
+  Fallout: `tests/test_gdb_tcp_server.py` - 3 of its tests specifically exercised the old
+  non-daemon-thread-hang regression (`test_close_unblocks_and_joins_the_loop_thread`, two more);
+  removed outright rather than adapted, since the failure mode they guarded against (a thread that
+  could outlive `close()`) can't exist anymore - there's no thread. Replaced with
+  `test_close_before_start_does_not_raise`/`test_stop_closes_the_listening_socket`, closer
+  equivalents of what every other `close()`/`stop()` test in this codebase already checks for its
+  own component. The rest converted to the same single-`asyncio.run()`-body-plus-`to_thread()`-
+  for-blocking-client-I/O pattern as every other transport test this backlog already touched.
+  `tests/test_simulator_shutdown.py`'s one real-`GDBTCPServer` test needed more care:
+  `Simulator.wait_for_shutdown()` is the *other* still-supported model (a plain synchronous/
+  background-thread caller, not `bind_loop()`) and its own `cleanup` contract is a plain
+  synchronous callable - passing the now-`async def close()` directly, unwrapped, would silently
+  create-and-discard a coroutine without ever awaiting it (confirmed: exactly the
+  `RuntimeWarning: coroutine 'GDBTCPServer.close' was never awaited` that a first attempt hit).
+  Fixed by giving that one test its own dedicated background loop thread (the "What still needs a
+  real thread" pattern, safe here since - unlike `ProcessInteractiveRepl` - nothing in
+  `GDBServer`/`GDBConnection` touches `signal.signal()`) and a small synchronous `_sync_close()`
+  wrapper bridging into it, matching how a genuinely external synchronous caller integrating the
+  two today would have to.
+
+  Verified: full suite green on both builds (502 passed - down from 503: net of removing 3
+  obsolete thread-hang tests and adding 2 replacements), `ruff`/`mypy` clean. Live smoke: a real
+  Python-socket GDB client (not the unit tests' fakes) against `micropython --tcp-port --gdb`,
+  sending a raw `$g#67` (read registers) packet over the wire and getting back a real, correctly
+  checksummed register dump - confirms the whole remote-protocol round trip still works
+  end-to-end through the new single-loop connection handler, not just that it doesn't crash.
+
+  Still not done: phase 5 (re-auditing every remaining `Simulator.call()`/`.acall()`/`.submit()`
+  caller - `mp_device.py`'s `simulator.submit()`, `kaluma_device.py`'s inherited use, and whether
+  `Simulator.call()`/`.acall()` still have any real caller left at all now that `GDBTCPServer`
+  doesn't).
