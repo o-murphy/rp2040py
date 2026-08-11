@@ -46,8 +46,9 @@ class UnknownBoardError(ValueError):
 # not any RP2040 GPIO (see docs/CYW43_WIFI_BACKLOG.md's "Onboard LED and pin differences vs. plain
 # Pico") - attached here anyway, explicitly, purely to exercise the ExternalDevice/
 # attach_external_devices() plumbing identically regardless of --board (step 1 of that doc's
-# "Implementation order") until Cyw43439 (cyw43/chip.py, step 3) grows its own LED handling and
-# supersedes this entry for "pico_w" specifically. "pico_w" has no CYW43439-specific extras yet.
+# "Implementation order") until Cyw43439 (external/cyw43/chip.py, step 3) grows its own LED
+# handling and supersedes this entry for "pico_w" specifically. "pico_w" has no CYW43439-specific
+# extras yet.
 BOARDS: dict[str, BoardSpec] = {
     "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25),)),
     "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25),)),
