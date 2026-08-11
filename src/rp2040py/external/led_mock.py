@@ -12,8 +12,8 @@ the CYW43439 chip itself, not any RP2040 GPIO at all (see this doc's own "Onboar
 differences vs. plain Pico") - a GPIO listener structurally cannot see that. `boards.py` attaches
 this to `pico_w` anyway, purely so the `ExternalDevice` plumbing gets exercised identically
 regardless of `--board` - `pico_w`'s LED behavior here is a placeholder, not real hardware
-emulation, and should be superseded there once `Cyw43439` (`cyw43/chip.py`, step 3) grows its own
-LED handling.
+emulation, and should be superseded there once `Cyw43439` (`external/cyw43/chip.py`, step 3)
+grows its own LED handling.
 """
 
 from collections.abc import Callable
