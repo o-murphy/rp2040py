@@ -57,12 +57,12 @@ class SocketInteractiveRepl(ProcessInteractiveRepl):
     Runs its `asyncio.start_server()` directly on `simulator`'s own engine-room loop - `start()`
     (like every `InteractiveRepl` subclass's, per docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target
     shape") is itself awaited from that same loop, so no cross-thread bridge is needed to get
-    there, mirroring `StdioInteractiveRepl`'s `add_reader()`. Contrast `GDBTCPServer`, which
-    doesn't need this: forwarding bytes to the device touches `cdc.tx_fifo` directly (via
-    `send()`/`pump()`, see `device/repl_runner.py`),
-    which is only ever safe from that one thread. Because the connection handler therefore already
-    runs on the right thread, both directions are plain synchronous calls with no per-message
-    cross-thread bridging.
+    there, mirroring `StdioInteractiveRepl`'s `add_reader()` (and, for the same reason,
+    `GDBTCPServer`'s own connection handler - see its own class docstring). Because the connection
+    handler therefore already runs on the right thread, both directions are plain synchronous
+    calls with no per-message cross-thread bridging: forwarding bytes to the device touches
+    `cdc.tx_fifo` directly (via `send()`/`pump()`, see `device/repl_runner.py`), which is only
+    ever safe from that one thread.
     """
 
     def __init__(

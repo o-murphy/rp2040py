@@ -90,11 +90,10 @@ class Simulator:
         - see docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") instead of via
         `start_execution()`'s own thread+loop creation. Cross-thread bridges
         (`call()`/`acall()`/`submit()`) use whatever loop was registered here; without this, a
-        caller reaching in from a genuinely different thread (e.g. `GDBTCPServer`'s own engine
-        room, bridging via `acall()`) would make `_ensure_loop()` spin up a second, unrelated loop
-        that nothing is actually running `execute()` on - scheduling work there via
-        `run_coroutine_threadsafe` would just sit forever, never executed. `loop=None` (the
-        default) resolves via `asyncio.get_running_loop()` - call this from inside the
+        caller reaching in from a genuinely different thread would make `_ensure_loop()` spin up a
+        second, unrelated loop that nothing is actually running `execute()` on - scheduling work
+        there via `run_coroutine_threadsafe` would just sit forever, never executed. `loop=None`
+        (the default) resolves via `asyncio.get_running_loop()` - call this from inside the
         coroutine/loop context that will drive `execute()`, before anything else might try to
         bridge in from another thread."""
         self._loop = loop if loop is not None else asyncio.get_running_loop()
