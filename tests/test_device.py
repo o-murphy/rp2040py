@@ -1,3 +1,4 @@
+import asyncio
 import struct
 import threading
 import time
@@ -33,14 +34,14 @@ def garbage_image(tmp_path) -> str:
 def test_exec_before_start_raises(garbage_image):
     device = MicroPythonDevice(garbage_image)
     with pytest.raises(RuntimeError):
-        device.exec("1")
+        device.exec_async("1")
 
 
 def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
     device = MicroPythonDevice(garbage_image)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        device.start(timeout=0.3)
+        device.start_async(timeout=0.3).result(timeout=5)
     elapsed = time.monotonic() - started
     assert elapsed < 5  # bounded failure, not a silent hang
     device.stop()
@@ -49,21 +50,28 @@ def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
 def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
     device = MicroPythonDevice(garbage_image)
     with pytest.raises(TimeoutError):
-        device.start(timeout=0.2)
+        device.start_async(timeout=0.2).result(timeout=5)
     with pytest.raises(RuntimeError):
-        device.start(timeout=0.2)
+        device.start_async(timeout=0.2)
     device.stop()
 
 
 def test_context_manager_calls_start_then_stop(garbage_image, monkeypatch):
     device = MicroPythonDevice(garbage_image)
     calls = []
-    monkeypatch.setattr(device, "start", lambda timeout=DEFAULT_TIMEOUT: calls.append("start"))
+
+    async def _fake_astart(timeout=DEFAULT_TIMEOUT) -> None:
+        calls.append("start")
+
+    monkeypatch.setattr(device, "astart", _fake_astart)
     monkeypatch.setattr(device, "stop", lambda: calls.append("stop"))
 
-    with device:
-        assert calls == ["start"]
-    assert calls == ["start", "stop"]
+    async def _body() -> None:
+        async with device:
+            assert calls == ["start"]
+        assert calls == ["start", "stop"]
+
+    asyncio.run(_body())
 
 
 def _pretend_started(device: MicroPythonDevice) -> None:
@@ -103,7 +111,7 @@ def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_im
         _reply(device, b"raw REPL; CTRL-B to exit\r\n>", b"OK", b"4\r\n", bytes([4]), bytes([4]))
 
     threading.Thread(target=_fake_device_replies).start()
-    stdout, stderr = device.exec("print(2 + 2)", timeout=5)
+    stdout, stderr = device.exec_async("print(2 + 2)", timeout=5).result(timeout=5)
     assert (stdout, stderr) == (b"4\r\n", b"")
 
 
@@ -111,7 +119,7 @@ def test_exec_raises_timeout_error_if_the_device_never_responds(garbage_image):
     device = MicroPythonDevice(garbage_image)
     _pretend_started(device)
     with pytest.raises(TimeoutError):
-        device.exec("1", timeout=0.3)
+        device.exec_async("1", timeout=0.3).result(timeout=5)
 
 
 def _serve_queued_execs(device: MicroPythonDevice, replies: "list[bytes]") -> None:

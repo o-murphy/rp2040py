@@ -1,3 +1,4 @@
+import asyncio
 from typing import cast
 
 import pytest
@@ -35,13 +36,13 @@ def _runner(source: bytes = b"print(1)", **kwargs) -> "tuple[RawReplRunner, _Fak
 
 def test_start_sends_interrupt_then_enter_raw_repl():
     runner, cdc = _runner()
-    runner.start()
+    asyncio.run(runner.start())
     assert bytes(cdc.sent) == bytes([CTRL_C, CTRL_C, CTRL_A])
 
 
 def test_full_protocol_success():
     runner, cdc = _runner(b"print(1 + 1)")
-    runner.start()
+    asyncio.run(runner.start())
     cdc.sent.clear()
 
     runner.feed(RAW_REPL_BANNER)
@@ -61,7 +62,7 @@ def test_full_protocol_success():
 def test_on_result_called_when_exec_completes():
     results: list[tuple[bytes, bytes]] = []
     runner, _cdc = _runner(b"print(1)", on_result=results.append)
-    runner.start()
+    asyncio.run(runner.start())
     runner.feed(RAW_REPL_BANNER)
     runner.feed(b"OK")
     runner.feed(b"1\r\n")
@@ -72,7 +73,7 @@ def test_on_result_called_when_exec_completes():
 
 def test_stderr_captured_on_error():
     runner, _cdc = _runner(b"raise ValueError('boom')")
-    runner.start()
+    asyncio.run(runner.start())
     runner.feed(RAW_REPL_BANNER)
     runner.feed(b"OK")
     runner.feed(bytes([CTRL_D]))  # empty stdout
@@ -87,7 +88,7 @@ def test_ignores_a_lookalike_prompt_before_the_real_banner():
     # from the normal boot banner racing with our Ctrl-A) it must not be mistaken for raw-REPL
     # readiness and trigger sending the source early.
     runner, cdc = _runner(b"print(1)")
-    runner.start()
+    asyncio.run(runner.start())
     cdc.sent.clear()
 
     runner.feed(b"MicroPython v1.21.0 on 2023-10-05\r\n>>> ")
@@ -103,11 +104,11 @@ def test_byte_by_byte_feeding_matches_chunked_feeding():
     stream = RAW_REPL_BANNER + b"OK" + b"hi\r\n" + bytes([CTRL_D]) + b"" + bytes([CTRL_D])
 
     chunked, _cdc = _runner(source)
-    chunked.start()
+    asyncio.run(chunked.start())
     chunked.feed(stream)
 
     byte_by_byte, _cdc = _runner(source)
-    byte_by_byte.start()
+    asyncio.run(byte_by_byte.start())
     for byte in stream:
         byte_by_byte.feed(bytes([byte]))
 
@@ -116,7 +117,7 @@ def test_byte_by_byte_feeding_matches_chunked_feeding():
 
 def test_malformed_ok_ack_raises_raw_repl_error():
     runner, _cdc = _runner()
-    runner.start()
+    asyncio.run(runner.start())
     runner.feed(RAW_REPL_BANNER)
     with pytest.raises(RawReplError):
         runner.feed(b"XY")
@@ -128,7 +129,7 @@ def test_feed_via_cdc_wiring_reports_protocol_errors_via_on_error_not_raise():
     # driving the simulator.
     errors: list[Exception] = []
     runner, cdc = _runner(on_error=errors.append)
-    runner.start()
+    asyncio.run(runner.start())
     cdc.on_serial_data(RAW_REPL_BANNER)
     cdc.on_serial_data(b"XY")
     assert len(errors) == 1
@@ -137,9 +138,9 @@ def test_feed_via_cdc_wiring_reports_protocol_errors_via_on_error_not_raise():
 
 def test_stop_unwires_on_serial_data():
     runner, cdc = _runner()
-    runner.start()
+    asyncio.run(runner.start())
     assert cdc.on_serial_data is not None
-    runner.stop()
+    asyncio.run(runner.stop())
     assert cdc.on_serial_data is None
 
 
@@ -157,7 +158,7 @@ def test_pump_paces_uploads_larger_than_the_send_buffer():
     cdc = _FakeCdc(size=capacity)
     source = b"print(1 + 1)" * 10  # far bigger than `capacity`
     runner = RawReplRunner(cdc, source)
-    runner.start()
+    asyncio.run(runner.start())
     cdc.sent.clear()
     cdc.tx_fifo.item_count = 0  # pretend the 3 start() control bytes have already been consumed
 

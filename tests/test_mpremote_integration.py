@@ -15,6 +15,7 @@ MicroPython firmware - something this sandboxed test run can't download (see thi
 network policy notes; not reproducible here without a firmware image already cached locally).
 """
 
+import asyncio
 import contextlib
 import errno
 import io
@@ -173,8 +174,15 @@ class _FakeRawReplDevice:
         return stdout.getvalue().encode(), b""
 
 
-def _run_mpremote(port: int, *args: str, cwd: Path, timeout: float = 15.0) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(
+async def _run_mpremote(port: int, *args: str, cwd: Path, timeout: float = 15.0) -> "subprocess.CompletedProcess[str]":
+    # Via asyncio.to_thread(), not a plain blocking subprocess.run(): this test's own event loop
+    # doubles as `repl`'s engine-room loop (per docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target
+    # shape" - see _run_test()'s own docstring below for why it has to be the main thread), so a
+    # plain blocking call here would starve that same loop of the chance to actually accept the
+    # connection/serve the raw-REPL exchange mpremote is about to make - moving the blocking
+    # subprocess wait to a worker thread keeps the loop free to do that concurrently.
+    return await asyncio.to_thread(
+        subprocess.run,
         [sys.executable, "-m", "mpremote", "connect", f"socket://127.0.0.1:{port}", *args],
         capture_output=True,
         text=True,
@@ -184,42 +192,55 @@ def _run_mpremote(port: int, *args: str, cwd: Path, timeout: float = 15.0) -> "s
     )
 
 
-@pytest.fixture
-def fake_device_repl(tmp_path):
-    device = _FakeRawReplDevice(tmp_path)
-    repl = SocketInteractiveRepl(device, Simulator(), on_quit=lambda code: None, port=0)
-    repl.start()
-    try:
-        yield repl, tmp_path
-    finally:
-        repl.stop()
+def _run_test(body) -> None:
+    """Runs an async test body via `asyncio.run()` on this (the main) thread - not a background
+    loop thread: `ProcessInteractiveRepl._on_start()`/`_on_stop()` call `signal.signal()`, which
+    CPython restricts to the main thread of the main interpreter, matching how a real caller only
+    ever awaits `start()`/`stop()` from `cli/__init__.py`'s own main-thread `asyncio.run()`."""
+    asyncio.run(body())
 
 
-def test_mpremote_exec_round_trips_through_the_tcp_transport(fake_device_repl):
-    repl, tmp_path = fake_device_repl
+def test_mpremote_exec_round_trips_through_the_tcp_transport(tmp_path):
+    async def _body() -> None:
+        device = _FakeRawReplDevice(tmp_path)
+        repl = SocketInteractiveRepl(device, Simulator(), on_quit=lambda code: None, port=0)
+        await repl.start()
+        try:
+            result = await _run_mpremote(repl.port, "exec", "print(1 + 1)", cwd=tmp_path)
 
-    result = _run_mpremote(repl.port, "exec", "print(1 + 1)", cwd=tmp_path)
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip() == "2"
+        finally:
+            await repl.stop()
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "2"
+    _run_test(_body)
 
 
-def test_mpremote_fs_cp_uploads_a_file_through_the_tcp_transport(fake_device_repl):
+def test_mpremote_fs_cp_uploads_a_file_through_the_tcp_transport(tmp_path):
     """fs_writefile()/fs_stat() (mpremote/transport.py) are themselves just chained exec() calls
     over the same raw-REPL connection - if the single exec() round trip above works, this mostly
     exercises that mpremote's higher-level `fs cp` command drives that chain correctly through
     this transport, not anything new about the transport itself."""
-    repl, tmp_path = fake_device_repl
 
-    local = tmp_path / "hello.py"
-    local.write_text("print('hello from device')\n")
-    # A bare relative filename, like a real remote MicroPython path (e.g. "/uploaded.py") - never
-    # the host's own absolute path, which on Windows contains backslashes that would corrupt the
-    # Python source mpremote embeds it into (fs_writefile()'s "f=open('%s','wb')" % dest).
-    # _FakeRawReplDevice resolves it against tmp_path itself (see _make_globals()).
-    remote_name = "uploaded.py"
+    async def _body() -> None:
+        device = _FakeRawReplDevice(tmp_path)
+        repl = SocketInteractiveRepl(device, Simulator(), on_quit=lambda code: None, port=0)
+        await repl.start()
+        try:
+            local = tmp_path / "hello.py"
+            local.write_text("print('hello from device')\n")
+            # A bare relative filename, like a real remote MicroPython path (e.g. "/uploaded.py") -
+            # never the host's own absolute path, which on Windows contains backslashes that would
+            # corrupt the Python source mpremote embeds it into (fs_writefile()'s
+            # "f=open('%s','wb')" % dest). _FakeRawReplDevice resolves it against tmp_path itself
+            # (see _make_globals()).
+            remote_name = "uploaded.py"
 
-    result = _run_mpremote(repl.port, "fs", "cp", str(local), f":{remote_name}", cwd=tmp_path)
+            result = await _run_mpremote(repl.port, "fs", "cp", str(local), f":{remote_name}", cwd=tmp_path)
 
-    assert result.returncode == 0, result.stderr
-    assert (tmp_path / remote_name).read_text() == "print('hello from device')\n"
+            assert result.returncode == 0, result.stderr
+            assert (tmp_path / remote_name).read_text() == "print('hello from device')\n"
+        finally:
+            await repl.stop()
+
+    _run_test(_body)

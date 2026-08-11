@@ -98,8 +98,8 @@ class PtyInteractiveRepl(ProcessInteractiveRepl):
         self._out_queue += bytes(data)
         self._flush_out_queue()
 
-    def _on_start(self) -> None:
-        super()._on_start()
+    async def _on_start(self) -> None:
+        await super()._on_start()
         assert pty is not None, "PtyInteractiveRepl requires a POSIX pty (checked by the CLI before this runs)"
         self._master_fd, self._slave_fd = pty.openpty()
         # A freshly opened pty defaults to cooked/echoing mode (ECHO, ICANON, ICRNL, OPOST/ONLCR,
@@ -115,12 +115,15 @@ class PtyInteractiveRepl(ProcessInteractiveRepl):
         tty.setraw(self._slave_fd)
         os.set_blocking(self._master_fd, False)
         self.slave_path = os.ttyname(self._slave_fd)
-        self._simulator.call(self._register_reader())
+        # Direct, not bridged via simulator.call() - _on_start() is itself awaited from the same
+        # thread that owns `simulator`'s own loop now (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's
+        # "Target shape"), and bridging into your own loop from itself would deadlock.
+        await self._register_reader()
 
-    def _on_stop(self) -> None:
-        super()._on_stop()
+    async def _on_stop(self) -> None:
+        await super()._on_stop()
         if self._master_fd is not None:
-            self._simulator.call(self._unregister())
+            await self._unregister()
             _close_quietly(self._master_fd)
             self._master_fd = None
         if self._slave_fd is not None:

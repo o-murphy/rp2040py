@@ -3,28 +3,35 @@ the library equivalent of the ``rp2040py micropython`` CLI subcommand, for embed
 Python programs rather than a terminal (e.g. a test runner, or a Thonny-style tool that wants to
 evaluate code against a device and read back the result).
 
-``start()``/``exec()``/``exec_file()`` block the calling thread. Each has an ``_async`` twin
-(``start_async()``/``exec_async()``/``exec_file_async()``) returning a `concurrent.futures.Future`
-instead - the blocking methods are one-line wrappers around them. A Future already supports
-callback style for free (``future.add_done_callback(...)``), and
-``astart()``/``aexec()``/``aexec_file()`` are thin ``async def`` wrappers for asyncio callers.
+Async-native only (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape" - see `base_device.py`'s
+own module docstring for why there is no blocking ``exec()``/``start()`` here anymore).
+``start_async()``/``exec_async()``/``exec_file_async()`` return a `concurrent.futures.Future` -
+useful for callback style for free (``future.add_done_callback(...)``) or a caller that wants a
+Future without awaiting one itself; ``astart()``/``aexec()``/``aexec_file()`` are thin
+``async def`` wrappers around those, for asyncio callers.
 
-All of these run as coroutines on the ``Simulator``'s own engine-room loop (`simulator.submit()`),
-serialized by one `asyncio.Lock`: the device only has one REPL channel, so it can't run two
-``exec()``s at once anyway - the lock gets queueing (extra calls simply wait their turn behind
-whichever coroutine holds it), while `simulator.submit()` gets Future/callback/async support for
-free the same way `concurrent.futures.Executor.submit()` would. Running on the engine room
-(instead of a separate worker thread) also means the raw-REPL protocol's own byte sends
-(`RawReplRunner.start()`'s Ctrl-C/Ctrl-A, `pump()`'s FIFO-paced uploads) happen on the same thread
-that drives `execute_instruction()`'s own USBCDC FIFO access - by construction, not by convention.
+All of these run as coroutines on the ``Simulator``'s own engine-room loop (`simulator.submit()`)
+- the *caller's own* currently-running loop, once `astart()` has bound it there (see its own
+docstring), not a separate dedicated thread - serialized by one `asyncio.Lock`: the device only
+has one REPL channel, so it can't run two ``exec()``s at once anyway - the lock gets queueing
+(extra calls simply wait their turn behind whichever coroutine holds it), while
+`simulator.submit()` gets Future/callback/async support for free the same way
+`concurrent.futures.Executor.submit()` would. Running on the engine room (instead of a separate
+worker thread) also means the raw-REPL protocol's own byte sends (`RawReplRunner.start()`'s
+Ctrl-C/Ctrl-A, `pump()`'s FIFO-paced uploads) happen on the same thread that drives
+`execute_instruction()`'s own USBCDC FIFO access - by construction, not by convention.
 
 .. code-block:: python
 
+    import asyncio
     from rp2040py.device import MicroPythonDevice
 
-    with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
-        stdout, stderr = device.exec("print(1 + 1)")
-        assert stdout == b"2\\r\\n"
+    async def main():
+        async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+            stdout, stderr = await device.aexec("print(1 + 1)")
+            assert stdout == b"2\\r\\n"
+
+    asyncio.run(main())
 """
 
 import asyncio
@@ -49,18 +56,9 @@ _T = TypeVar("_T")
 __all__ = ("MicroPythonDevice",)
 
 
-def _result(future: "Future[_T]", timeout: "float | None") -> _T:
-    """future.result(timeout), raising the builtin TimeoutError uniformly - concurrent.futures'
-    own TimeoutError is a distinct, unrelated class on Python <3.10, so plain `except TimeoutError`
-    would otherwise silently miss "still queued behind other work" timeouts on those versions."""
-    try:
-        return future.result(timeout)
-    except FutureTimeoutError as exc:
-        raise TimeoutError(f"did not complete within {timeout}s") from exc
-
-
 async def _await(future: "Future[_T]", timeout: "float | None") -> _T:
-    """asyncio.wrap_future(future), with the same TimeoutError normalization as _result()."""
+    """asyncio.wrap_future(future), raising the builtin TimeoutError uniformly - distinct from
+    concurrent.futures' own TimeoutError, which `except TimeoutError` wouldn't otherwise catch."""
     try:
         return await asyncio.wait_for(asyncio.wrap_future(future), timeout)
     except (FutureTimeoutError, asyncio.TimeoutError) as exc:
@@ -72,8 +70,8 @@ class MicroPythonDevice(BaseDevice):
     via the raw-REPL protocol (the same one `mpremote run`/`pyboard.py` and Thonny's "Run" use
     over a real serial port).
 
-    Use as a context manager (or `async with`), or call `start()`/`stop()` directly for more
-    control over the lifecycle. See the module docstring for the blocking/callback/async story.
+    Use as an async context manager (`async with`), or call `astart()`/`stop()` directly for more
+    control over the lifecycle. See the module docstring for the Future/callback/async story.
     """
 
     def __init__(
@@ -102,9 +100,10 @@ class MicroPythonDevice(BaseDevice):
         self._repl_lock = asyncio.Lock()
 
     # -- start -----------------------------------------------------------------------------
-    # Overridden (rather than inheriting BaseDevice.start()/stop() as-is) to route through
-    # self._repl_lock - the same lock exec_async() uses, so start_async()/exec_async() calls
-    # made back-to-back queue behind each other instead of racing.
+    # Overridden (rather than inheriting BaseDevice.astart()/start_async()/stop() as-is) to
+    # route through self._repl_lock - the same lock exec_async() uses, so
+    # start_async()/exec_async() calls made back-to-back queue behind each other instead of
+    # racing.
 
     async def _aconnect(self, timeout: "float | None") -> None:
         async with self._repl_lock:
@@ -119,18 +118,20 @@ class MicroPythonDevice(BaseDevice):
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails
-        with TimeoutError after `timeout` (if given)."""
+        with TimeoutError after `timeout` (if given). Runs on whatever loop `bind_loop()` last
+        registered on `self.simulator` (see `astart()`), or its own dedicated background thread
+        if none was ever registered - see `Simulator.bind_loop()`/`_ensure_loop()`."""
         if self._started:
-            raise RuntimeError("start()/start_async() already called")
+            raise RuntimeError("astart()/start_async() already called")
         self._started = True
         return self.simulator.submit(self._aconnect(timeout))
 
-    def start(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
-        """Blocking version of `start_async()`."""
-        _result(self.start_async(timeout), timeout)
-
     async def astart(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> None:
-        """asyncio version of `start_async()`."""
+        """asyncio version of `start_async()`. Binds `self.simulator` to the *caller's own*
+        currently-running loop first (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") -
+        `execute()` then runs as a task there instead of on a separate, dedicated background
+        thread."""
+        self.simulator.bind_loop()
         await _await(self.start_async(timeout), timeout)
 
     # stop() inherited from BaseDevice unchanged. Note: it does not resolve any Futures from an
@@ -182,14 +183,14 @@ class MicroPythonDevice(BaseDevice):
             # wires cdc.on_serial_data = runner.feed, then sends CTRL_C, CTRL_C, CTRL_A - now
             # genuinely running on the engine room, closing the same USBCDC.tx_fifo race PR 3
             # closed for stdin (see docs/ASYNCIO_MIGRATION_BACKLOG.md's "Resolved during PR 3").
-            runner.start()
+            await runner.start()
             pump_alarm.schedule(1_000_000)
 
             try:
                 await asyncio.wait_for(done.wait(), timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s") from exc
-            runner.stop()
+            await runner.stop()
             if errors:
                 raise errors[0]
             assert runner.result is not None
@@ -203,24 +204,20 @@ class MicroPythonDevice(BaseDevice):
         Interrupts anything already running on the device first (e.g. an auto-run `main.py` from
         a littlefs image), same as `mpremote run`/`pyboard.py` do.
 
-        Never raises for "another exec is running": if one is (or `start_async()` hasn't finished
-        connecting yet), this call queues behind it and runs once its turn comes - the device only
-        has one REPL channel, it can't run two exec()s at once. A queued call's own `timeout`
-        starts counting from when it actually begins, not from when it was queued; use
-        `future.result(timeout)`/`await asyncio.wait_for(...)` if you want to bound the wait
+        Never raises for "another exec is running": if one is (or `start_async()`/`astart()`
+        hasn't finished connecting yet), this call queues behind it and runs once its turn comes -
+        the device only has one REPL channel, it can't run two exec()s at once. A queued call's
+        own `timeout` starts counting from when it actually begins, not from when it was queued;
+        use `future.result(timeout)`/`await asyncio.wait_for(...)` if you want to bound the wait
         including queue time too.
         """
         if not self._started:
-            raise RuntimeError("call start()/start_async() (or enter as a context manager) before exec_async()")
+            raise RuntimeError("call astart()/start_async() (or enter as an async context manager) before exec_async()")
         return self.simulator.submit(self._aexec(code.encode(), timeout))
 
-    def exec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
-        """Blocking version of `exec_async()` - `timeout` bounds the *entire* wait, including any
-        time spent queued behind another exec()."""
-        return _result(self.exec_async(code, timeout), timeout)
-
     async def aexec(self, code: str, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
-        """asyncio version of `exec_async()` (see `exec()` re: `timeout` covering queue time too)."""
+        """asyncio version of `exec_async()` (see its own docstring re: `timeout` covering queue
+        time too)."""
         return await _await(self.exec_async(code, timeout), timeout)
 
     def exec_file_async(
@@ -229,17 +226,13 @@ class MicroPythonDevice(BaseDevice):
         with open(path) as f:
             return self.exec_async(f.read(), timeout=timeout)
 
-    def exec_file(self, path: PathLike, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
-        """Blocking version of `exec_file_async()`."""
-        return _result(self.exec_file_async(path, timeout=timeout), timeout)
-
     async def aexec_file(self, path: PathLike, timeout: "float | None" = DEFAULT_TIMEOUT) -> "tuple[bytes, bytes]":
         """asyncio version of `exec_file_async()`."""
         return await _await(self.exec_file_async(path, timeout=timeout), timeout)
 
     # -- context managers --------------------------------------------------------------------
-    # sync __enter__/__exit__ inherited from BaseDevice - self.start()/self.stop() there resolve
-    # to this class's own overrides via normal polymorphism.
+    # async __aenter__/__aexit__ only - see base_device.py's module docstring for why there is no
+    # blocking sync context-manager form anymore.
 
     async def __aenter__(self) -> "MicroPythonDevice":  # noqa: PYI034 (Self needs Python 3.11+)
         await self.astart()

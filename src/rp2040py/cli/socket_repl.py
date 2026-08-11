@@ -54,10 +54,12 @@ class SocketInteractiveRepl(ProcessInteractiveRepl):
     for `--expect-text`) - bytes are otherwise simply dropped when nothing is listening, the same
     as a real UART TX pin with nothing wired to RX.
 
-    Runs its `asyncio.start_server()` on `simulator`'s own engine-room loop (started there via
-    `simulator.call()`, mirroring `StdioInteractiveRepl`'s `add_reader()`) rather than an
-    independent one - contrast `GDBTCPServer`, which doesn't need this: forwarding bytes to the
-    device touches `cdc.tx_fifo` directly (via `send()`/`pump()`, see `device/repl_runner.py`),
+    Runs its `asyncio.start_server()` directly on `simulator`'s own engine-room loop - `start()`
+    (like every `InteractiveRepl` subclass's, per docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target
+    shape") is itself awaited from that same loop, so no cross-thread bridge is needed to get
+    there, mirroring `StdioInteractiveRepl`'s `add_reader()`. Contrast `GDBTCPServer`, which
+    doesn't need this: forwarding bytes to the device touches `cdc.tx_fifo` directly (via
+    `send()`/`pump()`, see `device/repl_runner.py`),
     which is only ever safe from that one thread. Because the connection handler therefore already
     runs on the right thread, both directions are plain synchronous calls with no per-message
     cross-thread bridging.
@@ -92,16 +94,16 @@ class SocketInteractiveRepl(ProcessInteractiveRepl):
         if self._extra_on_data is not None:
             self._extra_on_data(data)
 
-    def _on_start(self) -> None:
-        super()._on_start()
-        self._server = self._simulator.call(self._start_server())
+    async def _on_start(self) -> None:
+        await super()._on_start()
+        self._server = await self._start_server()
         assert self._server.sockets
         self.port = self._server.sockets[0].getsockname()[1]
 
-    def _on_stop(self) -> None:
-        super()._on_stop()
+    async def _on_stop(self) -> None:
+        await super()._on_stop()
         if self._server is not None:
-            self._simulator.call(self._stop_server())
+            await self._stop_server()
             self._server = None
             self.port = None
 

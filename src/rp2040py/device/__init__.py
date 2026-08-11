@@ -1,4 +1,4 @@
-from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice, connect_blocking
+from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
 from rp2040py.device.bootrom import BOOTROM_B1
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.mp_device import MicroPythonDevice
@@ -19,5 +19,4 @@ __all__ = (
     "MicroPythonDevice",
     "RawReplError",
     "RawReplRunner",
-    "connect_blocking",
 )

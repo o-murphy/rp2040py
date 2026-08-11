@@ -59,10 +59,16 @@ class StdioInteractiveRepl(ProcessInteractiveRepl):
     `stop()` restores the terminal. Quit by typing Ctrl+X.
 
     `simulator` is the `Simulator` that owns `cdc` - stdin is read via `asyncio.loop.add_reader()`
-    on `simulator`'s own engine-room loop (`Simulator._ensure_loop()`), the same thread
-    `execute()`/`USBCDC` state already only ever runs on, so forwarding bytes to the device never
-    needs a cross-thread bridge for the common case: the read callback already *is* on the right
-    thread.
+    on `simulator`'s own engine-room loop, the same thread `execute()`/`USBCDC` state already only
+    ever runs on, so forwarding bytes to the device never needs a cross-thread bridge for the
+    common case: the read callback already *is* on the right thread. `start()`/`stop()` must
+    themselves be called from that same loop's thread (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's
+    "Target shape" - the CLI's own `asyncio.run()`-hosted coroutine, same as `device.astart()`
+    bound `simulator` to) - `add_reader()`/`remove_reader()` are called directly via
+    `asyncio.get_running_loop()`, not bridged through `simulator.call()`, since a caller already
+    on that loop bridging into itself would deadlock (`.call()`'s blocking wait can only resolve
+    once the loop processes the very coroutine it's waiting on - impossible while its own thread
+    is the one blocked waiting).
 
     `on_data`, if given, is called with every chunk of device output in addition to it being
     echoed to stdout - e.g. for the CLI's `--expect-text` test-harness hook.
@@ -97,8 +103,8 @@ class StdioInteractiveRepl(ProcessInteractiveRepl):
         if self._extra_on_data is not None:
             self._extra_on_data(data)
 
-    def _on_start(self) -> None:
-        super()._on_start()
+    async def _on_start(self) -> None:
+        await super()._on_start()
         try:
             self._stdin_fd = sys.stdin.fileno()
             if termios is not None and sys.stdin.isatty():
@@ -124,22 +130,17 @@ class StdioInteractiveRepl(ProcessInteractiveRepl):
             self._stdin_fd = None
 
         if self._stdin_fd is not None:
-            self._simulator.call(self._register_reader())
+            # Direct, not bridged via simulator.call() - start() is called from the same thread
+            # that owns `simulator`'s own loop now (see the class docstring), and bridging into
+            # your own loop from itself would deadlock.
+            asyncio.get_running_loop().add_reader(self._stdin_fd, self._on_stdin_readable)
         else:
             self._fallback_thread = threading.Thread(target=self._fallback_read_loop, daemon=True)
             self._fallback_thread.start()
 
-    async def _register_reader(self) -> None:
-        assert self._stdin_fd is not None
-        asyncio.get_running_loop().add_reader(self._stdin_fd, self._on_stdin_readable)
-
-    async def _unregister_reader(self) -> None:
-        assert self._stdin_fd is not None
-        asyncio.get_running_loop().remove_reader(self._stdin_fd)
-
-    def _on_stop(self) -> None:
+    async def _on_stop(self) -> None:
         if self._stdin_fd is not None:
-            self._simulator.call(self._unregister_reader())
+            asyncio.get_running_loop().remove_reader(self._stdin_fd)
         if self._fallback_thread is not None:
             self._fallback_thread.join(timeout=1.0)
         self._restore_termios()

@@ -34,20 +34,24 @@ class BaseReplRunner:
         self._pending = b""
         self._pending_lock = threading.Lock()
 
-    def start(self) -> None:
+    async def start(self) -> None:
         self._cdc.on_serial_data = self._feed_safe
-        self._on_start()
+        await self._on_start()
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         if self._cdc.on_serial_data == self._feed_safe:
             self._cdc.on_serial_data = None
-        self._on_stop()
+        await self._on_stop()
 
-    def _on_start(self) -> None:
-        """Hook for subclasses: send whatever bytes/setup kick off this REPL mode."""
+    async def _on_start(self) -> None:
+        """Hook for subclasses: send whatever bytes/setup kick off this REPL mode. `async def`
+        (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") because at least one subclass
+        (`SocketInteractiveRepl`) needs to `await asyncio.start_server()` here - most others have
+        nothing to `await` and just run synchronous setup, which is fine inside an `async def`
+        with no `await` in it."""
 
-    def _on_stop(self) -> None:
-        """Hook for subclasses: teardown."""
+    async def _on_stop(self) -> None:
+        """Hook for subclasses: teardown. See `_on_start()` for why this is `async def`."""
 
     def feed(self, data: "bytes | bytearray") -> None:
         raise NotImplementedError
