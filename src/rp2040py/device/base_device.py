@@ -17,6 +17,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from os import PathLike
 from typing import TypeVar
 
+from rp2040py.boards import build_rp2040
 from rp2040py.device.load_flash import load_uf2
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.rp2040 import RP2040
@@ -46,9 +47,14 @@ class BaseDevice:
     lifecycle."""
 
     def __init__(
-        self, image: PathLike, *, bootrom_words: "list[int] | None" = None, log_level: LogLevel = LogLevel.ERROR
+        self,
+        image: PathLike,
+        *,
+        board: str = "pico",
+        bootrom_words: "list[int] | None" = None,
+        log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        self.simulator = Simulator()
+        self.simulator = Simulator(rp2040=build_rp2040(board))
         self.mcu: RP2040 = self.simulator.rp2040
 
         if bootrom_words is None:

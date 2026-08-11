@@ -78,13 +78,14 @@ class MicroPythonDevice(BaseDevice):
         self,
         image: PathLike,
         *,
+        board: str = "pico",
         littlefs: "PathLike | None" = None,
         fat12: "PathLike | None" = None,
         circuitpython: bool = False,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, bootrom_words=bootrom_words, log_level=log_level)
+        super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
             load_micropython_flash_image(littlefs, self.mcu)
         if fat12 is not None:
