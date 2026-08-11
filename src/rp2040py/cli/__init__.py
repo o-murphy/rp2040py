@@ -129,7 +129,6 @@ def _load_image(image_name: PathLike, rp2040: RP2040) -> None:
         _logger.error("Unsupported file type: %s", extension)
         sys.exit(1)
 
-
 def _mk_dump_fs_callback(filename: PathLike | None, device: BaseDevice) -> Callable[[], None]:
     def dump_fs_callback() -> None:
         if filename is not None:
