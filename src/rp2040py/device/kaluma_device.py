@@ -29,12 +29,13 @@ class KalumaDevice(BaseDevice):
         self,
         image: PathLike,
         *,
+        board: str = "pico",
         littlefs: "PathLike | None" = None,
         program: "PathLike | None" = None,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, bootrom_words=bootrom_words, log_level=log_level)
+        super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
             load_kaluma_flash_image(littlefs, self.mcu)
         if program is not None:

@@ -100,7 +100,7 @@ jobs:
       # right after will fail with a clearer signal if genuinely broken.
       - name: Warm up Kaluma ${{ matrix.kaluma_version }} download cache
         continue-on-error: true
-        run: timeout 1m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
+        run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --fetch-fw-only
 
       # Real code-execution test: stages tests/kaluma/index.js into Kaluma's "user program" flash
       # region (same one `kaluma flash index.js` writes to on real hardware), which Kaluma

@@ -9,6 +9,8 @@ from rp2040py.simulator import Simulator
 def _mp_args(**overrides):
     defaults = {
         "image": "fixed-image.uf2",
+        "board": "pico",
+        "fetch_fw_only": False,
         "expect_text": None,
         "expect_regex": False,
         "gdb": False,
@@ -39,7 +41,9 @@ class _FakeMicroPythonDevice:
     last_kwargs: "dict | None" = None
     last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None, log_level=None):
+    def __init__(
+        self, image, board=None, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None, log_level=None
+    ):
         _FakeMicroPythonDevice.last_kwargs = {
             "image": image,
             "littlefs": littlefs,
@@ -327,6 +331,8 @@ def test_tcp_port_starts_a_socket_repl_instead_of_the_stdio_one(fake_device, mon
 def _kaluma_args(**overrides):
     defaults = {
         "image": None,
+        "board": "pico",
+        "fetch_fw_only": False,
         "expect_text": None,
         "expect_regex": False,
         "gdb": False,
@@ -362,7 +368,7 @@ class _FakeKalumaDevice:
     last_instance: "_FakeKalumaDevice | None" = None
     last_bootrom_words: "list | None" = None
 
-    def __init__(self, image, littlefs=None, program=None, bootrom_words=None, log_level=None):
+    def __init__(self, image, board=None, littlefs=None, program=None, bootrom_words=None, log_level=None):
         _FakeKalumaDevice.last_kwargs = {"image": image, "littlefs": littlefs, "program": program}
         _FakeKalumaDevice.last_bootrom_words = bootrom_words
         _FakeKalumaDevice.last_instance = self

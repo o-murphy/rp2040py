@@ -5,7 +5,16 @@ PORTING.md / CHANGELOG.md for those. Items large enough to need their own file:
 [docs/JIT_BACKLOG.md](JIT_BACKLOG.md) (basic-block fusion / mini-JIT),
 [docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md) (replacing every
 `threading`-based workaround - `stdio_repl.py`'s reader thread, `pio.py`'s `RLock`,
-`gdb_tcp_server.py`'s accept-thread poll, ... - with one `asyncio` event loop).
+`gdb_tcp_server.py`'s accept-thread poll, ... - with one `asyncio` event loop),
+[docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (put `Simulator`'s
+engine-room loop on the process main thread instead of a dedicated background thread, matching
+upstream rp2040js's single-threaded model for the common single-instance case - **done**, all 5
+phases landed and verified),
+[docs/CYW43_WIFI_BACKLOG.md](CYW43_WIFI_BACKLOG.md) (Pico W WiFi emulation - new feature, not a
+porting gap; gSPI protocol fully documented from the official BSD-licensed `pico-sdk`/`cyw43-driver`
+source - command header bit layout, register maps, real `WLC_*`/`WLC_E_*` IDs - plus the phased plan
+under consideration; step 0 done on top of the now-landed main-thread architecture, step 1
+deferred - see that file's "Implementation order").
 
 ## SSI flash-write support — DONE, merged to main
 
