@@ -702,26 +702,54 @@ decision sections above that define what it actually means.
    real bit action (drive a TX bit, sample an RX bit) happens while `WL_CLK` is low, immediately
    before it's raised - so this decodes as sample-on-rising-edge (host drove the bit during the
    preceding low phase), drive-on-falling-edge (chip's own turn, so it's stable in time for the
-   host's next low-phase sample). `bus.py`'s own module docstring has the full derivation,
-   including why no explicit byte-swapping is needed on the Python side despite the C driver's own
-   `SWAP32()`/DMA-`bswap` calls (they cancel out to "wire carries the natural `make_cmd()`/register
-   value, MSB-first" - independently cross-checked against `cyw43_ll_bus_init()`'s own packed
-   multi-byte-register write, which only makes sense under that same reading).
+   host's next low-phase sample). `bus.py`'s own module docstring has the full derivation.
+
+   **Correction (2026-08-12), found by booting real firmware, not by reading source closer:**
+   the original claim here - that the C driver's `SWAP32()`/DMA-`bswap` calls cancel out, so the
+   wire always carries the natural `make_cmd()`/register value - is **wrong** for the two
+   `_swap`-suffixed accessors (`read_reg_u32_swap()`/`write_reg_u32_swap()`) that
+   `cyw43_ll_bus_init()` uses for the `SPI_READ_TEST_REGISTER` poll and the one `SPI_BUS_CONTROL`
+   write that switches modes. `SWAP32()` there is actually `__swap16x2()`/`REV16` (swaps bytes
+   *within* each 16-bit half, not a full 32-bit reversal) - composed with the DMA engine's own
+   *full* 32-bit byte-swap (applied unconditionally to every gSPI DMA transfer, regardless of
+   caller), the net wire transform for these two calls is "swap the two 16-bit halves of the word,
+   bytes in-order within each half" - confirmed by capturing a real word off a live Pico W boot:
+   the first test-register-poll header arrived as `0xa0044000`, exactly `0x4000a004` (the real
+   `make_cmd()` value) with its halves swapped, not the identity. Every *other* accessor (used
+   after that one `SPI_BUS_CONTROL` write) skips the C-level swap and relies on the DMA engine's
+   full byte-swap plus the chip's own `ENDIAN_BIG` config (set by that same write) to net out to a
+   *different* transform: a full 32-bit byte reversal instead. This is real, stateful gSPI hardware
+   behavior gated by `SPI_BUS_CONTROL`'s `WORD_LENGTH_32` bit (0 = 16-bit word length, the chip's
+   own power-on default; 1 = 32-bit) - not an implementation detail to paper over. `bus.py` now
+   models it directly: `GSPIBus._word_length_32` starts `False`, `_word()` applies the matching
+   self-inverse transform to every decoded/encoded 32-bit word, and `_write_f0()` flips the flag
+   the instant a `SPI_BUS_CONTROL` write's value has `WORD_LENGTH_32` set - see `bus.py`'s module
+   docstring for the full derivation and `_swap_halves()`/`_swap_bytes()` for the two transforms.
+   `tests/test_cyw43_bus.py`'s `_FakeGSPIMaster` mirrors the same mode-tracking so its round-trip
+   tests stay meaningful (both sides start in sync and flip in lockstep on the same rule, so
+   correctness holds regardless of which mode is active at any given moment in a test).
 
    **Verified end-to-end against a synthetic gSPI master** (`tests/test_cyw43_bus.py`'s
    `_FakeGSPIMaster`, bit-banging GPIO24/25/29 via the same SIO-write pattern
-   `tests/test_led_mock.py` established) - all 5 tests passed on the *first* run after writing
-   them, which is real (if not conclusive) evidence the from-source protocol derivation above holds
-   together: `SPI_READ_TEST_REGISTER` returns `TEST_PATTERN`, `SPI_BUS_CONTROL` write-then-read
-   round-trips (matching `cyw43_ll_bus_init()`'s own sequence), a 1-byte write only touches its own
-   byte, CS deasserted mid-transaction cleanly discards partial state instead of corrupting the
-   next transaction, and an unimplemented function (`BACKPLANE_FUNCTION`) reads `0` rather than
-   raising. **Not yet done: booting real, unmodified MicroPython/CircuitPython Pico W firmware
-   against this** (needs step 3's `Cyw43439`/`ExternalDevice.attach()` wiring - `--board pico_w`
-   firmware images themselves are now resolvable, see the now-done "Open questions" item below) -
-   the synthetic-master tests prove the decode logic is internally consistent with the documented
-   protocol, not that a real driver's actual init handshake succeeds end-to-end. Treat as a real,
-   not yet closed, risk until that boot test runs.
+   `tests/test_led_mock.py` established) - 13 tests (5 from step 2, 8 added for step 3b/3c/3d's
+   ALP/HT/KSO/backplane-window/core-reset-default coverage), all passing.
+
+   **Booted real, unmodified MicroPython Pico W firmware against this (2026-08-12) - the
+   `[CYW43] Failed to start CYW43` warning the user's own live test first surfaced (before any of
+   step 3's work, and before `Cyw43439`/`bus.py` were even wired into `boards.py`'s `pico_w`
+   extras) is now gone entirely** on both `v1.28.0` and `v1.21.0`, confirming `cyw43_ll_bus_init()`
+   (the F0-only handshake: test-register poll, the `SPI_BUS_CONTROL` word-length switch, and the
+   interrupt-register writes) completes successfully end-to-end for the first time. This needed
+   only the wire word-length/endian fix above, not step 3b/3c/3d's F1 work directly -
+   `cyw43_ll_bus_init()` itself never touches `BACKPLANE_FUNCTION`. Not yet confirmed live: whether
+   `cyw43_ll_wifi_on()` (the *later* call that actually exercises 3b/3c/3d's ALP/HT/KSO/backplane/
+   core-reset registers) succeeds - `v1.28.0`'s `network_cyw43_active()` unconditionally sets its
+   active flag regardless of `cyw43_wifi_set_up()`'s return code (confirmed by reading
+   `extmod/network_cyw43.c` directly), so `nic.active(True)` "succeeding" there is silent either
+   way; `v1.21.0` returned `active() == False` with no warning printed at all, which is *consistent
+   with* (not proof of) an older port version's `active()` actually propagating a `cyw43_ll_wifi_on()`
+   failure - plausible since 3e/3f (firmware/CLM download, SDPCM+ioctl) aren't built yet and
+   `cyw43_ll_wifi_on()` needs both. Real, not yet closed, risk to revisit once 3e/3f land.
 3. **Chip/backplane + SDPCM/WLC ioctl layer - revised into sub-steps (2026-08-12), see "Real
    bringup sequence beyond F0" above for the full derivation.** The original one-paragraph
    estimate here undersold the real scope (firmware/CLM blob download, ARM core reset registers,
@@ -737,17 +765,33 @@ decision sections above that define what it actually means.
       (`0x1000e`) / `SDIO_SLEEP_CSR` (`0x1001f`) - a register model where writing a `*_REQ`/
       `KEEP_SDIO_ON` bit makes the corresponding `*_AVAIL`/`DEVICE_ON` bit immediately readable
       satisfies every poll loop in `cyw43_ll_bus_sleep()`/`cyw43_kso_set()` correctly, no real
-      clock-startup latency needs modeling.
+      clock-startup latency needs modeling. **Done (2026-08-12)**, unit-tested (round-trip on both
+      registers). Not yet confirmed against real firmware's `cyw43_ll_wifi_on()` specifically (see
+      step 2's own progress-log entry above for why that's still open).
    3. **3c. Backplane (F1) windowed read/write.** A generic byte-addressable "backplane memory"
       model plus the `SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH` window-select registers on
       `BACKPLANE_FUNCTION` - same shape as `GSPIBus`'s own F0 register space (step 2), just a much
       bigger address space. Specific backplane *addresses'* meaning (core control registers,
       SOCSRAM, ...) layers on top in later sub-steps, not part of the windowing mechanism itself.
+      **Done (2026-08-12)**, unit-tested (window-select bytes route a flagged address to the
+      correct combined `(window << 15) | (addr & 0x7fff)` slot). Found and fixed a real bug along
+      the way: `_f1`'s register-bank addresses (`0x1000a`-`0x1001f`) were being indexed directly
+      into a from-zero 32-byte array, so every F1 register access silently fell out of bounds and
+      no-op'd - fixed with a `_F1_REGISTER_BASE` offset.
    4. **3d. ARM core reset/enable registers** (`CORE_WLAN_ARM`/`CORE_SOCRAM`'s `AI_IOCTRL_OFFSET`/
       `AI_RESETCTRL_OFFSET`, reached via 3c's windowed access) - reflecting "reset" then "clocked,
       out of reset" on readback is enough; **no second CPU core needs emulating** - the host driver
       never talks to the WLAN core's own firmware except through SDPCM (3f), so nothing downstream
       can tell a real running core from a register model that remembers it was told to start.
+      **Done (2026-08-12)**, unit-tested (both cores default to `AIRC_RESET` set; `AI_IOCTRL_OFFSET`
+      round-trips through the window like any other backplane-memory address).
+
+   **`Cyw43439` (`external/cyw43/chip.py`, 2026-08-12).** A minimal `ExternalDevice` that just owns
+   a `GSPIBus` and calls `attach_gpio()` from its own `attach()` - enough to wire 3b/3c/3d (and
+   step 2's F0 work) onto `boards.py`'s `pico_w` extras (alongside the existing placeholder
+   `LEDMock`) so real firmware boots actually exercise this code, not just unit tests. Everything
+   past this point (SDPCM/ioctl/firmware-download/events, 3e onward) still needs to land in this
+   same file/class before it does anything beyond bus-level register bookkeeping.
    5. **3e. Firmware/CLM blob download acceptance + F2 packet-available status plumbing.** Accept
       (don't need to validate or store meaningfully - `cyw43_check_valid_chipset_firmware()` runs
       entirely driver-side, never reaches the chip) the `cyw43_write_bytes()` block writes real
