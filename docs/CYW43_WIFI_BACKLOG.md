@@ -1,17 +1,22 @@
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**Current step (2026-08-12): 3f — SDPCM framing + generic ioctl request/response.** Everything
-before it in "Implementation order" below is done: step 0 (board-loading API), step 1
-(`ExternalDevice` proven via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware
-boots past the F0 handshake), and step 3's sub-steps 3a (generic word-aligned block transfers -
+**Current step (2026-08-12): 3g — async events + scripted scan/join.** Everything before it in
+"Implementation order" below is done: step 0 (board-loading API), step 1 (`ExternalDevice` proven
+via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware boots past the F0 handshake),
+and step 3's sub-steps 3a (generic word-aligned block transfers -
 `GSPIBus._on_clock_rising()`/`_start_response()` handle any `size`, not just one 32-bit word, via
 `_word_count()`/`_words_to_value()`/`_value_to_words()`), 3b (ALP/HT/KSO clock handshake), 3c (F1
-windowed backplane addressing), 3d (ARM core reset/enable registers), and 3e (firmware/CLM
-download acceptance - free via 3a/3c's generic F1 block writes - plus F2 packet delivery:
+windowed backplane addressing), 3d (ARM core reset/enable registers), 3e (firmware/CLM download
+acceptance - free via 3a/3c's generic F1 block writes - plus F2 packet delivery:
 `GSPIBus.queue_rx_packet()`, `SPI_STATUS_REGISTER`/`SPI_INTERRUPT_REGISTER` plumbing, and the
-shared `WL_D` IRQ pin now reflecting real pending-packet state instead of a hardcoded LOW
-placeholder) - all unit-tested in `tests/test_cyw43_bus.py` (22 tests). Nothing yet calls
-`queue_rx_packet()` with real protocol content - that's 3f/3g's job, next. See "Implementation
+shared `WL_D` IRQ pin reflecting real pending-packet state instead of a hardcoded LOW placeholder),
+and 3f (SDPCM framing + generic ioctl request/response: `GSPIBus._write_wlan()` parses inbound F2
+ioctl requests and answers with a generic zero-length success response via
+`_build_ioctl_success_response()`, echoing the request id and tracking `bus_data_credit` so the
+driver's own flow-control never stalls - corrected the SDPCM header size from an originally
+estimated 14 bytes to the real 12 along the way) - all unit-tested in `tests/test_cyw43_bus.py` (29
+tests). Real per-ioctl content and events (`WLC_SET_SSID`/join's scripted `WLC_E_*` sequence, scan
+results) still aren't built - that's 3g, next. See "Implementation
 order"'s step 3 for the full sub-step breakdown and status detail.
 
 [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (all 5 phases, engine-room
@@ -840,21 +845,50 @@ decision sections above that define what it actually means.
         new `_read_wlan()` handles `WLAN_FUNCTION` reads (always fixed-address, `addr=0`, matching
         `cyw43_read_bytes(WLAN_FUNCTION, 0, ...)` - the `addr` argument is unused, mirroring real
         hardware's own FIFO semantics), draining the queue and clearing both status/interrupt bits
-        once fully consumed. `WLAN_FUNCTION` *writes* (host-to-chip SDPCM/ioctl content) remain a
-        no-op - that's step 3f. Nothing calls `queue_rx_packet()` with real content yet; 3f/3g will.
-        Unit-tested (5 tests: delivery, status/length field, consume-clears-status, IRQ raised
-        while idle, IRQ drops once consumed).
+        once fully consumed. `WLAN_FUNCTION` *writes* (host-to-chip SDPCM/ioctl content) were still
+        a no-op at the time this landed - step 3f (below) fills that in. Unit-tested (5 tests:
+        delivery, status/length field, consume-clears-status, IRQ raised while idle, IRQ drops
+        once consumed).
       **Flag, still not solved (unchanged from the original estimate):** profile whether bit-level
       `GPIOPin.add_listener()` simulation of a real (hundreds-of-KB) firmware image is practically
       fast enough now that this actually lands and could be exercised against real firmware - may
       need a batched/short-circuited path for large pure-write block transfers specifically. Not
       yet profiled against a real boot (3e's own tests use small synthetic payloads, not a real
       firmware-sized download).
-   6. **3f. SDPCM framing + generic ioctl request/response.** The 14-byte SDPCM header + 16-byte
-      ioctl header, request-ID echo matching, and a bus-data-credit counter that just increments
-      consistently (no real flow-control/backpressure needed). One generic "echo a zero-length
-      success response" handler already satisfies the bulk of the real `WLC_*`/iovar vocabulary
-      `cyw43_ll_wifi_on()`/`cyw43_ll_wifi_join()` send along the way.
+   6. **3f. SDPCM framing + generic ioctl request/response.** **Done (2026-08-12)**, unit-tested (7
+      tests in `tests/test_cyw43_bus.py`, 29 total). Landed entirely in `bus.py`, same as every
+      prior sub-step:
+      - **Correction while implementing: the SDPCM header is 12 bytes, not the 14 originally
+        estimated here.** `struct sdpcm_header_t` (`cyw43_ll.c`) is 9 plain uint8/uint16 fields
+        (`size`, `size_com`, `sequence`, `channel_and_flags`, `next_length`, `header_length`,
+        `wireless_flow_control`, `bus_data_credit`, `reserved[2]`) - `2+2+1+1+1+1+1+1+2 = 12`, no
+        compiler padding possible (no uint32 members, already 2-byte aligned). The original
+        estimate had also missed the `next_length` field entirely. `SDPCM_HEADER_LEN = 12` in
+        `bus.py`, confirmed against the struct's own field list, not assumed. The 16-byte ioctl
+        header (`cmd`/`len`/`flags`/`status`, all `uint32_t`) was correct as originally estimated.
+      - `GSPIBus._write_wlan()` parses an inbound F2 block write (already a single call thanks to
+        step 3a - real firmware sends the whole SDPCM+ioctl+payload blob as one
+        `cyw43_write_bytes(WLAN_FUNCTION, 0, ...)`): validates `size`/`~size_com`, and for
+        `CONTROL_HEADER` frames only, calls `_build_ioctl_success_response()` and delivers it via
+        step 3e's `queue_rx_packet()`. `DATA_HEADER` (outbound Ethernet, step 4) and anything
+        malformed are silently ignored, not raised.
+      - `_build_ioctl_success_response()` builds a zero-length "success" response echoing the
+        request's own id (`ioctl_header_t.flags`'s `CDCF_IOC_ID_MASK` bits -
+        `sdpcm_process_rx_packet()` drops any response whose id doesn't match the driver's last
+        sent one), with `wireless_flow_control` always `0` and a `bus_data_credit` byte
+        (`GSPIBus._bus_data_credit`, starting at 1 to match the driver's own initial
+        `wwd_sdpcm_last_bus_data_credit`) incremented once per response. Both are real
+        correctness requirements, not cosmetic: a nonzero `wireless_flow_control` or a
+        `bus_data_credit` that doesn't stay strictly ahead of the driver's own send count makes
+        `cyw43_sdpcm_send_common()`'s own STALL check block every later host send forever
+        (confirmed by reading that function, not just the receive side).
+      - One generic "echo a zero-length success response" handler - no branching on `cmd` at all -
+        already satisfies the bulk of the real `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/
+        `cyw43_ll_wifi_join()` send during bring-up, exactly as originally planned. Real per-ioctl
+        content (`WLC_SET_SSID`/join's own scripted event sequence, `escan` results) is step 3g.
+      - Not yet confirmed against real firmware booting through this far - 3f's own tests drive
+        `GSPIBus` directly via the same fake-master wire-bang pattern every other test here uses,
+        not an actual MicroPython boot.
    7. **3g. Async events + scripted scan/join.** `cyw43_async_event_t`'s exact field layout
       (byte offsets matter - real firmware struct padding, not a natural dataclass shape),
       delivered as a fake-Ethernet-framed (`0x886c` + Broadcom OUI) SDPCM async packet. A fixed

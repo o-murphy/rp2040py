@@ -1,12 +1,13 @@
 """`Cyw43439` - the `ExternalDevice` (see `external/device.py`) that owns a `GSPIBus` (`bus.py`) and
 wires it onto a board's real WL_CLK/WL_D/WL_CS pins. Currently just that: `bus.py`'s F0/F1/F2
-decode is the entire chip model so far (docs/CYW43_WIFI_BACKLOG.md steps 3a-3e) - firmware/CLM
-block-write downloads are accepted (via the generic F1 block-transfer path) and `GSPIBus` can
-deliver a staged inbound F2 packet (`queue_rx_packet()`) with the matching
-`SPI_STATUS_REGISTER`/`SPI_INTERRUPT_REGISTER`/shared-IRQ-pin plumbing, but nothing yet actually
-calls `queue_rx_packet()` with real content - no SDPCM/ioctl framing or async events yet (step
-3f/3g), so real firmware's init handshake can get past the F0 test-register poll, the ALP/HT/KSO
-clock handshake, and firmware download, but nothing past that.
+decode is the entire chip model so far (docs/CYW43_WIFI_BACKLOG.md steps 3a-3f) - firmware/CLM
+block-write downloads are accepted (via the generic F1 block-transfer path), and real firmware's
+own SDPCM+ioctl requests now get a generic zero-length "success" response (`GSPIBus._write_wlan()`/
+`_build_ioctl_success_response()`), which is what `queue_rx_packet()`'s F2 delivery mechanism
+(step 3e) actually gets used for now. Real per-ioctl content and async events (`WLC_SET_SSID`/join,
+scan results) are still step 3g, so real firmware's init handshake, ALP/HT/KSO clock handshake,
+firmware download, and the bulk of `cyw43_ll_wifi_on()`'s own bring-up ioctls can all get past this
+model, but nothing that needs a scripted, content-aware response yet.
 """
 
 from typing import TYPE_CHECKING
