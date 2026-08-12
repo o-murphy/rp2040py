@@ -38,6 +38,17 @@ cdef int TIME_CHECK_INTERVAL = 256
 cdef long BATCH_INSTRUCTION_CEILING = 1000000
 
 
+def _has_runnable_machine(pio: object) -> bool:
+    """Mirrors _execute_batch.py's own helper of the same name - see its docstring for why a
+    machine sitting in `waiting=True` must not be re-`step()`'d every instruction (every wait
+    type already has its own targeted, event-driven re-check elsewhere) and
+    docs/records/0037-pio-clock-coupled-stepping.md for the real regression this fixes."""
+    for machine in pio.machines:
+        if machine.enabled and not machine.waiting:
+            return True
+    return False
+
+
 def execute_batch(simulator: object, tick_batch: int) -> None:
     """Same semantics as Simulator._execute_batch() (simulator.py), byte-for-byte translated -
     keep the two in sync by hand if either changes; there's no shared source between them (unlike
@@ -46,6 +57,14 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     cdef RP2040 rp2040 = simulator.rp2040
     cdef CortexM0Core core = rp2040.core
     clock = simulator.clock
+    # Stepped once per loop iteration below (both the idle-jump and busy-instruction paths - real
+    # PIO keeps running independent of CPU sleep state), the same "driven directly by this loop,
+    # not a competing asyncio.Task" pattern clock.tick() itself already uses - see
+    # _execute_batch.py's own comment on the mirrored line and
+    # docs/records/0037-pio-clock-coupled-stepping.md. RPPIO isn't natively typed (no
+    # native/_pio.pyx), so this is an ordinary Python attribute/method call from here, same
+    # boundary as clock itself.
+    pios = rp2040.pio
 
     cdef long i = 0
     cdef int ticks_since_check = 0
@@ -86,6 +105,9 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                     pending_nanos = 0.0
                     pending_count = 0
                     nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+        for pio in pios:
+            if not pio.stopped and _has_runnable_machine(pio):
+                pio.step()
         i += 1
     if pending_nanos:
         clock.tick(pending_nanos)

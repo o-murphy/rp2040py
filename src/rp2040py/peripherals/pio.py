@@ -74,6 +74,18 @@ class RPPIO(BasePeripheral):
         # runs on (it's only ever called from execute_instruction()'s bus dispatch, which only ever
         # runs inside Simulator.execute() on that loop). Exactly one thread can reach this state
         # now, by construction - not "races are unlikely," structurally impossible.
+        #
+        # Only used when this RP2040 has no owning Simulator at all (rp2040.simulator is None -
+        # e.g. tests/test_pio.py's fixture, driving RPPIO directly with its own bounded event
+        # loop). When a real Simulator does own this RP2040, its own _execute_batch()
+        # (_execute_batch.py/native/_simulator.pyx) steps every non-stopped RPPIO once per CPU
+        # instruction/idle-jump directly - see write_uint32()'s CTRL branch below for why a
+        # separately-scheduled task there was a real bug, not just a style choice: a competing
+        # asyncio.Task only gets a turn once per up-to-1,000,000-instruction CPU batch, so real
+        # firmware bit-banging a slow peripheral (CYW43's gSPI over PIO+DMA) could never make
+        # enough real progress before its own timeout-and-retry logic gave up and restarted it -
+        # a genuine livelock in native (fast CPU dispatch) mode, not just slow. Full derivation in
+        # docs/records/0037-pio-clock-coupled-stepping.md.
         self._run_task: asyncio.Task[None] | None = None
 
         self.stopped = True
@@ -222,13 +234,15 @@ class RPPIO(BasePeripheral):
                 # the program is still going after 1000 steps, e.g. it wraps/waits - needs
                 # scheduling as a task: write_uint32() itself can't `await` (it's called
                 # synchronously from execute_instruction()'s bus dispatch, which must stay
-                # synchronous), so run() picks up from here instead. get_running_loop() always
-                # resolves to Simulator's own engine-room loop here, since that's the only place
-                # write_uint32() is ever called from (see __init__'s _run_task comment) - except
-                # tests driving RPPIO directly with no Simulator at all, which need their own loop
-                # running for this specific case (see tests/test_pio.py's fixture).
+                # synchronous). When a real Simulator owns this RP2040, its own _execute_batch()
+                # already steps every non-stopped RPPIO once per CPU instruction/idle-jump (see
+                # __init__'s _run_task comment) - self.stopped staying False here is enough for
+                # that to pick the continuation up on its very next iteration, no task needed. The
+                # task path below is only for tests driving RPPIO directly with no Simulator at
+                # all, which need their own loop running for this specific case (see
+                # tests/test_pio.py's fixture).
                 self._step_batch()
-                if not self.stopped:
+                if not self.stopped and self.rp2040.simulator is None:
                     self._run_task = asyncio.get_running_loop().create_task(self.run())
             if not should_run:
                 self.stopped = True
@@ -320,13 +334,13 @@ class RPPIO(BasePeripheral):
 
     async def run(self) -> None:
         # Continuation of the first batch write_uint32()'s CTRL branch already ran synchronously -
-        # this only exists to keep making progress past that first 1000 steps without blocking
-        # whatever's driving Simulator.execute() (the only thing that ever schedules this, see
-        # __init__'s _run_task comment). Upstream rp2040js uses `setTimeout(() => this.run(), 0)`
-        # for the same reason, to yield back to the single-threaded JS event loop every 1000 steps
-        # so external stop() calls get a chance to run - `await asyncio.sleep(0)` is the direct
-        # analogue here, on Simulator's own engine-room loop rather than JS's single process-wide
-        # one.
+        # only reached at all when this RP2040 has no owning Simulator (see __init__'s _run_task
+        # comment/write_uint32()'s CTRL branch) - a real Simulator's own _execute_batch() drives
+        # the continuation directly instead, once per CPU instruction/idle-jump, never scheduling
+        # this task. Upstream rp2040js uses `setTimeout(() => this.run(), 0)` for the analogous
+        # no-owning-loop-driver case, to yield back to the single-threaded JS event loop every 1000
+        # steps so external stop() calls get a chance to run - `await asyncio.sleep(0)` is the
+        # direct analogue here.
         while not self.stopped:
             await asyncio.sleep(0)
             self._step_batch()
