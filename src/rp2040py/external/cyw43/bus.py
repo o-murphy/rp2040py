@@ -75,9 +75,15 @@ mechanisms on this side: `0x8000-0xffff` (`SBSDIO_SB_ACCESS_2_4B_FLAG` set) redi
 separate, sparse "backplane memory" store indexed by `(window << 15) | (addr & 0x7fff)` - `window`
 being whatever was last written across `SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH` - while everything
 else is F1's own small register bank (the window-select bytes themselves, `SDIO_CHIP_CLOCK_CSR`,
-`SDIO_SLEEP_CSR`, ...), same generic byte-addressable shape as F0's. `WLAN_FUNCTION` (step 4)
-still answers a harmless `0`/no-op rather than raising, so an unexpected early access during
-bring-up doesn't crash the whole emulator - not a claim that it's implemented.
+`SDIO_SLEEP_CSR`, ...), same generic byte-addressable shape as F0's. `WLAN_FUNCTION` (F2) reads
+now deliver whatever `queue_rx_packet()` staged - the generic inbound-delivery mechanism step
+3f/3g's SDPCM ioctl responses and async events will drive (step 3e: `_read_wlan()`,
+`STATUS_F2_PKT_AVAILABLE`/`F2_PACKET_AVAILABLE` plumbing, and the shared `WL_D` pin's own IRQ
+level when idle) - but writes (host-to-chip SDPCM/ioctl content, step 3f) still answer a harmless
+no-op rather than raising, so an unexpected early access during bring-up doesn't crash the whole
+emulator - not a claim that outbound handling is implemented. Real firmware/CLM downloads (also
+step 3e) don't touch `WLAN_FUNCTION` at all - `cyw43_download_resource()` writes through
+`BACKPLANE_FUNCTION` instead, already covered generically by the F1 block-transfer path above.
 """
 
 from dataclasses import dataclass
@@ -98,6 +104,7 @@ __all__ = (
     "BUS_FUNCTION",
     "CORE_SOCRAM",
     "CORE_WLAN_ARM",
+    "F2_PACKET_AVAILABLE",
     "SBSDIO_ALP_AVAIL",
     "SBSDIO_ALP_AVAIL_REQ",
     "SBSDIO_HT_AVAIL",
@@ -129,6 +136,9 @@ __all__ = (
     "SPI_RESP_DELAY_F3",
     "SPI_STATUS_ENABLE",
     "SPI_STATUS_REGISTER",
+    "STATUS_F2_PKT_AVAILABLE",
+    "STATUS_F2_PKT_LEN_MASK",
+    "STATUS_F2_PKT_LEN_SHIFT",
     "STATUS_F2_RX_READY",
     "STATUS_F3_RX_READY",
     "TEST_PATTERN",
@@ -176,6 +186,21 @@ TEST_PATTERN = 0xFEEDBEAD
 # the ones this module's default value uses are named here).
 STATUS_F2_RX_READY = 0x00000020
 STATUS_F3_RX_READY = 0x00000040
+
+# SPI_INTERRUPT_REGISTER bit (16-bit, cyw43_spi.h) - the very first thing
+# cyw43_ll_sdpcm_poll_device() checks before opening any SPI transaction at all
+# (cyw43_ll.c:~1008: `if (!(spi_int & F2_PACKET_AVAILABLE)) return -1;`).
+F2_PACKET_AVAILABLE = 0x0020
+
+# SPI_STATUS_REGISTER bits (32-bit) - what the driver actually trusts for "is a packet ready, and
+# how big" (cyw43_ll.c's SPI `cyw43_ll_sdpcm_poll_device()`: `bus_gspi_status = read(SPI_STATUS_REGISTER);
+# bytes_pending = (bus_gspi_status >> 9) & 0x7FF`). Numerically the same bit position as
+# F2_PACKET_AVAILABLE above - confirmed from source, not a typo here: the driver's own
+# `cyw43_spi.h` names this field `GSPI_PACKET_AVAILABLE` when read from SPI_STATUS_REGISTER even
+# though the constant is defined once, shared with the differently-scoped interrupt-register bit.
+STATUS_F2_PKT_AVAILABLE = 0x00000100
+STATUS_F2_PKT_LEN_MASK = 0x000FFE00
+STATUS_F2_PKT_LEN_SHIFT = 9
 
 # F1 (BACKPLANE_FUNCTION) register bank addresses (cyw43_ll.c's own #defines - not in cyw43_spi.h,
 # these are internal to the driver, not part of the public API header).
@@ -325,6 +350,9 @@ class GSPIBus:
         self._pending_write_words: list[int] = []
         self._response_bytes = b""
         self._response_bit_index = 0
+        # F2 (WLAN_FUNCTION) inbound packet queue (step 3e) - staged by queue_rx_packet(), drained
+        # by _read_wlan(). Empty means "nothing pending", matching STATUS_F2_PKT_AVAILABLE unset.
+        self._rx_packet = b""
         # Set by attach_gpio() - the pin this bus drives its response bits onto/samples host bits
         # from. None until attached (mirrors every other ExternalDevice-adjacent component here).
         self._data_pin: GPIOPin | None = None
@@ -398,20 +426,60 @@ class GSPIBus:
             return
         self._f1[offset : offset + size] = (value & ((1 << (size * 8)) - 1)).to_bytes(size, "little")
 
+    # -- F2 (WLAN_FUNCTION) inbound packet queue (step 3e) --------------------------------------
+
+    def queue_rx_packet(self, data: bytes) -> None:
+        """Stages `data` as the next inbound F2 packet - the generic delivery mechanism step
+        3f/3g's SDPCM ioctl responses and async events will use, not anything protocol-specific
+        itself. Sets `SPI_STATUS_REGISTER`'s `STATUS_F2_PKT_AVAILABLE` bit + length field and
+        `SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE` bit - what real firmware's
+        `cyw43_ll_sdpcm_poll_device()` actually polls for (cyw43_ll.c, SPI variant) - and, if CS is
+        currently deasserted, immediately raises the shared `WL_D` pin's own IRQ level too, since
+        that's a separate GPIO-level signal (`cyw43_cb_read_host_interrupt_pin()`, real hardware's
+        `CYW43_PIN_WL_HOST_WAKE`) a real driver's interrupt handler can notice without any SPI
+        transaction happening at all - `_on_cs_change()` alone wouldn't reflect a packet queued
+        while already idle."""
+        self._rx_packet = data
+        status = self._read_f0(SPI_STATUS_REGISTER, 4) | STATUS_F2_PKT_AVAILABLE
+        status = (status & ~STATUS_F2_PKT_LEN_MASK) | ((len(data) << STATUS_F2_PKT_LEN_SHIFT) & STATUS_F2_PKT_LEN_MASK)
+        self._write_f0(SPI_STATUS_REGISTER, 4, status)
+        self._write_f0(SPI_INTERRUPT_REGISTER, 2, self._read_f0(SPI_INTERRUPT_REGISTER, 2) | F2_PACKET_AVAILABLE)
+        if not self._selected and self._data_pin is not None:
+            self._data_pin.set_input_value(bool(data))
+
+    def _read_wlan(self, size: int) -> int:
+        """F2 reads are always against a fixed FIFO address on real hardware - `cyw43_read_bytes()`
+        always passes `addr=0` (see `cyw43_ll_sdpcm_poll_device()`), so `addr` itself is unused
+        here, mirroring that. Delivers up to `size` bytes of whatever `queue_rx_packet()` staged,
+        consuming them; once the queue is empty, clears `STATUS_F2_PKT_AVAILABLE`/
+        `F2_PACKET_AVAILABLE` - the shared IRQ pin itself drops on the next `_on_cs_change()`
+        deselect, which by then sees an empty `_rx_packet`, so nothing needs touching here."""
+        data, self._rx_packet = self._rx_packet[:size], self._rx_packet[size:]
+        if not self._rx_packet:
+            status = self._read_f0(SPI_STATUS_REGISTER, 4) & ~(STATUS_F2_PKT_AVAILABLE | STATUS_F2_PKT_LEN_MASK)
+            self._write_f0(SPI_STATUS_REGISTER, 4, status)
+            self._write_f0(SPI_INTERRUPT_REGISTER, 2, self._read_f0(SPI_INTERRUPT_REGISTER, 2) & ~F2_PACKET_AVAILABLE)
+        return int.from_bytes(data, "little")
+
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Returns whatever a real chip would answer for a `size`-byte read of `addr` on
-        `function`. `WLAN_FUNCTION` (step 4, not built yet) answers `0` rather than raising."""
+        `function`. `WLAN_FUNCTION` (F2) delivers whatever `queue_rx_packet()` staged (step 3e) -
+        outbound (host-to-chip) SDPCM/ioctl content is still step 3f, not built yet."""
         if function == BUS_FUNCTION:
             return self._read_f0(addr, size)
         if function == BACKPLANE_FUNCTION:
             if addr & SBSDIO_SB_ACCESS_2_4B_FLAG:
                 return self._read_backplane_memory(self._backplane_window | (addr & BACKPLANE_ADDR_MASK), size)
             return self._read_f1(addr, size)
+        if function == WLAN_FUNCTION:
+            return self._read_wlan(size)
         return 0
 
     def write_register(self, function: int, addr: int, size: int, value: int) -> None:
         """Applies a `size`-byte write of `value` to `addr` on `function`. `WLAN_FUNCTION` (step
-        4, not built yet) is a no-op."""
+        3f, not built yet) is still a no-op - real firmware/CLM downloads (step 3e) don't need it,
+        since `cyw43_download_resource()` writes through `BACKPLANE_FUNCTION` instead
+        (`cyw43_ll.c:cyw43_download_resource()`), already covered generically by step 3a/3c."""
         if function == BUS_FUNCTION:
             self._write_f0(addr, size, value)
         elif function == BACKPLANE_FUNCTION:
@@ -432,10 +500,12 @@ class GSPIBus:
         self._response_bit_index = 0
         if not selected and self._data_pin is not None:
             # "when CS is not asserted, WL_D instead carries the chip's IRQ level" (Wokwi
-            # investigation, docs/CYW43_WIFI_BACKLOG.md) - real interrupt delivery is a step 3/4
-            # concern (SPI_INTERRUPT_REGISTER/WLC_E_* events); drive a known "nothing pending" LOW
-            # rather than leaving the line floating/stale between transactions.
-            self._data_pin.set_input_value(False)
+            # investigation, docs/CYW43_WIFI_BACKLOG.md) - matches real hardware's
+            # CYW43_PIN_WL_HOST_WAKE (cyw43_cb_read_host_interrupt_pin(), cyw43_ctrl.c), which the
+            # driver polls directly, independent of any SPI transaction. Reflects whether a packet
+            # is still pending (step 3e's queue_rx_packet()/_read_wlan()) rather than an always-LOW
+            # placeholder - real SDPCM ioctl responses/async events (step 3f/3g) will ride this.
+            self._data_pin.set_input_value(bool(self._rx_packet))
 
     def _on_clock_rising(self, sampled_bit: bool) -> None:
         if not self._selected or self._response_bytes:

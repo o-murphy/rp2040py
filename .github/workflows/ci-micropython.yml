@@ -71,6 +71,8 @@ jobs:
           - "1.21.0"
           - "1.28.0"
           - "1.29.0-preview"
+        micropython_version_w:  # pico_w board firmware
+          - "1.28.0"
         python_runtime:
           - pypy-3.10
           - cpython-3.10
@@ -126,5 +128,11 @@ jobs:
         run: |
           . scripts/ci-common.sh
           run_micropython_dump_test "${{ matrix.python_runtime }}" "${{ matrix.micropython_version }}"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+      - name: Test MicroPython pico-w WLAN ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
+        if: ${{ matrix.micropython_version == matrix.micropython_version_w }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --board pico_w tests/micropython/main-cyw43.py
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

@@ -17,6 +17,7 @@ from rp2040py.external.cyw43.bus import (
     BUS_FUNCTION,
     CORE_SOCRAM,
     CORE_WLAN_ARM,
+    F2_PACKET_AVAILABLE,
     SBSDIO_ALP_AVAIL,
     SBSDIO_ALP_AVAIL_REQ,
     SBSDIO_HT_AVAIL,
@@ -32,8 +33,14 @@ from rp2040py.external.cyw43.bus import (
     SICF_CLOCK_EN,
     SICF_FGC,
     SPI_BUS_CONTROL,
+    SPI_INTERRUPT_REGISTER,
     SPI_READ_TEST_REGISTER,
+    SPI_STATUS_REGISTER,
+    STATUS_F2_PKT_AVAILABLE,
+    STATUS_F2_PKT_LEN_MASK,
+    STATUS_F2_PKT_LEN_SHIFT,
     TEST_PATTERN,
+    WLAN_FUNCTION,
     WORD_LENGTH_32,
     GSPIBus,
 )
@@ -147,10 +154,18 @@ class _FakeGSPIMaster:
 
 
 def _wire_up() -> tuple[RP2040, _FakeGSPIMaster]:
+    rp2040, _bus, master = _wire_up_with_bus()
+    return rp2040, master
+
+
+def _wire_up_with_bus() -> tuple[RP2040, GSPIBus, _FakeGSPIMaster]:
+    """Like `_wire_up()`, but also returns the `GSPIBus` itself - needed by tests that drive
+    `queue_rx_packet()` directly (step 3e), which has no wire-level equivalent to trigger it
+    (real firmware/step 3f/3g would call it from inside SDPCM handling, not built yet)."""
     rp2040 = RP2040()
     bus = GSPIBus()
     bus.attach_gpio(rp2040)
-    return rp2040, _FakeGSPIMaster(rp2040)
+    return rp2040, bus, _FakeGSPIMaster(rp2040)
 
 
 def test_read_test_register_returns_the_fixed_pattern():
@@ -359,3 +374,94 @@ def test_core_ioctrl_register_round_trips_through_the_backplane_window():
     master.write_register(BACKPLANE_FUNCTION, addr, 1, SICF_FGC | SICF_CLOCK_EN)
 
     assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == SICF_FGC | SICF_CLOCK_EN
+
+
+def test_firmware_download_shaped_block_writes_round_trip():
+    """Step 3e's 'accept the cyw43_write_bytes() block writes real firmware/CLM download does'
+    turns out to already 'just work' via step 3a/3c's generic backplane block-write path - no
+    bus.py change was needed for this half of 3e. Mirrors cyw43_download_resource()'s own
+    algorithm (cyw43_ll.c): chunk into CYW43_BUS_MAX_BLOCK_SIZE (64 bytes for SPI) pieces, each a
+    BACKPLANE_FUNCTION block write at a window-relative, SBSDIO_SB_ACCESS_2_4B_FLAG-tagged
+    address, re-selecting the window per chunk exactly like the real driver does - proves multiple
+    sequential chunks don't clobber each other, not just a single block transfer in isolation."""
+    _rp2040, master = _wire_up()
+    block_size = 64
+    base = CORE_SOCRAM  # real firmware download's actual target range
+    payload = bytes((i * 7 + 3) % 256 for i in range(block_size * 4))
+
+    for offset in range(0, len(payload), block_size):
+        dest_addr = base + offset
+        _select_backplane_window(master, dest_addr & ~BACKPLANE_ADDR_MASK)
+        addr = SBSDIO_SB_ACCESS_2_4B_FLAG | (dest_addr & BACKPLANE_ADDR_MASK)
+        chunk = payload[offset : offset + block_size]
+        master.write_register(BACKPLANE_FUNCTION, addr, len(chunk), int.from_bytes(chunk, "little"))
+
+    for offset in range(0, len(payload), block_size):
+        dest_addr = base + offset
+        _select_backplane_window(master, dest_addr & ~BACKPLANE_ADDR_MASK)
+        addr = SBSDIO_SB_ACCESS_2_4B_FLAG | (dest_addr & BACKPLANE_ADDR_MASK)
+        value = master.read_register(BACKPLANE_FUNCTION, addr, block_size)
+        assert value == int.from_bytes(payload[offset : offset + block_size], "little")
+
+
+def test_queued_rx_packet_is_delivered_via_f2_read():
+    """Step 3e's other half: queue_rx_packet() stages the generic inbound-delivery mechanism step
+    3f/3g's SDPCM ioctl responses and async events will use - proven here directly against a
+    plain F2 (WLAN_FUNCTION) read, without any SDPCM framing involved yet."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    payload = b"\x01\x02\x03\x04\x05\x06"
+    bus.queue_rx_packet(payload)
+
+    value = master.read_register(WLAN_FUNCTION, 0, len(payload))
+
+    assert value == int.from_bytes(payload, "little")
+
+
+def test_status_register_reports_pending_packet_availability_and_length():
+    """The actual field real firmware's cyw43_ll_sdpcm_poll_device() (SPI variant) trusts for
+    "is a packet ready, and how big" - STATUS_F2_PKT_AVAILABLE + the length packed into bits
+    19:9, not the interrupt register (that's only the earlier "worth even checking" gate)."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    payload = b"\xaa\xbb\xcc"
+    bus.queue_rx_packet(payload)
+
+    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+
+    assert status & STATUS_F2_PKT_AVAILABLE
+    assert (status & STATUS_F2_PKT_LEN_MASK) >> STATUS_F2_PKT_LEN_SHIFT == len(payload)
+
+
+def test_f2_read_consumes_the_packet_and_clears_pending_status():
+    _rp2040, bus, master = _wire_up_with_bus()
+    payload = b"\xde\xad\xbe\xef"
+    bus.queue_rx_packet(payload)
+
+    master.read_register(WLAN_FUNCTION, 0, len(payload))
+
+    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    assert not status & STATUS_F2_PKT_AVAILABLE
+    interrupt = master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2)
+    assert not interrupt & F2_PACKET_AVAILABLE
+
+
+def test_queuing_a_packet_while_idle_raises_the_shared_irq_pin():
+    """Real firmware's cyw43_cb_read_host_interrupt_pin() (cyw43_ctrl.c) polls WL_D's own level
+    directly, independent of any SPI transaction - the mechanism that lets a real driver's GPIO
+    interrupt handler notice a pending event without the host having to keep clocking the bus at
+    all. Must fire the instant queue_rx_packet() is called while CS is already deasserted, not
+    only the next time a transaction happens to start."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    assert not master.data_pin.input_value  # idle, deselected, nothing pending yet
+
+    bus.queue_rx_packet(b"\x01")
+
+    assert master.data_pin.input_value
+
+
+def test_irq_pin_drops_once_the_packet_is_fully_consumed():
+    _rp2040, bus, master = _wire_up_with_bus()
+    bus.queue_rx_packet(b"\x01\x02")
+
+    master.read_register(WLAN_FUNCTION, 0, 2)
+
+    assert not master.data_pin.input_value

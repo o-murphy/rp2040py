@@ -1,16 +1,18 @@
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**Current step (2026-08-12): 3e — firmware/CLM blob download acceptance + F2 packet-available
-status plumbing.** Everything before it in "Implementation order" below is done: step 0
-(board-loading API), step 1 (`ExternalDevice` proven via `LEDMock`), step 2 (F0 bus-level `GSPIBus`
-decode - real firmware boots past the F0 handshake), and step 3's sub-steps 3a (generic
-word-aligned block transfers - `GSPIBus._on_clock_rising()`/`_start_response()` now handle any
-`size`, not just one 32-bit word, via `_word_count()`/`_words_to_value()`/`_value_to_words()` in
-`bus.py`), 3b (ALP/HT/KSO clock handshake), 3c (F1 windowed backplane addressing), and 3d (ARM
-core reset/enable registers) - all unit-tested in `tests/test_cyw43_bus.py`. 3a specifically
-unblocks everything from 3e onward, since firmware download and SDPCM/ioctl framing are the first
-genuinely multi-byte (not single-register) transfers on this bus. See "Implementation order"'s
-step 3 for the full sub-step breakdown and status detail.
+**Current step (2026-08-12): 3f — SDPCM framing + generic ioctl request/response.** Everything
+before it in "Implementation order" below is done: step 0 (board-loading API), step 1
+(`ExternalDevice` proven via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware
+boots past the F0 handshake), and step 3's sub-steps 3a (generic word-aligned block transfers -
+`GSPIBus._on_clock_rising()`/`_start_response()` handle any `size`, not just one 32-bit word, via
+`_word_count()`/`_words_to_value()`/`_value_to_words()`), 3b (ALP/HT/KSO clock handshake), 3c (F1
+windowed backplane addressing), 3d (ARM core reset/enable registers), and 3e (firmware/CLM
+download acceptance - free via 3a/3c's generic F1 block writes - plus F2 packet delivery:
+`GSPIBus.queue_rx_packet()`, `SPI_STATUS_REGISTER`/`SPI_INTERRUPT_REGISTER` plumbing, and the
+shared `WL_D` IRQ pin now reflecting real pending-packet state instead of a hardcoded LOW
+placeholder) - all unit-tested in `tests/test_cyw43_bus.py` (22 tests). Nothing yet calls
+`queue_rx_packet()` with real protocol content - that's 3f/3g's job, next. See "Implementation
+order"'s step 3 for the full sub-step breakdown and status detail.
 
 [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (all 5 phases, engine-room
 concurrency model) landed first and unblocked this whole effort - `Simulator`'s engine-room loop
@@ -801,18 +803,53 @@ decision sections above that define what it actually means.
    **`Cyw43439` (`external/cyw43/chip.py`, 2026-08-12).** A minimal `ExternalDevice` that just owns
    a `GSPIBus` and calls `attach_gpio()` from its own `attach()` - enough to wire 3b/3c/3d (and
    step 2's F0 work) onto `boards.py`'s `pico_w` extras (alongside the existing placeholder
-   `LEDMock`) so real firmware boots actually exercise this code, not just unit tests. Everything
-   past this point (SDPCM/ioctl/firmware-download/events, 3e onward) still needs to land in this
-   same file/class before it does anything beyond bus-level register bookkeeping.
+   `LEDMock`) so real firmware boots actually exercise this code, not just unit tests. 3e (below)
+   also landed entirely in `bus.py`, not `chip.py` - continuing the precedent 3b/3c/3d already set
+   (the doc's original plan to move "3d onward" into `chip.py` wasn't followed in practice; register/
+   wire-level mechanics have all stayed in `GSPIBus` so far, `Cyw43439` remains a thin wrapper).
+   Everything past this point (SDPCM/ioctl framing/events, 3f onward) still needs to land before
+   `Cyw43439`/`GSPIBus` does anything beyond bus-level register bookkeeping.
    5. **3e. Firmware/CLM blob download acceptance + F2 packet-available status plumbing.** Accept
       (don't need to validate or store meaningfully - `cyw43_check_valid_chipset_firmware()` runs
       entirely driver-side, never reaches the chip) the `cyw43_write_bytes()` block writes real
       firmware/CLM download does; wire up `SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE` +
       `SPI_STATUS_REGISTER`'s `GSPI_PACKET_AVAILABLE`/pending-length field, the mechanism every
-      later sub-step's own responses/events get delivered through. **Flag, don't yet solve:
-      profile whether bit-level `GPIOPin.add_listener()` simulation of a real (hundreds-of-KB)
-      firmware image is practically fast enough once this lands** - may need a batched/
-      short-circuited path for large pure-write block transfers specifically.
+      later sub-step's own responses/events get delivered through. **Done (2026-08-12)**, split
+      into two independently-confirmed halves:
+      - **Firmware/CLM download acceptance turned out to need no new code at all.** Confirmed
+        directly from source (`cyw43_ll.c:cyw43_download_resource()`): it writes through
+        `cyw43_write_bytes(BACKPLANE_FUNCTION, dest_addr | SBSDIO_SB_ACCESS_2_4B_FLAG, sz, src)` in
+        `CYW43_BUS_MAX_BLOCK_SIZE` (64 bytes for SPI, `cyw43_ll.h`) chunks, re-selecting the
+        backplane window per chunk - exactly the generic F1 block-write path step 3a/3c already
+        built. Payload content is simply stored (and ignored) in `GSPIBus`'s existing sparse
+        `_backplane_memory` dict - real firmware download addresses land in SOCSRAM
+        (`CORE_SOCRAM`), a normal backplane-window target, nothing WLAN-function-specific.
+        Unit-tested (`test_firmware_download_shaped_block_writes_round_trip`) by replaying the real
+        chunking algorithm across several sequential 64-byte writes.
+      - **F2 packet delivery is genuinely new**: `GSPIBus.queue_rx_packet(data)` stages `data`,
+        sets `SPI_STATUS_REGISTER`'s `STATUS_F2_PKT_AVAILABLE` bit + length field (bits 19:9 -
+        confirmed the actual field real firmware's SPI-variant `cyw43_ll_sdpcm_poll_device()`
+        trusts, `cyw43_ll.c:~1080`) and `SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE` bit (the
+        earlier, cheaper gate the same function checks first, `cyw43_ll.c:~1008`), and - if CS is
+        currently deasserted - immediately drives the shared `WL_D` pin's own IRQ level high too,
+        since real firmware's `cyw43_cb_read_host_interrupt_pin()` (`cyw43_ctrl.c`) polls that pin
+        directly and independently of any SPI transaction (confirmed via
+        `CYW43_PIN_WL_HOST_WAKE`'s wiring in `pico_cyw43_driver/cyw43_driver.c` - same GPIO as
+        `WL_D`). `GSPIBus._on_cs_change()`'s deselect handler, previously a hardcoded LOW placeholder
+        (step 2's own note that this was deferred), now reflects `bool(self._rx_packet)` instead. A
+        new `_read_wlan()` handles `WLAN_FUNCTION` reads (always fixed-address, `addr=0`, matching
+        `cyw43_read_bytes(WLAN_FUNCTION, 0, ...)` - the `addr` argument is unused, mirroring real
+        hardware's own FIFO semantics), draining the queue and clearing both status/interrupt bits
+        once fully consumed. `WLAN_FUNCTION` *writes* (host-to-chip SDPCM/ioctl content) remain a
+        no-op - that's step 3f. Nothing calls `queue_rx_packet()` with real content yet; 3f/3g will.
+        Unit-tested (5 tests: delivery, status/length field, consume-clears-status, IRQ raised
+        while idle, IRQ drops once consumed).
+      **Flag, still not solved (unchanged from the original estimate):** profile whether bit-level
+      `GPIOPin.add_listener()` simulation of a real (hundreds-of-KB) firmware image is practically
+      fast enough now that this actually lands and could be exercised against real firmware - may
+      need a batched/short-circuited path for large pure-write block transfers specifically. Not
+      yet profiled against a real boot (3e's own tests use small synthetic payloads, not a real
+      firmware-sized download).
    6. **3f. SDPCM framing + generic ioctl request/response.** The 14-byte SDPCM header + 16-byte
       ioctl header, request-ID echo matching, and a bus-data-credit counter that just increments
       consistently (no real flow-control/backpressure needed). One generic "echo a zero-length
