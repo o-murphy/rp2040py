@@ -645,3 +645,100 @@ but evidently not converging against this exact real firmware end-to-end. `clkDi
 implemented` (wherever that log line actually lives - not yet located) is the concrete next lead,
 likely inside the gSPI bit-banging PIO program's own clock-divider handling. Not investigated
 further in this pass.
+
+## `nic.active(True)` "hang" root-caused (2026-08-12) - not a CYW43 protocol bug, a CPU/PIO/DMA scheduling-fairness problem
+
+Follow-up session, live-traced end to end (not source-reading alone) via instrumented harnesses
+driving `MicroPythonDevice` directly against the real, cached `v1.28.0` `RPI_PICO_W` UF2 - monkey-
+patching `GSPIBus`/`StateMachine`/`RP2040.read_uint32`/`write_uint32` under `RP2040PY_SKIP_CYTHON=1`
+(pure-Python mode, so the patches actually take effect), plus a bounded `cProfile` run and a direct
+`arm-none-eabi-objdump -Mforce-thumb` disassembly of the UF2's flash image cross-checked against
+live CPU register snapshots at the hot PC. Scripts are throwaway (scratchpad, not committed) but
+the method - and the four findings below - are reproducible from a cold session in under an hour if
+this needs re-verifying.
+
+**Finding 1: it is not stuck - it is making genuine, measured forward progress, just catastrophically
+slowly, and slowing down further over time.** A live trace of `GSPIBus._write_backplane_memory()`
+(the sink for real compiled ARM firmware bytes during `cyw43_download_resource()`) shows the target
+address genuinely incrementing (`0x0`, `0x40`, `0x80`, ... climbing steadily) over a 90+ second run,
+not repeating. But the real-time cost *per 64-byte chunk* was measured growing across one run: ~85ms/
+chunk for the first ~20 chunks, ~260ms/chunk by chunk ~40, ~420ms/chunk by chunk ~60, ~700ms+/chunk
+by chunk ~115 - an accelerating, not flat, per-chunk cost. Real firmware is ~229KB / 64-byte chunks
+≈ 3670 chunks total; even at the *initial* (fastest, not-yet-decelerated) rate this is minutes, and
+the observed deceleration means it likely never finishes in practice - which is exactly what reads
+as "hangs forever" to a live user, even though no step of it is a true infinite loop.
+
+**Finding 2: root mechanism, confirmed via live register+disassembly cross-reference, not guessed.**
+The CPU's hot PC (sampled directly from `mcu.core.registers`/`pc` during the stall) disassembles
+(`arm-none-eabi-objdump` against a UF2→flat-binary conversion, Thumb mode, `--adjust-vma=0x10000000`)
+to exactly pico-sdk's own `dma_channel_abort()` body: write `1 << channel` to `DMA_BASE +
+CHAN_ABORT` (`0x50000444`), then busy-poll `AL1_CTRL`'s `BUSY` bit (`0x50000000 + channel*0x40 +
+0x10`, bit 24 - both offsets confirmed byte-for-byte against
+`pico-sdk/src/rp2040/hardware_regs/include/hardware/regs/dma.h`, local checkout, submodule already
+initialized). Live-traced DMA register writes (`RP2040.write_uint32` patched to log every
+`0x50000000-0x500FFFFF` access) show real firmware's `cyw43_bus_pio_spi.c` transfer helper
+configuring **two chained DMA channels** - channel 0's `WRITE_ADDR=0x50300010` (PIO1's `TXF0`,
+confirmed from `pio.py`'s own register layout), channel 1's `WRITE_ADDR` back into RAM off PIO1's
+`RXF0` (`0x50300020`) - the standard SDK "DMA feeds PIO TX FIFO, DMA drains PIO RX FIFO" gSPI
+bit-bang pattern, exactly matching `cyw43_bus_pio_spi.c`'s real implementation (nothing
+CYW43-protocol-specific about this part - it's the generic mechanism every PIO-driven SPI transfer
+in the SDK uses). **The abort+reconfigure+retrigger cycle repeats because, from the firmware's own
+point of view, each attempt is legitimately timing out** - real firmware's own transfer helper has a
+bounded wait-then-retry loop around the DMA, and our emulated DMA/PIO pairing is too slow to ever
+finish inside that window, so the *retry* is real, correct driver behavior reacting to a real
+(emulator-side) latency problem - not a CYW43 bug being masked.
+
+**Finding 3: why the DMA/PIO pairing is this slow - a CPU/PIO scheduling-fairness gap, confirmed via
+direct instrumentation of both sides.** `Simulator._execute_batch()`
+([simulator.py:138](../../src/rp2040py/simulator.py)) runs up to 1,000,000 CPU instructions (or a
+real-time budget, whichever comes first) before its *one* `await asyncio.sleep(0)` yields control
+back to the engine-room event loop. `RPPIO.run()` ([peripherals/pio.py:321](../../src/rp2040py/peripherals/pio.py))
+- the task that actually steps the gSPI bit-bang state machine - is a *separate*, competing
+`asyncio.Task` on that same single-threaded loop, so it only gets a scheduling turn once per (up to)
+million-instruction CPU batch. Live-patching `StateMachine.wait()`/sampling `waiting`/`wait_type`
+every 3s over a 60s run shows PIO1 SM0 (the gSPI program) spending nearly all its time in
+`WaitType.OUT` (autopull stall - blocked on the TX FIFO having data) and executing real instructions
+only a couple of times across a 45-second `cProfile` window, against 18-24 **million** CPU
+instructions executed in that same window (`_cortex_m0_core.py:1442(execute_instruction)` call
+count) - `peripherals/dma.py` and `peripherals/_state_machine.py` functions barely register in that
+profile at all. `RPDMAChannel.transfer()`/`schedule_transfer()` ([peripherals/dma.py:214](../../src/rp2040py/peripherals/dma.py))
+were checked and are *not* the bug - they correctly pace one word per DREQ assertion via a
+`SimulationClock` alarm (hardware-accurate FIFO backpressure) - but each such word now needs a full
+CPU-batch/PIO-task/clock-alarm round trip, and the already-documented per-`clock.tick()`-call
+overhead ("Performance side quest" above) compounds *per word* rather than per block. Net effect:
+a real gSPI transaction that should take on the order of a microsecond of simulated time costs many
+milliseconds of real wall-clock scheduling latency, and CYW43 is the first thing in this codebase
+that drives PIO this heavily via chained DMA, which is why nothing else surfaced this before.
+
+**Finding 4, not yet chased down - the likely explanation for the deceleration in Finding 1.** The
+CPU/PIO scheduling-latency floor from Finding 3 alone would predict a *flat* per-chunk cost, not an
+accelerating one. Something scales with total elapsed work on top of that floor - candidates not
+yet isolated: `GSPIBus._backplane_memory`'s sparse dict growing to thousands of entries over a long
+download, uncancelled `SimulationClock` alarms/callbacks accumulating, or GC pressure from the
+sheer object count of a long-running trace. Next session's first move here should be a `cProfile`
+diff between an early time slice and a late time slice of the same run (not just one aggregate
+profile) to catch what's actually growing.
+
+**Explicitly ruled out this session, with evidence - do not re-check:**
+- **Not a CYW43/SDPCM/ioctl protocol bug.** `_write_wlan()`/`queue_rx_packet()`/ioctl-response
+  building never even get exercised in these traces - firmware download itself hasn't finished, so
+  the driver hasn't reached the ioctl-exchange phase yet at all.
+- **Not the `clkDivRestart not implemented` warning itself.** It's benign - fires once per real gSPI
+  transaction (`StateMachine.clk_div_restart()`, [peripherals/_state_machine.py:660](../../src/rp2040py/peripherals/_state_machine.py)),
+  matching real hardware's own `pio_sm_clkdiv_restart()` SDK call; a real fix could implement it
+  properly, but doing so would not touch the actual bottleneck above.
+- **Not a DMA-to-peripheral read/write dispatch bug.** `write_uint32_atomic()` → `RPDMA.write_uint32()`
+  → `RPDMAChannel.write_uint32()` was confirmed reaching the DMA peripheral correctly via live
+  address tracing (register values read back exactly what was written).
+- **Not a true infinite loop or protocol-level deadlock.** Backplane-write addresses genuinely,
+  monotonically advance over a 90+ second trace - the earlier "textually identical, stalled-retry-
+  loop" read on the debug log (previous session's finding, at the top of this section) undersold
+  real slow progress as a hang signature; both readings were partially right; it *is* a retry loop
+  (Finding 2), and it *is* real (if glacial) progress (Finding 1) at the same time.
+
+**Not fixed here, per this repo's document-vs-implement convention** (see `CLAUDE.md`) - this is a
+cross-cutting `Simulator`/`RPPIO`/`RPDMA`/`SimulationClock` scheduling-fairness redesign (e.g. CPU
+batches yielding early when a PIO instance has pending DREQ-driven work, rather than always running
+to their full instruction/time cap), not a CYW43-specific patch, and belongs as a continuation of
+this doc's own "Performance side quest" work above, not a new independent bug. Recommend picking up
+there next, starting with Finding 4's profile-diff, before attempting a scheduling change.

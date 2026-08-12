@@ -54,7 +54,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; main-spi.py hang + PIO clkDivRestart stall still open
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; `nic.active(True)` root-caused as a CPU/PIO/DMA scheduling-fairness gap (not a CYW43 bug, not fixed yet); main-spi.py hang still open
 - [ ] [0036](records/0036-littlefs-fat12-exclusivity.md) `--littlefs`/`--fat12` mutual exclusivity | Proposed — documented only
 
 ### Rejected / Superseded
