@@ -15,9 +15,14 @@ from rp2040py.external.cyw43.bus import (
     BACKPLANE_ADDR_MASK,
     BACKPLANE_FUNCTION,
     BUS_FUNCTION,
+    CDCF_IOC_ID_MASK,
+    CDCF_IOC_ID_SHIFT,
+    CONTROL_HEADER,
     CORE_SOCRAM,
     CORE_WLAN_ARM,
+    DATA_HEADER,
     F2_PACKET_AVAILABLE,
+    IOCTL_HEADER_LEN,
     SBSDIO_ALP_AVAIL,
     SBSDIO_ALP_AVAIL_REQ,
     SBSDIO_HT_AVAIL,
@@ -30,6 +35,7 @@ from rp2040py.external.cyw43.bus import (
     SDIO_BACKPLANE_ADDRESS_MID,
     SDIO_CHIP_CLOCK_CSR,
     SDIO_SLEEP_CSR,
+    SDPCM_HEADER_LEN,
     SICF_CLOCK_EN,
     SICF_FGC,
     SPI_BUS_CONTROL,
@@ -465,3 +471,122 @@ def test_irq_pin_drops_once_the_packet_is_fully_consumed():
     master.read_register(WLAN_FUNCTION, 0, 2)
 
     assert not master.data_pin.input_value
+
+
+def _build_ioctl_request(request_id: int, cmd: int = 2, payload: bytes = b"") -> bytes:
+    """Mirrors cyw43_send_ioctl()/cyw43_sdpcm_send_common()'s real wire framing (cyw43_ll.c) -
+    used to drive GSPIBus's F2 write parsing (step 3f) the same way real firmware would, rather
+    than only testing _build_ioctl_success_response() in isolation."""
+    ioctl_header = (
+        cmd.to_bytes(4, "little")
+        + (len(payload) & 0xFFFF).to_bytes(4, "little")
+        + ((request_id << CDCF_IOC_ID_SHIFT) & CDCF_IOC_ID_MASK).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+    )
+    size = SDPCM_HEADER_LEN + len(ioctl_header) + len(payload)
+    sdpcm_header = (
+        size.to_bytes(2, "little")
+        + (~size & 0xFFFF).to_bytes(2, "little")
+        + bytes([0, CONTROL_HEADER, 0, SDPCM_HEADER_LEN, 0, 0])
+        + bytes(2)
+    )
+    return sdpcm_header + ioctl_header + payload
+
+
+def _send_wlan_frame(master: _FakeGSPIMaster, frame: bytes) -> None:
+    master.write_register(WLAN_FUNCTION, 0, len(frame), int.from_bytes(frame, "little"))
+
+
+def _read_f2_response(master: _FakeGSPIMaster) -> bytes:
+    """Drains whatever F2 packet is pending the same way cyw43_ll_sdpcm_poll_device() does: check
+    SPI_STATUS_REGISTER's own pending-length field first, then read exactly that many bytes."""
+    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    length = (status & STATUS_F2_PKT_LEN_MASK) >> STATUS_F2_PKT_LEN_SHIFT
+    return master.read_register(WLAN_FUNCTION, 0, length).to_bytes(length, "little")
+
+
+def test_ioctl_request_produces_a_matching_id_zero_length_response():
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_ioctl_request(request_id=7))
+
+    response = _read_f2_response(master)
+
+    assert len(response) == SDPCM_HEADER_LEN + IOCTL_HEADER_LEN
+    flags = int.from_bytes(response[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
+    echoed_id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT
+    assert echoed_id == 7
+    status = int.from_bytes(response[SDPCM_HEADER_LEN + 12 : SDPCM_HEADER_LEN + 16], "little")
+    assert status == 0
+
+
+def test_ioctl_response_size_and_checksum_are_self_consistent():
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1))
+
+    response = _read_f2_response(master)
+
+    size = int.from_bytes(response[0:2], "little")
+    size_com = int.from_bytes(response[2:4], "little")
+    assert size == len(response)
+    assert size == (~size_com & 0xFFFF)
+
+
+def test_ioctl_response_keeps_wireless_flow_control_zero():
+    """A nonzero wireless_flow_control stalls every later host send
+    (cyw43_sdpcm_send_common(), cyw43_ll.c) - must always be 0 for a chip model that never
+    actually wants to throttle the driver."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1))
+
+    response = _read_f2_response(master)
+
+    assert response[8] == 0  # wireless_flow_control byte
+
+
+def test_malformed_size_checksum_request_is_ignored():
+    _rp2040, master = _wire_up()
+    request = bytearray(_build_ioctl_request(request_id=1))
+    request[2] ^= 0xFF  # corrupt size_com's low byte
+
+    _send_wlan_frame(master, bytes(request))
+
+    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    assert not status & STATUS_F2_PKT_AVAILABLE
+
+
+def test_data_header_frame_is_ignored_not_answered_with_an_ioctl_response():
+    """DATA_HEADER (outbound Ethernet, step 4's NAT bridge) isn't built yet - must not be
+    mistaken for a CONTROL_HEADER ioctl and answered."""
+    _rp2040, master = _wire_up()
+    request = bytearray(_build_ioctl_request(request_id=1))
+    request[5] = DATA_HEADER  # override channel_and_flags's low nibble
+
+    _send_wlan_frame(master, bytes(request))
+
+    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    assert not status & STATUS_F2_PKT_AVAILABLE
+
+
+def test_bus_data_credit_increments_across_successive_ioctl_responses():
+    """Must strictly exceed the driver's own send count or cyw43_sdpcm_send_common()'s STALL
+    check on the *next* send blocks forever (cyw43_ll.c) - see _build_ioctl_success_response()."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1))
+    first_credit = _read_f2_response(master)[9]
+
+    _send_wlan_frame(master, _build_ioctl_request(request_id=2))
+    second_credit = _read_f2_response(master)[9]
+
+    assert second_credit == (first_credit + 1) & 0xFF
+
+
+def test_ioctl_request_raises_the_shared_irq_pin_while_idle():
+    """The response is queued synchronously from inside the F2 write itself, while CS is still
+    asserted - proves the pin still ends up high once the transaction completes and CS deselects,
+    via _on_cs_change()'s own pending-packet check, not just when queue_rx_packet() is called
+    directly while already idle (already covered by the step 3e IRQ tests above)."""
+    _rp2040, master = _wire_up()
+
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1))
+
+    assert master.data_pin.input_value

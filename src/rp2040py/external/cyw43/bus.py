@@ -76,14 +76,20 @@ separate, sparse "backplane memory" store indexed by `(window << 15) | (addr & 0
 being whatever was last written across `SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH` - while everything
 else is F1's own small register bank (the window-select bytes themselves, `SDIO_CHIP_CLOCK_CSR`,
 `SDIO_SLEEP_CSR`, ...), same generic byte-addressable shape as F0's. `WLAN_FUNCTION` (F2) reads
-now deliver whatever `queue_rx_packet()` staged - the generic inbound-delivery mechanism step
-3f/3g's SDPCM ioctl responses and async events will drive (step 3e: `_read_wlan()`,
-`STATUS_F2_PKT_AVAILABLE`/`F2_PACKET_AVAILABLE` plumbing, and the shared `WL_D` pin's own IRQ
-level when idle) - but writes (host-to-chip SDPCM/ioctl content, step 3f) still answer a harmless
-no-op rather than raising, so an unexpected early access during bring-up doesn't crash the whole
-emulator - not a claim that outbound handling is implemented. Real firmware/CLM downloads (also
-step 3e) don't touch `WLAN_FUNCTION` at all - `cyw43_download_resource()` writes through
-`BACKPLANE_FUNCTION` instead, already covered generically by the F1 block-transfer path above.
+deliver whatever `queue_rx_packet()` staged (step 3e: `_read_wlan()`,
+`STATUS_F2_PKT_AVAILABLE`/`F2_PACKET_AVAILABLE` plumbing, and the shared `WL_D` pin's own IRQ level
+when idle) - the generic inbound-delivery mechanism step 3f's own ioctl responses now use, and 3g's
+async events will too. F2 writes parse SDPCM+ioctl requests generically (step 3f, `_write_wlan()`/
+`_build_ioctl_success_response()`): validates the SDPCM header's `size`/`~size_com` check, and for
+`CONTROL_HEADER` frames queues a zero-length success response echoing the request's own id
+(`CDCF_IOC_ID_MASK`) with a monotonically increasing `bus_data_credit` - satisfies the bulk of the
+real `WLC_*`/iovar vocabulary bring-up sends without per-ioctl content (step 3g still owns the
+handful - `WLC_SET_SSID`/join - that need real scripted behavior instead of this generic ack).
+`DATA_HEADER` outbound Ethernet frames (step 4's NAT bridge) and anything malformed are silently
+ignored, matching this class's existing no-op-rather-than-raise stance for unimplemented paths.
+Real firmware/CLM downloads (step 3e) don't touch `WLAN_FUNCTION` at all -
+`cyw43_download_resource()` writes through `BACKPLANE_FUNCTION` instead, already covered
+generically by the F1 block-transfer path above.
 """
 
 from dataclasses import dataclass
@@ -102,9 +108,14 @@ __all__ = (
     "BACKPLANE_ADDR_MASK",
     "BACKPLANE_FUNCTION",
     "BUS_FUNCTION",
+    "CDCF_IOC_ID_MASK",
+    "CDCF_IOC_ID_SHIFT",
+    "CONTROL_HEADER",
     "CORE_SOCRAM",
     "CORE_WLAN_ARM",
+    "DATA_HEADER",
     "F2_PACKET_AVAILABLE",
+    "IOCTL_HEADER_LEN",
     "SBSDIO_ALP_AVAIL",
     "SBSDIO_ALP_AVAIL_REQ",
     "SBSDIO_HT_AVAIL",
@@ -117,6 +128,7 @@ __all__ = (
     "SDIO_BACKPLANE_ADDRESS_MID",
     "SDIO_CHIP_CLOCK_CSR",
     "SDIO_SLEEP_CSR",
+    "SDPCM_HEADER_LEN",
     "SICF_CLOCK_EN",
     "SICF_CPUHALT",
     "SICF_FGC",
@@ -252,6 +264,26 @@ SICF_FGC = 0x0002
 SICF_CPUHALT = 0x0020
 AIRC_RESET = 1
 
+# SDPCM + ioctl framing (cyw43_ll.c - internal to the driver, not in cyw43_spi.h) - step 3f.
+# `struct sdpcm_header_t` is 9 plain uint8/uint16 fields (no uint32 members forcing extra
+# alignment), so its real size is the naive field sum, not a rounder-sounding guess: 2+2+1+1+1+1+
+# 1+1+2 = 12 bytes - confirmed against cyw43_ll.c's own field list, not assumed.
+SDPCM_HEADER_LEN = 12
+# `struct ioctl_header_t` is 4 uint32 fields (cmd/len/flags/status) = 16 bytes.
+IOCTL_HEADER_LEN = 16
+# sdpcm_header_t.channel_and_flags low nibble - only CONTROL_HEADER (ioctl request/response) is
+# actually handled by _write_wlan() (everything else, including DATA_HEADER, falls through its
+# `kind != CONTROL_HEADER` check and is silently ignored). DATA_HEADER is still named here rather
+# than left a bare magic number, since it's the concrete "not yet built" case worth naming
+# (outbound Ethernet, step 4's NAT bridge). ASYNCEVENT_HEADER (step 3g, chip-to-host only) isn't
+# needed on this side yet.
+CONTROL_HEADER = 0
+DATA_HEADER = 2
+# ioctl_header_t.flags: the requesting id lives in the top 16 bits - sdpcm_process_rx_packet()
+# (cyw43_ll.c) drops any response whose echoed id doesn't match the driver's own last-sent id.
+CDCF_IOC_ID_SHIFT = 16
+CDCF_IOC_ID_MASK = 0xFFFF0000
+
 
 @dataclass(frozen=True)
 class GSPICommand:
@@ -353,6 +385,11 @@ class GSPIBus:
         # F2 (WLAN_FUNCTION) inbound packet queue (step 3e) - staged by queue_rx_packet(), drained
         # by _read_wlan(). Empty means "nothing pending", matching STATUS_F2_PKT_AVAILABLE unset.
         self._rx_packet = b""
+        # SDPCM bus_data_credit (step 3f) - matches the real driver's own initial
+        # wwd_sdpcm_last_bus_data_credit (cyw43_ll_init(), cyw43_ll.c). Incremented once per ioctl
+        # response we send (_build_ioctl_success_response()) - see that method for why it must
+        # stay strictly ahead of the driver's own send count.
+        self._bus_data_credit = 1
         # Set by attach_gpio() - the pin this bus drives its response bits onto/samples host bits
         # from. None until attached (mirrors every other ExternalDevice-adjacent component here).
         self._data_pin: GPIOPin | None = None
@@ -461,10 +498,70 @@ class GSPIBus:
             self._write_f0(SPI_INTERRUPT_REGISTER, 2, self._read_f0(SPI_INTERRUPT_REGISTER, 2) & ~F2_PACKET_AVAILABLE)
         return int.from_bytes(data, "little")
 
+    # -- F2 (WLAN_FUNCTION) outbound SDPCM/ioctl (step 3f) --------------------------------------
+
+    def _build_ioctl_success_response(self, request_id: int) -> bytes:
+        """Generic zero-length "success" SDPCM+ioctl response - satisfies the bulk of the real
+        `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/`cyw43_ll_wifi_join()` send during bring-up
+        without needing per-ioctl content (step 3g is where the handful that actually need
+        scripted behavior - `WLC_SET_SSID`/join - get real responses instead of this).
+
+        Two things `sdpcm_process_rx_packet()`/`cyw43_sdpcm_send_common()` (cyw43_ll.c) actually
+        enforce on whatever we send back, both handled here:
+        - The response's `ioctl_header_t.flags` must echo the request's own id
+          (`CDCF_IOC_ID_MASK`) - `sdpcm_process_rx_packet()` silently drops anything whose id
+          doesn't match the driver's last-sent one.
+        - `bus_data_credit` must end up strictly ahead of the driver's own send count, or
+          `cyw43_sdpcm_send_common()`'s STALL check blocks the *next* host send forever - the
+          driver increments its send count by one per send, so incrementing this by one per
+          response keeps exactly one ahead, matching this chip model's synchronous
+          one-request-one-response shape. `wireless_flow_control` must also stay 0 - any nonzero
+          value has the same stalling effect, unconditionally, on every later send."""
+        ioctl_header = (
+            (0).to_bytes(4, "little")  # cmd - not inspected by the driver on a response
+            + (0).to_bytes(4, "little")  # len (output length) - zero-length success
+            + ((request_id << CDCF_IOC_ID_SHIFT) & CDCF_IOC_ID_MASK).to_bytes(4, "little")  # flags
+            + (0).to_bytes(4, "little")  # status = success
+        )
+        size = SDPCM_HEADER_LEN + len(ioctl_header)
+        self._bus_data_credit = (self._bus_data_credit + 1) & 0xFF
+        sdpcm_header = (
+            size.to_bytes(2, "little")
+            + (~size & 0xFFFF).to_bytes(2, "little")
+            # sequence(0, unchecked on receive) / channel_and_flags / next_length(0, control-only)
+            # / header_length / wireless_flow_control(0) / bus_data_credit:
+            + bytes([0, CONTROL_HEADER, 0, SDPCM_HEADER_LEN, 0, self._bus_data_credit])
+            + bytes(2)  # reserved
+        )
+        return sdpcm_header + ioctl_header
+
+    def _write_wlan(self, data: bytes) -> None:
+        """Real firmware's `cyw43_sdpcm_send_common()` sends the whole SDPCM(+ioctl+payload) blob
+        as one F2 block write (`cyw43_write_bytes(WLAN_FUNCTION, 0, ...)`), so a single
+        `write_register()` call already has the complete frame - no reassembly across calls
+        needed. Validates the SDPCM header's own `size`/`~size_com` check, and - for
+        `CONTROL_HEADER` (ioctl) frames only - queues a generic zero-length success response
+        echoing the request's id (`_build_ioctl_success_response()`). Anything else (`DATA_HEADER`
+        outbound Ethernet frames - step 4's NAT bridge - or a malformed/too-short frame) is
+        silently ignored for now, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise
+        stance elsewhere in this class."""
+        if len(data) < SDPCM_HEADER_LEN:
+            return
+        size = int.from_bytes(data[0:2], "little")
+        size_com = int.from_bytes(data[2:4], "little")
+        if size != (~size_com & 0xFFFF):
+            return
+        kind = data[5] & 0x0F  # channel_and_flags, low nibble
+        if kind != CONTROL_HEADER or len(data) < SDPCM_HEADER_LEN + IOCTL_HEADER_LEN:
+            return
+        flags = int.from_bytes(data[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
+        request_id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT
+        self.queue_rx_packet(self._build_ioctl_success_response(request_id))
+
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Returns whatever a real chip would answer for a `size`-byte read of `addr` on
         `function`. `WLAN_FUNCTION` (F2) delivers whatever `queue_rx_packet()` staged (step 3e) -
-        outbound (host-to-chip) SDPCM/ioctl content is still step 3f, not built yet."""
+        including `_write_wlan()`'s own generic ioctl responses (step 3f)."""
         if function == BUS_FUNCTION:
             return self._read_f0(addr, size)
         if function == BACKPLANE_FUNCTION:
@@ -476,10 +573,10 @@ class GSPIBus:
         return 0
 
     def write_register(self, function: int, addr: int, size: int, value: int) -> None:
-        """Applies a `size`-byte write of `value` to `addr` on `function`. `WLAN_FUNCTION` (step
-        3f, not built yet) is still a no-op - real firmware/CLM downloads (step 3e) don't need it,
-        since `cyw43_download_resource()` writes through `BACKPLANE_FUNCTION` instead
-        (`cyw43_ll.c:cyw43_download_resource()`), already covered generically by step 3a/3c."""
+        """Applies a `size`-byte write of `value` to `addr` on `function`. `WLAN_FUNCTION` (F2)
+        parses SDPCM+ioctl requests generically (step 3f, `_write_wlan()`) - real firmware/CLM
+        downloads (step 3e) don't go through here at all, since `cyw43_download_resource()` writes
+        through `BACKPLANE_FUNCTION` instead (`cyw43_ll.c`), already covered by step 3a/3c."""
         if function == BUS_FUNCTION:
             self._write_f0(addr, size, value)
         elif function == BACKPLANE_FUNCTION:
@@ -487,6 +584,8 @@ class GSPIBus:
                 self._write_backplane_memory(self._backplane_window | (addr & BACKPLANE_ADDR_MASK), size, value)
             else:
                 self._write_f1(addr, size, value)
+        elif function == WLAN_FUNCTION:
+            self._write_wlan(value.to_bytes(size, "little"))
 
     # -- wire-level decode, GPIO-independent (see attach_gpio() for the real wiring) ------------
 
