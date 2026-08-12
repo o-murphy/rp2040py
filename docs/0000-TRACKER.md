@@ -53,7 +53,8 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — pico_w wild-execution + main-spi.py hang found, not yet root-caused
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — pico_w wild-execution root-caused → 0035; main-spi.py hang still open
+- [ ] [0035](records/0035-board-aware-fs-flash-offset.md) board-aware MicroPython FS flash offset | Proposed — root cause confirmed, fix not yet implemented
 
 ### Rejected / Superseded
 
