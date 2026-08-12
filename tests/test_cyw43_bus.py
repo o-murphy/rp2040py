@@ -120,16 +120,27 @@ class _FakeGSPIMaster:
         return word
 
     def read_register(self, function: int, addr: int, size: int) -> int:
+        """Reads `size` bytes, `size` possibly spanning several 32-bit wire words (a block
+        transfer, docs/CYW43_WIFI_BACKLOG.md step 3a) - one word covers 4 address-ascending bytes,
+        same convention `bus.py`'s `_value_to_words()` uses, so this stays a plain inverse of it."""
         self.select()
         self.send_word(self._word(_make_cmd(write=False, inc=True, fn=function, addr=addr, size=size)))
-        value = self._word(self.recv_word())
+        word_count = max(1, (size + 3) // 4)
+        raw = b"".join(self._word(self.recv_word()).to_bytes(4, "little") for _ in range(word_count))
         self.deselect()
-        return value
+        return int.from_bytes(raw[:size], "little")
 
     def write_register(self, function: int, addr: int, size: int, value: int) -> None:
+        """Writes `size` bytes, spanning several 32-bit wire words for a block transfer (step 3a) -
+        mirrors `read_register()`'s own chunking so round-trips through `GSPIBus` stay meaningful
+        regardless of size."""
         self.select()
         self.send_word(self._word(_make_cmd(write=True, inc=True, fn=function, addr=addr, size=size)))
-        self.send_word(self._word(value))
+        word_count = max(1, (size + 3) // 4)
+        raw = value.to_bytes(size, "little").ljust(word_count * 4, b"\x00")
+        for i in range(word_count):
+            word = int.from_bytes(raw[i * 4 : i * 4 + 4], "little")
+            self.send_word(self._word(word))
         self.deselect()
         if function == BUS_FUNCTION and addr == SPI_BUS_CONTROL and value & WORD_LENGTH_32:
             self._word_length_32 = True
@@ -287,6 +298,51 @@ def test_wlan_arm_and_socram_cores_default_to_held_in_reset():
         value = master.read_register(BACKPLANE_FUNCTION, addr, 1)
 
         assert value & AIRC_RESET
+
+
+def test_f0_block_write_spans_multiple_registers():
+    """Step 3a: a block transfer wider than one 32-bit word (firmware/CLM download chunks, SDPCM
+    frames, ... - step 3e onward all need this) must round-trip correctly, not just the
+    single-word register pokes every earlier test here exercises."""
+    _rp2040, master = _wire_up()
+    payload = int.from_bytes(bytes(range(8)), "little")
+
+    master.write_register(BUS_FUNCTION, 0x0000, 8, payload)
+
+    assert master.read_register(BUS_FUNCTION, 0x0000, 8) == payload
+
+
+def _select_backplane_window(master: _FakeGSPIMaster, window: int) -> None:
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+
+
+def test_backplane_block_write_then_read_round_trips_across_multiple_words():
+    """Same as the F0 case above but through the windowed backplane path - real firmware/CLM
+    download chunks and SDPCM frames both ride this route, not F0."""
+    _rp2040, master = _wire_up()
+    _select_backplane_window(master, 0x18000)
+    addr = SBSDIO_SB_ACCESS_2_4B_FLAG | 0x0100
+    payload = int.from_bytes(bytes(range(12)), "little")  # 12 bytes = 3 wire words
+
+    master.write_register(BACKPLANE_FUNCTION, addr, 12, payload)
+
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 12) == payload
+
+
+def test_block_transfer_size_not_a_multiple_of_four_still_round_trips():
+    """A 6-byte block (not word-aligned) still rides two full 32-bit wire words, the second
+    zero-padded - `_word_count()`'s ceiling division must cover this, not just exact multiples of
+    4 (real block transfers always are word-aligned, but this proves the general case)."""
+    _rp2040, master = _wire_up()
+    _select_backplane_window(master, 0x18000)
+    addr = SBSDIO_SB_ACCESS_2_4B_FLAG | 0x0200
+    payload = int.from_bytes(bytes([1, 2, 3, 4, 5, 6]), "little")
+
+    master.write_register(BACKPLANE_FUNCTION, addr, 6, payload)
+
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 6) == payload
 
 
 def test_core_ioctrl_register_round_trips_through_the_backplane_window():
