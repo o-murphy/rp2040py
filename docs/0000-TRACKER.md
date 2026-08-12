@@ -47,6 +47,7 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0030](records/0030-external-device-concurrency.md) ExternalDevice concurrency model | accepted
 - [x] [0031](records/0031-pio-cython-tick-batching.md) PIO Cython + `clock.tick()` batching | follow-up of 0013
 - [x] [0032](records/0032-docs-restructure.md) documentation restructure | this reorganization
+- [x] [0033](records/0033-completions-and-validation.md) Add autocompletions for the cli tool | accepted
 
 ### In progress / Proposed
 
