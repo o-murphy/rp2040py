@@ -19,9 +19,14 @@ RX bit - happens while `WL_CLK` is *low*, immediately before it's raised again):
   through the low phase for the host's own `in pins,1 side 0` sample right before the next rise) -
   a single consistent rule that covers both transfer directions of one shared half-duplex line.
 - The first 32-bit word of a transaction is always the command header (`make_cmd()`'s bit layout -
-  see `_decode_header()`). A `write` header is followed by one more host-driven 32-bit word (the
-  value); a `read` header switches the data line to chip-driven and we shift the requested
-  register's value back out, MSB-first, immediately after the header completes.
+  see `_decode_header()`). A `write` header is followed by `_word_count(size)` more host-driven
+  32-bit words (the value, or block data for a multi-byte transfer - step 3a, `_words_to_value()`);
+  a `read` header switches the data line to chip-driven and we shift that many words of the
+  requested register's value back out, MSB-first per word, immediately after the header completes
+  (`_start_response()`/`_value_to_words()`). `size` (the header's own 11-bit field, in bytes) is
+  always word-aligned for genuine block transfers (real driver asserts `!(len & 3)`) but a plain
+  1-3 byte register poke still rides exactly one full word either way - `_word_count()` covers both
+  uniformly via ceiling division with a floor of one word.
 
 **Word-length/endian mode (`SPI_BUS_CONTROL` bit 0, `WORD_LENGTH_32`).** The physical gSPI
 interface itself - not any one function's registers - operates in one of two word-transfer modes,
@@ -48,7 +53,10 @@ same as real silicon reconfiguring itself the instant that command lands.
 
 **Scope.** `BUS_FUNCTION` (F0, step 2 - "far enough for the driver's init handshake to succeed")
 plus `BACKPLANE_FUNCTION` (F1, step 3b/3c/3d - see docs/CYW43_WIFI_BACKLOG.md's "Real bringup
-sequence beyond F0" for the full derivation): the ALP/HT clock handshake and KSO sleep-CSR
+sequence beyond F0" for the full derivation), plus arbitrary word-aligned block transfers on top of
+either function (step 3a - `_word_count()`/`_words_to_value()`/`_value_to_words()`, needed before
+anything past this point - firmware/CLM download, SDPCM framing, step 3e onward - can move real
+multi-byte data at all): the ALP/HT clock handshake and KSO sleep-CSR
 (`SDIO_CHIP_CLOCK_CSR`/`SDIO_SLEEP_CSR`) - the *only* two steps in `cyw43_ll_bus_init()` that
 actually check their own return value and abort the whole sequence on failure, confirmed by
 reading the rest of that function; the backplane windowed-memory redirect
@@ -243,6 +251,33 @@ def _swap_bytes(word: int) -> int:
     return ((word & 0xFF) << 24) | ((word & 0xFF00) << 8) | ((word >> 8) & 0xFF00) | ((word >> 24) & 0xFF)
 
 
+def _word_count(size: int) -> int:
+    """How many 32-bit wire words a `size`-byte value/block spans - at least one even for a
+    sub-word register access, since gSPI is word-oriented (see module docstring's "Wire framing"):
+    a 1-3 byte register poke still rides one full 32-bit word, only its low bytes meaningful."""
+    return max(1, (size + 3) // 4)
+
+
+def _words_to_value(words: list[int], size: int) -> int:
+    """Reassembles `size` meaningful bytes (address-ascending, the same little-endian-byte-stream
+    convention `read_register()`/`write_register()` already use for size<=4) from the sequence of
+    decoded (word-transform already undone) wire words a multi-word write accumulated. Inverse of
+    `_value_to_words()`."""
+    raw = b"".join(word.to_bytes(4, "little") for word in words)
+    return int.from_bytes(raw[:size], "little")
+
+
+def _value_to_words(value: int, size: int) -> list[int]:
+    """Splits a `size`-byte register/block value into the 32-bit wire words a read response
+    streams out, one word per 4 address-ascending bytes - zero-padded if `size` isn't a multiple
+    of 4 (real block transfers always are, per `cyw43_bus_pio_spi.c`'s own `assert(!(len & 3))`,
+    but small sub-word register reads aren't and still ride one full word). Inverse of
+    `_words_to_value()`."""
+    word_count = _word_count(size)
+    raw = value.to_bytes(size, "little").ljust(word_count * 4, b"\x00")
+    return [int.from_bytes(raw[i * 4 : i * 4 + 4], "little") for i in range(word_count)]
+
+
 def _decode_header(word: int) -> GSPICommand:
     return GSPICommand(
         write=bool(word & 0x8000_0000),
@@ -285,6 +320,9 @@ class GSPIBus:
         self._shift_reg = 0
         self._bits_in_word = 0
         self._pending_command: GSPICommand | None = None
+        # Accumulates the decoded (word-transform already undone) value words of a write still in
+        # progress - a block write (step 3a) spans several 32-bit words, not just one.
+        self._pending_write_words: list[int] = []
         self._response_bytes = b""
         self._response_bit_index = 0
         # Set by attach_gpio() - the pin this bus drives its response bits onto/samples host bits
@@ -389,6 +427,7 @@ class GSPIBus:
         self._shift_reg = 0
         self._bits_in_word = 0
         self._pending_command = None
+        self._pending_write_words = []
         self._response_bytes = b""
         self._response_bit_index = 0
         if not selected and self._data_pin is not None:
@@ -413,17 +452,29 @@ class GSPIBus:
         if self._pending_command is None:
             command = _decode_header(word)
             if command.write:
-                # A write header is followed by one more host-driven word (the value) - stay in
-                # sampling mode, decode on the *next* full word instead.
+                # A write header is followed by `_word_count(command.size)` more host-driven
+                # words (the value/block data) - stay in sampling mode, decode once they've all
+                # arrived instead.
                 self._pending_command = command
+                self._pending_write_words = []
             else:
-                value = self.read_register(command.function, command.address, command.size)
-                self._response_bytes = self._word(value).to_bytes(4, "big")
-                self._response_bit_index = 0
+                self._start_response(command)
         else:
             command = self._pending_command
+            self._pending_write_words.append(word)
+            if len(self._pending_write_words) < _word_count(command.size):
+                return  # a block write spans several words - still waiting on the rest.
             self._pending_command = None
-            self.write_register(command.function, command.address, command.size, word)
+            value = _words_to_value(self._pending_write_words, command.size)
+            self._pending_write_words = []
+            self.write_register(command.function, command.address, command.size, value)
+
+    def _start_response(self, command: GSPICommand) -> None:
+        value = self.read_register(command.function, command.address, command.size)
+        self._response_bytes = b"".join(
+            self._word(word).to_bytes(4, "big") for word in _value_to_words(value, command.size)
+        )
+        self._response_bit_index = 0
 
     def _on_clock_falling(self) -> "bool | None":
         """Returns the next bit to drive onto the data line, or `None` if we have nothing to

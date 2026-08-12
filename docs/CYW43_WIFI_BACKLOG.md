@@ -1,23 +1,29 @@
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**Unblocked (2026-08-12): [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md)
-has fully landed** (all 5 phases done and verified - `Simulator`'s engine-room loop now runs on
-whichever loop the caller itself owns, via `bind_loop()`, matching upstream rp2040js's
-single-threaded model for the common single-instance case; a dedicated background thread is now
-the exception, not the default). Step 0 below (board-loading API - `ExternalDevice`, `boards.py`,
-`schedule_threadsafe()`) was originally built and merged against the *old* background-thread
-engine room on a since-abandoned branch, then **rebuilt here from scratch directly on top of the
-new architecture** (`feat/board-loading-api`, branched from `refactor/main-thread-asyncio`) rather
-than ported as a literal patch - `Simulator.__init__`'s `rp2040=` constructor argument,
-`schedule_threadsafe()`, and `bind_loop()`'s interaction with it all needed re-verifying against
-the new single-loop model, not just copying over. Step 2+ (the actual CYW43439 bus/chip/NAT work)
-can now safely start on top of this, per "Implementation order" below.
+**Current step (2026-08-12): 3e — firmware/CLM blob download acceptance + F2 packet-available
+status plumbing.** Everything before it in "Implementation order" below is done: step 0
+(board-loading API), step 1 (`ExternalDevice` proven via `LEDMock`), step 2 (F0 bus-level `GSPIBus`
+decode - real firmware boots past the F0 handshake), and step 3's sub-steps 3a (generic
+word-aligned block transfers - `GSPIBus._on_clock_rising()`/`_start_response()` now handle any
+`size`, not just one 32-bit word, via `_word_count()`/`_words_to_value()`/`_value_to_words()` in
+`bus.py`), 3b (ALP/HT/KSO clock handshake), 3c (F1 windowed backplane addressing), and 3d (ARM
+core reset/enable registers) - all unit-tested in `tests/test_cyw43_bus.py`. 3a specifically
+unblocks everything from 3e onward, since firmware download and SDPCM/ioctl framing are the first
+genuinely multi-byte (not single-register) transfers on this bus. See "Implementation order"'s
+step 3 for the full sub-step breakdown and status detail.
 
-Not started yet — this is the pre-work: what we confirmed about the real hardware and about how
-Wokwi (closed-source, but built on the same open `rp2040js` this project ports) actually pulled it
-off, plus the plan we're building toward. Goal (per discussion 2026-08-11): real internet access
-from emulated firmware, SLIRP/NAT-style (see "Implementation order" below), not just a canned
-"connected" stub.
+[docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (all 5 phases, engine-room
+concurrency model) landed first and unblocked this whole effort - `Simulator`'s engine-room loop
+now runs on whichever loop the caller itself owns, via `bind_loop()`, matching upstream rp2040js's
+single-threaded model for the common single-instance case; a dedicated background thread is now
+the exception, not the default. Step 0 below (board-loading API - `ExternalDevice`, `boards.py`,
+`schedule_threadsafe()`) was originally built and merged against the *old* background-thread
+engine room on a since-abandoned branch, then rebuilt from scratch directly on top of the new
+architecture (`feat/board-loading-api`, branched from `refactor/main-thread-asyncio`) rather than
+ported as a literal patch.
+
+Goal (per discussion 2026-08-11): real internet access from emulated firmware, SLIRP/NAT-style (see
+"Implementation order" below), not just a canned "connected" stub.
 
 This is a **new feature**, not a porting gap: upstream `rp2040js` has no CYW43439/WiFi support at
 all (confirmed via `gh api search/code` against `wokwi/rp2040js` — zero hits for `cyw43`/`wifi`),
@@ -760,7 +766,13 @@ decision sections above that define what it actually means.
       `_on_clock_rising()`/`_on_clock_falling()` from exactly-one-32-bit-word to an arbitrary,
       word-aligned byte count (`make_cmd()`'s `size` field is 11 bits for exactly this reason).
       Nothing past this point is reachable without it - every SDPCM/ioctl/firmware-download
-      transfer is multi-byte.
+      transfer is multi-byte. **Done (2026-08-12)**, unit-tested (`bus.py` gained
+      `_word_count()`/`_words_to_value()`/`_value_to_words()`; multi-word backplane and F0 block
+      round-trips, plus a non-word-aligned 6-byte block, in `tests/test_cyw43_bus.py`). Existing
+      single-register accesses (size<=4) are unaffected - `_word_count()` floors to one word, the
+      same wire shape they always used, so this is a strict generalization, not a rewrite. Not yet
+      exercised against real firmware (that needs 3e's firmware-download acceptance to actually
+      trigger a block-sized transfer over the bus).
    2. **3b. ALP/HT clock handshake + KSO** on `BACKPLANE_FUNCTION`'s `SDIO_CHIP_CLOCK_CSR`
       (`0x1000e`) / `SDIO_SLEEP_CSR` (`0x1001f`) - a register model where writing a `*_REQ`/
       `KEEP_SDIO_ON` bit makes the corresponding `*_AVAIL`/`DEVICE_ON` bit immediately readable
