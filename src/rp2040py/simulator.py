@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
+from rp2040py._clock_batch_gate import clock_tick_batch_size
 from rp2040py.clock.simulation_clock import SimulationClock
 from rp2040py.rp2040 import RP2040
 from rp2040py.utils.asyncio_loop_thread import start_loop_thread
@@ -163,6 +164,20 @@ class Simulator:
         i: float = 0
         batch_start = time.monotonic()
         ticks_since_check = 0
+        # RP2040PY_CLOCK_TICK_BATCH (default 1 - see _clock_batch_gate.py's own module docstring
+        # for why this stays opt-in): >1 lets the busy branch below accumulate several
+        # instructions' worth of simulated nanoseconds into pending_nanos instead of calling the
+        # real clock.tick() after every single one, flushing (the real tick(), firing any due
+        # alarm exactly as it would have anyway) whenever nanos_budget would go non-positive or
+        # tick_batch instructions have accumulated - whichever comes first - so a scheduled alarm
+        # never fires later than it does today, only the (typically far more common, per a real
+        # measured boot - see the same module docstring) no-alarm-imminent case skips repeated
+        # full tick() calls. tick_batch==1 (the default) takes the exact same one-call-per-
+        # instruction path as always, just with the redundant branch below.
+        tick_batch = clock_tick_batch_size()
+        pending_nanos = 0.0
+        pending_count = 0
+        nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
         while i < 1000000 and not self.stopped:
             # Checked every _TIME_CHECK_INTERVAL iterations regardless of idle/busy - not just
             # during an uninterrupted idle run. A real device idling at the REPL isn't purely
@@ -186,6 +201,13 @@ class Simulator:
                     # yielding, so nothing about idle state or instruction execution is lost.
                     break
             if rp2040.core.waiting:
+                if pending_nanos:
+                    # Flush whatever the busy branch below had accumulated first - the idle jump
+                    # right after must be relative to the real, ticked-forward clock, not stale by
+                    # however much was still pending.
+                    clock.tick(pending_nanos)
+                    pending_nanos = 0.0
+                    pending_count = 0
                 # Jumping straight to the next alarm costs ~nothing in real time no matter how far
                 # away it is (no instructions execute), so it must not be weighted by the simulated
                 # nanoseconds it covers - that previously counted a single 1ms USB SOF-driven idle
@@ -197,10 +219,29 @@ class Simulator:
                 # actually produced the wildly variable wall-clock times noted in
                 # docs/BACKLOG.md's CDC investigation, not anything USB-specific.
                 clock.tick(clock.nanos_to_next_alarm)
+                if tick_batch > 1:
+                    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
             else:
                 cycles = rp2040.core.execute_instruction()
-                clock.tick(cycles * cycle_nanos)
+                delta_nanos = cycles * cycle_nanos
+                if tick_batch <= 1:
+                    clock.tick(delta_nanos)
+                else:
+                    pending_nanos += delta_nanos
+                    pending_count += 1
+                    nanos_budget -= delta_nanos
+                    if nanos_budget <= 0 or pending_count >= tick_batch:
+                        clock.tick(pending_nanos)
+                        pending_nanos = 0.0
+                        pending_count = 0
+                        nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
             i += 1
+        if pending_nanos:
+            # End of batch (stopped, iteration ceiling, or the real-time yield budget above) with
+            # something still un-flushed - must not leave simulated time silently behind by up to
+            # a whole batch's worth of nanoseconds, e.g. for a caller reading clock.nanos right
+            # after execute() yields.
+            clock.tick(pending_nanos)
 
     async def execute(self) -> None:
         self.stopped = False

@@ -1,6 +1,7 @@
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**Current step (2026-08-12): 3g — async events + scripted scan/join.** Everything before it in
+**Paused mid-3g (2026-08-12) for a simulator performance side quest - see below.** Next step once
+resumed: 3g — async events + scripted scan/join. Everything before it in
 "Implementation order" below is done: step 0 (board-loading API), step 1 (`ExternalDevice` proven
 via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware boots past the F0 handshake),
 and step 3's sub-steps 3a (generic word-aligned block transfers -
@@ -21,11 +22,25 @@ HT request, F1's register bank missing its true 2-byte-lower bound, and missing
 `CYW43_BACKPLANE_READ_PAD_LEN_BYTES` padding on backplane reads) that were silently aborting
 bring-up before firmware download ever started; firmware download now genuinely runs against real
 firmware (traced live), though impractically slowly - see step 3f's own "Real-firmware
-verification" entry below for the full writeup, including the deliberate decision to defer the
-performance fix and move on to 3g instead. 35 tests total in `tests/test_cyw43_bus.py`. Real
+verification" entry below for the full writeup. 35 tests total in `tests/test_cyw43_bus.py`. Real
 per-ioctl content and events (`WLC_SET_SSID`/join's scripted `WLC_E_*` sequence, scan results)
 still aren't built - that's 3g, next. See "Implementation
 order"'s step 3 for the full sub-step breakdown and status detail.
+
+**Performance side quest (2026-08-12), why 3g hasn't started yet.** Profiling the real-firmware
+boot above (the same run that verified 3e/3f) found the slowness isn't cyw43 code at all -
+`GSPIBus`'s own GPIO listeners were ≈0.4% of profiled time. The real cost is shared simulator
+infrastructure: `simulator.py`'s per-instruction dispatch loop, `peripherals/pio.py` PIO stepping
+(no Cython port existed at all, unlike the CPU core), and `clock/simulation_clock.py`'s `tick()`
+call volume. Two of the three are now done and measured - a genuine Cython port of PIO's
+`StateMachine` (found and fixed a real latent 32-bit-masking bug along the way) plus an opt-in
+batched `clock.tick()` (`RP2040PY_CLOCK_TICK_BATCH`, default off) - **~9.2x more PIO steps
+completed in the same wall-clock window**, combined. Full writeup, numbers, and the file-by-file
+structure are in `docs/BACKLOG.md`'s own "Follow-up: PIO Cython port + opt-in `clock.tick()`
+batching" section (under its "Cython port of the interpreter core" heading) - not duplicated here
+since it's a simulator-wide concern, not cyw43-specific. Firmware download itself hasn't been
+re-verified end-to-end against this faster baseline yet (the profiling runs used a bounded window,
+not a full boot to completion) - worth doing before or after resuming 3g, not required to resume.
 
 [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (all 5 phases, engine-room
 concurrency model) landed first and unblocked this whole effort - `Simulator`'s engine-room loop
