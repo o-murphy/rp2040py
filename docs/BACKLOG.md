@@ -1082,13 +1082,56 @@ native) at `RP2040PY_CLOCK_TICK_BATCH` unset, `1`, `64`, and `256` - full 563-te
 every value in both backends; full `pre-commit run --all-files` (mypy, ruff, both pytest runs)
 passes after both parts, including after the `in_pins` bugfix rebuild.
 
-**Confirmed, not just theorized, as the next real lever if this work continues:**
-`_execute_batch()`'s own per-instruction dispatch loop is now proportionally the dominant remaining
-cost (~46.8% of total profiled time, up from ~43.8% before either change here, since the other two
-legs got cheaper around it) - exactly what the original three-way profile predicted before any of
-this landed. Not attempted in this pass; a genuine further port would need to move the loop's own
-control flow into native code, not just `core.execute_instruction()` (already native), which is a
-larger, riskier change than either part above and was deliberately scoped out up front.
+### Not yet tried - real, scoped-out follow-ups, not vague ideas
+
+Each of these was identified during this pass and deliberately left for later, not forgotten:
+
+1. **`_execute_batch()`'s own per-instruction dispatch loop → native.** The single biggest
+   remaining lever, **confirmed, not just theorized**: it's now proportionally the dominant
+   remaining cost (~46.8% of total profiled time, up from ~43.8% before either part above, since
+   the other two legs got cheaper around it) - exactly what the original three-way profile
+   predicted before any of this landed. Even with a native CPU core, the `while` loop in
+   `simulator.py` that calls `core.execute_instruction()` one instruction at a time stays plain
+   Python - only the instruction *handler* was ever ported, not the loop driving it. A genuine
+   further port would need to move the loop's own control flow into native code (plus whatever it
+   touches per iteration - `rp2040.core.waiting`, the now-batched clock bookkeeping,
+   `_TIME_CHECK_INTERVAL`'s real-time budget check), which is a larger, more invasive change than
+   either part above (it's the piece everything else in `Simulator` hangs off of) and was
+   deliberately scoped out up front, not attempted here.
+2. **`rx_fifo`/`tx_fifo` inlined as raw C arrays inside the native `StateMachine`**, instead of the
+   plain `utils.fifo.FIFO` Python objects it still uses today. Each state machine owns exactly two
+   fixed-size-4 FIFOs; a small `unsigned int[4]` + start/count pair per FIFO would remove the last
+   Python-object-attribute-access hot spot inside `StateMachine` itself (`fifo.py`'s own
+   `empty`/`full`/`push`/`pull` showed up as a real, if modest, line item in the post-Part-1
+   profile - 0.536s self-time over 6.1M calls). Not done here specifically to keep Part 1's diff
+   small enough to review and correctness-verify in one pass (a second, independent
+   implementation of FIFO's exact semantics, "kept in sync by hand" the same way this file's
+   `WAIT_TYPE_*`/register-bit constants already are, is a second place the two implementations
+   could silently drift) - worth profiling again first to confirm it's still worth the added
+   surface, now that the bigger PIO-internal costs are gone.
+3. **The bitfield-derived property getters** (`sideset_count`, `in_base`, `push_threshold`, etc.)
+   are Cython `property`s over already-typed fields today, not bare `cdef` methods - faster than
+   the pure-Python version already, but a `property` still pays Python's `__get__` protocol
+   overhead per access that a plain `cdef` method call wouldn't. Left as properties deliberately
+   for this pass (same call syntax as the reference implementation, `self.sideset_count` not
+   `self.sideset_count()` - zero external-facing change) - converting them is a candidate only if a
+   future profile still shows them hot after the two bigger levers above are addressed.
+4. **`RP2040.gpio`/`.dma` still aren't cimportable from native code at all** - `StateMachine.rp2040`
+   stays `object`-typed because `native/_rp2040.pxd`'s typed surface only covers the bus
+   `read_uint32`/`write_uint32` family, not `gpio`/`dma` (they live in `RP2040`'s own `cdef dict
+   __dict__`). Every `self.rp2040.gpio[i].input_value`/`self.rp2040.dma.set_dreq(...)` call
+   (`jmp_condition`'s PIN case, `check_wait`'s PIN case, `_update_dma_rx`/`_update_dma_tx`, ...)
+   still goes through ordinary Python attribute lookup regardless of `StateMachine` itself being
+   native. Giving `GPIOPin`/`RPDMA` the same typed-`.pxd` treatment `RP2040` already has would be a
+   materially bigger, separate effort (new native modules, not an extension of this one) - not
+   attempted, not even scoped in detail yet.
+5. **Firmware download itself hasn't been re-verified end-to-end against this faster baseline** -
+   every profiling run in this section used a bounded 25s window (`asyncio.wait_for(...,
+   timeout=...)`, chosen so cProfile always gets to write its stats regardless of how far the boot
+   got), not a full boot to completion. "9.2x more PIO steps in the same window" is solid evidence
+   of a real speedup, but isn't the same claim as "a full firmware download now finishes in N
+   seconds" - that number hasn't been measured. See `docs/CYW43_WIFI_BACKLOG.md`'s own note on this
+   under its "Performance side quest" entry.
 
 ## littlefs persistence to the host `--littlefs` image file — resolved, via `--dump-fs`
 
