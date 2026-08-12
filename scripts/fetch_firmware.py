@@ -51,6 +51,57 @@ _KALUMA_BOARD_ASSET_SUFFIXES = {"pico": "pico", "pico_w": "pico-w"}
 
 _S3_XML_NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 
+# Where each firmware family's own filesystem (Kaluma also: "user program") flash region actually
+# lives - not fetched from any live source (there's no API for it; these are board hardware-config
+# constants, not release metadata), curated by hand from that firmware's own upstream board config
+# and re-asserted here every run so `firmware_specs.json`'s copy can't silently drift from its real
+# source. See docs/records/0035-board-aware-fs-flash-offset.md for the full derivation/root-cause
+# writeup this was added for.
+#
+# MicroPython (ports/rp2/boards/{RPI_PICO,RPI_PICO_W}/mpconfigboard.h, ports/rp2/rp2_flash.c):
+# MICROPY_HW_FLASH_STORAGE_BASE = PICO_FLASH_SIZE_BYTES(0x200000) - MICROPY_HW_FLASH_STORAGE_BYTES
+# - RPI_PICO: 1408*1024 -> 0x200000-0x160000 = 0xa0000, 352 blocks (0x160000/4096).
+# - RPI_PICO_W: 848*1024 (smaller - leaves more flash for the CYW43 driver/lwIP stack) ->
+#   0x200000-0xd4000 = 0x12c000, 212 blocks (0xd4000/4096).
+# Not yet verified stable across every tracked MicroPython version tag (checked against v1.28.0
+# only) - see 0035's "Open questions".
+_MICROPYTHON_FLASH_LAYOUT = {
+    "pico": {"fs_start": "0xa0000", "fs_blockcount": 352},
+    "pico_w": {"fs_start": "0x12c000", "fs_blockcount": 212},
+}
+
+# Kaluma (kaluma-project/kaluma, targets/rp2/boards/{pico,pico-w}/board.h + board.js): identical
+# between pico and pico-w (KALUMA_FLASH_SECTOR_COUNT=260, KALUMA_PROG_SECTOR_BASE=4,
+# KALUMA_PROG_SECTOR_COUNT=128, board.js's `new Flash(132, 128)`) - Kaluma reserves the same fixed
+# code budget regardless of board, unlike MicroPython. Still stored per-board (both keys pointing
+# at the same values) so every firmware family's flash layout lives in this one uniform shape.
+_KALUMA_FLASH_LAYOUT = {
+    "pico": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128},
+    "pico_w": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128},
+}
+
+# CircuitPython (adafruit/circuitpython, ports/raspberrypi/{mpconfigport.h,link-rp2040.ld,
+# boards/raspberry_pi_pico{,_w}/{mpconfigboard.mk,link.ld}}): CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR
+# = CIRCUITPY_FIRMWARE_SIZE + CIRCUITPY_INTERNAL_NVM_SIZE(4096) - i.e. the same "firmware size
+# varies per board, filesystem starts right after" shape as MicroPython, just computed from the
+# *start* of flash instead of the end.
+# - raspberry_pi_pico: default firmware_size = 1020K (link-rp2040.ld, no board override) ->
+#   0x10000000 + 1020K + 4096 = 0x10100000, i.e. offset 0x100000 (matches this project's
+#   pre-existing, apparently-already-correct-for-plain-pico constant).
+# - raspberry_pi_pico_w: overrides firmware_size = 1532K (boards/raspberry_pi_pico_w/link.ld,
+#   "Must be accompanied by a linker script change" per mpconfigboard.mk's own comment - the CYW43
+#   driver/lwIP stack needs the extra room, same underlying reason as MicroPython's) ->
+#   0x10000000 + 1532K + 4096 = 0x10180000, offset 0x180000.
+# fs_blockcount left at the existing 512 for both boards (unlike MicroPython's, which genuinely
+# shrinks on pico_w) - rp2040py's own emulated flash buffer is 16MB (_rp2040.py), far bigger than
+# either board's real 2MB chip, so a generous fixed region past the real firmware's end doesn't
+# collide with anything either board actually uses; only the *start* address matters for
+# correctness (matching where real firmware's own compiled code actually ends).
+_CIRCUITPYTHON_FLASH_LAYOUT = {
+    "pico": {"fs_start": "0x100000", "fs_blockcount": 512},
+    "pico_w": {"fs_start": "0x180000", "fs_blockcount": 512},
+}
+
 
 def _http_get(url: str, *, accept_json: bool = False) -> bytes:
     headers = {"User-Agent": "rp2040py-firmware-fetch"}
@@ -143,6 +194,10 @@ def main() -> None:
     _merge_boards(specs["micropython"].setdefault("boards", {}), _fetch_micropython(), "micropython")
     _merge_boards(specs["circuitpython"].setdefault("boards", {}), _fetch_circuitpython(), "circuitpython")
     _merge_boards(specs["kaluma"].setdefault("boards", {}), _fetch_kaluma(), "kaluma")
+
+    specs["micropython"]["flash_layout"] = _MICROPYTHON_FLASH_LAYOUT
+    specs["kaluma"]["flash_layout"] = _KALUMA_FLASH_LAYOUT
+    specs["circuitpython"]["flash_layout"] = _CIRCUITPYTHON_FLASH_LAYOUT
 
     bootrom_versions = _fetch_bootrom()
     bootrom_map = specs["bootrom"].setdefault("known_versions", {})
