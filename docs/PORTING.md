@@ -150,21 +150,27 @@ optional the way `fs` is. `demo/emulator_run.py`,
 demo/*.py` commands keep working unchanged for anyone working from a checkout rather than a
 pip/uv install.
 
-`cli/firmware_retrieve.py` (also no rp2040js equivalent; originally split across `cli/mp_retrieve.py`
-and `cli/kaluma_retrieve.py`, merged once the duplication between them - and a real `v`-prefix bug
-in the CircuitPython path only one of them had - became annoying enough to fix properly) resolves
-`micropython --image`/`--circuitpython`, `kaluma --image`, and `--bootrom` (see
-[README](../README.md#bootrom-revisions)) on all four subcommands: a known version tag, or an
-existing local path, downloading the matching file into `~/.cache/rp2040py` on first use and
-reusing it thereafter (falls back to the current directory, today's original behavior, if the
-cache directory isn't writable for any reason). Each firmware is a declarative `FirmwareSpec`
-(filename/URL templates, default tag,
-optional known-version-tag table) loaded from `cli/firmware_specs.json` - kept as plain JSON
-data rather than Python literals so bumping a default tag or adding a new MicroPython release is a
-data edit, not a code change - plus one generic `retrieve(spec, image)` instead of three
-near-duplicate implementations. This replaces the previous "download it yourself and drop it next
-to the CLI" instructions in the README; `ci-micropython.yml`'s separate `curl` download step was
-removed accordingly, since `--image <tag>` now does the same job on demand.
+`utils/firmware_retrieve.py` (also no rp2040js equivalent; originally split across
+`cli/mp_retrieve.py` and `cli/kaluma_retrieve.py`, merged once the duplication between them - and a
+real `v`-prefix bug in the CircuitPython path only one of them had - became annoying enough to fix
+properly; moved from `cli/` to `utils/` on 2026-08-12 once `--board`
+(docs/CYW43_WIFI_BACKLOG.md) needed it too - it's a generic tag/URL/path resolver with no argparse
+involvement, not CLI-specific) resolves `micropython --image`/`--circuitpython`, `kaluma --image`,
+and `--bootrom` (see [README](../README.md#bootrom-revisions)) on all four subcommands: a known
+version tag, a direct `http(s)://` URL, or an existing local path, downloading the matching file
+into `~/.cache/rp2040py` on first use and reusing it thereafter (falls back to the current
+directory, today's original behavior, if the cache directory isn't writable for any reason). Each
+firmware is a declarative `FirmwareSpec` (default tag, plus either a `boards: dict[board,
+dict[tag, url]]` table - MicroPython/CircuitPython/Kaluma, which genuinely ship different builds
+per board - or a flat `known_versions: dict[tag, url]` for board-agnostic firmware, i.e. just
+BOOTROM) loaded from `utils/firmware_specs.json` - kept as plain JSON data rather than Python
+literals, and fetched from each firmware's own real release source by `scripts/fetch_firmware.py`
+at development time rather than generated from a filename/URL template at request time, so bumping
+a default tag or adding a new release is a data refresh (re-run the script, commit the diff), not
+a code change - plus one generic `retrieve(spec, image, board)` instead of three near-duplicate
+implementations. This replaces the previous "download it yourself and drop it next to the CLI"
+instructions in the README; `ci-micropython.yml`'s separate `curl` download step was removed
+accordingly, since `--image <tag>` now does the same job on demand.
 
 `bootrom.py`'s `BOOTROM_B1` (a ~4,100-element constant list) is imported lazily inside the functions
 that need it (`_cmd_run`, `BaseDevice.__init__`, etc.) rather than at module import time, so

@@ -11,7 +11,7 @@ Subcommands:
   ``-m <module>``, or a script ``<filename>`` run non-interactively via the raw-REPL protocol
   instead of dropping into the REPL, mirroring ``micropython``'s own CLI. ``--image`` accepts a
   known version tag (e.g. ``1.21.0``), a local file path, or is omitted entirely - either way,
-  missing firmware is downloaded automatically (see ``rp2040py.cli.firmware_retrieve``).
+  missing firmware is downloaded automatically (see ``rp2040py.utils.firmware_retrieve``).
   ``--tcp-port`` serves the console over a plain TCP socket instead of this process's own stdio -
   for tools expecting a serial port that can't get one (e.g. ``mpremote``, via pySerial's built-in
   ``socket://host:port`` URL support - see ``rp2040py.cli.socket_repl``); mutually exclusive with
@@ -19,7 +19,7 @@ Subcommands:
 - ``kaluma``: Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console, interactive REPL
   only - Kaluma has no raw-REPL-equivalent protocol, so unlike ``micropython`` there's no
   ``-c``/``-m``/``<filename>`` exec mode. ``--image`` accepts a version tag, a local file path, or
-  is omitted entirely to download the default (see ``rp2040py.cli.firmware_retrieve``). An
+  is omitted entirely to download the default (see ``rp2040py.utils.firmware_retrieve``). An
   optional ``<filename>`` positional stages a local ``.js`` file into Kaluma's "user program"
   flash region before boot, matching ``kaluma flash <file>`` on real hardware - Kaluma
   auto-executes it on every boot, unlike its ``--littlefs`` filesystem (plain storage, no
@@ -59,7 +59,6 @@ from pathlib import Path
 from typing import Any
 
 from rp2040py.boards import BOARDS, build_rp2040
-from rp2040py.cli.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.pty_repl import PtyInteractiveRepl
@@ -88,6 +87,7 @@ from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import ShutdownRequest, Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
+from rp2040py.utils.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
@@ -444,7 +444,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
             _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
             return 1
 
-    image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image)
+    image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image, board=args.board)
     if image_name is None:
         _logger.error("Could not find micropython image: %s", args.image)
         return 1
@@ -546,7 +546,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
 async def _kaluma_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
-    image_name = retrieve(KALUMA, args.image)
+    image_name = retrieve(KALUMA, args.image, board=args.board)
     if image_name is None:
         _logger.error("Could not find kaluma image: %s", args.image)
         return 1
