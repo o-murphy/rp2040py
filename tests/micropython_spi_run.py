@@ -4,7 +4,8 @@ against the expected messages passed as positional command-line arguments.
 Usage: python tests/micropython_spi_run.py [--image <tag|path>] "hello world" "h" "0123456789abcdef..."
 
 ``--image`` defaults to ``micropython.uf2`` but also accepts a known version tag (e.g. ``1.21.0``);
-either way it's downloaded automatically via ``rp2040py.cli.firmware_retrieve`` if not found locally.
+either way it's downloaded automatically via ``rp2040py.utils.firmware_retrieve`` if not found
+locally.
 """
 
 import argparse
@@ -12,10 +13,10 @@ import os
 import time
 from pathlib import Path
 
-from rp2040py.cli.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
 from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.simulator import Simulator
+from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 
