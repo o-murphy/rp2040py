@@ -20,6 +20,7 @@ from rp2040py.external.cyw43.bus import (
     CONTROL_HEADER,
     CORE_SOCRAM,
     CORE_WLAN_ARM,
+    CYW43_BACKPLANE_READ_PAD_LEN_BYTES,
     DATA_HEADER,
     F2_PACKET_AVAILABLE,
     IOCTL_HEADER_LEN,
@@ -34,6 +35,7 @@ from rp2040py.external.cyw43.bus import (
     SDIO_BACKPLANE_ADDRESS_LOW,
     SDIO_BACKPLANE_ADDRESS_MID,
     SDIO_CHIP_CLOCK_CSR,
+    SDIO_FUNCTION2_WATERMARK,
     SDIO_SLEEP_CSR,
     SDPCM_HEADER_LEN,
     SICF_CLOCK_EN,
@@ -135,9 +137,16 @@ class _FakeGSPIMaster:
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Reads `size` bytes, `size` possibly spanning several 32-bit wire words (a block
         transfer, docs/CYW43_WIFI_BACKLOG.md step 3a) - one word covers 4 address-ascending bytes,
-        same convention `bus.py`'s `_value_to_words()` uses, so this stays a plain inverse of it."""
+        same convention `bus.py`'s `_value_to_words()` uses, so this stays a plain inverse of it.
+        `BACKPLANE_FUNCTION` reads clock `CYW43_BACKPLANE_READ_PAD_LEN_BYTES` of leading dummy
+        words first (real `cyw43_bus_pio_spi.c`'s own `_cyw43_read_reg()` behavior, step 3g-era
+        fix) - discarded here exactly like the real driver discards them, the real answer is
+        whatever comes after."""
         self.select()
         self.send_word(self._word(_make_cmd(write=False, inc=True, fn=function, addr=addr, size=size)))
+        if function == BACKPLANE_FUNCTION:
+            for _ in range(CYW43_BACKPLANE_READ_PAD_LEN_BYTES // 4):
+                self.recv_word()
         word_count = max(1, (size + 3) // 4)
         raw = b"".join(self._word(self.recv_word()).to_bytes(4, "little") for _ in range(word_count))
         self.deselect()
@@ -590,3 +599,122 @@ def test_ioctl_request_raises_the_shared_irq_pin_while_idle():
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
 
     assert master.data_pin.input_value
+
+
+# -- Fixes found booting real MicroPython Pico W firmware against this bus (2026-08-12) --------
+# cyw43_ll_bus_init() goes well beyond the F0/ALP/backplane-window/core-reset surface steps
+# 2/3b/3c/3d modeled - these three bugs each silently aborted real firmware's own bring-up before
+# it ever reached firmware download, with no visible symptom besides a plain OSError: EPERM many
+# calls later (cyw43_ll_bus_init()'s own CYW43_WARN() diagnostics are compiled out of release
+# firmware). Found by tracing every GSPIBus register access against a real boot, not by reading
+# source alone - see docs/CYW43_WIFI_BACKLOG.md's step 3 progress log for the full narrative.
+
+
+def test_backplane_read_clocks_pad_words_before_the_real_answer():
+    """cyw43_bus_pio_spi.c's _cyw43_read_reg(): every BACKPLANE_FUNCTION read (not just windowed
+    SB_ACCESS ones) clocks CYW43_BACKPLANE_READ_PAD_LEN_BYTES/4 dummy words before the real
+    answer - the driver reads the *last* word as the value, discarding the rest. Drives the wire
+    directly (bypassing _FakeGSPIMaster.read_register()'s own padding-skip, which assumes this
+    already works) to prove the padding is actually there, not just assumed by the test helper."""
+    _rp2040, master = _wire_up()
+    master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
+
+    master.select()
+    master.send_word(
+        master._word(_make_cmd(write=False, inc=True, fn=BACKPLANE_FUNCTION, addr=SDIO_CHIP_CLOCK_CSR, size=1))
+    )
+    pad_words = [master._word(master.recv_word()) for _ in range(CYW43_BACKPLANE_READ_PAD_LEN_BYTES // 4)]
+    answer_word = master._word(master.recv_word())
+    master.deselect()
+
+    assert pad_words == [0] * (CYW43_BACKPLANE_READ_PAD_LEN_BYTES // 4)
+    assert answer_word & SBSDIO_ALP_AVAIL
+
+
+def test_bus_and_wlan_function_reads_get_no_padding():
+    """Only BACKPLANE_FUNCTION reads get the extra padding - BUS_FUNCTION/WLAN_FUNCTION reads
+    (e.g. SPI_READ_TEST_REGISTER itself) must still be answered in exactly one word, or the very
+    first thing real firmware does (the test-register poll) would break."""
+    _rp2040, master = _wire_up()
+
+    master.select()
+    master.send_word(
+        master._word(_make_cmd(write=False, inc=True, fn=BUS_FUNCTION, addr=SPI_READ_TEST_REGISTER, size=4))
+    )
+    answer_word = master._word(master.recv_word())
+    master.deselect()
+
+    assert answer_word == TEST_PATTERN
+
+
+def test_alp_available_survives_a_later_clear_to_zero_write():
+    """cyw43_ll_bus_init() clears SDIO_CHIP_CLOCK_CSR to 0 immediately after achieving ALP (real
+    source's own `alp_set:` label) - a non-sticky model would silently un-set SBSDIO_ALP_AVAIL on
+    that very write, even though real hardware's availability reflects actual clock-lock state,
+    not the last-written request byte."""
+    _rp2040, master = _wire_up()
+    master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, 0)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1)
+    assert value & SBSDIO_ALP_AVAIL
+
+
+def test_ht_available_becomes_readable_once_the_wlan_arm_core_is_up_with_no_ht_request_sent():
+    """cyw43_ll_bus_init() (cyw43_ll.c:~1655-1667) calls reset_device_core(CORE_WLAN_ARM, false)
+    then polls SDIO_CHIP_CLOCK_CSR for SBSDIO_HT_AVAIL - with no SDIO_CHIP_CLOCK_CSR HT-request
+    write anywhere in between (unlike the earlier ALP handshake, which does request first). Real
+    hardware brings HT up as a side effect of the ARM core actually running its own firmware;
+    since this project doesn't emulate a second CPU core, the core reaching device_core_is_up()'s
+    own "up" condition is the trigger instead - reproduces reset_device_core()'s exact write
+    sequence, not just the end state, since _maybe_mark_ht_available() checks after every write."""
+    _rp2040, master = _wire_up()
+    window = CORE_WLAN_ARM & ~BACKPLANE_ADDR_MASK
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+    ioctrl_addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((CORE_WLAN_ARM + AI_IOCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+    resetctrl_addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((CORE_WLAN_ARM + AI_RESETCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+
+    # disable_device_core() (real CORE_WLAN_ARM default: AIRC_RESET already set - no write needed)
+    # reset_device_core()'s own sequence:
+    master.write_register(BACKPLANE_FUNCTION, ioctrl_addr, 1, SICF_FGC | SICF_CLOCK_EN)
+    assert not master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1) & SBSDIO_HT_AVAIL
+    master.write_register(BACKPLANE_FUNCTION, resetctrl_addr, 1, 0)
+    assert not master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1) & SBSDIO_HT_AVAIL
+    master.write_register(BACKPLANE_FUNCTION, ioctrl_addr, 1, SICF_CLOCK_EN)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1)
+    assert value & SBSDIO_HT_AVAIL
+
+
+def test_socram_core_reaching_up_state_does_not_trigger_ht_available():
+    """Scoped to CORE_WLAN_ARM specifically - only a running core would plausibly request its own
+    clock; CORE_SOCRAM is just memory, bringing it "up" must not be mistaken for the ARM core."""
+    _rp2040, master = _wire_up()
+    window = CORE_SOCRAM & ~BACKPLANE_ADDR_MASK
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+    ioctrl_addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((CORE_SOCRAM + AI_IOCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+    resetctrl_addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((CORE_SOCRAM + AI_RESETCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+
+    master.write_register(BACKPLANE_FUNCTION, ioctrl_addr, 1, SICF_FGC | SICF_CLOCK_EN)
+    master.write_register(BACKPLANE_FUNCTION, resetctrl_addr, 1, 0)
+    master.write_register(BACKPLANE_FUNCTION, ioctrl_addr, 1, SICF_CLOCK_EN)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1)
+    assert not value & SBSDIO_HT_AVAIL
+
+
+def test_sdio_function2_watermark_register_round_trips():
+    """A Bluetooth-gated check in cyw43_ll_bus_init() writes then reads back this exact register,
+    failing the whole bring-up on a mismatch - it sits 2 bytes below SDIO_BACKPLANE_ADDRESS_LOW,
+    the F1 register bank's previous (too-narrow) lower bound, so real firmware silently aborted
+    right after the ALP handshake, before ever reaching firmware download."""
+    _rp2040, master = _wire_up()
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_FUNCTION2_WATERMARK, 1, 0x10)
+
+    assert master.read_register(BACKPLANE_FUNCTION, SDIO_FUNCTION2_WATERMARK, 1) == 0x10

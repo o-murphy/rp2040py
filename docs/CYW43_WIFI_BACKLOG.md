@@ -14,9 +14,17 @@ and 3f (SDPCM framing + generic ioctl request/response: `GSPIBus._write_wlan()` 
 ioctl requests and answers with a generic zero-length success response via
 `_build_ioctl_success_response()`, echoing the request id and tracking `bus_data_credit` so the
 driver's own flow-control never stalls - corrected the SDPCM header size from an originally
-estimated 14 bytes to the real 12 along the way) - all unit-tested in `tests/test_cyw43_bus.py` (29
-tests). Real per-ioctl content and events (`WLC_SET_SSID`/join's scripted `WLC_E_*` sequence, scan
-results) still aren't built - that's 3g, next. See "Implementation
+estimated 14 bytes to the real 12 along the way). **Verified against a real, unmodified
+MicroPython Pico W boot (2026-08-12, post-3f)** - not just unit tests: found and fixed three real
+bugs (sticky ALP/HT clock availability including a WLAN-ARM-core-triggered case with no explicit
+HT request, F1's register bank missing its true 2-byte-lower bound, and missing
+`CYW43_BACKPLANE_READ_PAD_LEN_BYTES` padding on backplane reads) that were silently aborting
+bring-up before firmware download ever started; firmware download now genuinely runs against real
+firmware (traced live), though impractically slowly - see step 3f's own "Real-firmware
+verification" entry below for the full writeup, including the deliberate decision to defer the
+performance fix and move on to 3g instead. 35 tests total in `tests/test_cyw43_bus.py`. Real
+per-ioctl content and events (`WLC_SET_SSID`/join's scripted `WLC_E_*` sequence, scan results)
+still aren't built - that's 3g, next. See "Implementation
 order"'s step 3 for the full sub-step breakdown and status detail.
 
 [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](MAIN_THREAD_ASYNCIO_BACKLOG.md) (all 5 phases, engine-room
@@ -886,9 +894,80 @@ decision sections above that define what it actually means.
         already satisfies the bulk of the real `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/
         `cyw43_ll_wifi_join()` send during bring-up, exactly as originally planned. Real per-ioctl
         content (`WLC_SET_SSID`/join's own scripted event sequence, `escan` results) is step 3g.
-      - Not yet confirmed against real firmware booting through this far - 3f's own tests drive
-        `GSPIBus` directly via the same fake-master wire-bang pattern every other test here uses,
-        not an actual MicroPython boot.
+
+   **Real-firmware verification (2026-08-12), post-3f - three real bugs found and fixed, not just
+   unit-tested in isolation.** `tests/micropython/main-cyw43.py` (a real MicroPython network-module
+   doc snippet, run via `rp2040py micropython --board pico_w tests/micropython/main-cyw43.py`
+   against an actual downloaded `v1.28.0` UF2) had never gotten past `nic.active(True)` silently
+   failing (`itf_state` staying 0, later surfacing as a plain `OSError: EPERM` on the next call
+   that checks it - `cyw43_ll_bus_init()`'s own `CYW43_WARN()` diagnostics are compiled out of
+   release firmware, so nothing printed). Found by tracing every `GSPIBus` register access against
+   a real boot (temporary instrumentation, removed once each bug was found) rather than guessing -
+   each fix confirmed by watching the trace move past its failure point, not just by re-reading
+   source:
+   - **`SDIO_CHIP_CLOCK_CSR`'s `SBSDIO_ALP_AVAIL`/`SBSDIO_HT_AVAIL` bits needed to be genuinely
+     sticky, on *both* read and write, not just OR'd into one write's value.** `cyw43_ll_bus_init()`
+     clears the register to 0 right after achieving ALP (its own `alp_set:` label) - a non-sticky
+     model silently un-set `SBSDIO_ALP_AVAIL` on that very write. Separately, and more
+     significantly: **`SBSDIO_HT_AVAIL` is polled later (`cyw43_ll.c:~1655-1667`, right after
+     `reset_device_core(CORE_WLAN_ARM, ...)`) with no `SBSDIO_HT_AVAIL_REQ` write anywhere in
+     between** - real hardware brings HT up as a side effect of the ARM core actually running its
+     own firmware, which this project deliberately doesn't emulate. Fix: `GSPIBus._alp_available`/
+     `_ht_available` are now sticky booleans, re-applied by both `_read_f1()` and `_write_f1()`
+     whenever `SDIO_CHIP_CLOCK_CSR` is touched (an earlier version of this fix only patched the
+     write path and still failed, since nothing writes this register again after the ARM core
+     comes up - the driver only ever reads it from that point on); a new
+     `_maybe_mark_ht_available()`, called after every `BACKPLANE_FUNCTION` write, sets
+     `_ht_available` the instant `CORE_WLAN_ARM`'s own registers reach `device_core_is_up()`'s
+     exact "up" condition - scoped to `CORE_WLAN_ARM` specifically, not `CORE_SOCRAM` (only a
+     running core would plausibly request its own clock).
+   - **F1's register-bank lower bound was 2 bytes too high.** `SDIO_FUNCTION2_WATERMARK = 0x10008`
+     sits below `SDIO_BACKPLANE_ADDRESS_LOW = 0x1000A` (the old `_F1_REGISTER_BASE`), so a
+     Bluetooth-gated write-then-read-back check in `cyw43_ll_bus_init()` silently read back `0`
+     instead of what it just wrote, failed its own equality check, and aborted bring-up immediately
+     after the ALP handshake - before firmware download ever started. Fix: `_F1_REGISTER_BASE` is
+     now `SDIO_FUNCTION2_WATERMARK` itself (the real lowest F1 register address used anywhere in
+     `cyw43_ll.c`), growing `_f1`'s bounds by 2 bytes to include it.
+   - **`BACKPLANE_FUNCTION` reads were missing `CYW43_BACKPLANE_READ_PAD_LEN_BYTES` (16 bytes = 4
+     words) of leading dummy padding.** Confirmed from `cyw43_bus_pio_spi.c`'s `_cyw43_read_reg()`:
+     real hardware needs extra turnaround time to actually fetch backplane-sourced data, so every
+     F1 read (not just windowed `SB_ACCESS` ones - gated purely on `fn == BACKPLANE_FUNCTION`)
+     clocks 4 dummy words before the real answer, and the driver reads the *last* word of the
+     total response as the value, discarding everything before it. `GSPIBus` was driving the real
+     value immediately after the header instead - the driver discarded it as padding and read
+     stale/undriven bits as the "answer," corrupting that transaction and cascading into
+     garbage-looking subsequent ones (this was the single most confusing symptom: two phantom
+     `size=0` reads appearing with no `CS` deselect/reselect between them and the prior real read,
+     which turned out to be the driver's own PIO clocking through what it correctly expected to be
+     padding, while `GSPIBus` had already exhausted its one-word response and started
+     misinterpreting the continued clock edges as a new command header). Fix: `_start_response()`
+     now prepends `CYW43_BACKPLANE_READ_PAD_LEN_BYTES / 4` zero words before the real value,
+     `BACKPLANE_FUNCTION` reads only - `BUS_FUNCTION`/`WLAN_FUNCTION` reads are unaffected (and a
+     dedicated test confirms `SPI_READ_TEST_REGISTER` - the very first thing real firmware does -
+     still gets exactly one word, unpadded).
+
+   All three fixed and regression-tested in `tests/test_cyw43_bus.py` (35 tests total - 6 new: the
+   three fixes above, plus a `BUS_FUNCTION`/`WLAN_FUNCTION`-gets-no-padding check, an
+   ALP-survives-a-later-clear-to-zero check, and a `CORE_SOCRAM`-doesn't-trigger-HT check). Real
+   effect, confirmed live: firmware download (step 3e/3a's own block-write path) now actually
+   *runs* against real firmware for the first time - traced address-incrementing 64-byte
+   `BACKPLANE_FUNCTION` writes of real compiled ARM firmware bytes, not just unit-tested in
+   isolation.
+
+   **Performance is a real, now-confirmed problem, not just the theoretical concern step 3e
+   flagged - explicitly not fixed here, by design decision (2026-08-12).** Real firmware is
+   ~229KB downloaded in `CYW43_BUS_MAX_BLOCK_SIZE` (64-byte) chunks - thousands of transactions,
+   each involving hundreds of individual Python `GPIOPin.add_listener()` bit-level callback
+   invocations. A live run against `tests/micropython/main-cyw43.py` was still mid-firmware-download
+   after 8 minutes of wall-clock time (steadily progressing, not stuck - confirmed via address
+   tracing) before being killed. Separately: `timeout <n>` did **not** reliably kill the process in
+   this state - `uv run`'s child Python process kept running well past the timeout, burning 100%
+   CPU, until explicitly `kill -TERM`'d by PID; a genuine operational hazard worth remembering when
+   testing this manually, independent of the emulation-speed problem itself. **Deliberately
+   deferred, not solved**: continuing with step 3g (the plan's own next step) rather than building
+   the batched/short-circuited large-block-write path step 3e already flagged as the likely fix -
+   correctness against real firmware is now demonstrated as far as SDPCM/ioctl bring-up; making
+   that bring-up fast enough for interactive/CI use is real, separate, future work.
    7. **3g. Async events + scripted scan/join.** `cyw43_async_event_t`'s exact field layout
       (byte offsets matter - real firmware struct padding, not a natural dataclass shape),
       delivered as a fake-Ethernet-framed (`0x886c` + Broadcom OUI) SDPCM async packet. A fixed
