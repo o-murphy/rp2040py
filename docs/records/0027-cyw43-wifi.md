@@ -587,14 +587,35 @@ own `ci-micropython.yml` pico-w job timeout was bumped 10m → 15m as a stopgap 
 commit; **this alone does not fix the underlying issue** - if the process genuinely never
 terminates (vs. being merely slow), no timeout bump makes that job reliably pass.
 
-**Separately found while investigating, not yet root-caused either, and not the same failure
-mode:** `rp2040py micropython --image <v1.28.0> tests/micropython/main-spi.py` (raw-REPL exec mode,
-plain `RPI_PICO`, no CYW43/pico_w involvement at all) hangs indefinitely - `device.aexec(...,
-timeout=None)` never returns. Debug-level logging showed active `[CortexM0Core] SEV`/`[USB] Start
-USB transfer` traffic clustered inside a sub-100ms window of *simulated* time, repeating for the
-entire real-time duration observed - looks like a live spin/protocol stall (host and device
-retrying without making simulated-time progress) rather than a genuine wait-forever-for-input
-condition, but not confirmed. Does **not** reproduce the wild-execution/invalid-address signature
-above (a bounded trace of the same image+script showed only the same 2-3 benign hits plain `pico`
-boots normally show) - a different bug, or a different symptom of a shared underlying cause; not
-yet determined which. Not yet bisected to a specific commit/branch.
+**Separately found while investigating, not yet root-caused, and not the same failure mode:**
+`rp2040py micropython --image <v1.28.0> tests/micropython/main-spi.py` (raw-REPL exec mode, plain
+`RPI_PICO`, no CYW43/pico_w involvement at all) hangs, still running at 100% CPU past 60 real
+seconds (not confirmed whether it ever terminates). Does **not** reproduce the wild-execution/
+invalid-address signature above (a bounded trace of the same image+script showed only the same 2-3
+benign hits plain `pico` boots normally show) - a genuinely different bug.
+
+Narrowed by elimination, correcting an earlier theory in this same investigation:
+
+- **Not a general raw-REPL exec-mode issue.** A trivial `print("hi")` script (no SPI, no littlefs)
+  via the identical `rp2040py micropython --image <v1.28.0> <file>` invocation completes in 0.4s,
+  clean. The hang needs `main-spi.py`'s own content specifically.
+- **Not (at least not simply) missing an SPI completion listener.** `peripherals/spi.py`'s
+  `RPSPI.on_transmit` defaults to `lambda value: self.complete_transmit(0)` - i.e. every SPI byte
+  self-completes synchronously unless something overrides it - so the initial theory ("nothing
+  calls `complete_transmit()` without a listener like `tests/micropython_spi_run.py`'s") does not
+  hold as stated; confirmed by reading the source, not just running it. The real mechanism is still
+  unidentified - possibly DMA-channel-completion (a separate path from the plain
+  `on_transmit`/`complete_transmit()` byte callback) behaves differently, not yet checked.
+- **100% CPU, not idle** - real instructions are executing throughout (unlike a genuine
+  wait-forever-for-an-event condition, which would show near-zero CPU), consistent with either a
+  true infinite busy-loop in firmware polling a status flag that never sets, or a very slow but
+  eventually-converging one (not distinguished - no run has been let go longer than ~60s).
+- **Reproduces on `origin/main` and `refactor/main-thread-asyncio` too** (not yet checked on
+  `feat/board-loading-api`) - i.e. not a regression from the main-thread-asyncio migration or any
+  of this branch's own CYW43/`_execute_batch()` work, contrary to an initial suspicion that this
+  might be the same class of cross-thread `tx_fifo` race 0018 already fixed once. Also confirmed
+  CI never actually exercises this exact code path for `main-spi.py` at all - `ci-micropython.yml`
+  embeds it as `main.py` via `mklittlefs` and drives it through the dedicated
+  `tests/micropython_spi_run.py` (which *does* wire a real `on_transmit`/`complete_transmit()`
+  listener, on a delay, matching real SPI clock timing) rather than raw-REPL exec - so this may be
+  a previously never-exercised combination, not a new regression in the ordinary sense.
