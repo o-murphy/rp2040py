@@ -113,6 +113,7 @@ __all__ = (
     "CONTROL_HEADER",
     "CORE_SOCRAM",
     "CORE_WLAN_ARM",
+    "CYW43_BACKPLANE_READ_PAD_LEN_BYTES",
     "DATA_HEADER",
     "F2_PACKET_AVAILABLE",
     "IOCTL_HEADER_LEN",
@@ -127,6 +128,7 @@ __all__ = (
     "SDIO_BACKPLANE_ADDRESS_LOW",
     "SDIO_BACKPLANE_ADDRESS_MID",
     "SDIO_CHIP_CLOCK_CSR",
+    "SDIO_FUNCTION2_WATERMARK",
     "SDIO_SLEEP_CSR",
     "SDPCM_HEADER_LEN",
     "SICF_CLOCK_EN",
@@ -194,6 +196,16 @@ _F0_SPACE_SIZE = 0x20  # covers every address above; out-of-range accesses are s
 # cyw43_ll_bus_init()) before trusting the bus is up at all.
 TEST_PATTERN = 0xFEEDBEAD
 
+# Real hardware needs extra turnaround time to actually fetch backplane-sourced data, so every
+# BACKPLANE_FUNCTION *read* (both F1's own small register bank and windowed SB_ACCESS backplane
+# memory - gated purely on `fn == BACKPLANE_FUNCTION`, confirmed from `cyw43_bus_pio_spi.c`'s
+# `_cyw43_read_reg()`) clocks this many dummy padding bytes *before* the real answer; the driver
+# reads the *last* word of the total response as the actual value, discarding everything before
+# it. BUS_FUNCTION/WLAN_FUNCTION reads get none of this. We don't model the real delay, just the
+# extra word count, so the driver's own fixed-offset "answer is the last word" indexing lines up -
+# see `_start_response()`.
+CYW43_BACKPLANE_READ_PAD_LEN_BYTES = 16
+
 # SPI_STATUS_REGISTER bits GSPIBus actually sets by default (cyw43_spi.h has the full set - only
 # the ones this module's default value uses are named here).
 STATUS_F2_RX_READY = 0x00000020
@@ -216,6 +228,7 @@ STATUS_F2_PKT_LEN_SHIFT = 9
 
 # F1 (BACKPLANE_FUNCTION) register bank addresses (cyw43_ll.c's own #defines - not in cyw43_spi.h,
 # these are internal to the driver, not part of the public API header).
+SDIO_FUNCTION2_WATERMARK = 0x10008
 SDIO_BACKPLANE_ADDRESS_LOW = 0x1000A
 SDIO_BACKPLANE_ADDRESS_MID = 0x1000B
 SDIO_BACKPLANE_ADDRESS_HIGH = 0x1000C
@@ -224,8 +237,16 @@ SDIO_SLEEP_CSR = 0x1001F
 
 # The register bank above is sparse and starts well above address 0 (unlike F0's) - `_f1` is
 # indexed relative to this base rather than from 0, or every one of these addresses would fall
-# straight past a from-zero array's bounds and silently no-op.
-_F1_REGISTER_BASE = SDIO_BACKPLANE_ADDRESS_LOW
+# straight past a from-zero array's bounds and silently no-op. Base is SDIO_FUNCTION2_WATERMARK,
+# not SDIO_BACKPLANE_ADDRESS_LOW - it's 2 bytes lower and is real firmware's *lowest* F1 register
+# access (a Bluetooth-gated write-then-read-back check in cyw43_ll_bus_init(), only present when
+# the firmware build has Bluetooth compiled in - confirmed live via a real MicroPython Pico W
+# boot: with the base at SDIO_BACKPLANE_ADDRESS_LOW, this address silently fell outside `_f1`'s
+# bounds and read back 0 instead of what was just written, failing the driver's own equality
+# check and aborting cyw43_ll_bus_init() immediately after the ALP handshake - long before
+# firmware download ever starts. No special dispatch needed for this address itself, same
+# generic byte-addressable storage as the rest of the bank.
+_F1_REGISTER_BASE = SDIO_FUNCTION2_WATERMARK
 _F1_REGISTER_SPACE_SIZE = SDIO_SLEEP_CSR - _F1_REGISTER_BASE + 1  # covers every address above.
 
 # SDIO_CHIP_CLOCK_CSR bits: writing a *_REQ bit makes the corresponding *_AVAIL bit immediately
@@ -390,6 +411,12 @@ class GSPIBus:
         # response we send (_build_ioctl_success_response()) - see that method for why it must
         # stay strictly ahead of the driver's own send count.
         self._bus_data_credit = 1
+        # SDIO_CHIP_CLOCK_CSR's ALP/HT availability, sticky once achieved (see _write_f1()'s
+        # SDIO_CHIP_CLOCK_CSR branch and _maybe_mark_ht_available() for why: real availability
+        # reflects actual clock-lock state, not the last-written request byte, and HT specifically
+        # can become available with no *_REQ write at all - see _maybe_mark_ht_available()).
+        self._alp_available = False
+        self._ht_available = False
         # Set by attach_gpio() - the pin this bus drives its response bits onto/samples host bits
         # from. None until attached (mirrors every other ExternalDevice-adjacent component here).
         self._data_pin: GPIOPin | None = None
@@ -436,16 +463,33 @@ class GSPIBus:
         offset = addr - _F1_REGISTER_BASE
         if offset < 0 or offset + size > len(self._f1):
             return 0
-        return int.from_bytes(bytes(self._f1[offset : offset + size]), "little")
+        value = int.from_bytes(bytes(self._f1[offset : offset + size]), "little")
+        if addr == SDIO_CHIP_CLOCK_CSR:
+            # _alp_available/_ht_available can flip true with no write to this register at all
+            # (_maybe_mark_ht_available() - the WLAN ARM core coming up) - _write_f1()'s own
+            # OR-in only refreshes the stored byte as a side effect of a write to *this* address,
+            # so a read that happens without one in between must recompute from the sticky flags
+            # too, or a real driver's read-only poll loop would never see the bit.
+            value |= (SBSDIO_ALP_AVAIL if self._alp_available else 0) | (SBSDIO_HT_AVAIL if self._ht_available else 0)
+        return value
 
     def _write_f1(self, addr: int, size: int, value: int) -> None:
         if addr == SDIO_CHIP_CLOCK_CSR:
             # Writing a *_REQ bit makes the corresponding *_AVAIL bit immediately readable - see
             # module docstring for why modeling real clock-startup latency isn't needed here.
-            avail = (SBSDIO_ALP_AVAIL if value & SBSDIO_ALP_AVAIL_REQ else 0) | (
-                SBSDIO_HT_AVAIL if value & SBSDIO_HT_AVAIL_REQ else 0
-            )
-            value |= avail
+            # Sticky (self._alp_available/_ht_available - _read_f1() re-applies these on every
+            # read too, not just here), not just OR'd into this one write's value: real
+            # availability reflects actual clock-lock state, which doesn't drop the instant the
+            # request byte is cleared - cyw43_ll_bus_init() clears SBSDIO_ALP_AVAIL_REQ right
+            # after achieving ALP (see alp_set: in that function), and a non-sticky model would
+            # silently un-set SBSDIO_ALP_AVAIL on that very write. _ht_available can also flip
+            # true with no write to this register at all - see _maybe_mark_ht_available() - which
+            # is exactly why _read_f1() needs its own copy of this OR-in, not just this write path.
+            if value & SBSDIO_ALP_AVAIL_REQ:
+                self._alp_available = True
+            if value & SBSDIO_HT_AVAIL_REQ:
+                self._ht_available = True
+            value |= (SBSDIO_ALP_AVAIL if self._alp_available else 0) | (SBSDIO_HT_AVAIL if self._ht_available else 0)
         elif addr == SDIO_SLEEP_CSR:
             # cyw43_kso_set() polls for KEEP_SDIO_ON *and* DEVICE_ON to read back together.
             if value & SBSDIO_SLPCSR_KEEP_SDIO_ON:
@@ -581,11 +625,34 @@ class GSPIBus:
             self._write_f0(addr, size, value)
         elif function == BACKPLANE_FUNCTION:
             if addr & SBSDIO_SB_ACCESS_2_4B_FLAG:
-                self._write_backplane_memory(self._backplane_window | (addr & BACKPLANE_ADDR_MASK), size, value)
+                combined = self._backplane_window | (addr & BACKPLANE_ADDR_MASK)
+                self._write_backplane_memory(combined, size, value)
+                self._maybe_mark_ht_available(combined)
             else:
                 self._write_f1(addr, size, value)
         elif function == WLAN_FUNCTION:
             self._write_wlan(value.to_bytes(size, "little"))
+
+    def _maybe_mark_ht_available(self, written_addr: int) -> None:
+        """Real HT clock genuinely becomes available as a side effect of the WLAN ARM core being
+        taken out of reset and starting to run its own firmware - `cyw43_ll_bus_init()` calls
+        `reset_device_core(CORE_WLAN_ARM, ...)` immediately before its own HT-available wait loop
+        (`cyw43_ll.c:~1655-1667`), with no explicit `SDIO_CHIP_CLOCK_CSR` HT-request write in
+        between (unlike the earlier ALP handshake, which does request first) - so a driver-observed
+        HT clock genuinely depends on the ARM core actually running, on real hardware. Since this
+        project deliberately doesn't emulate a second CPU core (see docs/CYW43_WIFI_BACKLOG.md's
+        own reasoning for `AI_IOCTRL_OFFSET`/`AI_RESETCTRL_OFFSET`), the closest honest trigger is
+        the same "core is up" condition `device_core_is_up()` itself checks - once
+        `CORE_WLAN_ARM`'s own registers reach that state, treat HT as available from then on, the
+        same sticky-forever simplification already used for `SDIO_CHIP_CLOCK_CSR`'s own `*_REQ`
+        bits. Scoped to `CORE_WLAN_ARM` specifically, not `CORE_SOCRAM` - only a running core would
+        plausibly request its own clock; SOCRAM is just memory."""
+        if written_addr not in (CORE_WLAN_ARM + AI_IOCTRL_OFFSET, CORE_WLAN_ARM + AI_RESETCTRL_OFFSET):
+            return
+        ioctrl = self._backplane_memory.get(CORE_WLAN_ARM + AI_IOCTRL_OFFSET, 0)
+        resetctrl = self._backplane_memory.get(CORE_WLAN_ARM + AI_RESETCTRL_OFFSET, 0)
+        if (ioctrl & (SICF_FGC | SICF_CLOCK_EN)) == SICF_CLOCK_EN and not (resetctrl & AIRC_RESET):
+            self._ht_available = True
 
     # -- wire-level decode, GPIO-independent (see attach_gpio() for the real wiring) ------------
 
@@ -640,9 +707,12 @@ class GSPIBus:
 
     def _start_response(self, command: GSPICommand) -> None:
         value = self.read_register(command.function, command.address, command.size)
-        self._response_bytes = b"".join(
-            self._word(word).to_bytes(4, "big") for word in _value_to_words(value, command.size)
-        )
+        words = _value_to_words(value, command.size)
+        if command.function == BACKPLANE_FUNCTION:
+            # See CYW43_BACKPLANE_READ_PAD_LEN_BYTES's own comment - the driver discards this many
+            # leading words and takes the real answer from the end.
+            words = [0] * (CYW43_BACKPLANE_READ_PAD_LEN_BYTES // 4) + words
+        self._response_bytes = b"".join(self._word(word).to_bytes(4, "big") for word in words)
         self._response_bit_index = 0
 
     def _on_clock_falling(self) -> "bool | None":
