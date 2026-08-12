@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rp2040py.clock.clock import IClock
+from rp2040py.external.cyw43.chip import Cyw43439
 from rp2040py.external.device import ExternalDevice, attach_external_devices
 from rp2040py.external.led_mock import LEDMock
 from rp2040py.rp2040 import RP2040
@@ -47,11 +48,10 @@ class UnknownBoardError(ValueError):
 # Pico") - attached here anyway, explicitly, purely to exercise the ExternalDevice/
 # attach_external_devices() plumbing identically regardless of --board (step 1 of that doc's
 # "Implementation order") until Cyw43439 (external/cyw43/chip.py, step 3) grows its own LED
-# handling and supersedes this entry for "pico_w" specifically. "pico_w" has no CYW43439-specific
-# extras yet.
+# handling and supersedes this entry for "pico_w" specifically.
 BOARDS: dict[str, BoardSpec] = {
     "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25),)),
-    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25),)),
+    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25), Cyw43439)),
 }
 
 

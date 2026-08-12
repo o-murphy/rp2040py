@@ -9,11 +9,32 @@ correctly to the same wire protocol a real driver would produce.
 """
 
 from rp2040py.external.cyw43.bus import (
+    AI_IOCTRL_OFFSET,
+    AI_RESETCTRL_OFFSET,
+    AIRC_RESET,
+    BACKPLANE_ADDR_MASK,
     BACKPLANE_FUNCTION,
     BUS_FUNCTION,
+    CORE_SOCRAM,
+    CORE_WLAN_ARM,
+    SBSDIO_ALP_AVAIL,
+    SBSDIO_ALP_AVAIL_REQ,
+    SBSDIO_HT_AVAIL,
+    SBSDIO_HT_AVAIL_REQ,
+    SBSDIO_SB_ACCESS_2_4B_FLAG,
+    SBSDIO_SLPCSR_DEVICE_ON,
+    SBSDIO_SLPCSR_KEEP_SDIO_ON,
+    SDIO_BACKPLANE_ADDRESS_HIGH,
+    SDIO_BACKPLANE_ADDRESS_LOW,
+    SDIO_BACKPLANE_ADDRESS_MID,
+    SDIO_CHIP_CLOCK_CSR,
+    SDIO_SLEEP_CSR,
+    SICF_CLOCK_EN,
+    SICF_FGC,
     SPI_BUS_CONTROL,
     SPI_READ_TEST_REGISTER,
     TEST_PATTERN,
+    WORD_LENGTH_32,
     GSPIBus,
 )
 from rp2040py.gpio_pin import FUNCTION_SIO
@@ -45,6 +66,17 @@ class _FakeGSPIMaster:
         # Real gpio_set_function() enables input as a side effect (pico-sdk) - mirrored here
         # directly since this test drives pins itself rather than running real firmware.
         self.data_pin.pad_value |= 0x40
+
+        # Mirrors GSPIBus's own word-length mode tracking (bus.py's "Word-length/endian mode") -
+        # both sides start in the same real-silicon-default 16-bit mode and flip in lockstep the
+        # instant a SPI_BUS_CONTROL write's value has WORD_LENGTH_32 set, so round-trips stay
+        # correct regardless of which mode is active.
+        self._word_length_32 = False
+
+    def _word(self, word: int) -> int:
+        if self._word_length_32:
+            return ((word & 0xFF) << 24) | ((word & 0xFF00) << 8) | ((word >> 8) & 0xFF00) | ((word >> 24) & 0xFF)
+        return ((word & 0xFFFF) << 16) | (word >> 16)
 
     def _set(self, bitmask: int, high: bool) -> None:
         if high:
@@ -89,16 +121,18 @@ class _FakeGSPIMaster:
 
     def read_register(self, function: int, addr: int, size: int) -> int:
         self.select()
-        self.send_word(_make_cmd(write=False, inc=True, fn=function, addr=addr, size=size))
-        value = self.recv_word()
+        self.send_word(self._word(_make_cmd(write=False, inc=True, fn=function, addr=addr, size=size)))
+        value = self._word(self.recv_word())
         self.deselect()
         return value
 
     def write_register(self, function: int, addr: int, size: int, value: int) -> None:
         self.select()
-        self.send_word(_make_cmd(write=True, inc=True, fn=function, addr=addr, size=size))
-        self.send_word(value)
+        self.send_word(self._word(_make_cmd(write=True, inc=True, fn=function, addr=addr, size=size)))
+        self.send_word(self._word(value))
         self.deselect()
+        if function == BUS_FUNCTION and addr == SPI_BUS_CONTROL and value & WORD_LENGTH_32:
+            self._word_length_32 = True
 
 
 def _wire_up() -> tuple[RP2040, _FakeGSPIMaster]:
@@ -156,9 +190,116 @@ def test_deselecting_mid_word_discards_the_partial_transaction():
 
 
 def test_unimplemented_function_reads_zero_instead_of_raising():
-    """BACKPLANE_FUNCTION (step 3, not built yet) - must not crash an early/unexpected access."""
+    """WLAN_FUNCTION (step 4, not built yet) - must not crash an early/unexpected access."""
     _rp2040, master = _wire_up()
 
-    value = master.read_register(BACKPLANE_FUNCTION, 0x1000A, 1)
+    value = master.read_register(2, 0x1000A, 1)
 
     assert value == 0
+
+
+def test_alp_and_ht_avail_req_bits_are_readable_back_immediately():
+    """The one poll cyw43_ll_bus_init() actually gates on beyond F0 - real silicon takes a moment
+    to bring its clock up, this model skips that latency (see bus.py's module docstring)."""
+    _rp2040, master = _wire_up()
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1)
+    assert value & SBSDIO_ALP_AVAIL
+    assert value & SBSDIO_HT_AVAIL
+
+
+def test_alp_avail_req_alone_does_not_set_ht_avail():
+    _rp2040, master = _wire_up()
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1)
+    assert value & SBSDIO_ALP_AVAIL
+    assert not value & SBSDIO_HT_AVAIL
+
+
+def test_keep_sdio_on_makes_device_on_readable_too():
+    """cyw43_kso_set() polls SDIO_SLEEP_CSR up to 64x1ms expecting both bits set together."""
+    _rp2040, master = _wire_up()
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, SBSDIO_SLPCSR_KEEP_SDIO_ON)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1)
+    assert value & SBSDIO_SLPCSR_DEVICE_ON
+
+
+def test_clearing_keep_sdio_on_clears_device_on():
+    _rp2040, master = _wire_up()
+    master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, SBSDIO_SLPCSR_KEEP_SDIO_ON)
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, 0)
+
+    value = master.read_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1)
+    assert not value & SBSDIO_SLPCSR_DEVICE_ON
+
+
+def test_backplane_window_redirects_writes_into_the_combined_address():
+    """cyw43_write_backplane()'s own scheme: window bytes set via LOW/MID/HIGH, then a
+    SBSDIO_SB_ACCESS_2_4B_FLAG-tagged address lands at (window << 15) | (addr & 0x7fff)."""
+    _rp2040, master = _wire_up()
+    window = 0x18003
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+
+    addr = SBSDIO_SB_ACCESS_2_4B_FLAG | 0x0100
+    master.write_register(BACKPLANE_FUNCTION, addr, 4, 0xDEADBEEF)
+
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 4) == 0xDEADBEEF
+
+
+def test_backplane_window_low_byte_is_the_low_order_bits_of_the_window():
+    """SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH build a 32-bit window value shifted left 8/16/24 -
+    writing only LOW must not disturb whatever MID/HIGH already hold."""
+    _rp2040, master = _wire_up()
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, 0x03)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, 0x00)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, 0x00)
+    addr = SBSDIO_SB_ACCESS_2_4B_FLAG
+    master.write_register(BACKPLANE_FUNCTION, addr, 1, 0xAB)
+
+    # window = 0x030000, combined address = (0x030000 << 15) | 0 - readable only through the same
+    # window, proving LOW's earlier write (0x00) didn't clobber MID's 0x03.
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == 0xAB
+
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, 0x04)
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == 0
+
+
+def test_wlan_arm_and_socram_cores_default_to_held_in_reset():
+    """Real silicon holds both cores in reset at power-on; disable_device_core() (cyw43_ll.c)
+    CHECKS this is already true rather than setting it - the emulated default must match."""
+    _rp2040, master = _wire_up()
+    for core in (CORE_WLAN_ARM, CORE_SOCRAM):
+        window = core & ~BACKPLANE_ADDR_MASK
+        master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+        master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+        master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+        addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((core + AI_RESETCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+
+        value = master.read_register(BACKPLANE_FUNCTION, addr, 1)
+
+        assert value & AIRC_RESET
+
+
+def test_core_ioctrl_register_round_trips_through_the_backplane_window():
+    """AI_IOCTRL_OFFSET (SICF_FGC/SICF_CLOCK_EN) is the register reset_device_core() writes to
+    bring a core out of reset - just needs to hold whatever was last written, like any other
+    backplane-memory address."""
+    _rp2040, master = _wire_up()
+    window = CORE_WLAN_ARM & ~BACKPLANE_ADDR_MASK
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
+    master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
+    addr = SBSDIO_SB_ACCESS_2_4B_FLAG | ((CORE_WLAN_ARM + AI_IOCTRL_OFFSET) & BACKPLANE_ADDR_MASK)
+
+    master.write_register(BACKPLANE_FUNCTION, addr, 1, SICF_FGC | SICF_CLOCK_EN)
+
+    assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == SICF_FGC | SICF_CLOCK_EN
