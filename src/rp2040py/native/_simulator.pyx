@@ -1,0 +1,91 @@
+"""Native port of Simulator._execute_batch()'s own per-instruction dispatch/idle loop
+(simulator.py) - the confirmed single biggest remaining interpretation cost even under an
+otherwise-fully-native CPU core/bus (docs/records/0013-cython-core.md's own "not yet tried" #1:
+~43-47% of profiled time was still this loop itself, since only execute_instruction() - the
+handler it calls - was ever ported, not the while loop driving it).
+
+Only the loop's own control flow moves here. rp2040/core are already-native (cimported, typed via
+their own .pxd - core.execute_instruction()/rp2040.core field access resolve to direct C calls),
+but clock (SimulationClock, clock/simulation_clock.py) is not natively ported at all - even native
+RP2040 holds it as a plain Python object (native/_rp2040.pyx imports it directly from
+clock.simulation_clock) - so clock.tick() and its two properties stay ordinary Python calls here,
+the same accepted boundary as StateMachine.rp2040.gpio/.dma staying object-typed in
+native/_state_machine.pyx (see docs/records/0031-pio-cython-tick-batching.md's own "not yet
+tried" #4). simulator itself (rp2040py.simulator.Simulator) is likewise plain Python - its own
+.stopped flag needs a fresh read every iteration (a cross-thread stop() call must be able to
+interrupt a running batch, per Simulator.stop()'s own docstring), so it's read via ordinary
+attribute access every iteration, same as clock.
+
+Called only when the facade in simulator.py has already confirmed both
+rp2040py._native_gate.native_disabled() is False and the caller's own Simulator.rp2040 is actually
+the native RP2040 class (not a bare pure-Python one manually constructed while native extensions
+happen to be installed) - nothing here re-checks that; the `cdef RP2040 rp2040 = simulator.rp2040`
+assignment below would raise a TypeError instead of silently misbehaving if that invariant were
+ever violated, but the facade is what's relied on to avoid hitting it.
+"""
+
+import time
+
+from rp2040py.native._cortex_m0_core cimport CortexM0Core
+from rp2040py.native._rp2040 cimport RP2040
+
+cdef double CYCLE_NANOS = 1e9 / 125_000_000  # 125 MHz
+
+# Mirrors simulator.py's own module-level constants exactly - see that file's docstrings for the
+# full rationale (why 256/0.005s, why the idle jump must not be weighted by simulated nanoseconds).
+cdef double BATCH_YIELD_BUDGET_SECONDS = 0.005
+cdef int TIME_CHECK_INTERVAL = 256
+cdef long BATCH_INSTRUCTION_CEILING = 1000000
+
+
+def execute_batch(simulator: object, tick_batch: int) -> None:
+    """Same semantics as Simulator._execute_batch() (simulator.py), byte-for-byte translated -
+    keep the two in sync by hand if either changes; there's no shared source between them (unlike
+    e.g. StateMachine, this loop was never a `_execute_batch.py` reference module the pure-Python
+    Simulator imports, since Simulator itself stays a plain Python class either way)."""
+    cdef RP2040 rp2040 = simulator.rp2040
+    cdef CortexM0Core core = rp2040.core
+    clock = simulator.clock
+
+    cdef long i = 0
+    cdef int ticks_since_check = 0
+    cdef double batch_start = time.monotonic()
+    cdef double pending_nanos = 0.0
+    cdef int pending_count = 0
+    cdef double nanos_budget
+    cdef double delta_nanos
+    cdef int cycles
+
+    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+
+    while i < BATCH_INSTRUCTION_CEILING and not simulator.stopped:
+        ticks_since_check += 1
+        if ticks_since_check >= TIME_CHECK_INTERVAL:
+            ticks_since_check = 0
+            if time.monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
+                break
+        if core.waiting:
+            if pending_nanos:
+                clock.tick(pending_nanos)
+                pending_nanos = 0.0
+                pending_count = 0
+            clock.tick(clock.nanos_to_next_alarm)
+            if tick_batch > 1:
+                nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+        else:
+            cycles = core.execute_instruction()
+            delta_nanos = cycles * CYCLE_NANOS
+            if tick_batch <= 1:
+                clock.tick(delta_nanos)
+            else:
+                pending_nanos += delta_nanos
+                pending_count += 1
+                nanos_budget -= delta_nanos
+                if nanos_budget <= 0 or pending_count >= tick_batch:
+                    clock.tick(pending_nanos)
+                    pending_nanos = 0.0
+                    pending_count = 0
+                    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+        i += 1
+    if pending_nanos:
+        clock.tick(pending_nanos)

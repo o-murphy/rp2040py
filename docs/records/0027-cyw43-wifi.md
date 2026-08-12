@@ -541,3 +541,60 @@ from "closed, kept for the record."
 - The SDPCM data-frame envelope byte layout for the actual WLAN RX/TX *data* path (as opposed to
   control/ioctl, already covered above) - step 4's concern, not step 3 - not yet dug out.
   - maybe document way to use gpiozero as global external device for emulations on the RP
+
+## Performance side quest, continued (2026-08-12) - wild-execution finding, not yet root-caused
+
+Re-verified the earlier "Performance side quest" entry's own open item ("firmware download itself
+hasn't been re-verified end-to-end against this faster baseline") after 0034 (`_execute_batch()`
+native port) landed on top of this entry's own PIO/tick-batching work. **No improvement**: a bounded
+9-minute run of `tests/micropython/main-cyw43.py` (real `v1.28.0` UF2, `--board pico_w`) still never
+reached the REPL, unchanged from before 0034. Investigating why turned up something more
+fundamental than a throughput problem.
+
+**Established by direct elimination testing, not guessed:**
+
+1. A bounded (`asyncio.wait_for`-wrapped) profiling harness against the real boot found ~64% of
+   profiled time going into `logging.py`'s `warning()` - 41 million calls in a 25-second window.
+   Counting message shapes traced this to `RP2040`'s own "Read from invalid memory address"/"Write
+   to undefined address" warnings (`_rp2040.py`), not anything CYW43-specific.
+2. Tracing the actual addresses hit (not just counting) found **987,379 distinct addresses in 5
+   seconds, spanning `0x0041fd80` to `0xffffffff`** - essentially the whole 32-bit space, not a
+   bounded scan just past RAM. A PC trace confirmed the CPU actually reaches this - the same exact
+   PC history and register snapshot (PC ending at `0xfffffffe`, a register holding `0xffffffff`
+   used as an apparent branch target - consistent with reading a never-populated struct field/
+   callback pointer and jumping through it) reproduces byte-for-byte across separate runs.
+3. **Not caused by anything in `main-cyw43.py`'s own script content.** The identical PC
+   history/register snapshot reproduces with `nic.connect(...)` commented out, and even with a
+   completely trivial `print("hi")` script with no `import network` at all - ruling out
+   `cyw43_ll_wifi_join()`'s ioctl cascade (the original hypothesis) as the cause. Also confirmed no
+   output (`print("Initializing...")`, this script's very first line) ever appears before the
+   crash, so it happens before user code meaningfully runs at all.
+4. **Not caused by `Cyw43439`/`GSPIBus` being attached.** The same trivial script against the same
+   `v1.28.0` `RPI_PICO_W` UF2, booted on the plain `"pico"` board spec (no `Cyw43439` in
+   `boards.py`'s extras at all), reproduces identically.
+5. **Specific to the `RPI_PICO_W` firmware image itself.** The same trivial script against the
+   plain (non-`_W`) `RPI_PICO` `v1.28.0` UF2 does not reproduce it at all (only 2-3 benign
+   out-of-range hits in a small, bounded address range, matching ordinary boot-time probing).
+
+**Conclusion: this is a bug in how this emulator handles something the `pico_w`-*variant* firmware
+image's own board-specific C init touches differently from plain `pico`'s init - not a CYW43/SDPCM/
+ioctl protocol bug, and not related to WiFi scan/join logic at all.** Real root cause not yet
+identified - would need symbol-matched disassembly (e.g. a local build of the matching
+`micropython` v1.28.0 checkout, submodules not currently initialized) to pin down the exact C call
+site; not done here. `tests/micropython/main-cyw43.py` was left unmodified rather than narrowed to
+avoid `connect()` - see point 3 above for why that would not have addressed the actual cause. CI's
+own `ci-micropython.yml` pico-w job timeout was bumped 10m → 15m as a stopgap in a separate, small
+commit; **this alone does not fix the underlying issue** - if the process genuinely never
+terminates (vs. being merely slow), no timeout bump makes that job reliably pass.
+
+**Separately found while investigating, not yet root-caused either, and not the same failure
+mode:** `rp2040py micropython --image <v1.28.0> tests/micropython/main-spi.py` (raw-REPL exec mode,
+plain `RPI_PICO`, no CYW43/pico_w involvement at all) hangs indefinitely - `device.aexec(...,
+timeout=None)` never returns. Debug-level logging showed active `[CortexM0Core] SEV`/`[USB] Start
+USB transfer` traffic clustered inside a sub-100ms window of *simulated* time, repeating for the
+entire real-time duration observed - looks like a live spin/protocol stall (host and device
+retrying without making simulated-time progress) rather than a genuine wait-forever-for-input
+condition, but not confirmed. Does **not** reproduce the wild-execution/invalid-address signature
+above (a bounded trace of the same image+script showed only the same 2-3 benign hits plain `pico`
+boots normally show) - a different bug, or a different symptom of a shared underlying cause; not
+yet determined which. Not yet bisected to a specific commit/branch.
