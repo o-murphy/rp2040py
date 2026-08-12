@@ -94,3 +94,14 @@ class SimulationClock(IClock):
         if self._next_alarm:
             return self._next_alarm.nanos - self.nanos
         return 0
+
+    @property
+    def has_scheduled_alarm(self) -> bool:
+        """Distinguishes "no alarm scheduled at all" from "an alarm is scheduled and due right
+        now" - both read as `nanos_to_next_alarm == 0`, which is fine for that property's own two
+        existing callers (both just want "how long to jump forward," and jumping forward by 0 when
+        nothing's scheduled is already correct) but is genuinely ambiguous for
+        simulator.py's opt-in clock-tick-batching (RP2040PY_CLOCK_TICK_BATCH): with no alarm
+        scheduled, there's no due time to avoid overshooting, so batching can run unbounded rather
+        than conservatively flushing every instruction."""
+        return self._next_alarm is not None
