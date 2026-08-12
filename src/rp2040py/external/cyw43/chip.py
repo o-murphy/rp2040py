@@ -1,8 +1,12 @@
 """`Cyw43439` - the `ExternalDevice` (see `external/device.py`) that owns a `GSPIBus` (`bus.py`) and
-wires it onto a board's real WL_CLK/WL_D/WL_CS pins. Currently just that: `bus.py`'s F0/F1 decode
-is the entire chip model so far (docs/CYW43_WIFI_BACKLOG.md step 3b/3c/3d) - no SDPCM/ioctl/firmware
-acceptance yet (step 3e/3f/3g), so real firmware's init handshake can get past the F0 test-register
-poll and the ALP/HT/KSO clock handshake, but nothing beyond that.
+wires it onto a board's real WL_CLK/WL_D/WL_CS pins. Currently just that: `bus.py`'s F0/F1/F2
+decode is the entire chip model so far (docs/CYW43_WIFI_BACKLOG.md steps 3a-3e) - firmware/CLM
+block-write downloads are accepted (via the generic F1 block-transfer path) and `GSPIBus` can
+deliver a staged inbound F2 packet (`queue_rx_packet()`) with the matching
+`SPI_STATUS_REGISTER`/`SPI_INTERRUPT_REGISTER`/shared-IRQ-pin plumbing, but nothing yet actually
+calls `queue_rx_packet()` with real content - no SDPCM/ioctl framing or async events yet (step
+3f/3g), so real firmware's init handshake can get past the F0 test-register poll, the ALP/HT/KSO
+clock handshake, and firmware download, but nothing past that.
 """
 
 from typing import TYPE_CHECKING
