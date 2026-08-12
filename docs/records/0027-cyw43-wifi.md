@@ -945,3 +945,75 @@ change) rather than a quick follow-up. CI's own `ci-micropython.yml` was adjuste
 to stop running the pico_w WLAN job against `1.28.0` (kept only for `1.23.0`, which completes
 quickly) - a pragmatic workaround given a 10+ minute runtime isn't practical for CI regardless of
 correctness, not a fix.
+
+## Same-day follow-up: several throughput ideas tried live, all rejected (2026-08-13)
+
+After 0037 landed (see above), tried a handful of quick, uncommitted experiments against this
+throughput ceiling before stopping for the day. None of them are in the tree - documented here
+purely so a future session doesn't re-spend time on the same dead ends.
+
+- **PyPy** (`uv run --python pypy3.11 ...`, native extensions unavailable under PyPy by design -
+  see 0016's own PyPy note). Inconclusive at best: reached the same stall point *slower* than
+  CPython+Cython (JIT warm-up cost), and in a 600s bounded run the CPU's PC sat completely frozen
+  on one single address for the last 130+ seconds - a different, more suspicious shape than the
+  CPython+Cython baseline (which kept visibly varying the whole time). Not root-caused; flagging
+  as a possible PyPy-specific issue worth a closer look, not just "PyPy is slower here."
+- **`RP2040PY_CLOCK_TICK_BATCH=1000`** (already-existing opt-in from 0031). Measured *slower* than
+  no batching (~68s to first stall vs. ~38-40s baseline) - the alarms in this workload (DMA
+  word-pacing, USB SOF) are frequent enough that batching's own accounting overhead isn't repaid.
+  Also surfaced an `IndexError` in `peripherals/io.py`'s `get_pin_from_offset()` after
+  `device.stop()` in the same run - not confirmed whether batching-specific or a pre-existing
+  shutdown-ordering artifact; worth a dedicated look either way.
+- **Underclocking the modeled CPU rate** (`_execute_batch.py`/`native/_simulator.pyx`'s
+  `cycle_nanos`, 125MHz→12.5MHz - deliberately the *opposite* of the intuitive "overclock to go
+  faster," since this constant controls how much simulated time each already-slow real instruction
+  is credited for, not real execution speed; overclocking would need *more* real instructions per
+  simulated millisecond, not fewer). Genuinely sped up the early gSPI-transaction phase as
+  predicted, but has a real, confirmed side effect: USB SOF and other alarm-scheduled peripheral
+  activity fire at fixed *simulated* nanosecond intervals independent of this constant, so
+  underclocking makes them fire more often *relative to real CPU instructions executed* - measured
+  making `v1.23.0` (normally ~30-33s) noticeably slower. Reverted.
+- **A separate thread for PIO stepping.** Not implemented at all - ruled out on the same grounds
+  0026 (main-thread-asyncio migration) already established: the GIL means no real parallelism for
+  pure Python/Cython work without `nogil`, and this project already went through a
+  "background-thread engine room → real race conditions (0018's `tx_fifo` race) → single-threaded
+  main-thread model" cycle once; CPU/PIO/DMA interact too finely (potentially every CPU
+  instruction) for cross-thread synchronization to pay for itself.
+- **Removing the 1-step-per-CPU-instruction throttle 0037 itself introduced** - replace `if
+  not pio.stopped and _has_runnable_machine(pio): pio.step()` with `while not pio.stopped and
+  _has_runnable_machine(pio): pio.step()`, letting a runnable PIO run all the way to its own next
+  real wait every time it's visited, not just one step. **Not actually disproven** - reverted
+  because a fair comparison wasn't possible: the reverted-vs-with-PoC comparison that looked bad
+  turned out to be confounded by the machine's own CPU frequency governor sitting in `powersave`
+  (~1.4GHz) for unrelated reasons during part of that testing (confirmed via
+  `/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`/`scaling_cur_freq` - `rp2040py bench`
+  swung between ~8M and ~25M instructions/sec purely from this, independent of any code change).
+  **This is the most promising lead from this session's follow-up and deserves a real, fairly-measured
+  retry** - with one real risk to guard against first: if any PIO program loaded during boot
+  (not necessarily the CYW43 gSPI one) never naturally reaches a wait state (a legitimate,
+  intentionally free-running design, not unheard of for e.g. clock-generator-shaped programs),
+  this loop would burn a huge number of extra `step()` calls on every single CPU instruction with
+  no cap - needs a real, principled bound (or a check that the PC is making progress) before
+  landing, not just an arbitrary iteration guard.
+- **The user's own architectural idea, not yet tried**: since `Cyw43439`/`GSPIBus` already lives as
+  a decoupled `ExternalDevice`, bypass bit-level PIO/DMA simulation entirely for CYW43 gSPI traffic
+  specifically - detect a DMA transfer targeting PIO1's `TXF0`/`RXF0` (the addresses this
+  investigation already confirmed: `0x50300010`/`0x50300020`), read the source buffer directly from
+  RAM, dispatch it through `GSPIBus`'s own already-fast, already-correct logical
+  `read_register()`/`write_register()` (or the full wire-level `_on_cs_change()`/`_on_clock_rising()`/
+  `_on_clock_falling()` callbacks, sourced from RAM instead of real PIO-driven GPIO edges, to reuse
+  proven framing/endian logic exactly rather than re-deriving it), write the result directly back to
+  RAM, and mark the DMA/PIO state as if the transfer completed normally - crediting the clock with
+  the real elapsed nanoseconds the bit-banged version would have taken, so wall-clock-dependent code
+  downstream doesn't desync. Unlike every idea above, this is CYW43-specific (would live in
+  `external/cyw43/`), doesn't touch shared simulator infrastructure, and removes the *need* for
+  thousands of PIO steps per transaction instead of just making each step marginally cheaper -
+  plausibly the highest-leverage idea from this whole investigation, but a real design/
+  implementation effort, not a quick experiment.
+
+**Non-technical lesson, worth repeating**: several hours of this follow-up were spent chasing
+apparent regressions that were actually - or at least partly - explained by the test machine's own
+CPU frequency governor silently sitting in `powersave` for stretches of the session. Check
+`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`/`scaling_cur_freq` *before* trusting
+any wall-clock timing comparison in this kind of investigation, not after a result looks
+surprising.
