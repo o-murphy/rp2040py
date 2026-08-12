@@ -57,22 +57,23 @@ jobs:
 
   test-micropython:
     needs: build-littlefs
-    name: Micropython ${{ matrix.micropython_version }} / ${{ matrix.python_runtime }}
+    name: Micropython ${{ matrix.micropython_version.tag }} / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         micropython_version:
-          - "1.16"
-          - "1.17"
-          - "1.18"
-          - "1.19.1"
-          - "1.20.0"
-          - "1.21.0"
-          - "1.28.0"
-          - "1.29.0-preview"
-        micropython_version_w:  # pico_w board firmware
-          - "1.28.0"
+          - tag: "1.16"
+          - tag: "1.17"
+          - tag: "1.18"
+          - tag: "1.19.1"
+          - tag: "1.20.0"
+          - tag: "1.21.0"
+          - tag: "1.23.0"
+            pico_w: true
+          - tag: "1.28.0"
+            pico_w: true
+          - tag: "1.29.0-preview"
         python_runtime:
           - pypy-3.10
           - cpython-3.10
@@ -105,34 +106,34 @@ jobs:
       # micropython.org fetch doesn't get counted as (or blow the budget of) actual boot/run time.
       # continue-on-error: a hiccup here shouldn't fail the job on its own - the real test step
       # right after will fail with a clearer signal if the download is genuinely broken.
-      - name: Warm up MicroPython ${{ matrix.micropython_version }} download cache
+      - name: Warm up MicroPython ${{ matrix.micropython_version.tag }} download cache
         continue-on-error: true
-        run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --fetch-fw-only
+        run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --fetch-fw-only
 
-      - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
+      - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
-      - name: Test MicroPython SPI ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py --image ${{ matrix.micropython_version }} "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+      - name: Test MicroPython SPI ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py --image ${{ matrix.micropython_version.tag }} "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
-      - name: Test MicroPython flash read/write ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
+      - name: Test MicroPython flash read/write ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
-      - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version }}
+      - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }}
         run: |
           . scripts/ci-common.sh
-          run_micropython_dump_test "${{ matrix.python_runtime }}" "${{ matrix.micropython_version }}"
+          run_micropython_dump_test "${{ matrix.python_runtime }}" "${{ matrix.micropython_version.tag }}"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
-      - name: Test MicroPython pico-w WLAN ${{matrix.python_runtime}}-${{ matrix.micropython_version }}
-        if: ${{ matrix.micropython_version == matrix.micropython_version_w }}
-        run: timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version }} --board pico_w tests/micropython/main-cyw43.py
+      - name: Test MicroPython pico-w WLAN ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        if: ${{ matrix.micropython_version.pico_w }}
+        run: timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --board pico_w tests/micropython/main-cyw43.py
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
