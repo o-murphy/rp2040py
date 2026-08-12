@@ -49,12 +49,13 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0032](records/0032-docs-restructure.md) documentation restructure | this reorganization
 - [x] [0033](records/0033-completions-and-validation.md) Add autocompletions for the cli tool | accepted
 - [x] [0034](records/0034-execute-batch-native-port.md) `_execute_batch()` native Cython port | follow-up of 0013/0031
+- [x] [0035](records/0035-board-aware-fs-flash-offset.md) board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes pico_w wild-execution crash
 
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — pico_w wild-execution root-caused → 0035; main-spi.py hang still open
-- [ ] [0035](records/0035-board-aware-fs-flash-offset.md) board-aware MicroPython FS flash offset | Proposed — root cause confirmed, fix not yet implemented
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; main-spi.py hang + PIO clkDivRestart stall still open
+- [ ] [0036](records/0036-littlefs-fat12-exclusivity.md) `--littlefs`/`--fat12` mutual exclusivity | Proposed — documented only
 
 ### Rejected / Superseded
 
