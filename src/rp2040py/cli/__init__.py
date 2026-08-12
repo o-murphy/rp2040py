@@ -58,6 +58,8 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
+import argcomplete
+
 from rp2040py.boards import BOARDS, build_rp2040
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
@@ -912,6 +914,22 @@ _PTY_HELP = (
 )
 
 
+def _mk_file_suffixes_validator(*suffixes: str) -> Callable[[str], Path]:
+    valid_suffixes = {s.lower() for s in suffixes}
+
+    def validator(p: str) -> Path:
+        path = Path(p)
+        if path.suffix.lower() in valid_suffixes:
+            return path
+        raise argparse.ArgumentTypeError(f"File must have one of the following extensions: {', '.join(valid_suffixes)}")
+
+    return validator
+
+
+_LITTLEFS_SUFFIX_VALIDATOR = _mk_file_suffixes_validator(".img", ".bin", ".lfs")
+_FAT_SUFIX_VALIDATOR = _mk_file_suffixes_validator(".img", ".bin", ".fat", ".fat12")
+
+
 def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
     """Builds an `add_help=False` parent parser carrying just the named shared arguments, for
     `subparsers.add_parser(..., parents=[...])` - argparse's own mechanism for reusing identical
@@ -927,8 +945,11 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
         "bootrom": {"help": _BOOTROM_HELP},
         "expect-text": {"action": "append", "help": _EXPECT_TEXT_HELP},
         "expect-regex": {"action": "store_true", "help": _EXPECT_REGEX_HELP},
-        "littlefs": {"type": Path, "help": _LITTLEFS_HELP},
-        "dump-fs": {"type": Path, "help": _DUMP_FS_HELP},
+        "littlefs": {
+            "type": _LITTLEFS_SUFFIX_VALIDATOR,
+            "help": _LITTLEFS_HELP,
+        },
+        "dump-fs": {"type": _LITTLEFS_SUFFIX_VALIDATOR, "help": _DUMP_FS_HELP},
         "tcp-port": {"type": int, "default": None, "help": _TCP_PORT_HELP},
         "pty": {"action": "store_true", "help": _PTY_HELP},
     }
@@ -936,6 +957,30 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
     for name in names:
         shared.add_argument(f"--{name}", **definitions[name])
     return shared
+
+
+def _cmd_install_completion(args: argparse.Namespace) -> None:
+    shell = os.environ.get("SHELL", "bash")
+    rc_file = "~/.zshrc" if "zsh" in shell else "~/.bashrc"
+    expanded_path = os.path.expanduser(rc_file)
+
+    completion_cmd = 'eval "$(register-python-argcomplete rp2040py)"\n'
+
+    try:
+        with open(expanded_path, "r") as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+
+    if completion_cmd.strip() not in content:
+        with open(expanded_path, "a") as f:
+            f.write(f"\n# rp2040py auto-completion\n{completion_cmd}")
+        print(f"Autocomplete successfully added to {rc_file}!")
+        print(f"Run: source {rc_file} (or restart terminal)")
+    else:
+        print(f"Autocomplete is already configured in {rc_file}.")
+
+    sys.exit(0)
 
 
 def main(argv: "list[str] | None" = None) -> None:
@@ -998,7 +1043,7 @@ def main(argv: "list[str] | None" = None) -> None:
     )
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     mp_parser.add_argument("--circuitpython", action="store_true")
-    mp_parser.add_argument("--fat12", type=Path, help="optional fat12.img to load")
+    mp_parser.add_argument("--fat12", type=_FAT_SUFIX_VALIDATOR, help="optional fat12.img to load")
     mp_source_group = mp_parser.add_mutually_exclusive_group()
     mp_source_group.add_argument(
         "-c", dest="command", metavar="<command>", help="execute the given command on the device, then exit"
@@ -1010,7 +1055,10 @@ def main(argv: "list[str] | None" = None) -> None:
         help="import the given module on the device (approximates `-m`), then exit",
     )
     mp_source_group.add_argument(
-        "filename", nargs="?", type=Path, help="run the given local script file on the device, then exit"
+        "filename",
+        nargs="?",
+        type=_mk_file_suffixes_validator(".py"),
+        help="run the given local script file on the device, then exit",
     )
     mp_parser.set_defaults(func=_cmd_micropython)
 
@@ -1035,7 +1083,10 @@ def main(argv: "list[str] | None" = None) -> None:
     )
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     kaluma_parser.add_argument(
-        "filename", nargs="?", help="local .js file to stage as the auto-run user program, then boot"
+        "filename",
+        nargs="?",
+        type=_mk_file_suffixes_validator(".js"),
+        help="local .js file to stage as the auto-run user program, then boot",
     )
     kaluma_parser.set_defaults(func=_cmd_kaluma)
 
@@ -1066,12 +1117,17 @@ def main(argv: "list[str] | None" = None) -> None:
             "mklittlefs", help="build a littlefs image for `micropython`'s filesystem support"
         )
         mklittlefs_parser.add_argument(
-            "files", nargs="*", type=Path, help="source files to add, keeping their own basename"
+            "files",
+            nargs="*",
+            type=_mk_file_suffixes_validator(".py", ".js"),
+            help="source files to add, keeping their own basename",
         )
         mklittlefs_parser.add_argument(
             "--main", metavar="<basename>", help="write the `files` entry with this basename as main.py"
         )
-        mklittlefs_parser.add_argument("-o", "--output", type=Path, default="littlefs.img", help="output image path")
+        mklittlefs_parser.add_argument(
+            "-o", "--output", type=_LITTLEFS_SUFFIX_VALIDATOR, default="littlefs.img", help="output image path"
+        )
         mklittlefs_parser.add_argument(
             "-f", "--force", action="store_true", help="overwrite `--output` if it already exists"
         )
@@ -1097,6 +1153,13 @@ def main(argv: "list[str] | None" = None) -> None:
         )
         mklittlefs_parser.set_defaults(func=_cmd_mklittlefs)
 
+    completion_parser = subparsers.add_parser(
+        "install-completion",
+        help="install tab-completion for bash/zsh",
+    )
+    completion_parser.set_defaults(func=_cmd_install_completion)
+
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
 
     # format="%(message)s": without a handler configured anywhere, stdlib logging's own "handler

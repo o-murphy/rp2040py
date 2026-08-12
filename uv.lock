@@ -7,6 +7,15 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "argcomplete"
+version = "3.7.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/6f/5a73f04007ca950701765949209f068da628bd11f9c2da287278ce91e0ee/argcomplete-3.7.2.tar.gz", hash = "sha256:aad8b69a0b9969edb62db0d1752354c0d50717b10e0cbb00e2a958381b9fc6b9", size = 74473, upload-time = "2026-08-06T04:53:21.662Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/bd/551ee6af426af84ca33e02622be722925c196608e9127d731ef17c47f06e/argcomplete-3.7.2-py3-none-any.whl", hash = "sha256:6029205678bdd9c1c728a155f5f9ecf5812393f969eef58807641a2bc2aa5b19", size = 43294, upload-time = "2026-08-06T04:53:20.246Z" },
+]
+
+[[package]]
 name = "ast-serialize"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -773,6 +782,7 @@ wheels = [
 name = "rp2040py"
 source = { editable = "." }
 dependencies = [
+    { name = "argcomplete" },
     { name = "mpremote" },
     { name = "pyelftools" },
     { name = "semver" },
@@ -797,6 +807,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "argcomplete", specifier = ">=3.7.2" },
     { name = "littlefs-python", marker = "extra == 'fs'", specifier = ">=0.18.0" },
     { name = "mpremote", specifier = ">=1.28.0" },
     { name = "pyelftools", specifier = ">=0.33" },
