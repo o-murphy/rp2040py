@@ -46,7 +46,7 @@ def main() -> None:
     littlefs = Path("littlefs-spi.img")
     if littlefs.exists():
         print(f"Loading littlefs image {littlefs}")
-        load_micropython_flash_image(littlefs, mcu)
+        load_micropython_flash_image(littlefs, mcu, "pico")
 
     spi_buf = bytearray()
 

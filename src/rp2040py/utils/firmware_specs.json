@@ -46,6 +46,16 @@
         "1.29.0-preview.657.gf013bb5195": "https://micropython.org/resources/firmware/RPI_PICO_W-20260730-v1.29.0-preview.657.gf013bb5195.uf2",
         "1.29.0-preview.627.g8250ff1c11": "https://micropython.org/resources/firmware/RPI_PICO_W-20260726-v1.29.0-preview.627.g8250ff1c11.uf2"
       }
+    },
+    "flash_layout": {
+      "pico": {
+        "fs_start": "0xa0000",
+        "fs_blockcount": 352
+      },
+      "pico_w": {
+        "fs_start": "0x12c000",
+        "fs_blockcount": 212
+      }
     }
   },
   "circuitpython": {
@@ -320,6 +330,16 @@
         "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.8.uf2",
         "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.9.uf2"
       }
+    },
+    "flash_layout": {
+      "pico": {
+        "fs_start": "0x100000",
+        "fs_blockcount": 512
+      },
+      "pico_w": {
+        "fs_start": "0x180000",
+        "fs_blockcount": 512
+      }
     }
   },
   "kaluma": {
@@ -354,6 +374,18 @@
         "1.1.0-beta.3": "https://github.com/kaluma-project/kaluma/releases/download/1.1.0-beta.3/kaluma-rp2-pico-w-1.1.0-beta.3.uf2",
         "1.1.0-beta.2": "https://github.com/kaluma-project/kaluma/releases/download/1.1.0-beta.2/kaluma-rp2-pico-w-1.1.0-beta.2.uf2",
         "1.1.0-beta.1": "https://github.com/kaluma-project/kaluma/releases/download/1.1.0-beta.1/kaluma-rp2-pico-w-1.1.0-beta.1.uf2"
+      }
+    },
+    "flash_layout": {
+      "pico": {
+        "prog_start": "0x100000",
+        "fs_start": "0x180000",
+        "fs_blockcount": 128
+      },
+      "pico_w": {
+        "prog_start": "0x100000",
+        "fs_start": "0x180000",
+        "fs_blockcount": 128
       }
     }
   },

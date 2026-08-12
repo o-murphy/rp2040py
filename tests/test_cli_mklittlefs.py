@@ -14,13 +14,14 @@ from rp2040py.cli.mklittlefs import (
 def _read_back(image: str, filename: str) -> bytes:
     from littlefs import LittleFS, UserContext
 
-    from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKCOUNT, MICROPYTHON_FS_BLOCKSIZE
+    from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKSIZE
+    from rp2040py.utils.firmware_retrieve import MICROPYTHON
+    from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
+    block_count = _flash_layout(MICROPYTHON, "pico")["fs_blockcount"]
     with open(image, "rb") as fh:
         context = UserContext(buffer=bytearray(fh.read()))
-    lfs = LittleFS(
-        context=context, block_size=MICROPYTHON_FS_BLOCKSIZE, block_count=MICROPYTHON_FS_BLOCKCOUNT, mount=True
-    )
+    lfs = LittleFS(context=context, block_size=MICROPYTHON_FS_BLOCKSIZE, block_count=block_count, mount=True)
     with lfs.open(filename, "rb") as f:
         return f.read()
 

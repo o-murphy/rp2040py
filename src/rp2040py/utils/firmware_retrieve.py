@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 
 import semver
 
-__all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "retrieve")
+__all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "flash_layout", "retrieve")
 
 _logger = logging.getLogger(__name__)
 
@@ -57,6 +57,18 @@ class FirmwareSpec:
     # tag -> url, board-agnostic. Only ever set when `boards` is `None` (BOOTROM); unused
     # otherwise.
     known_versions: "dict[str, str] | None" = None
+    # board -> {"fs_start": "0x...", "fs_blockcount": N, ...} - where a firmware's own compiled
+    # filesystem (and, for Kaluma, "user program") flash region actually lives, real values sourced
+    # from that firmware's own upstream board config, not guessed (see docs/records/0035 for the
+    # MicroPython derivation - a board with a bigger compiled binary, like pico_w's CYW43 driver +
+    # lwIP stack, needs a correspondingly relocated filesystem region, or writing a filesystem image
+    # silently overwrites the tail of the firmware itself). Set for MICROPYTHON/KALUMA; `None` for
+    # CIRCUITPYTHON (not yet audited the same way - see 0035's "Open questions") and BOOTROM (no
+    # filesystem concept at all). Kaluma's values happen to be identical across every board key
+    # (confirmed against kaluma-project/kaluma's own board.js/board.h) - still stored per-board here
+    # rather than as a separate board-invariant shape, so every firmware family's flash layout lives
+    # in this one place uniformly.
+    flash_layout: "dict[str, dict[str, str | int]] | None" = None
 
 
 def _load_specs() -> "dict[str, FirmwareSpec]":
@@ -164,6 +176,20 @@ def _download(url: str, filename: str) -> "Path | None":
         return None
     _logger.info("Download complete: file saved to: %s", str(cached_path))
     return cached_path
+
+
+def flash_layout(spec: FirmwareSpec, board: str) -> "dict[str, int]":
+    """Resolves `spec.flash_layout[board]` (MICROPYTHON/KALUMA only - see `FirmwareSpec.flash_layout`'s
+    own docstring) into an all-`int` dict, parsing each `"0x..."` string value - `firmware_specs.json`
+    stores them as hex strings for human readability, plain JSON has no hex-literal syntax. Raises
+    `KeyError` for a spec with no `flash_layout` at all, or a `board` not present in it - both
+    considered a caller bug (every board this project actually supports for a `flash_layout`-bearing
+    spec must have an entry), not a runtime condition to degrade gracefully from.
+    """
+    if spec.flash_layout is None:
+        raise KeyError(f"{spec!r} has no flash_layout")
+    entry = spec.flash_layout[board]
+    return {key: (int(value, 16) if isinstance(value, str) else value) for key, value in entry.items()}
 
 
 def retrieve(spec: FirmwareSpec, image: "str | None" = None, board: str = _DEFAULT_BOARD) -> "Path | None":

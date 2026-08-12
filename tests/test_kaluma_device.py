@@ -5,7 +5,11 @@ import time
 import pytest
 
 from rp2040py.device.kaluma_device import KalumaDevice
-from rp2040py.device.load_flash import KALUMA_PROG_FLASH_START, KALUMA_PROG_MAX_SIZE, load_kaluma_program
+from rp2040py.device.load_flash import KALUMA_PROG_MAX_SIZE, load_kaluma_program
+from rp2040py.utils.firmware_retrieve import KALUMA
+from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
+
+KALUMA_PROG_FLASH_START = _flash_layout(KALUMA, "pico")["prog_start"]
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -71,19 +75,19 @@ def test_littlefs_image_loaded_via_load_kaluma_flash_image(garbage_image, monkey
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_flash_image",
-        lambda filename, rp2040: calls.append((filename, rp2040)),
+        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
     )
 
     device = KalumaDevice(garbage_image, littlefs="kaluma_littlefs.img")
 
-    assert calls == [("kaluma_littlefs.img", device.mcu)]
+    assert calls == [("kaluma_littlefs.img", device.mcu, "pico")]
 
 
 def test_no_littlefs_image_by_default(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_flash_image",
-        lambda filename, rp2040: calls.append((filename, rp2040)),
+        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
     )
 
     KalumaDevice(garbage_image)
@@ -95,19 +99,19 @@ def test_program_loaded_via_load_kaluma_program(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_program",
-        lambda filename, rp2040: calls.append((filename, rp2040)),
+        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
     )
 
     device = KalumaDevice(garbage_image, program="index.js")
 
-    assert calls == [("index.js", device.mcu)]
+    assert calls == [("index.js", device.mcu, "pico")]
 
 
 def test_no_program_by_default(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_program",
-        lambda filename, rp2040: calls.append((filename, rp2040)),
+        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
     )
 
     KalumaDevice(garbage_image)
@@ -120,7 +124,7 @@ def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_regio
     script.write_text('console.log("hi");')
     rp2040 = rp2040_factory()
 
-    load_kaluma_program(str(script), rp2040)
+    load_kaluma_program(str(script), rp2040, "pico")
 
     written = rp2040.flash[KALUMA_PROG_FLASH_START : KALUMA_PROG_FLASH_START + len(b'console.log("hi");') + 1]
     assert written == b'console.log("hi");\x00'
@@ -132,4 +136,4 @@ def test_load_kaluma_program_rejects_a_source_too_large_for_the_prog_region(tmp_
     rp2040 = rp2040_factory()
 
     with pytest.raises(ValueError, match="exceeds Kaluma's"):
-        load_kaluma_program(str(script), rp2040)
+        load_kaluma_program(str(script), rp2040, "pico")

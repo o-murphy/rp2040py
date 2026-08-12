@@ -37,11 +37,11 @@ class KalumaDevice(BaseDevice):
     ) -> None:
         super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
-            load_kaluma_flash_image(littlefs, self.mcu)
+            load_kaluma_flash_image(littlefs, self.mcu, board)
         if program is not None:
-            load_kaluma_program(program, self.mcu)
+            load_kaluma_program(program, self.mcu, board)
 
     def dump_flash_image(self, filename: PathLike) -> None:
         """Dump the device's flash filesystem image (LittleFS for Kaluma)
         to a local file."""
-        dump_kaluma_flash_image(filename, self.mcu)
+        dump_kaluma_flash_image(filename, self.mcu, self.board)

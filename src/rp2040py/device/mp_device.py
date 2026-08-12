@@ -87,9 +87,9 @@ class MicroPythonDevice(BaseDevice):
     ) -> None:
         super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
-            load_micropython_flash_image(littlefs, self.mcu)
+            load_micropython_flash_image(littlefs, self.mcu, board)
         if fat12 is not None:
-            load_circuitpython_flash_image(fat12, self.mcu)
+            load_circuitpython_flash_image(fat12, self.mcu, board)
         self.circuitpython = circuitpython
         # Serializes start_async()/exec_async() coroutines running on the engine room (see
         # simulator.submit() below) the same way ThreadPoolExecutor(max_workers=1) used to -
@@ -246,6 +246,6 @@ class MicroPythonDevice(BaseDevice):
         """Dump the device's flash filesystem image (LittleFS for MicroPython, FAT12 for CircuitPython)
         to a local file."""
         if self.circuitpython:
-            dump_circuitpython_flash_image(filename, self.mcu)
+            dump_circuitpython_flash_image(filename, self.mcu, self.board)
         else:
-            dump_micropython_flash_image(filename, self.mcu)
+            dump_micropython_flash_image(filename, self.mcu, self.board)

@@ -619,3 +619,29 @@ Narrowed by elimination, correcting an earlier theory in this same investigation
   `tests/micropython_spi_run.py` (which *does* wire a real `on_transmit`/`complete_transmit()`
   listener, on a delay, matching real SPI clock timing) rather than raw-REPL exec - so this may be
   a previously never-exercised combination, not a new regression in the ordinary sense.
+
+## Wild-execution finding root-caused and fixed (2026-08-12) - see 0035
+
+The "wild-execution" entry above is resolved - root cause was `device/load_flash.py`'s
+`MICROPYTHON_FS_FLASH_START` being a single hardcoded offset wrong for `pico_w` specifically
+(silently overwriting the tail of that board's larger compiled `.data` region). Full derivation,
+fix, and verification in 0035.
+
+**A new, different, still-open issue found while verifying 0035's fix end-to-end via the real
+CLI**, not the wild-execution bug (confirmed - that specific signature is gone): booting
+`tests/micropython/main-cyw43.py` on `pico_w` still doesn't reach the script's own output within
+30-35s. Debug logging shows a suspiciously uniform (~0.24s real-time interval) repeating sequence
+- `[CortexM0Core] SEV` / `[USB] Start USB transfer, ...]` / `[PIO1] clkDivRestart not implemented`
+- textually identical each cycle, reading more like a stalled retry loop than genuinely-slow-but-
+progressing SPI bit-banging (the kind of shape 0027's own "Performance side quest" already
+diagnosed as a real, separate throughput concern).
+
+**Localized precisely (2026-08-12), via a live interactive session, not just the batch script:**
+booting to the friendly REPL and typing `import network`/`nic = network.WLAN(network.WLAN.IF_STA)`
+both return immediately and normally - **`nic.active(True)` is exactly where it hangs**, with
+nothing printed afterward. This is `cyw43_wifi_up()`/`cyw43_ll_wifi_on()` in the real driver - the
+ALP/HT clock handshake + ARM core bring-up (steps 3b/3c/3d), already implemented and unit-tested,
+but evidently not converging against this exact real firmware end-to-end. `clkDivRestart not
+implemented` (wherever that log line actually lives - not yet located) is the concrete next lead,
+likely inside the gSPI bit-banging PIO program's own clock-divider handling. Not investigated
+further in this pass.

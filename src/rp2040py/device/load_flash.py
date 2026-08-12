@@ -12,6 +12,8 @@ from pathlib import Path
 
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.rp2040 import RP2040
+from rp2040py.utils.firmware_retrieve import CIRCUITPYTHON, KALUMA, MICROPYTHON
+from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
 __all__ = (
     "UF2Block",
@@ -27,27 +29,25 @@ __all__ = (
     "load_uf2",
 )
 
-MICROPYTHON_FS_FLASH_START = 0xA0000
 MICROPYTHON_FS_BLOCKSIZE = 4096
-MICROPYTHON_FS_BLOCKCOUNT = 352
 
-CIRCUITPYTHON_FS_FLASH_START = 0x100000
 CIRCUITPYTHON_FS_BLOCKSIZE = 4096
-CIRCUITPYTHON_FS_BLOCKCOUNT = 512
 
 # Kaluma's `pico`/`pico-w` board.js mounts littlefs via `new Flash(132, 128)` - sector 132,
 # 128 sectors - on top of a 1008K (0xFC000) firmware region with 4096-byte sectors:
 # 0xFC000 + 132*4096 = 0x180000. See targets/rp2/boards/pico/board.h in kaluma-project/kaluma.
-KALUMA_FS_FLASH_START = 0x180000
+# Confirmed identical for pico-w too (docs/records/0035) - unlike MicroPython's, whose real
+# storage base genuinely differs per board (see that record for the full derivation).
+# firmware_retrieve.flash_layout(KALUMA, board) below still resolves the actual addresses, for a
+# single source of truth across both firmware families, even though Kaluma's values don't vary by
+# board.
 KALUMA_FS_BLOCKSIZE = 4096
-KALUMA_FS_BLOCKCOUNT = 128
 
 # Kaluma's "user program" region - what `kaluma flash <file>` writes to over YMODEM, and what
 # km_runtime_load() (src/runtime.c) auto-executes on every boot (unless GP22 is pulled low - see
 # km_running_script_check() in targets/rp2/src/system.c; floating/pulled-up by default, same as
 # this emulator's default GPIO state). KALUMA_PROG_SECTOR_BASE=4, KALUMA_PROG_SECTOR_COUNT=128 in
-# board.h: 0xFC000 + 4*4096 = 0x100000. Sits directly before KALUMA_FS_FLASH_START (0x180000).
-KALUMA_PROG_FLASH_START = 0x100000
+# board.h: 0xFC000 + 4*4096 = 0x100000. Sits directly before the fs region (0x180000).
 KALUMA_PROG_MAX_SIZE = 128 * 4096  # KALUMA_PROG_SECTOR_COUNT * KALUMA_FLASH_SECTOR_SIZE
 
 UF2_BLOCK_SIZE = 512
@@ -103,21 +103,22 @@ def _load_flash_image(filename: PathLike, rp2040: RP2040, flash_start: int, bloc
         rp2040.flash[flash_start:flash_end] = f.read()
 
 
-def load_micropython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _load_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT)
+def load_micropython_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(MICROPYTHON, board)
+    _load_flash_image(filename, rp2040, layout["fs_start"], MICROPYTHON_FS_BLOCKSIZE, layout["fs_blockcount"])
 
 
-def load_circuitpython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _load_flash_image(
-        filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT
-    )
+def load_circuitpython_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(CIRCUITPYTHON, board)
+    _load_flash_image(filename, rp2040, layout["fs_start"], CIRCUITPYTHON_FS_BLOCKSIZE, layout["fs_blockcount"])
 
 
-def load_kaluma_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _load_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT)
+def load_kaluma_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(KALUMA, board)
+    _load_flash_image(filename, rp2040, layout["fs_start"], KALUMA_FS_BLOCKSIZE, layout["fs_blockcount"])
 
 
-def load_kaluma_program(filename: PathLike, rp2040: RP2040) -> None:
+def load_kaluma_program(filename: PathLike, rp2040: RP2040, board: str) -> None:
     with open(filename, "rb") as f:
         source = f.read()
     # km_prog_end() (src/prog.c) appends this NUL terminator on real hardware too -
@@ -128,7 +129,8 @@ def load_kaluma_program(filename: PathLike, rp2040: RP2040) -> None:
             f"{filename!r} is {len(source)} bytes, exceeds Kaluma's "
             f"{KALUMA_PROG_MAX_SIZE}-byte user-program flash region"
         )
-    rp2040.flash[KALUMA_PROG_FLASH_START : KALUMA_PROG_FLASH_START + len(data)] = data
+    prog_start = _flash_layout(KALUMA, board)["prog_start"]
+    rp2040.flash[prog_start : prog_start + len(data)] = data
 
 
 def load_uf2(filename: PathLike, rp2040: RP2040) -> None:
@@ -148,15 +150,16 @@ def _dump_flash_image(filename: PathLike, rp2040: RP2040, flash_start: int, bloc
         f.write(rp2040.flash[flash_start:flash_end])
 
 
-def dump_micropython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _dump_flash_image(filename, rp2040, MICROPYTHON_FS_FLASH_START, MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT)
+def dump_micropython_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(MICROPYTHON, board)
+    _dump_flash_image(filename, rp2040, layout["fs_start"], MICROPYTHON_FS_BLOCKSIZE, layout["fs_blockcount"])
 
 
-def dump_circuitpython_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _dump_flash_image(
-        filename, rp2040, CIRCUITPYTHON_FS_FLASH_START, CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT
-    )
+def dump_circuitpython_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(CIRCUITPYTHON, board)
+    _dump_flash_image(filename, rp2040, layout["fs_start"], CIRCUITPYTHON_FS_BLOCKSIZE, layout["fs_blockcount"])
 
 
-def dump_kaluma_flash_image(filename: PathLike, rp2040: RP2040) -> None:
-    _dump_flash_image(filename, rp2040, KALUMA_FS_FLASH_START, KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT)
+def dump_kaluma_flash_image(filename: PathLike, rp2040: RP2040, board: str) -> None:
+    layout = _flash_layout(KALUMA, board)
+    _dump_flash_image(filename, rp2040, layout["fs_start"], KALUMA_FS_BLOCKSIZE, layout["fs_blockcount"])

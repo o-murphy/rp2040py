@@ -1,7 +1,7 @@
-# 0035. Board-aware MicroPython filesystem flash offset
+# 0035. Board-aware MicroPython/CircuitPython/Kaluma filesystem flash offset
 
-- Status: Proposed — root cause confirmed, fix designed, not yet implemented
-- Conceived: 2026-08-12
+- Status: Implemented — measured (2026-08-12)
+- Conceived: 2026-08-12 · Implemented: 2026-08-12
 - Related: 0027 (CYW43439/Pico W epic, where this was found), 0034 (`_execute_batch()` native
   port, during whose re-verification this was found)
 
@@ -123,12 +123,71 @@ mirroring how `utils/firmware_specs.json`/`FirmwareSpec` already handles board-s
    - `tests/micropython_spi_run.py`, `tests/test_cli_mklittlefs.py` - update call sites, no design
      question, just following the new signature.
 
+## Implemented (2026-08-12)
+
+Built as designed above, with one addition made during implementation: **CircuitPython audited
+too**, not left as an open question - real source (`adafruit/circuitpython`,
+`ports/raspberrypi/{mpconfigport.h,link-rp2040.ld}` +
+`boards/raspberry_pi_pico{,_w}/{mpconfigboard.mk,link.ld}`) confirmed the identical bug shape:
+`CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR = CIRCUITPY_FIRMWARE_SIZE + CIRCUITPY_INTERNAL_NVM_SIZE(4096)`
+- plain `pico`'s default `firmware_size = 1020K` (no board override) gives `0x100000`, matching
+  this project's pre-existing constant exactly (was already correct, by luck or original intent).
+  `pico_w` overrides `firmware_size = 1532K` (`boards/raspberry_pi_pico_w/link.ld`, "Must be
+  accompanied by a linker script change" per its own `mpconfigboard.mk` comment - same underlying
+  reason as MicroPython's, the CYW43 driver/lwIP stack needs the room) → real start `0x180000`,
+  not `0x100000`. `fs_blockcount` left at the existing `512` for both boards (unlike
+  MicroPython's, which genuinely shrinks on `pico_w`) - rp2040py's own emulated flash buffer is
+  16MB (`_rp2040.py`), far bigger than either board's real 2MB chip, so only the *start* address
+  needs to be correct; a generously-sized region past it doesn't collide with anything either
+  board's real firmware actually uses.
+
+`firmware_specs.json` gained a `flash_layout` key on all three of `micropython`/`kaluma`/
+`circuitpython` (Kaluma's board-invariant, stored per-board anyway for one uniform shape -
+confirmed via `kaluma-project/kaluma`'s own `board.h`/`board.js`, identical between boards).
+`scripts/fetch_firmware.py` gained matching `_MICROPYTHON_FLASH_LAYOUT`/`_KALUMA_FLASH_LAYOUT`/
+`_CIRCUITPYTHON_FLASH_LAYOUT` constants (hand-curated, not fetched live - no API exists for these,
+they're board hardware-config constants not release metadata) that `main()` now writes into the
+regenerated spec every run, so the JSON's copy can't silently drift from its cited source.
+`utils/firmware_retrieve.py` gained `FirmwareSpec.flash_layout` (a new frozen field) and a
+`flash_layout(spec, board)` helper resolving the JSON's hex-string values into plain ints.
+`device/load_flash.py`'s six load/dump functions for MicroPython/Kaluma/CircuitPython all take a
+new required `board: str` parameter, resolving their real offsets via that helper instead of
+module-level constants (which are now deleted, not deprecated in place - `MICROPYTHON_FS_BLOCKSIZE`
+etc. stay, since block *size* never varies, only start/count).
+
+`device/base_device.py`'s `BaseDevice.__init__` now stores `self.board`, so
+`MicroPythonDevice`/`KalumaDevice` (both already accepted a `board` constructor arg) can resolve
+it again later for `dump_flash_image()`. `cli/mklittlefs.py`'s `mklittlefs` subcommand gained
+`--board` (via the existing `parents=[_shared_arg_parser(...)]` mechanism, used in tandem with
+`--target`, per direct discussion during design) - `_target_fs_layout(target, board)` now resolves
+the real size for whichever board `--board` names, replacing the old static `_TARGET_FS_LAYOUTS`
+dict.
+
+**Verified:**
+- `uv run pre-commit run --all-files` clean (mypy, ruff, pytest both backends).
+- **The original crash is gone.** Re-ran the exact reproduction from 0027's own investigation
+  (`scan_range.py`-style address tracing against `tests/micropython/main-cyw43.py`'s real content,
+  now built into a littlefs image with `mklittlefs --board pico_w` so it lands at the *correct*
+  `0x12c000` offset): distinct invalid-address hits dropped from 987K (spanning
+  `0x0041fd80`-`0xffffffff`) to 2, in the same tiny benign range (`0x14000004`-`0x14002000`) a
+  healthy boot with no littlefs at all already shows - i.e. indistinguishable from "nothing wrong
+  here." A longer, non-bounded run also progressed 24M+ instructions (5.8s) without incident,
+  versus crashing within the first few hundred thousand before this fix.
+
+**Not resolved by this fix - a real, different, next issue found while verifying end-to-end via
+the actual CLI (`rp2040py micropython --board pico_w tests/micropython/main-cyw43.py`, not just
+the bounded tracing harness above):** the full boot still doesn't reach the script's own output
+within 30-35s. Debug-level logging shows a suspiciously uniform (~0.24s real-time interval)
+repeating sequence - `[CortexM0Core] SEV` / `[USB] Start USB transfer, ...]` / `[PIO1]
+clkDivRestart not implemented` - textually identical each cycle, which reads more like a stalled
+retry loop than genuinely-slow-but-progressing SPI bit-banging. Not investigated further in this
+pass - flagged as a new, separate open item in 0027 rather than pursued here.
+
 ## Open questions
 
-- **CircuitPython not checked yet** - `CIRCUITPYTHON_FS_FLASH_START`/`_BLOCKCOUNT` are a second,
-  separate pair of hardcoded constants in the same file with the same shape of risk (a `pico_w`-
-  class board with a bigger compiled binary could hit the identical bug) - not verified against
-  real CircuitPython board config in this pass.
-- **Whether `MICROPY_HW_FLASH_STORAGE_BASE`/`_BYTES` are stable across MicroPython releases** - the
-  fix above assumes one fixed pair of values per board works for every tracked version tag; not
-  verified against anything but the current `v1.28.0` checkout.
+- **Whether `MICROPY_HW_FLASH_STORAGE_BASE`/`_BYTES` (and CircuitPython's/Kaluma's equivalents)
+  are stable across every tracked version tag** - the fix above assumes one fixed pair of values
+  per board works for every release; verified against the current checkouts only (MicroPython
+  v1.28.0, current CircuitPython/Kaluma `main`/`master`).
+- The still-open `[PIO1] clkDivRestart not implemented` stall noted above - real root cause not
+  yet investigated.
