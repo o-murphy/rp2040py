@@ -2,15 +2,17 @@
 
 ## Where things stand
 
-Active work happens on `feat/board-loading-api` (not yet merged to `main`). Two living plan
-documents track it - check both before assuming what's done:
+Engineering notes live as numbered, append-only records under [docs/records/](docs/records/),
+indexed by [docs/0000-TRACKER.md](docs/0000-TRACKER.md) (the scheme itself is
+[record 0032](docs/records/0032-docs-restructure.md)). Two records track the active work -
+check both before assuming what's done:
 
-- [docs/MAIN_THREAD_ASYNCIO_BACKLOG.md](docs/MAIN_THREAD_ASYNCIO_BACKLOG.md) - engine-room
+- [docs/records/0026-main-thread-asyncio.md](docs/records/0026-main-thread-asyncio.md) - engine-room
   concurrency model. **Done**, all 5 phases landed and verified.
-- [docs/CYW43_WIFI_BACKLOG.md](docs/CYW43_WIFI_BACKLOG.md) - CYW43439/Pico W WiFi emulation.
-  In progress; the doc's own header states exactly which step is current.
+- [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) - CYW43439/Pico W WiFi emulation.
+  In progress; the record's own header states exactly which step is current.
 
-Both docs keep a "Progress log"/inline status markers per phase/step - read those rather than
+Records keep a "Progress log"/inline status markers per phase/step - read those rather than
 assuming from the filename alone whether something landed.
 
 ## Verification
@@ -44,7 +46,7 @@ When asked to "document" a possible design/decision (задокументуй), 
 relevant doc as a note about what *should eventually happen* - it does **not** authorize
 implementing it, even if the surrounding conversation included a design judgment call. This repo
 has an established pattern of writing down future work separately from doing it (see the many
-"not started yet"/"deferred, not designed" sections throughout `docs/*_BACKLOG.md`). Only cross
+"not started yet"/"deferred, not designed" sections throughout `docs/records/`). Only cross
 into actual code changes on an explicit, separate go-ahead. When unsure whether a message is
 asking for a doc note or an implementation, ask.
 

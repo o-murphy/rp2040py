@@ -10,7 +10,7 @@
 
 Raspberry Pi Pico (RP2040) Emulator in Python — started as a port of [rp2040js](https://github.com/wokwi/rp2040js), now grown into its own CLI/SDK toolkit around it (see [Differences from upstream rp2040js](#differences-from-upstream-rp2040js) below). It blinks, runs native code, and even the MicroPython REPL!
 
-See [docs/PORTING.md](docs/PORTING.md) for the file-by-file port status against upstream rp2040js.
+See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) for the file-by-file port status against upstream rp2040js.
 
 ## Table of Contents
 
@@ -102,7 +102,7 @@ To confirm you actually got it:
     mpremote` (the real `mpremote` binary alone still fails - pySerial's `list_ports` has no
     Android backend and raises `ImportError` at import time regardless of which subcommand you
     run; `rp2040py mpremote` patches around it - see
-    [docs/mpremote.md](docs/mpremote.md#androidtermux-and-ios-pyserials-list_ports-importerror)).
+    [docs/reference/mpremote.md](docs/reference/mpremote.md#androidtermux-and-ios-pyserials-list_ports-importerror)).
     The compiled `rp2040py.native` (Cython) extension loads and runs fine here too - confirmed by
     hand, no pure-Python fallback needed.
   - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
@@ -183,13 +183,13 @@ file already on disk:
 > compilation gotchas in the bus/interpreter hot path (untyped `address`/`value` parameters forcing
 > a `PyLong` box on every memory access, and bare `0x80000000`+ hex literals silently compiling as
 > Python-object constants instead of C literals) - see
-> [docs/BACKLOG.md](docs/BACKLOG.md#follow-up-two-more-boxing-sources-found-by-reading-the-generated-c-not-by-guessing)
+> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md#follow-up-two-more-boxing-sources-found-by-reading-the-generated-c-not-by-guessing)
 > for the full writeup, including why PyPy's gap didn't close by the same amount (a real boot
 > spends a large, unchanged share of its time in still-Python peripheral emulation that these fixes
 > don't touch). **This row is CPython 3.10 specifically** (this project's default target, and below
 > the abi3 floor - see [Performance](#performance) below): CPython 3.11+ actually measures slower
 > in absolute terms (33.90s, ~5.6x) on the *same* fixed source, purely from the stable-ABI
-> (`Py_LIMITED_API`) build every 3.11+ wheel uses - see the same BACKLOG.md section for that gap
+> (`Py_LIMITED_API`) build every 3.11+ wheel uses - see the same [record 0013](docs/records/0013-cython-core.md) section for that gap
 > too, found (and initially mismeasured!) while producing these very numbers.
 >
 > The `rp2040py.native` row is what most installs actually get with no extra effort - see
@@ -198,7 +198,7 @@ file already on disk:
 > CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner:
 > `uv run --python pypy3.10 --no-dev -- rp2040py micropython ...` (or `... -- python
 > demo/micropython_run.py ...` from a checkout). See
-> [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for the full breakdown
+> [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js) for the full breakdown
 > (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
 > all three.
 >
@@ -216,7 +216,7 @@ file already on disk:
 >
 > Core-level per-instruction throughput work continues independently of this version gap (most
 > recently: `RP2040.write_uint32()` was checking a peripheral dict lookup before cheap RAM/flash
-> range comparisons - see [docs/PORTING.md](docs/PORTING.md#known-differences-from-rp2040js) for
+> range comparisons - see [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js) for
 > the running log). These are general wins, not something that closes the 1.21-vs-1.28 gap itself -
 > that gap is real work MicroPython 1.28's own compiled firmware does per loop iteration, not
 > something this project's emulator code controls.
@@ -267,7 +267,7 @@ supports also works here, *plus* `mpremote`'s own bare interactive REPL, which d
 that specific crash, so `rp2040py mpremote connect socket://host:port repl` works too, no `--pty`
 needed.
 
-See **[docs/mpremote.md](docs/mpremote.md)** for the full picture: connection details for both
+See **[docs/reference/mpremote.md](docs/reference/mpremote.md)** for the full picture: connection details for both
 flags, the `rp2040py mpremote` proxy and the upstream bug it patches around
 ([micropython#18660](https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170)),
 how to quit the emulator when `mpremote` owns the console, and an explicit list of which `mpremote`
@@ -294,7 +294,7 @@ rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # 
 
 `--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
 <=1.21's bundled littlefs can only mount `2.0`, while 1.28's reads both - see
-[docs/PORTING.md](docs/PORTING.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
+[docs/records/0003-littlefs-image-format.md](docs/records/0003-littlefs-image-format.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
 for why.
 
 `--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` to a known
@@ -442,7 +442,7 @@ console instead of this process's own stdio, is not).
 > unformatted flash region - purely cosmetic, Kaluma catches and prints the error without aborting,
 > so boot and `<script.js>` auto-run both continue normally past it. This used to reproduce even
 > against a validly-built `mklittlefs` image, not just blank flash - no longer reproduced after the
-> SSI flash-read/write fixes in `docs/BACKLOG.md` (a real `--target kaluma` image now mounts and
+> SSI flash-read/write fixes in `docs/records/0008-ssi-flash-write.md` (a real `--target kaluma` image now mounts and
 > reads/writes cleanly, verified via `tests/kaluma/index-flash-rw.js`), though that wasn't a
 > deliberate target of those fixes and hasn't been separately root-caused - flag it if it resurfaces.
 
@@ -515,7 +515,7 @@ All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(m
 The interpreter core (`CortexM0Core`) and the memory bus's hot read/write paths are also available
 as a compiled Cython extension (`rp2040py.native`), giving roughly **7x** the instruction
 throughput of the pure-Python implementation on both a synthetic benchmark and a real MicroPython
-boot (see [docs/BACKLOG.md](docs/BACKLOG.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
+boot (see [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
 for the full measured breakdown).
 
 This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
@@ -532,7 +532,7 @@ exist for cases where you want to control this explicitly:
 ## Differences from upstream rp2040js
 
 rp2040py started as a straight port of [rp2040js](https://github.com/wokwi/rp2040js) - the core
-CPU/peripheral emulation still tracks it closely, and [docs/PORTING.md](docs/PORTING.md) keeps a
+CPU/peripheral emulation still tracks it closely, and [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) keeps a
 file-by-file checklist of that. But it's grown well past a 1:1 translation into its own toolkit
 with no rp2040js equivalent, built around actually running real firmware from a shell rather than
 embedding the emulator as a library (rp2040js's own primary use case, e.g. inside Wokwi):
@@ -544,7 +544,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   `os`/`rp2.Flash` calls go through to erase/program flash) implements the actual JEDEC SPI-NOR
   command set (`WREN`/`WRDI`, status/JEDEC-ID reads, page program, sector/block erase) - the same
   commands real flash hardware understands - not just a register stub. rp2040js has the same gap
-  MicroPython/CircuitPython on rp2040py *used* to have (see `docs/BACKLOG.md`'s "SSI flash-write
+  MicroPython/CircuitPython on rp2040py *used* to have (see `docs/records/0008-ssi-flash-write.md`'s "SSI flash-write
   support"): on-device `open(path, "w")`/`os.remove()`/... genuinely persist to the emulated flash
   now, instead of raising/no-opping against an unimplemented peripheral.
 - **A filesystem toolkit**: `mklittlefs` builds a littlefs image on the host (needs
@@ -581,7 +581,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
   [Pythonista](#environments-without-compiled-extension-support-ios)).
 
-See [docs/PORTING.md#known-differences-from-rp2040js](docs/PORTING.md#known-differences-from-rp2040js)
+See [docs/reference/porting-checklist.md#known-differences-from-rp2040js](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,
 not just added features).
 
@@ -594,7 +594,7 @@ not just added features).
 ## Learn more
 
 - [rp2040js](https://github.com/wokwi/rp2040js) — the upstream TypeScript emulator this project is ported from.
-- [docs/PORTING.md](docs/PORTING.md) — port status, file by file.
+- [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) — port status, file by file.
 
 ## License
 

@@ -178,3 +178,22 @@ the exact behavior rp2040py had before `docs/BACKLOG.md`'s "Unified process-shut
 work wired this handler up (found while checking which `mpremote` commands work over
 `--tcp-port` - see `docs/BACKLOG.md` for the full writeup).
 
+
+<!-- restructure: the individual "known differences" grew into their own records -->
+
+## Known differences — index
+
+The individual known-differences that grew large are now numbered records
+(see [../0000-TRACKER.md](../0000-TRACKER.md)):
+
+- [0001](../records/0001-cli-device-api.md) CLI packaging
+- [0002](../records/0002-mklittlefs-image.md) mklittlefs image handling
+- [0003](../records/0003-littlefs-image-format.md) littlefs image format vs. old MicroPython
+- [0006](../records/0006-gpio-pull-floating.md) GPIO pull-up/pull-down for undriven pins
+- [0007](../records/0007-bootrom-revisions.md) configurable bootrom revisions
+- [0014](../records/0014-threading-model.md) threading model
+- [0017](../records/0017-perf-python-vs-v8.md) performance: pure-Python vs V8
+- [0018](../records/0018-raw-repl-txfifo.md) raw-REPL cross-thread tx_fifo bug
+- [0020](../records/0020-pty-serial-passthrough.md) external serial-tool passthrough
+
+The two minor ones (`pio_assembler.py` argument order, `RPWatchdog` reset) stayed above in this file.
