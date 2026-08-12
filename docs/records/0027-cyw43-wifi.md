@@ -742,3 +742,206 @@ batches yielding early when a PIO instance has pending DREQ-driven work, rather 
 to their full instruction/time cap), not a CYW43-specific patch, and belongs as a continuation of
 this doc's own "Performance side quest" work above, not a new independent bug. Recommend picking up
 there next, starting with Finding 4's profile-diff, before attempting a scheduling change.
+
+## Scheduling fix landed - but a separate, deeper stall found underneath (2026-08-13, see 0037)
+
+Follow-up session, explicit user go-ahead to fix (not just document) the CPU/PIO scheduling gap
+above. **Two of this entry's own findings turned out to be measurement artifacts of testing under
+`RP2040PY_SKIP_CYTHON=1` (forced pure Python), not accurate for the real, default native path -
+corrected here, not deleted, per this doc's append-only convention:**
+
+- **Finding 1 ("not stuck, just catastrophically slow") was wrong for native mode.** A native-mode
+  live trace of the same `nic.active(True)` scenario (`mcu.pio[1].machines[0].pc`/`.cycles`
+  sampled every few seconds, no env var override) showed `pc` genuinely frozen at `27` and `cycles`
+  cycling through exactly {260, 580, 900} - never higher - for a full 120s run. That *is* a true
+  livelock in native mode, not merely slow; the pure-Python trace's "real, if glacial, progress"
+  reading only held because forcing pure Python also happened to narrow the CPU/PIO speed gap
+  enough to mask it.
+- **Finding 3's mechanism (PIO "barely stepping," ~2 real instructions in a 45s profile window)
+  was real for the specific window profiled, but not representative** - that window happened to
+  land before firmware download reached its PIO-heavy phase. A `cProfile` diff gated on actual
+  firmware-download chunk progress (not fixed wall-clock offsets) showed PIO stepping
+  (`_state_machine.py`'s `execute_instruction()`/`step()`/`check_wait()`) as the dominant cost
+  *during* that phase - the real bottleneck is the CPU/PIO scheduling gap itself (root-caused
+  below), not PIO simply failing to run.
+
+**Root mechanism, unchanged and confirmed correct**: `RPPIO.run()` (`peripherals/pio.py`) was a
+separate, competing `asyncio.Task` on the same engine-room loop as `Simulator._execute_batch()`'s
+own up-to-1,000,000-instruction CPU batches, entirely decoupled from the same simulated clock/
+instruction cadence that `RPDMAChannel`'s DMA pacing and everything else correctly uses via
+`clock.tick()`. **Fixed in 0037**: `_execute_batch.py`/`native/_simulator.pyx` now step every
+non-stopped `RPPIO` once per CPU instruction/idle-jump directly, the same "driven inline, not a
+competing task" shape `clock.tick()` already had; `RPPIO.write_uint32()`'s `CTRL` branch only
+creates the old competing task when `rp2040.simulator is None` (the no-`Simulator`-owner test-
+fixture path, unaffected). Full derivation, the fix itself, and its own verification
+(`rp2040py bench`, `pre-commit run --all-files`) are in 0037 - not duplicated here.
+
+**Verified this genuinely fixes the livelock, not just changes its shape**: re-tracing the same
+native-mode scenario after 0037 landed shows real, multiple gSPI transactions completing - `cycles`
+reaching well past the old 900 ceiling, `pc` moving through 0/26/27, `tx_fifo` genuinely filling
+and draining - for roughly the first 35-40s of a boot, where before it was frozen from the first
+few seconds. This is 0037's actual scope and it is done.
+
+**A new, different, still-open issue found immediately after, live-traced but not root-caused
+in this pass**: `nic.active(True)` still doesn't return, even given a genuinely long bound (traced
+to a full 10 minutes/600s with no change - confirmed permanent within that window, not merely
+slow). What actually happens, precisely, not guessed:
+
+- Around the same ~35-40s mark every run (reproduced twice, same signature both times, not a
+  one-off race), PIO1 SM0 enters a `WaitType.OUT` autopull stall (blocked wanting one more 32-bit
+  word) and **stays there permanently** - `tx_fifo.empty=True`, `cycles` frozen at a fixed value
+  (519 in both reproductions), never resumes. The DMA channel feeding it (`_read_addr=0x20002064`,
+  a small fixed buffer matching the driver's own reusable `spid_buf`, not the growing firmware-
+  image buffer) shows `active=False`, `_trans_count=0` - it finished its own configured transfer
+  cleanly, with `_trans_count_reload=1` (a single 32-bit word).
+- Read against the real source
+  (`pico-sdk/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c`/`.pio`, local checkout): a
+  write-only `cyw43_spi_transfer()` (`rx == NULL`) deliberately reconfigures the SM's `wrap_top` to
+  loop back to the *start* of the TX loop once the driver's own requested bit count is exhausted -
+  i.e. the SM structurally *always* ends a write-only transfer sitting in exactly this "wants one
+  more TX word" stall by design. Real firmware's own termination signal for this case is *not*
+  "DMA finished" - it explicitly clears `FDEBUG`'s `TXSTALL` bit for this SM
+  (`pio->fdebug = fdebug_tx_stall`) then polls `while (!(pio->fdebug & fdebug_tx_stall))
+  tight_loop_contents();`, relying on real silicon re-asserting `TXSTALL` continuously every cycle
+  the SM is genuinely stalled. So a permanently-stalled SM is *expected* at this point - the open
+  question is why the driver's own poll loop for it never resolves in our emulation.
+- **Not yet confirmed which side is actually wrong.** `RPPIO`'s own `FDEBUG`/`tx_stall` plumbing
+  (`peripherals/pio.py`/`peripherals/_state_machine.py`) looks structurally correct on inspection -
+  sticky-until-`write_fifo()`-clears-it, re-asserted by `execute_instruction()`'s `OUT` branch the
+  instant a real stall begins - but this was read, not empirically proven against a live trace of
+  the driver's own `FDEBUG` reads. **Contradicting evidence against a simple "poll loop never
+  sees the bit" theory**: if the CPU were genuinely stuck in that specific 2-3 instruction
+  `tight_loop_contents()` spin, repeated PC sampling (every 0.4-2s) would keep landing on the same
+  couple of addresses - instead it shows widely varying PCs (`0x10074xxx`, `0x10053axx`, and
+  others) for the full 10 minutes, i.e. the CPU is doing real, varied work, not spinning on that
+  poll. What that varied work actually is was not identified in this pass - one candidate lead
+  (not confirmed): a register sampled mid-loop at one of those addresses looked like `memcmp()`
+  being called with a *monotonically growing* pointer argument walking from an implausible low
+  value (0xfe) up through and past valid SRAM's actual bounds (RP2040 SRAM ends around 0x20042000;
+  the pointer was observed past 0x20313000) over several seconds - consistent with, but not proven
+  to be, a walking-off-the-end memory scan (the same *class* of bug 0035 fixed a different instance
+  of, not confirmed to be the same one). Could equally be unrelated, legitimate MicroPython
+  background work (GC, import machinery) that's simply slow here for its own reasons.
+- **Explicitly not chased further in this pass**: this needs either a symbol-matched disassembly
+  (a real local MicroPython v1.28.0 build with debug info, not just the raw compiled UF2 via
+  `arm-none-eabi-objdump` with no symbols - which is what every trace in this doc so far has used)
+  or a live GDB session (`rp2040py micropython --gdb`, already supported by this CLI, not yet
+  tried for this investigation) to identify the actual function this loop belongs to with
+  confidence, rather than continuing to guess from raw addresses.
+
+## Follow-up stall root-caused precisely, via a real symbol-matched build (2026-08-13)
+
+The `memcmp`-with-a-growing-pointer/"walking off SRAM" theory above is **wrong - retracted, not
+just superseded.** Built the actual firmware locally instead of guessing further: this machine
+already has a `micropython` checkout at exactly `v1.28.0` (`git describe` confirms it, submodules
+for `cyw43-driver`/`pico-sdk` already pinned to the matching versions) - `make BOARD=RPI_PICO_W
+submodules && make BOARD=RPI_PICO_W` in `ports/rp2` (after fetching the additionally-needed
+`lib/lwip`, `lib/btstack`, and `pico-sdk`'s own `lib/tinyusb` submodules, none initialized by
+default) produces a real `firmware.elf` with full debug symbols. Booting the simulator against
+*this build's own* `firmware.uf2` (not the originally-downloaded release UF2 - a different
+compilation, so its addresses don't correspond to this ELF's symbols at all; this distinction
+matters and cost real time to notice) reproduces the exact same stall signature (`dma0_reload=1`,
+`cycles=519`, permanent `WaitType.OUT`), confirming it's the same bug, not build-specific -
+`arm-none-eabi-addr2line -f -C -e firmware.elf <addr>` then resolves every address from this
+session's traces with certainty:
+
+- **The CPU's PC at the exact moment of the stall is `cyw43_delay_ms()`**
+  (`extmod/cyw43_config_common.h:101`) - not stuck *inside* the SPI/PIO code at all by this point,
+  already past it. Its body is a plain, correct busy-wait:
+  ```c
+  static inline void cyw43_delay_ms(uint32_t ms) {
+      uint32_t us = ms * 1000;
+      uint32_t start = mp_hal_ticks_us();
+      while (mp_hal_ticks_us() - start < us) {
+          CYW43_EVENT_POLL_HOOK;   // mp_event_handle_nowait()
+      }
+  }
+  ```
+  `cyw43_ll_wifi_on()` calls this with small, bounded values (50ms after setting country, 50ms
+  after CLM load, 50ms after `event_msgs`, 50ms after `WLC_UP`, one `cyw43_delay_us(150000-dt)`) -
+  a few hundred milliseconds of *requested* delay, total, across the whole call. The permanently-
+  stalled PIO SM from the entry above is a red herring for this specific stall - it's an
+  *abandoned* transaction the driver already timed out on and moved past (matching
+  `cyw43_do_ioctl()`'s own bounded `CYW43_IOCTL_TIMEOUT_US` retry logic), not what's currently
+  blocking forward progress.
+- **The addresses sampled *after* the stall resolve to real, legitimate code, not a bug or a
+  memory-scanning artifact**: `sync_ep_buffer`/`advance_index`
+  (`lib/tinyusb/src/portable/raspberrypi/rp2040/rp2040_usb.c`,
+  `lib/tinyusb/src/common/tusb_fifo.c`) and newlib's own `memcmp`. `rp2` doesn't define its own
+  `MICROPY_INTERNAL_EVENT_HOOK` (`py/mphal.h`'s default, `(void)0`, applies), so
+  `CYW43_EVENT_POLL_HOOK`/`mp_event_handle_nowait()` itself is a *cheap*, non-blocking call on this
+  port (just `mp_handle_pending()`) - it is not where the USB activity comes from. `sync_ep_buffer`/
+  `advance_index` are real **USB interrupt handler** code (tinyusb's `dcd_rp2040.c`/`tud_int_handler`
+  path), confirmed against `peripherals/usb.py`: `USBCTRL` schedules a Start-of-Frame interrupt
+  every 1ms of simulated time (`# SOF every 1ms = 1,000,000 ns`), correctly clock-coupled (a
+  `SimulationClock` alarm, the same mechanism `RPDMAChannel` correctly uses - not the
+  competing-task problem 0037 fixed). A `cyw43_delay_ms(50)` call should see roughly 50 real SOF
+  interrupts fire during its 50 *simulated* milliseconds.
+- **Conclusion: this is a real-wall-clock performance problem, not a correctness bug or hang** -
+  the same *class* of issue as this doc's own "Performance side quest" (PIO stepping cost) and
+  0037 (PIO/CPU scheduling), just manifesting via USB SOF-interrupt-handling cost instead. A few
+  hundred milliseconds of *simulated* delay, spread across a few dozen SOF interrupts each costing
+  real Python-level emulation time to service, is turning into multiple real minutes. Not measured
+  precisely in this pass (no per-interrupt profiling done yet) - the next concrete step for
+  whoever picks this up is a bounded `cProfile` run scoped specifically to the USB IRQ handler
+  path (`peripherals/usb.py`'s interrupt dispatch, mirroring the profiling method 0031/0034/0037
+  already used for PIO) to confirm the exact per-SOF real-time cost and decide whether it needs the
+  same kind of fix (cheaper handling, or coarser interrupt granularity) or is simply inherent to
+  emulating USB in pure Python at this fidelity.
+- **Everything in the immediately-preceding entry that is now superseded, precisely**: the
+  `memcmp`-with-growing-pointer read was a real observation but a wrong interpretation - it's
+  `memcmp` being called repeatedly from legitimate tinyusb/newlib code (different call sites, not
+  one call walking a buffer), not a single scan walking off SRAM's bounds; there is no
+  `wild-execution`-class memory-safety bug here. The `dma_channel_abort()`/FDEBUG-polling
+  mechanism read from `cyw43_bus_pio_spi.c` in that entry is real and accurate, just not what's
+  currently executing by the time of the stall - the driver already moved past it via its own
+  bounded retry/timeout logic, same conclusion reached differently.
+
+## USB-SOF hypothesis retracted; real cost was 0037's own fix; still not fully resolved (2026-08-13)
+
+The previous entry's "next concrete step" (profile the USB IRQ handler path) was done - and its
+own hypothesis was wrong. A bounded `cProfile` run scoped to the `cyw43_delay_ms()` phase (gated
+on real elapsed time against the just-built local firmware, not a fixed offset) showed
+`peripherals/usb.py` at a combined ~0.02s out of a 20s window - negligible, not the cost. The
+actual dominant cost, unexpectedly, was **0037's own fix**: `RPPIO.step()`/`check_changed_pins()`
+at ~8s+3s of the same 20s window (14.37 million calls) - because PIO1's SM0, permanently
+`waiting=True` after the stalled write-only transaction two entries up, never gets its `stopped`
+flag set (a real hardware SM legitimately doesn't need to be disabled just because it's stalled -
+`pio.stopped` only reflects the `CTRL` register's `should_run` bits, untouched here), so 0037's
+"step every non-stopped `RPPIO` once per CPU instruction" was paying full `step()` cost for a
+machine that could not possibly make progress - for the rest of the session, on every single
+instruction.
+
+**Fixed**: confirmed every `StateMachine` wait type (`IRQ`, `PIN`, `RX_FIFO`, `TX_FIFO`/`OUT`)
+already has its own targeted, event-driven re-check elsewhere in the codebase
+(`RPPIO.irq_updated()`, `GPIOPin._apply_input_value()`, `StateMachine.read_fifo()`/`write_fifo()`)
+that flips `waiting` back to `False` the instant whatever it's blocked on actually changes - so
+`_execute_batch.py`/`native/_simulator.pyx` now only call `pio.step()` when at least one machine is
+`enabled and not waiting` (`_has_runnable_machine()`), skipping the wasted call entirely for a
+PIO instance that's enabled but has nothing runnable right now. Verified via the same profiling
+method (cost gone) and `rp2040py bench`/`pre-commit run --all-files` (no regression, both builds
+pass) - see 0037's own updated Verification section.
+
+**Still open after this fix, confirmed via a 600s bounded run against the real, locally-built
+`v1.28.0` firmware (not the downloaded release UF2 - see the entry above for why that distinction
+matters)**: `nic.active(True)` does not complete even given 10 real minutes. The CPU's PC keeps
+varying throughout (genuine, ongoing execution, not a second livelock) and the previous entry's own
+root cause still holds precisely: `cyw43_delay_ms()`'s busy-wait needs the *simulated* clock to
+advance through the driver's own requested delay total (a few hundred milliseconds, spread across
+several calls in `cyw43_ll_wifi_on()`), and advancing simulated time this way still costs far more
+real wall-clock time in this Python-level emulator than the delay itself represents - the same
+*class* of limitation as this doc's own "Performance side quest" (PIO stepping cost) and 0037 (the
+scheduling gap), just now bottlenecked on raw per-instruction interpretation throughput with no
+further starvation/scheduling bug found underneath it. Consistent with an independent data point
+from live testing (not this investigation): `v1.23.0` (an older, presumably shorter `cyw43-driver`
+bring-up path) returns from `nic.active(True)` quickly on this same emulator, while `v1.28.0`'s
+longer sequence does not - matching "total requested delay scales with driver version," not a
+version-specific bug.
+
+**Not fixed here** - this is a genuine raw-throughput ceiling, not a scheduling or correctness bug,
+and needs its own investigation (most likely a native Cython port of more of the peripheral/bus
+dispatch path, in the same spirit as 0013/0031/0034, rather than another `_execute_batch()`-level
+change) rather than a quick follow-up. CI's own `ci-micropython.yml` was adjusted in this session
+to stop running the pico_w WLAN job against `1.28.0` (kept only for `1.23.0`, which completes
+quickly) - a pragmatic workaround given a 10+ minute runtime isn't practical for CI regardless of
+correctness, not a fix.

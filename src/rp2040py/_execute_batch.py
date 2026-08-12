@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from rp2040py.peripherals.pio import RPPIO
     from rp2040py.simulator import Simulator
 
 # A purely-idle (WFI'd) batch can legitimately jump thousands of simulated-time units ahead per
@@ -46,6 +47,37 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
     touches `.rp2040`, `.clock`, and `.stopped`, structurally, the same three attributes
     native/_simulator.pyx's own execute_batch() reads."""
     rp2040, clock = simulator.rp2040, simulator.clock
+
+    # Stepped once per loop iteration below (both the idle-jump and busy-instruction paths - real
+    # PIO keeps running independent of CPU sleep state), the same "driven directly by this loop,
+    # not a competing asyncio.Task" pattern clock.tick() itself already uses. Grabbed once here,
+    # not re-read from rp2040.pio every iteration - a fixed 2-element list for the life of an
+    # RP2040. See peripherals/pio.py's __init__/write_uint32() CTRL-branch comments and
+    # docs/records/0037-pio-clock-coupled-stepping.md for why a separately-scheduled RPPIO.run()
+    # task was a real bug here, not just a style choice.
+    #
+    # Only actually stepped below when at least one machine is enabled and not currently blocked
+    # in a wait (`_has_runnable_machine()`) - a machine sitting in `waiting=True` gains nothing
+    # from being re-`step()`'d every single instruction: every StateMachine wait type (IRQ, PIN,
+    # RX_FIFO, TX_FIFO/OUT) already has its own targeted, event-driven re-check elsewhere
+    # (RPPIO.irq_updated(), GPIOPin._apply_input_value(), StateMachine.read_fifo()/write_fifo()) -
+    # those already flip `waiting` back to False the instant whatever it's blocked on actually
+    # changes, and this loop picks the machine back up on its very next iteration once that
+    # happens. Found live, not theorized: profiling a real CYW43 boot after this file's own first
+    # version landed showed RPPIO.step()/check_changed_pins() as ~55% of profiled time in a 20s
+    # window (14.3M calls) - PIO1's SM0 sat permanently `waiting=True` after a stalled gSPI
+    # transaction (see 0027's own write-up) yet `pio.stopped` stays False (a real hardware SM
+    # doesn't need to be explicitly disabled just because it's stalled), so every single
+    # subsequent CPU instruction was paying full step() cost for a machine that could not
+    # possibly make progress until an external event it wasn't currently waiting to be told
+    # about anyway.
+    def _has_runnable_machine(pio: "RPPIO") -> bool:
+        for machine in pio.machines:
+            if machine.enabled and not machine.waiting:
+                return True
+        return False
+
+    pios = rp2040.pio
     cycle_nanos = 1e9 / 125_000_000  # 125 MHz
     i: float = 0
     batch_start = time.monotonic()
@@ -120,6 +152,9 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
                     pending_nanos = 0.0
                     pending_count = 0
                     nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+        for pio in pios:
+            if not pio.stopped and _has_runnable_machine(pio):
+                pio.step()
         i += 1
     if pending_nanos:
         # End of batch (stopped, iteration ceiling, or the real-time yield budget above) with

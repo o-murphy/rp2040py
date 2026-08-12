@@ -50,11 +50,12 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0033](records/0033-completions-and-validation.md) Add autocompletions for the cli tool | accepted
 - [x] [0034](records/0034-execute-batch-native-port.md) `_execute_batch()` native Cython port | follow-up of 0013/0031
 - [x] [0035](records/0035-board-aware-fs-flash-offset.md) board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes pico_w wild-execution crash
+- [x] [0037](records/0037-pio-clock-coupled-stepping.md) couple `RPPIO` stepping to the CPU's own instruction loop | fixes CYW43 native-mode livelock, follow-up of 0031/0034
 
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; `nic.active(True)` root-caused as a CPU/PIO/DMA scheduling-fairness gap (not a CYW43 bug, not fixed yet); main-spi.py hang still open
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; CPU/PIO scheduling livelock fixed by 0037 (incl. a same-day follow-up fix for a regression 0037 itself introduced); `nic.active(True)` on v1.28.0 still exceeds 10min — root-caused via a real symbol-matched local build to raw per-instruction throughput inside `cyw43_delay_ms()`'s busy-wait, not a scheduling/correctness bug (v1.23.0 completes quickly); CI dropped 1.28.0 from the pico_w WLAN job as a pragmatic workaround; main-spi.py hang still open
 - [ ] [0036](records/0036-littlefs-fat12-exclusivity.md) `--littlefs`/`--fat12` mutual exclusivity | Proposed — documented only
 
 ### Rejected / Superseded
