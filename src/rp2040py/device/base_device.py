@@ -54,6 +54,7 @@ class BaseDevice:
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
+        self.board = board
         self.simulator = Simulator(rp2040=build_rp2040(board))
         self.mcu: RP2040 = self.simulator.rp2040
 

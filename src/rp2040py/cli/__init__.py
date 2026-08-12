@@ -71,11 +71,8 @@ from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.device.base_device import BaseDevice
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import (
-    CIRCUITPYTHON_FS_BLOCKCOUNT,
     CIRCUITPYTHON_FS_BLOCKSIZE,
-    KALUMA_FS_BLOCKCOUNT,
     KALUMA_FS_BLOCKSIZE,
-    MICROPYTHON_FS_BLOCKCOUNT,
     MICROPYTHON_FS_BLOCKSIZE,
     load_micropython_flash_image,
     load_uf2,
@@ -89,7 +86,7 @@ from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import ShutdownRequest, Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
-from rp2040py.utils.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, retrieve
+from rp2040py.utils.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, flash_layout, retrieve
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
@@ -680,7 +677,7 @@ def _bench_firmware(
 
     if littlefs:
         try:
-            load_micropython_flash_image(littlefs, rp2040)
+            load_micropython_flash_image(littlefs, rp2040, board)
         except ValueError as exc:
             _logger.error("%s", exc)
             sys.exit(1)
@@ -832,11 +829,20 @@ def _cmd_mpremote(args: argparse.Namespace) -> None:
     sys.exit(_mpremote_main())
 
 
-_TARGET_FS_LAYOUTS = {
-    "micropython": (MICROPYTHON_FS_BLOCKSIZE, MICROPYTHON_FS_BLOCKCOUNT),
-    "circuitpython": (CIRCUITPYTHON_FS_BLOCKSIZE, CIRCUITPYTHON_FS_BLOCKCOUNT),
-    "kaluma": (KALUMA_FS_BLOCKSIZE, KALUMA_FS_BLOCKCOUNT),
-}
+_TARGET_NAMES = ("micropython", "circuitpython", "kaluma")
+
+
+def _target_fs_layout(target: str, board: str) -> "tuple[int, int]":
+    """(block_size, block_count) for `--target`, board-aware for every family - see
+    docs/records/0035-board-aware-fs-flash-offset.md for why this can't be a plain per-target
+    constant (a board's real firmware footprint changes where/how big its filesystem region is;
+    building a littlefs image sized for the wrong board silently corrupts the firmware it's loaded
+    alongside)."""
+    if target == "micropython":
+        return MICROPYTHON_FS_BLOCKSIZE, flash_layout(MICROPYTHON, board)["fs_blockcount"]
+    if target == "kaluma":
+        return KALUMA_FS_BLOCKSIZE, flash_layout(KALUMA, board)["fs_blockcount"]
+    return CIRCUITPYTHON_FS_BLOCKSIZE, flash_layout(CIRCUITPYTHON, board)["fs_blockcount"]
 
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
@@ -845,10 +851,12 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if args.target is not None:
-        block_size, block_count = _TARGET_FS_LAYOUTS[args.target]
+        block_size, block_count = _target_fs_layout(args.target, args.board)
     else:
         block_size = args.block_size if args.block_size is not None else MICROPYTHON_FS_BLOCKSIZE
-        block_count = args.block_count if args.block_count is not None else MICROPYTHON_FS_BLOCKCOUNT
+        block_count = (
+            args.block_count if args.block_count is not None else _target_fs_layout("micropython", args.board)[1]
+        )
 
     try:
         build_littlefs_image(
@@ -1114,7 +1122,9 @@ def main(argv: "list[str] | None" = None) -> None:
 
     if _HAS_LITTLEFS:
         mklittlefs_parser = subparsers.add_parser(
-            "mklittlefs", help="build a littlefs image for `micropython`'s filesystem support"
+            "mklittlefs",
+            parents=[_shared_arg_parser("board")],
+            help="build a littlefs image for `micropython`'s filesystem support",
         )
         mklittlefs_parser.add_argument(
             "files",
@@ -1133,13 +1143,15 @@ def main(argv: "list[str] | None" = None) -> None:
         )
         mklittlefs_parser.add_argument(
             "--target",
-            choices=tuple(_TARGET_FS_LAYOUTS.keys()),
+            choices=_TARGET_NAMES,
             default=None,
             help=(
                 "preset --block-size/--block-count for a known firmware's filesystem layout - "
-                "mutually exclusive with passing them explicitly "
-                f"(defaults to micropython's {MICROPYTHON_FS_BLOCKSIZE}/{MICROPYTHON_FS_BLOCKCOUNT} "
-                "if neither --target nor --block-size/--block-count is given)"
+                "mutually exclusive with passing them explicitly, sized for --board (micropython/"
+                "kaluma only - a board with a bigger compiled firmware needs a differently-sized/"
+                "placed filesystem region, see docs/records/0035) "
+                "(defaults to micropython's if neither --target nor --block-size/--block-count is "
+                "given)"
             ),
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=None)
