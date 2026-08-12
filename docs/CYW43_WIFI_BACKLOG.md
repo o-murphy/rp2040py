@@ -276,6 +276,168 @@ since the wire format is big-endian-ish word order but the CPU is little-endian.
 word-aligned (asserted `& 3` checks throughout) - matches the 32-bit-word framing already inferred
 from Wokwi's bundle, now confirmed from the source driving it.
 
+## Real bringup sequence beyond F0 — read from source (2026-08-12)
+
+**Supersedes step 3's original one-paragraph estimate in "Implementation order" below.** That
+estimate ("F0 bus registers, F1 windowed backplane addressing, enough `WLC_*`/`WLC_E_*` handling
+... also synchronous, in-line — still pure state machine, no real I/O yet") undersold this
+significantly - read the rest of `cyw43_ll.c` (2435 lines total, not just the ~100-line
+`cyw43_ll_bus_init()` excerpt step 2 needed) end to end before writing any step-3 code. What
+follows is what real, unmodified firmware actually does between "F0 handshake done" (step 2) and
+"`network.WLAN().scan()`/`.connect()` works" - each subsection names the step (below, in the
+revised "Implementation order") it belongs to.
+
+### Structural gap step 2 didn't anticipate: block transfers
+
+**Every real gSPI transaction from here on is multi-byte, not the single 4-byte register
+reads/writes step 2's `GSPIBus` handles.** `make_cmd()`'s own `size` field is 11 bits (up to 2047
+bytes) for exactly this reason - firmware download writes chunks up to `CYW43_BUS_MAX_BLOCK_SIZE`,
+SDPCM/ioctl frames are tens to low hundreds of bytes, and F2 packet reads use whatever
+`SPI_STATUS_REGISTER`'s pending-length field reports. `GSPIBus._on_clock_rising()`/
+`_on_clock_falling()` today only ever drive/sample exactly one 32-bit word per read/write - this
+needs generalizing to arbitrary byte counts (still MSB-first per word, still word-aligned per the
+real driver's own `assert(!(len & 3))` checks) before any of the sub-steps below can do anything
+beyond single-register pokes. This is genuinely step 2's own scope creeping forward, not step 3 -
+listed as step 3a below for exactly that reason.
+
+### ALP/HT clock handshake + KSO (`BACKPLANE_FUNCTION`, `SDIO_CHIP_CLOCK_CSR`/`SDIO_SLEEP_CSR`)
+
+Every `cyw43_ll_bus_sleep(false)` call (which `cyw43_sdpcm_send_common()` - i.e. *every* SDPCM
+send - calls first) goes through `cyw43_kso_set()` (`USE_KSO` is unconditionally `1`, not an
+SDIO-only path): writes `SBSDIO_SLPCSR_KEEP_SDIO_ON` to `SDIO_SLEEP_CSR` (`0x1001f`), then polls
+reading it back (up to 64 attempts, 1ms apart) until both `KEEP_SDIO_ON`/`DEVICE_ON` bits read back
+set. Separately, `cyw43_ll_bus_sleep_helper()`'s own HT-clock request writes
+`SBSDIO_HT_AVAIL_REQ` to `SDIO_CHIP_CLOCK_CSR` (`0x1000e`) and polls (up to 1000×, 1ms apart) for
+`SBSDIO_HT_AVAIL` to read back set; the earlier ALP handshake in `cyw43_ll_bus_init()` (already
+partially read for step 2) does the same dance with `SBSDIO_ALP_AVAIL_REQ`/`SBSDIO_ALP_AVAIL`. No
+real clock startup latency needs modeling - a register model where writing the `*_REQ` bit makes
+the corresponding `*_AVAIL` bit immediately readable satisfies every poll loop above trivially and
+correctly (this project has no reason to make these loops spin for real).
+
+### Backplane (F1) windowed addressing (`cyw43_set_backplane_window()`/`cyw43_read_backplane()`/`cyw43_write_backplane()`)
+
+The F1 address field in `make_cmd()` is 17 bits; backplane addresses are 32-bit, so the driver
+maintains a movable "window": `SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH` (`0x1000a`/`0x1000b`/`0x1000c`,
+each 1 byte, written only when that byte of the target address actually changed vs.
+`self->cur_backplane_window` - a driver-side optimization, not something the chip model needs to
+replicate) select the upper bits; the low 15 bits (`BACKPLANE_ADDR_MASK = 0x7fff`) go directly in
+the F1 read/write's own address field, OR'd with `SBSDIO_SB_ACCESS_2_4B_FLAG` (`0x08000`) - always
+set for SPI (`CYW43_USE_SPI`), regardless of transfer size. A plain byte-addressable "backplane
+memory" model (a big enough `bytearray`, or a sparse dict if a full 4GB space is wasteful) with
+generic read/write dispatch - the same shape as `GSPIBus`'s own F0 register space (step 2) - covers
+this; the *meaning* of specific backplane addresses (core control registers, SOCSRAM, ...) is
+layered on top, not part of the windowing mechanism itself.
+
+### ARM core reset/enable (`disable_device_core()`/`reset_device_core()`/`device_core_is_up()`)
+
+Real bringup resets then re-enables two of the chip's own internal cores - `CORE_WLAN_ARM`
+(`WLAN_ARMCM3_BASE_ADDRESS = 0x18003000`) and `CORE_SOCRAM` (`SOCSRAM_BASE_ADDRESS = 0x18004000`),
+each with a `WRAPPER_REGISTER_OFFSET = 0x100000` added, then `AI_IOCTRL_OFFSET = 0x408`/
+`AI_RESETCTRL_OFFSET = 0x800` added on top for the two registers actually touched
+(`SICF_FGC|SICF_CLOCK_EN|SICF_CPUHALT` bits at `AI_IOCTRL_OFFSET`, `AIRC_RESET` bit at
+`AI_RESETCTRL_OFFSET`) - all via the backplane windowed access above. **This does not require
+emulating a second CPU core running real ARM code** - `rp2040py` only needs these specific backplane
+registers to reflect "reset" then "clocked and out of reset" when read back, matching
+`device_core_is_up()`'s own check (`AI_IOCTRL_OFFSET & (SICF_FGC|SICF_CLOCK_EN) == SICF_CLOCK_EN`
+and `AI_RESETCTRL_OFFSET & AIRC_RESET == 0`) - the WLAN core's own firmware execution is opaque to
+the host driver already (it only ever talks to it through SDPCM), so nothing downstream can tell
+the difference between "real ARM core executing real firmware" and "a register model that just
+remembers it was told to start."
+
+### Firmware + CLM blob download (`cyw43_download_resource()`/`cyw43_clm_load()`)
+
+The driver writes the actual compiled WiFi-chip firmware image (`wifi_firmware.S`/`.ld`,
+hundreds of KB, embedded in the host binary) plus a separate CLM (Country Locale Matrix,
+regulatory config) blob into backplane/SOCSRAM memory via chunked `cyw43_write_bytes()` calls.
+**`cyw43_check_valid_chipset_firmware()` (checks for a `"Version: "` string near the blob's own
+end) runs entirely on the driver/host side, against the driver's own in-memory copy of the
+firmware, before any of it is written to the bus** - the chip model never sees this check and
+doesn't need to satisfy it; it only ever needs to accept the resulting write transactions (ignore
+the actual bytes, or store them somewhere inert - there's no second CPU to execute them against,
+per the previous subsection). **Real, separate concern this raises: performance.** `GSPIBus`
+today is driven by genuine per-bit `GPIOPin.add_listener()` callbacks - hundreds of KB of firmware
+downloaded this way is potentially millions of individual Python callback invocations during boot.
+Worth profiling once step 3a (block transfers) lands, before assuming real-firmware boot is
+practically fast enough to use interactively; a batched/short-circuited write path for large
+block transfers (still correct from the driver's point of view - it never inspects the response to
+a pure write) may be needed regardless of the bit-level protocol fidelity kept for reads/small
+transfers.
+
+### SDPCM framing + ioctl request/response (`cyw43_sdpcm_send_common()`/`cyw43_send_ioctl()`/`sdpcm_process_rx_packet()`)
+
+Once the chip is "up," every control/data exchange rides one common 14-byte SDPCM header
+(`size`/`size_com` - a redundant `~size` checksum, not compression - `sequence`, `channel_and_flags`
+selecting `CONTROL_HEADER=0`/`DATA_HEADER=2`/`ASYNCEVENT_HEADER=1`, `header_length`,
+`wireless_flow_control`, `bus_data_credit`, 2 reserved bytes) written via
+`cyw43_write_bytes(WLAN_FUNCTION, 0, ...)` - i.e. as an ordinary F2 block write, using the
+block-transfer machinery from step 3a. An ioctl request adds its own 16-byte header on top (`cmd`,
+`len` - packed input/output lengths - `flags` - includes a per-request ID the response must echo
+back exactly, `CDCF_IOC_ID_MASK`/`_SHIFT` - `status`) plus the payload. `sdpcm_process_rx_packet()`
+(response side) validates the `size`/`~size_com` pair, tracks `bus_data_credit` (a simple flow-
+control counter - the model doesn't need real backpressure, just something that increments
+consistently so the driver's own stall-detection loop in `cyw43_sdpcm_send_common()` never
+triggers), and for `CONTROL_HEADER` responses checks the echoed ID matches the last request sent
+before treating the payload as that ioctl's actual response. A minimal chip model can satisfy the
+*bulk* of real firmware's own `WLC_*` ioctl vocabulary (see the ID list in the "Authoritative
+protocol reference" section above, now confirmed larger than first listed -
+`WLC_GET_BSSID`/`WLC_GET_SSID`/`WLC_SET_CHANNEL`/`WLC_GET_ANTDIV`/`WLC_SET_DTIMPRD`/`WLC_GET_PM`/
+`WLC_GET_ASSOCLIST`/`WLC_SET_WSEC_PMK` all appear in `cyw43_ll.c` too) with one generic
+"echo a zero-length success response" handler, reserving real per-ioctl behavior for the small
+subset that actually needs it (`WLC_SET_SSID`/`WLC_SET_VAR "escan"`/join-related ones - see below).
+
+### F2 "packet available" polling (`cyw43_ll_sdpcm_poll_device()`, SPI variant)
+
+The driver has no separate interrupt-line wiring on Pico W beyond the shared `WL_D` pin's own
+IRQ-when-CS-deasserted behavior (already noted in "Hardware: how RP2040 talks to the CYW43439"
+above - confirmed here as `CYW43_PIN_WL_HOST_WAKE == WL_DATA_IN`, the exact same GPIO24). Polling
+for an inbound packet reads `SPI_INTERRUPT_REGISTER` (`F2_PACKET_AVAILABLE` bit) then
+`SPI_STATUS_REGISTER` (`GSPI_PACKET_AVAILABLE` bit + pending-byte-count in bits 19:9,
+`STATUS_F2_PKT_LEN_MASK`/`_SHIFT`), then reads exactly that many bytes via
+`cyw43_read_bytes(WLAN_FUNCTION, 0, bytes_pending, ...)`. So delivering an ioctl response or async
+event to the driver, from the chip model's side, means: stage the encoded SDPCM+payload bytes,
+set `SPI_STATUS_REGISTER`'s pending-length field and `GSPI_PACKET_AVAILABLE`, set
+`SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE`, then hand those exact bytes back on the next F2
+read of that length.
+
+### Async event delivery (`cyw43_ll_parse_async_event()`, `cyw43_async_event_t`)
+
+An async event (channel `ASYNCEVENT_HEADER`) is delivered as a fake inbound Ethernet frame: the
+BDC-header-stripped payload must have EtherType `0x886c` at the conventional offset and the
+Broadcom OUI (`00:10:18`) right after it - `sdpcm_process_rx_packet()` rejects anything else before
+the event struct is even looked at. The actual `cyw43_async_event_t` (`cyw43_ll.h`) starts 24 bytes
+past that OUI check: 2 reserved bytes, `flags` (u16, big-endian on the wire - `cyw43_be16toh()`),
+`event_type`/`status`/`reason` (u32 each, big-endian), 30 reserved bytes, `interface`, 1 reserved
+byte, then a union whose only current member is `cyw43_ev_scan_result_t` (bssid/ssid/channel/
+auth_mode/rssi, with several `uint32_t`/`uint16_t` reserved gaps matching real firmware's own
+struct padding - field offsets matter here, this can't be a natural Python dataclass layout without
+explicit packing). `WLC_E_*` event-type IDs are already listed in "Authoritative protocol
+reference" above - confirmed complete against this header (`CYW43_EV_SET_SSID=0`, `_JOIN=1`,
+`_AUTH=3`, `_DEAUTH=5`, `_DEAUTH_IND=6`, `_ASSOC=7`, `_DISASSOC=11`, `_DISASSOC_IND=12`, `_LINK=16`,
+`_PRUNE=23`, `_PSK_SUP=46`, `_ICV_ERROR=49`, `_ESCAN_RESULT=69`, `_CSA_COMPLETE_IND=80`,
+`_ASSOC_REQ_IE=87`, `_ASSOC_RESP_IE=88`) alongside `CYW43_STATUS_*` codes events carry
+(`SUCCESS=0`, `FAIL=1`, `TIMEOUT=2`, `NO_NETWORKS=3`, `ABORT=4`, `NO_ACK=5`, `UNSOLICITED=6`,
+`ATTEMPT=7`, `PARTIAL=8` - scan results specifically arrive with this status - `NEWSCAN=9`,
+`NEWASSOC=10`).
+
+### Scan (`cyw43_ll_wifi_scan()`) and join (`cyw43_ll_wifi_join()`)
+
+`scan()` is just one `WLC_SET_VAR "escan"` iovar write (a fixed-shape options struct - version/
+action/bssid/bss_type/probe+active+passive+home timing/channel list, all driver-chosen constants,
+nothing the chip model needs to branch on) - the *response* is what matters: one or more
+`ASYNCEVENT_HEADER` deliveries with `event_type=CYW43_EV_ESCAN_RESULT`, `status=CYW43_STATUS_PARTIAL`
+per result found, each carrying a populated `cyw43_ev_scan_result_t` (a fixed fake AP, mirroring
+`Wokwi-GUEST`'s shape per the original step-3 plan, is exactly this - one canned event). `join()`
+is a materially longer sequence than the doc's original step-3 estimate implied: `ampdu_ba_wsize`
+iovar, `WLC_SET_WSEC`, three separate `bsscfg:sup_*` iovars, optionally `WLC_SET_WSEC_PMK` (WPA
+PSK) or a `sae_password` iovar (WPA3), `WLC_SET_INFRA`, `WLC_SET_AUTH`, an `mfp` iovar,
+`WLC_SET_WPA_AUTH`, an event-mask iovar, *then* (not yet read in full - see "Research homework"
+below) the actual `WLC_SET_SSID` that triggers the join and the scripted `WLC_E_*` sequence
+(`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`/...) real firmware fires in response, which is what makes
+`network.WLAN().status()` progress through the same codes real hardware would. Every ioctl/iovar
+in this sequence *before* that final SSID write can use the generic "echo success" handler from
+the SDPCM subsection above without inspecting its payload at all - only the SSID-triggered join
+itself needs real scripted behavior.
+
 ## Module layout decision (2026-08-11)
 
 Resolves "where in `src/rp2040py/` does this belong."
@@ -555,22 +717,64 @@ decision sections above that define what it actually means.
    byte, CS deasserted mid-transaction cleanly discards partial state instead of corrupting the
    next transaction, and an unimplemented function (`BACKPLANE_FUNCTION`) reads `0` rather than
    raising. **Not yet done: booting real, unmodified MicroPython/CircuitPython Pico W firmware
-   against this** (needs step 3's `Cyw43439`/`ExternalDevice.attach()` wiring plus a real
-   `pico_w`-capable firmware image - `cli/firmware_retrieve.py` doesn't yet resolve board-specific
-   images, per "Open questions" above) - the synthetic-master tests prove the decode logic is
-   internally consistent with the documented protocol, not that a real driver's actual init
-   handshake succeeds end-to-end. Treat as a real, not yet closed, risk until that boot test runs.
-3. **Chip/backplane + SDPCM/WLC ioctl layer.** A `Cyw43439` model class: F0 bus registers, F1
-   windowed backplane addressing (`SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH`), and enough of
-   `handleControl()`-equivalent `WLC_*` ioctl decoding + `WLC_E_*` event delivery (exact IDs above -
-   `WLC_UP`, `WLC_SET_SSID`, `WLC_SET_INFRA`, `WLC_SET_AUTH`, etc.) for
-   `network.WLAN().scan()`/`.connect()` to work against real, unmodified `cyw43_driver` code, with a
-   fixed fake AP (mirroring `Wokwi-GUEST`'s shape) and `.status()` progressing through the same
-   codes real firmware reports. Read `cyw43_ll.c`'s ioctl dispatch and event-sending functions
-   directly when implementing this - it's long (2000+ lines) but is the authoritative spec for
-   exactly what each ioctl/event needs to contain. Also synchronous, in-line — still pure state
-   machine, no real I/O yet. Lives in `external/cyw43/chip.py`; this is where `Cyw43439` implements
-   `ExternalDevice.attach()`.
+   against this** (needs step 3's `Cyw43439`/`ExternalDevice.attach()` wiring - `--board pico_w`
+   firmware images themselves are now resolvable, see the now-done "Open questions" item below) -
+   the synthetic-master tests prove the decode logic is internally consistent with the documented
+   protocol, not that a real driver's actual init handshake succeeds end-to-end. Treat as a real,
+   not yet closed, risk until that boot test runs.
+3. **Chip/backplane + SDPCM/WLC ioctl layer - revised into sub-steps (2026-08-12), see "Real
+   bringup sequence beyond F0" above for the full derivation.** The original one-paragraph
+   estimate here undersold the real scope (firmware/CLM blob download, ARM core reset registers,
+   ALP/HT clock handshake, SDPCM framing all sit *between* F0 and the first `WLC_*` ioctl) - broken
+   up so each piece can land and get tested independently, in dependency order:
+
+   1. **3a. Block transfers in `GSPIBus` (step 2's own scope creeping forward).** Generalize
+      `_on_clock_rising()`/`_on_clock_falling()` from exactly-one-32-bit-word to an arbitrary,
+      word-aligned byte count (`make_cmd()`'s `size` field is 11 bits for exactly this reason).
+      Nothing past this point is reachable without it - every SDPCM/ioctl/firmware-download
+      transfer is multi-byte.
+   2. **3b. ALP/HT clock handshake + KSO** on `BACKPLANE_FUNCTION`'s `SDIO_CHIP_CLOCK_CSR`
+      (`0x1000e`) / `SDIO_SLEEP_CSR` (`0x1001f`) - a register model where writing a `*_REQ`/
+      `KEEP_SDIO_ON` bit makes the corresponding `*_AVAIL`/`DEVICE_ON` bit immediately readable
+      satisfies every poll loop in `cyw43_ll_bus_sleep()`/`cyw43_kso_set()` correctly, no real
+      clock-startup latency needs modeling.
+   3. **3c. Backplane (F1) windowed read/write.** A generic byte-addressable "backplane memory"
+      model plus the `SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH` window-select registers on
+      `BACKPLANE_FUNCTION` - same shape as `GSPIBus`'s own F0 register space (step 2), just a much
+      bigger address space. Specific backplane *addresses'* meaning (core control registers,
+      SOCSRAM, ...) layers on top in later sub-steps, not part of the windowing mechanism itself.
+   4. **3d. ARM core reset/enable registers** (`CORE_WLAN_ARM`/`CORE_SOCRAM`'s `AI_IOCTRL_OFFSET`/
+      `AI_RESETCTRL_OFFSET`, reached via 3c's windowed access) - reflecting "reset" then "clocked,
+      out of reset" on readback is enough; **no second CPU core needs emulating** - the host driver
+      never talks to the WLAN core's own firmware except through SDPCM (3f), so nothing downstream
+      can tell a real running core from a register model that remembers it was told to start.
+   5. **3e. Firmware/CLM blob download acceptance + F2 packet-available status plumbing.** Accept
+      (don't need to validate or store meaningfully - `cyw43_check_valid_chipset_firmware()` runs
+      entirely driver-side, never reaches the chip) the `cyw43_write_bytes()` block writes real
+      firmware/CLM download does; wire up `SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE` +
+      `SPI_STATUS_REGISTER`'s `GSPI_PACKET_AVAILABLE`/pending-length field, the mechanism every
+      later sub-step's own responses/events get delivered through. **Flag, don't yet solve:
+      profile whether bit-level `GPIOPin.add_listener()` simulation of a real (hundreds-of-KB)
+      firmware image is practically fast enough once this lands** - may need a batched/
+      short-circuited path for large pure-write block transfers specifically.
+   6. **3f. SDPCM framing + generic ioctl request/response.** The 14-byte SDPCM header + 16-byte
+      ioctl header, request-ID echo matching, and a bus-data-credit counter that just increments
+      consistently (no real flow-control/backpressure needed). One generic "echo a zero-length
+      success response" handler already satisfies the bulk of the real `WLC_*`/iovar vocabulary
+      `cyw43_ll_wifi_on()`/`cyw43_ll_wifi_join()` send along the way.
+   7. **3g. Async events + scripted scan/join.** `cyw43_async_event_t`'s exact field layout
+      (byte offsets matter - real firmware struct padding, not a natural dataclass shape),
+      delivered as a fake-Ethernet-framed (`0x886c` + Broadcom OUI) SDPCM async packet. A fixed
+      fake AP (mirroring `Wokwi-GUEST`'s shape) answers `scan()`'s single `escan` iovar with one
+      `CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_PARTIAL` event. `join()`'s own scripted `WLC_E_*`
+      sequence (`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`/...) is the one piece not yet fully read from
+      source (see "Research homework" below - `cyw43_ll_wifi_join()`'s tail end, past the SSID
+      write) - this is the sub-step that actually makes `.status()` progress through real codes.
+
+   Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
+   reasonably live in either, judgment call when implementing); this is where `Cyw43439`
+   implements `ExternalDevice.attach()`. Every sub-step stays synchronous, in-line - still a pure
+   state machine, no real I/O (`schedule_threadsafe()`) until step 4.
 4. **Real network bridge.** Once firmware believes it's associated and starts moving IP packets,
    the userspace NAT/SLIRP layer described earlier — real `socket.getaddrinfo`/TCP/UDP via the host,
    DNS included — so `urequests`-style code in emulated firmware reaches the real internet. Needs
@@ -606,7 +810,8 @@ from "closed, kept for the record."
   separate, additional feature layered on top of step 4 — it would need an explicit forwarded
   port from the host into the NAT. A natural follow-on, but not something step 4 delivers for
   free on its own.
-- Explicitly **out of scope for the `firmware_retrieve.py` work below: the `"bootrom"` entry.** The
+- Explicitly **out of scope for the `firmware_retrieve.py` board-awareness work (done - see
+  "Deferred, not designed" below): the `"bootrom"` entry.** The
   bootrom is a mask ROM baked into the RP2040 die itself at manufacturing time, identical across
   every board that chip ends up on — versioned only by silicon stepping (B0/B1/B2, already handled
   per issue #11/`docs/BACKLOG.md`), never by board. It has no awareness of externally-wired
@@ -657,78 +862,61 @@ from "closed, kept for the record."
   to call. Not needed for step 2 (bus level); flagging so `attach()` implementations don't throw
   that return value away.
 
-- **`cli/firmware_retrieve.py` needs to grow board-awareness eventually — not now.** Its
-  `firmware_specs.json` is currently hard-coded to plain-Pico assets:
-  `"micropython": "RPI_PICO-{version}.uf2"`, `"circuitpython":
-  "adafruit-circuitpython-raspberry_pi_pico-en_US-{version}.uf2"`. Real MicroPython/CircuitPython
-  ship separate Pico-W-specific builds under different filenames
-  (`RPI_PICO_W-{version}.uf2`, `..._pico_w-en_US-...`) — the ones that actually have the
-  `cyw43-driver`/network stack compiled in. Once `--board pico_w` exists, firmware retrieval needs
-  to resolve to the right variant per board, not just per firmware family/version.
+- **Done (2026-08-12): `utils/firmware_retrieve.py` (moved from `cli/` - it's a generic tag/URL/
+  path resolver with no argparse involvement, not CLI-specific) is now board-aware**, per the
+  "Candidate redesign" this bullet originally proposed - implemented essentially as decided, both
+  formerly-open sub-items resolved along the way:
 
-  **Candidate redesign (2026-08-11), largely decided, two sub-items still open.** Current
-  `retrieve()` resolves `image` two ways: a local file path (`Path(image).exists()`,
-  `firmware_retrieve.py:114-115`), or a version tag run through `_resolve_version()` and then
-  `spec.filename_template.format(...)` / `spec.url_template.format(...)` (`:117-119`) — template
-  substitution against a `known_versions: dict[tag, filename-version]` map. Proposed instead:
-
-  - **Three resolution paths, not two:** local file path (unchanged) — version tag (resolution
-    kept, format simplified below) — and a direct HTTP/HTTPS URL passed straight through `--image`
-    (new), which downloads from exactly that URL, caches it, and gets reused from cache on
-    subsequent runs the same way a resolved tag already does.
-  - **Drop `filename_template`/`url_template` entirely, and drop runtime URL generation
-    entirely too.** Replace `known_versions: dict[tag, filename-version]` with a flat
-    `known_versions: dict[tag, url]` — tag straight to a full download URL, no template
-    substitution step in the resolution algorithm at all. Crucially, this map isn't generated at
-    request time by `retrieve()` — it's **fetched at development time** (via the fetch script
-    below) and committed straight into `firmware_specs.json`, so the shipped index always has
-    real, verified tags and URLs for every firmware release as of whenever it was last refreshed —
-    no filename-guessing or template drift at runtime, just a lookup.
-  - **Per-board resolution reuses the same lookup, keyed by board too — but only for the tag
-    path.** Passing a tag (e.g. `v1.28`) plus the selected `--board` (default: `pico`, once
-    `--board` exists at all) resolves to *that* board's URL for MicroPython 1.28.
-
-    **Nesting order: `dict[board][tag] -> url`, board outer, decided.** Matches how firmware is
-    actually published for MicroPython and CircuitPython — you pick the board first, then see the
-    versions available for it, then download. Kaluma is a partial mismatch (GitHub releases, no
-    clean per-board split at the release level — firmware for different boards mixed together) but
-    a minor enough one to still nest it the same way for consistency rather than special-case the
-    index shape per firmware family. Board-outer also gives a clean two-step validation: check the
-    board key exists first (a clear "unknown board" error if not) before even looking at the tag,
-    then check the tag exists within that board's map (a clear "unknown version for this board"
-    error if not) — each failure mode gets its own unambiguous error instead of one lookup that
-    can fail for either reason.
-
-    **Board only ever affects the *tag* path.** If `image` is instead a local file path or a
-    direct HTTP/HTTPS URL, that file/URL is used exactly as given — no board-based resolution
-    happens at all, regardless of what `--board` is set to. `--board pico_w --image ./custom.uf2`
-    (or any URL) just runs `custom.uf2`; `--board` isn't consulted for firmware selection in that
-    case. Board-gated resolution is purely a tag-path concern; file path and raw URL are both
-    already-resolved, unconditional answers to "what to run."
-  - **There's already a working prototype for *building* one of these maps:** the
-    `tool/fetch-mp-firmware` branch's `scripts/fetch_mp_firmware_list.py` scrapes
-    `https://micropython.org/download/{board}/` per board prefix (`RPI_PICO`, `RPI_PICO_W` are
-    already separate lookups there) into a tag→filename map — this is also, incidentally, the
-    concrete mechanism that would satisfy the board-awareness need above, since the per-board split
-    already exists in that scraper. Remaining work: extend it to emit full URLs (not bare
-    filenames) and write the equivalent scraper for CircuitPython and Kaluma. Presumably re-run
-    periodically (manually, or a scheduled job) to keep the committed index current as new
-    releases land — **open sub-item: exact refresh workflow not decided.**
-  - **Open sub-item: how to name the cache entry for a raw URL passed via `--image`.** Today's tag
-    path caches under the resolved filename (`_cache_dir() / filename`, `firmware_retrieve.py:120`)
-    — there is no filename for an arbitrary URL beyond whatever its path happens to contain, which
-    isn't guaranteed unique or even present (query-string-only URLs, redirects, etc.). One
-    reasonable option worth considering: key the cache entry off a hash of the URL string itself
-    (not its content — hashing content would require downloading first, defeating the point of
-    checking the cache before fetching), e.g. `sha256(url).hexdigest()[:16]`, optionally suffixed
-    with the URL's basename if it has one for human-readability while the hash guarantees
-    uniqueness/correctness. Not committed to; flagged for a follow-up decision.
+  - `FirmwareSpec` dropped `filename_template`/`url_template` entirely - `boards: dict[board,
+    dict[tag, url]]` (MicroPython/CircuitPython/Kaluma - genuinely different per-board builds) or a
+    flat `known_versions: dict[tag, url]` (BOOTROM only - board-agnostic, a silicon-stepping-only
+    mask ROM, deliberately *not* nested by board - see the "Historical/closed" section above for
+    why). `retrieve(spec, image, board="pico")` resolves three ways: existing local path (unchanged),
+    a direct `http(s)://` URL (new - downloads and caches it under its own basename, or a
+    `sha256(url)[:16]` hash when the URL has no usable path component - the "how to name the cache
+    entry" sub-item's resolution), or a version tag looked up in `spec.boards[board]` (an unknown
+    board or unknown tag is now a clear, distinct logged error instead of the old silent
+    "fall back to using the raw tag as a literal filename suffix" behavior). `board` is consulted
+    only for the tag path against a `boards`-shaped spec, exactly as decided - a local path or raw
+    URL is used exactly as given regardless of `--board`, and `board` is ignored entirely for
+    `known_versions`-shaped BOOTROM.
+  - **Refresh workflow (the other open sub-item), decided while implementing:** one script,
+    `scripts/fetch_firmware.py`, not one per firmware family - fetches and writes all four
+    families' real data in a single pass (run `uv run scripts/fetch_firmware.py`, diff, commit).
+    Sources actually used, each confirmed live (2026-08-12), correcting a couple of assumptions
+    from the original proposal along the way:
+    - MicroPython: `https://micropython.org/download/{RPI_PICO,RPI_PICO_W}/`, scraped HTML - as
+      originally proposed (the `tool/fetch-mp-firmware` branch's own prototype scraper, since
+      superseded by this script - extended to emit full URLs instead of bare filenames).
+    - CircuitPython: **not** the board pages (`circuitpython.org/board/<slug>/`, which - confirmed
+      live - only ever show the *current* stable + prerelease, no history at all). The public S3
+      bucket's own REST listing API instead (`?prefix=...` on the bucket root - not to be confused
+      with `/index.html?prefix=...`, a JS-rendered page not scrapable without a JS engine) returns
+      the *full* version history as a plain XML `ListBucketResult` - filtered to drop CI nightly/
+      PR-preview builds that live in the same prefix (named `<8-digit-date>-<branch>-PR<n>-<hash>`,
+      not a real version).
+    - Kaluma: **the original "no clean per-board split" assumption was wrong** - confirmed directly
+      against the GitHub releases API that Kaluma *does* publish separate
+      `kaluma-rp2-pico-<version>.uf2`/`kaluma-rp2-pico-w-<version>.uf2` release assets, on every
+      release since 1.1.0. No compromise/special-casing needed after all.
+    - Bootrom: the GitHub releases API (`raspberrypi/pico-bootrom-rp2040`) - one `<tag>.elf` asset
+      per release (b0/b1/b2) - fetched by the same script for consistency (one place the
+      board-aware-vs-not distinction lives), written to the flat `known_versions` shape.
+  - `firmware_specs.json` (now `utils/firmware_specs.json`) populated with real data from all four
+    sources as of 2026-08-12 - 23/17 MicroPython pico/pico_w versions, 160/105 CircuitPython
+    (limited to non-nightly releases), 17/9 Kaluma, 3 bootrom.
 
 ### Research homework — not decisions, just needs source-reading during implementation
 
-- Full backplane *core* address map (chip-common registers, ARM core reset/halt registers, SOCSRAM
-  addresses, etc.) needed for a real chip bring-up sequence, and the SDPCM data-frame envelope byte
-  layout for the actual WLAN RX/TX data path (steps 3/4 concern, not step 2) — not yet dug out of
-  `cyw43_ll.c` (2000+ lines); read `cyw43_ll.c`'s `cyw43_ll_bus_init()`/`cyw43_ll_wifi_pm()`-area
-  functions and the `SDIO_*`/`SBSDIO_*` constants near the top of the file when step 3 starts.
+- **Resolved (2026-08-12), see "Real bringup sequence beyond F0" above:** the backplane *core*
+  address map (chip-common registers, ARM core reset/halt registers, SOCSRAM addresses) needed for
+  bring-up, SDPCM header layout, and async-event framing are now all documented directly from
+  `cyw43_ll.c`/`cyw43_ll.h` - no longer just "not yet dug out."
+- **Still open: `cyw43_ll_wifi_join()`'s tail end** (past the point read for the "Real bringup
+  sequence" section above - the actual `WLC_SET_SSID` call that triggers the join, and the
+  `WLC_E_*` event sequence real firmware fires in response) - needed for step 3g specifically.
+  Read the rest of `cyw43_ll_wifi_join()` (starts at `cyw43_ll.c:2051`) and
+  `cyw43_ll_parse_async_event()`'s callers when implementing that sub-step.
+- The SDPCM data-frame envelope byte layout for the actual WLAN RX/TX *data* path (as opposed to
+  control/ioctl, already covered above) - step 4's concern, not step 3 - not yet dug out.
   - maybe document way to use gpiozero as global external device for emulations on the RP
