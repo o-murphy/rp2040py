@@ -48,11 +48,12 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0031](records/0031-pio-cython-tick-batching.md) PIO Cython + `clock.tick()` batching | follow-up of 0013
 - [x] [0032](records/0032-docs-restructure.md) documentation restructure | this reorganization
 - [x] [0033](records/0033-completions-and-validation.md) Add autocompletions for the cli tool | accepted
+- [x] [0034](records/0034-execute-batch-native-port.md) `_execute_batch()` native Cython port | follow-up of 0013/0031
 
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — pico_w wild-execution + main-spi.py hang found, not yet root-caused
 
 ### Rejected / Superseded
 
