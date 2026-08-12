@@ -1,17 +1,22 @@
 # Main-thread asyncio: put the primary Simulator's engine room on the process main thread
 
-**Status: in progress.** This is a plan document in the same spirit as
+**Status: DONE (2026-08-11/12) - all 5 phases landed and verified.** See "Progress log" below for
+the per-phase detail. **Not yet merged to `main`** - this, and the CYW43439 work built on top of it
+(see docs/CYW43_WIFI_BACKLOG.md), all live on `feat/board-loading-api` so far (`git log --oneline
+main..HEAD` shows both efforts' commits together, oldest-first: the 3 asyncio-migration commits,
+then the CYW43 step 0/2/3 commits). This is a plan document in the same spirit as
 [docs/ASYNCIO_MIGRATION_BACKLOG.md](ASYNCIO_MIGRATION_BACKLOG.md) (which it directly follows on
 from and assumes as background reading) - written up before any code changes, per this project's
 own established practice of scoping a concurrency-model change as its own effort rather than
 starting it mid-flight on top of something else.
 
-**Sequencing, decided (2026-08-11): this must land on `main` as its own effort before a separate,
-not-yet-merged CYW43439/Pico-W-WiFi-emulation effort (`ExternalDevice`s attached to `RP2040`)
-continues.** That work is being built on a different branch and needs the concurrency-model shape
-this document produces as a foundation, not the reverse - building CYW43439's bus/chip/NAT-bridge
-layers against today's engine-room-thread model and then re-threading them onto whatever this
-migration produces would mean doing that work twice.
+**Sequencing, decided (2026-08-11): this had to land before the CYW43439/Pico-W-WiFi-emulation
+effort (`ExternalDevice`s attached to `RP2040`) continued past its step 0.** It has - CYW43 work
+resumed immediately once this was done and is now well past step 0 (see
+docs/CYW43_WIFI_BACKLOG.md for current status). That work needed the concurrency-model shape this
+document produces as a foundation, not the reverse - building CYW43439's bus/chip/NAT-bridge layers
+against the old engine-room-thread model and then re-threading them onto whatever this migration
+produced would have meant doing that work twice.
 
 ## Why this document exists
 
