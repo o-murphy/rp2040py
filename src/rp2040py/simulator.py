@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import logging
 import sys
 import threading
 import time
@@ -15,6 +16,7 @@ from rp2040py.utils.asyncio_loop_thread import start_loop_thread
 __all__ = ("ShutdownRequest", "Simulator")
 
 _T = TypeVar("_T")
+_logger = logging.getLogger(__name__)
 
 
 class ShutdownRequest:
@@ -69,6 +71,14 @@ class Simulator:
         self._loop_thread: threading.Thread | None = None
         self._loop_init_lock = threading.Lock()
         self._execute_task: asyncio.Task[None] | None = None
+        # Set by execute() itself, right before it re-raises, whenever _execute_batch() raises
+        # something unexpected (a real bug, not a deliberate stop()) - see execute()'s own
+        # docstring/comment and wait_for()'s below for why an uncaught exception here can't just be
+        # left as "the task died, nobody happened to call .exception() on it": docs/tasks/
+        # cyw43-post-data-header-freeze.md's own root cause was exactly that - a swallowed
+        # exception here left every awaiter blocked on device state that could now never arrive
+        # genuinely stuck forever (0% CPU, not merely slow) instead of failing loudly.
+        self.engine_room_error: BaseException | None = None
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None:
@@ -97,8 +107,20 @@ class Simulator:
         daemon=True).start()`. execute() keeps running there until stop()."""
         loop = self._ensure_loop()
 
+        def _on_execute_done(task: "asyncio.Task[None]") -> None:
+            # Logged here, immediately, rather than left for asyncio's own default handler (which
+            # only fires once the Task object is garbage-collected - never, in practice, since
+            # self._execute_task keeps it referenced for this Simulator's whole remaining
+            # lifetime) - see engine_room_error's own docstring for the hang this otherwise causes.
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                _logger.critical("Simulator engine room (execute()) crashed - see traceback below", exc_info=exc)
+
         def _start() -> None:
             self._execute_task = loop.create_task(self.execute())
+            self._execute_task.add_done_callback(_on_execute_done)
 
         loop.call_soon_threadsafe(_start)
 
@@ -135,6 +157,44 @@ class Simulator:
         else:
             loop.call_soon_threadsafe(fn_or_coro)
 
+    async def wait_for(self, event: asyncio.Event, timeout: "float | None") -> None:
+        """`await event.wait()`, bounded by `timeout` like `asyncio.wait_for()` normally would -
+        except also unblocked early, raising the exception that killed it, if this Simulator's own
+        engine-room task (execute()) crashes while still waiting. Without this, an `Event` that
+        only ever gets `.set()` from deep inside execute()'s own call chain (an alarm callback, a
+        peripheral response reacting to CDC input) would otherwise wait forever for a `.set()` that
+        can now never come once execute() has died - indistinguishable, from the caller's side,
+        from "device's just being slow" - see docs/tasks/cyw43-post-data-header-freeze.md for the
+        real hang this fixes and engine_room_error's own docstring for the underlying state this
+        reads.
+
+        Also unblocks (distinctly, a plain `RuntimeError`, not wrapping anything) if execute()
+        instead ends *without* crashing (a deliberate stop() mid-wait) - previously left pending
+        forever too (`device/base_device.py`'s own `stop()` docstring used to document exactly
+        that as an accepted trade-off); failing fast here is strictly better than hanging, so that
+        trade-off is now moot rather than being deliberately preserved."""
+        event_task: asyncio.Task[bool] = asyncio.ensure_future(event.wait())
+        watch: set[asyncio.Future[Any]] = {event_task}
+        execute_task = self._execute_task
+        if execute_task is not None:
+            watch.add(execute_task)
+        try:
+            done, _pending = await asyncio.wait(watch, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Only ever cancels event_task (its own private wait, safe to abandon) - execute_task
+            # is never touched here regardless of outcome: it's the live engine-room task, owned
+            # entirely by start_execution()/stop(), and must survive an ordinary timeout (the
+            # common case: execute() is still running fine, `event` just hasn't fired yet).
+            if not event_task.done():
+                event_task.cancel()
+        if event_task in done:
+            return
+        if execute_task is not None and execute_task in done:
+            if self.engine_room_error is not None:
+                raise RuntimeError("simulator engine room crashed while waiting") from self.engine_room_error
+            raise RuntimeError("simulator stopped while waiting")
+        raise asyncio.TimeoutError
+
     def _execute_batch(self) -> None:
         """Runs up to 1,000,000 instructions/idle-jumps, or until stop() is called, or until the
         batch itself has eaten its own real-time budget - whichever comes first. Synchronous and
@@ -151,13 +211,29 @@ class Simulator:
 
     async def execute(self) -> None:
         self.stopped = False
-        while not self.stopped:
-            self._execute_batch()
-            # Upstream rp2040js uses `setTimeout(() => this.execute(), 0)` to yield back to the
-            # single-threaded JS event loop every batch so external stop() calls can get in -
-            # `await asyncio.sleep(0)` is the direct analogue, on this Simulator's own dedicated
-            # engine-room loop (see _ensure_loop()) rather than JS's single process-wide one.
-            await asyncio.sleep(0)
+        try:
+            while not self.stopped:
+                self._execute_batch()
+                # Upstream rp2040js uses `setTimeout(() => this.execute(), 0)` to yield back to
+                # the single-threaded JS event loop every batch so external stop() calls can get
+                # in - `await asyncio.sleep(0)` is the direct analogue, on this Simulator's own
+                # dedicated engine-room loop (see _ensure_loop()) rather than JS's single
+                # process-wide one.
+                await asyncio.sleep(0)
+        except Exception as exc:
+            # A real bug somewhere in _execute_batch()'s reachable call graph (bus dispatch,
+            # peripheral register access, ...) - not a deliberate stop(). Recorded and re-raised
+            # (not swallowed) so `wait_for()` below can unblock any caller stuck waiting on
+            # device-produced state (CDC output, an Event a peripheral callback would have set)
+            # that can now never arrive, and so start_execution()'s done-callback can log it
+            # immediately instead of it vanishing silently - see engine_room_error's own
+            # docstring and docs/tasks/cyw43-post-data-header-freeze.md for the hang this fixes.
+            # `self.stopped = True` matters on its own too: without it, `executing`/`wait_for_
+            # shutdown()`/`_await_shutdown()`'s own poll loops would never notice execute() had
+            # already ended and would keep waiting for a batch that will never run again.
+            self.engine_room_error = exc
+            self.stopped = True
+            raise
 
     def stop(self) -> None:
         # A plain bool set/read is already atomic in CPython - safe to call from any thread
@@ -206,3 +282,13 @@ class Simulator:
                 cleanup()
             self.stop()
             sys.exit(self.shutdown_request.code)
+
+        if self.engine_room_error is not None:
+            # execute() crashed rather than stopping via either path above - still run cleanup
+            # (both branches above do), then let the real exception propagate with a real
+            # traceback instead of this method just returning as if nothing happened. See
+            # execute()'s own comment / docs/tasks/cyw43-post-data-header-freeze.md for the silent
+            # hang this replaces.
+            if cleanup is not None:
+                cleanup()
+            raise self.engine_room_error

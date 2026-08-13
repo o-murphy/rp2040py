@@ -4,16 +4,17 @@
 - Conceived: 2026-08-12
 - Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency) · research
   note 0024 · fixes 0035 (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response
-  correctness bug)
+  correctness bug), 0041 (post-`DATA_HEADER` freeze)
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1-72 -->
 
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**3g (async events + scripted scan/join) done (2026-08-13): implemented, unit-tested, and live-boot
-verified as far as a separate, pre-existing simulator-level freeze (not a 3g bug - see
-`docs/tasks/cyw43-post-data-header-freeze.md`) currently allows - see step 3's own "3g" bullet
-below for the full writeup.** Everything before it in
+**3g (async events + scripted scan/join) done (2026-08-13): implemented, unit-tested. Live boot was
+blocked by a separate, pre-existing simulator-level freeze (not a 3g bug -
+`docs/tasks/cyw43-post-data-header-freeze.md`), root-caused and fixed same-day (see
+[0041](0041-cyw43-post-data-header-freeze-fix.md)) - the same script now runs to completion post-fix.
+See step 3's own "3g" bullet below for the full writeup.** Everything before it in
 "Implementation order" below is done: step 0 (board-loading API), step 1 (`ExternalDevice` proven
 via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware boots past the F0 handshake),
 and step 3's sub-steps 3a (generic word-aligned block transfers -
@@ -494,6 +495,21 @@ decision sections above that define what it actually means.
       correctness plus a live boot that demonstrably progresses further than any prior verification
       of this bus - rather than blocking indefinitely on a full script-completion live boot that a
       *different*, already-flagged issue currently prevents.
+
+      **Freeze above root-caused and fixed (2026-08-13), see
+      [0041](0041-cyw43-post-data-header-freeze-fix.md).** Not a `ptrace`-needing mystery after
+      all: a stack trace obtained without `gdb`/`py-spy` (a throwaway `SIGUSR1` handler using
+      `faulthandler`/`asyncio.all_tasks()`, no attach required) showed `Simulator.execute()`'s task
+      had already died with an uncaught `RuntimeError` - `_rp2040.py`'s unaligned-read diagnostic
+      used `.error()` (which raises by default) for a condition its own caller treats as
+      recoverable, and nothing downstream ever surfaced the resulting silently-dead engine room.
+      Fixed narrowly (that one log call) and systemically (`execute()` no longer swallows
+      exceptions; every caller waiting on device-produced state now unblocks with a real error
+      instead of hanging forever if the engine room ever dies again). Re-running this same 3g
+      live-boot script post-fix now completes end to end (`active`/`scan`/`connect`/`config`/
+      `ipconfig`, exit 0, ~50s native / PyPy both) - 3g's own full live-boot verification (not just
+      "progresses further than before") is unblocked, though not yet separately re-run/re-recorded
+      as such here.
 
    Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
    reasonably live in either, judgment call when implementing); this is where `Cyw43439`

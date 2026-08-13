@@ -113,7 +113,7 @@ class MicroPythonDevice(BaseDevice):
             self.mcu.core.pc = FLASH_START_ADDRESS
             self.simulator.start_execution()
             try:
-                await asyncio.wait_for(connected.wait(), timeout)
+                await self.simulator.wait_for(connected, timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
 
@@ -188,7 +188,7 @@ class MicroPythonDevice(BaseDevice):
             pump_alarm.schedule(1_000_000)
 
             try:
-                await asyncio.wait_for(done.wait(), timeout)
+                await self.simulator.wait_for(done, timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(f"raw-REPL exec did not complete within {timeout}s") from exc
             await runner.stop()

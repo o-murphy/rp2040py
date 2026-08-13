@@ -88,7 +88,7 @@ class BaseDevice:
         self.mcu.core.pc = FLASH_START_ADDRESS
         self.simulator.start_execution()
         try:
-            await asyncio.wait_for(connected.wait(), timeout)
+            await self.simulator.wait_for(connected, timeout)
         except asyncio.TimeoutError as exc:
             raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
 
@@ -113,7 +113,11 @@ class BaseDevice:
     def stop(self) -> None:
         """Halt the emulator. Safe to call even if `astart()`/`start_async()` was never called -
         synchronous and non-blocking (a plain flag flip - see `Simulator.stop()`), so there's no
-        async/blocking-facade distinction needed here the way there is for `astart()`."""
+        async/blocking-facade distinction needed here the way there is for `astart()`. A
+        stop() mid-`exec_async()`/`start_async()` call (even with `timeout=None`) no longer leaves
+        that call's Future pending forever - `Simulator.wait_for()` (used by `MicroPythonDevice`'s
+        own `_aconnect()`/`_aexec()`) unblocks with a clear error the moment execute() actually
+        ends, for any reason, not just a crash."""
         self.simulator.stop()
 
     async def __aenter__(self) -> "BaseDevice":  # noqa: PYI034 (Self needs Python 3.11+)
