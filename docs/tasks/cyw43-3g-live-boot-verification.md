@@ -74,7 +74,8 @@ fixed but not re-run):
 
 ```python
 async with MicroPythonDevice(image, board="pico_w", log_level=LogLevel.ERROR) as device:
-    stdout, stderr = await device.aexec("""
+    stdout, stderr = await device.aexec(
+        """
 import network, time
 nic = network.WLAN(network.WLAN.IF_STA)
 nic.active(True)
@@ -86,7 +87,9 @@ for i in range(50):
     if connected:
         break
     time.sleep(0.2)
-""", timeout=120)
+""",
+        timeout=120,
+    )
 ```
 
 If `scan()` doesn't return the fake AP, or `connect()` never reaches `isconnected() == True`, that's
