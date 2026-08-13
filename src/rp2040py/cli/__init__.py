@@ -432,6 +432,12 @@ async def _await_shutdown(simulator: Simulator) -> "int | None":
         if shutdown_request.event.is_set():
             break
         await asyncio.sleep(0.1)
+    if simulator.engine_room_error is not None:
+        # execute() crashed rather than stopping cleanly (ShutdownRequest, natural completion) -
+        # surface it as a real, loud process failure instead of treating this the same as a
+        # natural exit (see Simulator.execute()'s own comment/docs/tasks/
+        # cyw43-post-data-header-freeze.md for the hang this used to cause instead).
+        raise simulator.engine_room_error
     return shutdown_request.code if shutdown_request.event.is_set() else None
 
 
