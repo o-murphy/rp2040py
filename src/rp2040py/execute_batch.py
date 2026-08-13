@@ -6,11 +6,10 @@ falling back to the plain-Python reference implementation in `_execute_batch.py`
 facade exactly.
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._simulator import execute_batch
 except ImportError:
     from rp2040py._execute_batch import execute_batch
