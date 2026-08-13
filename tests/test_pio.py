@@ -672,17 +672,15 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
     rp2040.write_uint32(INSTR_MEM0, pio_pull(False, False))
     rp2040.write_uint32(INSTR_MEM1, pio_jmp(0, PIO_COND_ALWAYS))
 
-    # RP2040.reset() (run once during construction) ends with RPDMA.reset()'s own
-    # `self.dreq.clear()` - correct on real silicon's own reset behavior, but this simulator only
-    # recomputes a channel's DREQ *level* on the next `StateMachine.write_fifo()`/`read_fifo()`
-    # call, not continuously - so SM0's construction-time DREQ_PIO0_TX0=True (set before that
-    # clear) is lost and nothing re-establishes it until its FIFO state actually changes again.
-    # Real firmware never notices (`cyw43_bus_pio_spi.c` always does `pio_sm_put()`/DMA writes that
-    # touch the FIFO before ever relying on DREQ) - this test needs the same one-time nudge, via the
-    # public TXF0 write path (StateMachine.write_fifo() recomputes the DREQ level as a side effect)
-    # rather than a native-Cython-inaccessible private method. The extra word just becomes SM0's
-    # own first pull, ahead of the DMA-fed ones - harmless, this test only checks word *count*/
-    # completion, not content.
+    # Historical note: RPDMA.reset() used to clear self.dreq unconditionally, discarding
+    # SM0's construction-time DREQ_PIO0_TX0=True and starving this DMA channel until something
+    # else nudged the peripheral's FIFO (fixed - see docs/tasks/main-spi-hang.md and
+    # RPDMA.reset()'s own comment). This write predates that fix and is no longer required to
+    # establish the initial DREQ level, but is kept anyway via the public TXF0 write path
+    # (StateMachine.write_fifo() recomputes the DREQ level as a side effect) rather than a
+    # native-Cython-inaccessible private method. The extra word just becomes SM0's own first
+    # pull, ahead of the DMA-fed ones - harmless, this test only checks word *count*/completion,
+    # not content.
     rp2040.write_uint32(TXF0, 0)
 
     # DMA channel 0: word_count 32-bit transfers from src_addr into PIO0 SM0's own TX FIFO
