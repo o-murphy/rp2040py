@@ -17,8 +17,8 @@ def _mp_args(**overrides):
         "gdb_port": 3333,
         "bootrom": None,
         "circuitpython": False,
-        "littlefs": "littlefs.img",
-        "fat12": "fat12.img",
+        "littlefs": None,
+        "fat12": None,
         "dump_fs": None,
         "tcp_port": None,
         "pty": False,
@@ -78,10 +78,9 @@ def fake_device(monkeypatch):
 
 def test_micropython_mode_loads_littlefs_not_fat12(tmp_path, fake_device):
     (tmp_path / "littlefs.img").write_bytes(b"")
-    (tmp_path / "fat12.img").write_bytes(b"")
 
     with pytest.raises(SystemExit) as exc_info:
-        cli._cmd_micropython(_mp_args(circuitpython=False))
+        cli._cmd_micropython(_mp_args(circuitpython=False, littlefs="littlefs.img"))
 
     assert exc_info.value.code == 0
     assert fake_device.last_kwargs == {
@@ -96,11 +95,10 @@ def test_circuitpython_mode_loads_fat12_not_littlefs(tmp_path, fake_device):
     # Regression test: refactoring the littlefs/fat12 path-resolution logic into a single
     # `if not args.circuitpython` branch used to gate *both* assignments on it, so fat12.img was
     # silently never loaded in --circuitpython mode even when it existed on disk.
-    (tmp_path / "littlefs.img").write_bytes(b"")
     (tmp_path / "fat12.img").write_bytes(b"")
 
     with pytest.raises(SystemExit) as exc_info:
-        cli._cmd_micropython(_mp_args(circuitpython=True))
+        cli._cmd_micropython(_mp_args(circuitpython=True, fat12="fat12.img"))
 
     assert exc_info.value.code == 0
     assert fake_device.last_kwargs == {
@@ -112,10 +110,10 @@ def test_circuitpython_mode_loads_fat12_not_littlefs(tmp_path, fake_device):
 
 
 def test_micropython_mode_skips_missing_littlefs_image(fake_device):
-    # Neither littlefs.img nor fat12.img exists in the isolated cwd - both should stay None
-    # rather than erroring, matching "silently skipped if absent" from the README.
+    # littlefs.img doesn't exist in the isolated cwd - should stay None rather than erroring,
+    # matching "silently skipped if absent" from the README.
     with pytest.raises(SystemExit):
-        cli._cmd_micropython(_mp_args(circuitpython=False))
+        cli._cmd_micropython(_mp_args(circuitpython=False, littlefs="littlefs.img"))
 
     assert fake_device.last_kwargs is not None
     assert fake_device.last_kwargs["littlefs"] is None
@@ -124,11 +122,32 @@ def test_micropython_mode_skips_missing_littlefs_image(fake_device):
 
 def test_circuitpython_mode_skips_missing_fat12_image(fake_device):
     with pytest.raises(SystemExit):
-        cli._cmd_micropython(_mp_args(circuitpython=True))
+        cli._cmd_micropython(_mp_args(circuitpython=True, fat12="fat12.img"))
 
     assert fake_device.last_kwargs is not None
     assert fake_device.last_kwargs["littlefs"] is None
     assert fake_device.last_kwargs["fat12"] is None
+
+
+def test_micropython_littlefs_and_fat12_are_mutually_exclusive(caplog, fake_device):
+    # The bug this guards against: which flag "won" used to be decided implicitly by
+    # --circuitpython, silently dropping the other one instead of erroring
+    # (docs/records/0036-littlefs-fat12-exclusivity.md).
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(circuitpython=False, littlefs="littlefs.img", fat12="fat12.img"))
+
+    assert exc_info.value.code == 1
+    assert "mutually exclusive" in caplog.text
+    assert fake_device.last_kwargs is None
+
+
+def test_micropython_littlefs_and_fat12_are_mutually_exclusive_even_with_circuitpython(caplog, fake_device):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(circuitpython=True, littlefs="littlefs.img", fat12="fat12.img"))
+
+    assert exc_info.value.code == 1
+    assert "mutually exclusive" in caplog.text
+    assert fake_device.last_kwargs is None
 
 
 def test_missing_image_prints_the_requested_identifier_not_none(caplog, monkeypatch):
