@@ -2,8 +2,38 @@
 
 Working note - what's left to check now that
 [0041](../records/0041-cyw43-post-data-header-freeze-fix.md) fixed the freeze that used to block
-`tests/micropython/main-cyw43.py` from ever finishing. **Not yet investigated - flagged, not
-started.**
+`tests/micropython/main-cyw43.py` from ever finishing. **Done (2026-08-13) - see "Findings" below;
+folded back into [0027](../records/0027-cyw43-wifi.md)'s own "3g" entry.**
+
+## Findings (2026-08-13)
+
+Ran the harness sketched below (`MicroPythonDevice`, real `v1.28.0` firmware, `board="pico_w"`),
+unmodified except for the missing `retrieve(...)` call to resolve `image` from the version tag -
+scratch script, not landed (same pattern as 0038's own verification harness).
+
+Result:
+
+- `scan()` returns the real fake AP:
+  `[(b'RP2040PY-GUEST', b'B\x137U\xaa\x01', 6, -87, 0, 1)]` - confirms 3g's scripted `escan`
+  sequence produces a genuine result, not an empty/fast-fail list.
+- `connect()` reaches `status() == 2` (`CYW43_LINK_NOIP`) and stays there for the full 10s poll
+  window (50 polls × 0.2s). `isconnected()` never becomes `True`; `config('mac')` stays all-zero;
+  `ipconfig('addr4')` stays `('0.0.0.0', '255.255.255.0')`.
+- This is the **expected** outcome, not a 3g gap: `bus.py`'s `_queue_join_events()` scripts the
+  link-layer event sequence (`WLC_E_SET_SSID`/`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`) through to
+  `LINK_NOIP` (joined, no IP) - full `isconnected() == True` additionally needs a real DHCP lease,
+  which requires answering `cyw43_cb_tcpip_init()`'s outbound DHCP/ARP frames with real content.
+  That's step 4 (NAT bridge), not built yet - `_build_flow_control_response()`'s own docstring
+  already flags outbound Ethernet frames as silently dropped by design at this step.
+- One unexplained but non-blocking log line, seen once near the start of the run:
+  `[CYW43] Bus error condition detected 0xb9`. Did not stop scan/join from completing. Not
+  investigated further - reads like firmware's own log output, not something this bus emits (no
+  matching string anywhere in `external/cyw43/`).
+
+Conclusion: 3g's live-boot behavior is now formally confirmed at the layer it actually owns - scan
+returns a real result, connect drives the full link-layer join sequence to completion, and it stops
+exactly where step 4 begins. No further action needed on 3g itself; step 4 is the next real step
+for `isconnected() == True` to ever be reachable on a live boot.
 
 ## What's confirmed so far
 

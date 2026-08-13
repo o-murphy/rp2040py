@@ -515,6 +515,27 @@ decision sections above that define what it actually means.
       hangs," is still unverified - see `docs/tasks/cyw43-3g-live-boot-verification.md` (flagged,
       not started).
 
+      **Verified (2026-08-13), see `docs/tasks/cyw43-3g-live-boot-verification.md`'s own findings
+      section.** Ran the task doc's own `MicroPythonDevice` harness (real firmware, `board="pico_w"`,
+      `v1.28.0`) with `scan()`'s return value printed and `isconnected()`/`status()` polled in a
+      loop after `connect()`. `scan()` genuinely returns the fake AP
+      (`[(b'RP2040PY-GUEST', b'B\x137U\xaa\x01', 6, -87, 0, 1)]`) - confirms 3g's scripted `escan`
+      sequence runs and produces a real result, not an empty/fast-fail list. `connect()` reaches
+      `status() == 2` (`CYW43_LINK_NOIP` - joined at the link layer, no IP) and *stays* there for
+      the full 10s poll window; `isconnected()` stays `False`, `config('mac')` stays all-zero,
+      `ipconfig('addr4')` stays `0.0.0.0`. This is the **expected** result, not a gap in 3g: the
+      scripted `WLC_E_SET_SSID`/`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK` sequence (`bus.py`'s
+      `_queue_join_events()`) only drives the link-layer join to completion - `isconnected()`
+      requires a full IP lease, which needs `cyw43_cb_tcpip_init()`'s outbound DHCP/ARP Ethernet
+      frames to get a real answer, and answering those with real content is step 4's NAT bridge
+      (not built - `_build_flow_control_response()`'s own docstring already says as much). So 3g's
+      live-boot behavior is now formally confirmed end to end at the layer it actually owns: scan
+      returns a real result, join drives the full link-layer event sequence to `LINK_NOIP`, and it
+      stops exactly where step 4 begins. One unexplained, non-blocking log line seen once near the
+      start of the run - `[CYW43] Bus error condition detected 0xb9` - did not prevent scan/join
+      from completing; not investigated further here (looks like firmware's own log output, not
+      this bus's).
+
    Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
    reasonably live in either, judgment call when implementing); this is where `Cyw43439`
    implements `ExternalDevice.attach()`. Every sub-step stays synchronous, in-line - still a pure
