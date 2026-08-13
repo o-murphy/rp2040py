@@ -4,11 +4,10 @@ falling back to the plain-Python implementation in _bit.py otherwise. Every call
 imports from here, never from _bit.py or rp2040py.native directly.
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._bit import (
         bit,
         read_uint16_le,
