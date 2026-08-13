@@ -275,7 +275,7 @@ cdef class RP2040:
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int offset
         if addr & 0x3:
-            self.logger.error(LOG_NAME, f"read from address {addr:x}, which is not 32 bit aligned")
+            self.logger.warning(LOG_NAME, f"read from address {addr:x}, which is not 32 bit aligned")
 
         if addr < self.bootrom_byte_size:
             return self._bootrom[addr // 4]

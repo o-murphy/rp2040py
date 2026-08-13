@@ -54,11 +54,12 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0037](records/0037-pio-clock-coupled-stepping.md) couple `RPPIO` stepping to the CPU's own instruction loop | fixes CYW43 native-mode livelock, follow-up of 0031/0034
 - [x] [0038](records/0038-cyw43-ioctl-response-zero-fill.md) `GSPIBus` ioctl-response zero-fill fix | fixes `nic.active(True)` real root cause (was misdiagnosed as throughput-only)
 - [x] [0039](records/0039-simulation-clock-native-port.md) `SimulationClock` native Cython port | follow-up of 0013/0031/0034, closes 0034's own leftover gap; ~2.7x on a synthetic busy-spin benchmark, `powersave` governor caveat, literal 0038 repro not re-run
+- [x] [0041](records/0041-cyw43-post-data-header-freeze-fix.md) CYW43 live-boot freeze root cause + fix | fixes `docs/tasks/cyw43-post-data-header-freeze.md`; unblocks 0027 step 3g live-boot verification
 
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot now blocked on a separate frozen-CPU issue (`docs/tasks/cyw43-post-data-header-freeze.md`), not the known raw-throughput ceiling; main-spi.py hang still open; step 4 (real network bridge) not started
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot's frozen-CPU blocker (`docs/tasks/cyw43-post-data-header-freeze.md`) root-caused + fixed (0041) - step 3g's own live-boot verification unblocked, not yet re-run; main-spi.py hang still open; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 
