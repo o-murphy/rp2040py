@@ -1,5 +1,12 @@
 # Task: `main-spi.py` hangs at 100% CPU, never reaches the REPL
 
+**Resolved 2026-08-14 — root cause + fix in
+[docs/records/0044-spi-dma-tx-rx-starvation-fix.md](../records/0044-spi-dma-tx-rx-starvation-fix.md).**
+Kept below as-is (investigation history), not rewritten - see that record for what actually
+happened: two independent bugs stacked (RPDMA.reset() discarding RPSPI's already-correct
+construction-time DREQ level, and SimulationClock's same-timestamp alarm tie-break letting a
+self-rescheduling DMA TX channel perpetually starve its own paired RX channel).
+
 Not a `docs/records/` entry - a working note for whoever picks this up next. Found while
 investigating [0027](../records/0027-cyw43-wifi.md)'s CYW43/pico_w wild-execution bug, but
 **genuinely unrelated to CYW43** - reproduces on plain `RPI_PICO`, no `pico_w`/`Cyw43439`

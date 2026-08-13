@@ -57,10 +57,11 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0041](records/0041-cyw43-post-data-header-freeze-fix.md) CYW43 live-boot freeze root cause + fix | fixes `docs/tasks/cyw43-post-data-header-freeze.md`; unblocks 0027 step 3g live-boot verification
 - [x] [0042](records/0042-cyw43-interrupt-register-w1c-fix.md) `GSPIBus` `SPI_INTERRUPT_REGISTER` write-1-to-clear (W1C) fix | fixes spurious `[CYW43] Bus error condition detected 0xb9` warning during live boot
 - [x] [0043](records/0043-pio-dma-first-batch-race.md) `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes MicroPython v1.23.0's CYW43 boot (`scan()` raising `EPERM`), follow-up of 0037
+- [x] [0044](records/0044-spi-dma-tx-rx-starvation-fix.md) DMA-driven SPI TX/RX hang fix | fixes `docs/tasks/main-spi-hang.md` (stale DREQ cache after `RPDMA.reset()` + same-tick `SimulationClock` alarm starvation), confirmed unrelated to CYW43/0027
 
 ### In progress / Proposed
 
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, live-boot-verified on both v1.23.0 and v1.28.0 (2026-08-13/14, see 0042/0043 fixes); `main-spi.py` hang still open, not root-caused - see `docs/tasks/main-spi-hang.md`; step 4 (real network bridge) not started
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, live-boot-verified on both v1.23.0 and v1.28.0 (2026-08-13/14, see 0042/0043 fixes); `main-spi.py` hang fixed but confirmed unrelated to this epic - see 0044; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 
