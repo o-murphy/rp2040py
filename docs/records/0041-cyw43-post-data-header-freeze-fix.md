@@ -106,3 +106,9 @@ freeze that prevented it from ever reaching script completion is fixed, not mere
 Whoever picks up 3g's own live-boot check next no longer needs to read
 `docs/tasks/cyw43-post-data-header-freeze.md`'s blocker context first; that file is left as-is
 (investigation history, not rewritten) with this record as its resolution.
+
+**Unblocked is not the same as verified**: the script now exits 0 with no traceback, but that only
+proves nothing crashed - it does not by itself confirm 3g's scripted scan/join event sequence
+actually produced a real result (the script never prints `scan()`'s own return value or polls
+`isconnected()` after `connect()`). That check is a separate, not-yet-started task - see
+`docs/tasks/cyw43-3g-live-boot-verification.md`.
