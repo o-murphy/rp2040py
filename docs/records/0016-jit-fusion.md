@@ -1,8 +1,11 @@
 # 0016. Basic-block fusion / mini-JIT via ast-generated code
 
-- Status: Proposed — isolated test done, results validated the idea
+- Status: Rejected (2026-08-13) — every real integration attempt (Phase 1's fixed byte-loop
+  pattern, the branch-only-check follow-up, the bulk-copy-loop follow-up) measured net negative on
+  a full firmware boot; the Cython interpreter core (0013) was pursued instead and is on by
+  default
 - Conceived: 2026-08-05
-- Related: 0013 (Cython), 0015 (memcpy HLE), note 0017 (perf)
+- Related: 0013 (Cython — chosen instead), 0015 (memcpy HLE), note 0017 (perf)
 
 <!-- migrated verbatim from docs/JIT_BACKLOG.md lines 1-350 -->
 
