@@ -12,6 +12,7 @@ from rp2040py.external.cyw43.bus import (
     AI_IOCTRL_OFFSET,
     AI_RESETCTRL_OFFSET,
     AIRC_RESET,
+    ASYNCEVENT_HEADER,
     BACKPLANE_ADDR_MASK,
     BACKPLANE_FUNCTION,
     BUS_FUNCTION,
@@ -21,6 +22,14 @@ from rp2040py.external.cyw43.bus import (
     CORE_SOCRAM,
     CORE_WLAN_ARM,
     CYW43_BACKPLANE_READ_PAD_LEN_BYTES,
+    CYW43_EV_ASSOC,
+    CYW43_EV_AUTH,
+    CYW43_EV_ESCAN_RESULT,
+    CYW43_EV_LINK,
+    CYW43_EV_PSK_SUP,
+    CYW43_EV_SET_SSID,
+    CYW43_STATUS_PARTIAL,
+    CYW43_STATUS_SUCCESS,
     DATA_HEADER,
     F2_PACKET_AVAILABLE,
     IOCTL_HEADER_LEN,
@@ -49,6 +58,8 @@ from rp2040py.external.cyw43.bus import (
     STATUS_F2_PKT_LEN_SHIFT,
     TEST_PATTERN,
     WLAN_FUNCTION,
+    WLC_SET_SSID,
+    WLC_SET_VAR,
     WORD_LENGTH_32,
     GSPIBus,
 )
@@ -587,17 +598,26 @@ def test_malformed_size_checksum_request_is_ignored():
     assert not status & STATUS_F2_PKT_AVAILABLE
 
 
-def test_data_header_frame_is_ignored_not_answered_with_an_ioctl_response():
-    """DATA_HEADER (outbound Ethernet, step 4's NAT bridge) isn't built yet - must not be
-    mistaken for a CONTROL_HEADER ioctl and answered."""
+def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer():
+    """DATA_HEADER (outbound Ethernet, step 4's NAT bridge) isn't built yet, so there's no real
+    content to answer with - but it must still get *some* response (a bare, ioctl-header-less
+    flow-control frame - real firmware's own named case for this, see
+    _build_flow_control_response()'s docstring for why silence here permanently desyncs
+    cyw43_sdpcm_send_common()'s shared credit/transmit-sequence channel, found live-booting real
+    firmware: an unanswered data send deadlocks every later ioctl too, well before scan()/
+    connect() ever run)."""
     _rp2040, master = _wire_up()
     request = bytearray(_build_ioctl_request(request_id=1))
     request[5] = DATA_HEADER  # override channel_and_flags's low nibble
 
     _send_wlan_frame(master, bytes(request))
 
-    status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
-    assert not status & STATUS_F2_PKT_AVAILABLE
+    response = _read_f2_response(master)
+    assert len(response) == SDPCM_HEADER_LEN
+    assert response[5] & 0x0F == CONTROL_HEADER
+    size = int.from_bytes(response[0:2], "little")
+    size_com = int.from_bytes(response[2:4], "little")
+    assert size == SDPCM_HEADER_LEN == (~size_com & 0xFFFF)
 
 
 def test_bus_data_credit_increments_across_successive_ioctl_responses():
@@ -611,6 +631,26 @@ def test_bus_data_credit_increments_across_successive_ioctl_responses():
     second_credit = _read_f2_response(master)[9]
 
     assert second_credit == (first_credit + 1) & 0xFF
+
+
+def test_bus_data_credit_still_increments_across_an_intervening_data_header_send():
+    """Regression test for the real deadlock found live-booting firmware (2026-08-13, see
+    _build_flow_control_response()'s docstring): an outbound DATA_HEADER send between two ioctls
+    must still bump bus_data_credit like any other send, or cyw43_sdpcm_send_common()'s shared
+    credit/transmit-sequence channel permanently desyncs and every ioctl after it stalls."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1))
+    first_credit = _read_f2_response(master)[9]
+
+    data_request = bytearray(_build_ioctl_request(request_id=2))
+    data_request[5] = DATA_HEADER
+    _send_wlan_frame(master, bytes(data_request))
+    data_credit = _read_f2_response(master)[9]
+    assert data_credit == (first_credit + 1) & 0xFF
+
+    _send_wlan_frame(master, _build_ioctl_request(request_id=3))
+    third_credit = _read_f2_response(master)[9]
+    assert third_credit == (data_credit + 1) & 0xFF
 
 
 def test_ioctl_request_raises_the_shared_irq_pin_while_idle():
@@ -742,3 +782,128 @@ def test_sdio_function2_watermark_register_round_trips():
     master.write_register(BACKPLANE_FUNCTION, SDIO_FUNCTION2_WATERMARK, 1, 0x10)
 
     assert master.read_register(BACKPLANE_FUNCTION, SDIO_FUNCTION2_WATERMARK, 1) == 0x10
+
+
+# -- Step 3g: async events + scripted scan/join --------------------------------------------------
+
+
+def _parse_async_event(frame: bytes) -> tuple[int, int, int, int, bytes]:
+    """Unwraps one ASYNCEVENT_HEADER frame (BDC header + fake Ethernet + bcmeth_hdr_t + the real
+    cyw43_async_event_t byte layout - see bus.py's module docstring) into
+    (event_type, status, flags, interface, scan_result_bytes)."""
+    assert frame[5] & 0x0F == ASYNCEVENT_HEADER
+    payload = frame[SDPCM_HEADER_LEN:]
+    ethernet_frame = payload[4:]  # skip the 4-byte BDC header
+    assert ethernet_frame[12:14] == b"\x88\x6c"  # EtherType
+    assert ethernet_frame[19:22] == b"\x00\x10\x18"  # Broadcom OUI
+    core = ethernet_frame[24:]
+    flags = int.from_bytes(core[2:4], "big")
+    event_type = int.from_bytes(core[4:8], "big")
+    status = int.from_bytes(core[8:12], "big")
+    interface = core[46]
+    return event_type, status, flags, interface, core[48:]
+
+
+def _build_escan_request(request_id: int) -> bytes:
+    return _build_ioctl_request(request_id, cmd=WLC_SET_VAR, payload=b"escan\x00" + bytes(64))
+
+
+def _build_set_ssid_request(request_id: int, ssid: bytes = b"testnet") -> bytes:
+    payload = (len(ssid)).to_bytes(4, "little") + ssid.ljust(32, b"\x00")
+    return _build_ioctl_request(request_id, cmd=WLC_SET_SSID, payload=payload)
+
+
+def test_escan_ack_is_a_plain_ioctl_response_not_an_async_event():
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_escan_request(request_id=3))
+
+    response = _read_f2_response(master)
+
+    assert response[5] & 0x0F == CONTROL_HEADER
+    flags = int.from_bytes(response[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
+    assert (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT == 3
+
+
+def test_escan_queues_a_partial_result_then_a_completion_event_behind_its_own_ack():
+    """CYW43_EV_ESCAN_RESULT/CYW43_STATUS_PARTIAL carries the fake AP; the completion event
+    (status=CYW43_STATUS_SUCCESS) is what actually ends network_cyw43_scan()'s own wait loop -
+    see bus.py's module docstring for why both are needed, not just the one the original plan
+    estimated."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_escan_request(request_id=1))
+    _read_f2_response(master)  # the generic ioctl ack itself, not under test here
+
+    partial = _parse_async_event(_read_f2_response(master))
+    completion = _parse_async_event(_read_f2_response(master))
+
+    assert partial[0] == CYW43_EV_ESCAN_RESULT
+    assert partial[1] == CYW43_STATUS_PARTIAL
+    assert completion[0] == CYW43_EV_ESCAN_RESULT
+    assert completion[1] == CYW43_STATUS_SUCCESS
+
+
+def test_escan_partial_result_matches_the_fixed_fake_ap_shape():
+    """docs/records/0024-cyw43-protocol.md's confirmed real Wokwi capture:
+    `[(b'Wokwi-GUEST', b'B\\x137U\\xaa\\x01', 6, -87, 0, 1)]` - bssid/channel/rssi/auth_mode (the
+    6th tuple field is synthesized entirely on the MicroPython side, not part of the wire event).
+    The ssid itself is this project's own (`RP2040PY-GUEST`, not Wokwi's - see bus.py's
+    `_FAKE_AP_SSID`), everything else mirrors that real capture. auth_mode=0 (open) comes from
+    cyw43_ll_wifi_parse_scan_result()'s own IE scan finding no RSN/WPA element and no privacy bit -
+    not set directly by this bus."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_escan_request(request_id=1))
+    _read_f2_response(master)
+
+    _event_type, status, _flags, _interface, scan_result = _parse_async_event(_read_f2_response(master))
+    assert status == CYW43_STATUS_PARTIAL
+
+    bssid = scan_result[20:26]
+    ssid_len = scan_result[30]
+    ssid = scan_result[31 : 31 + ssid_len]
+    channel = int.from_bytes(scan_result[84:86], "little")
+    rssi = int.from_bytes(scan_result[90:92], "little", signed=True)
+    assert bssid == b"\x42\x13\x37\x55\xaa\x01"
+    assert ssid == b"RP2040PY-GUEST"
+    assert channel == 6
+    assert rssi == -87
+
+
+def test_wlc_set_ssid_queues_the_scripted_join_event_sequence_behind_its_own_ack():
+    """cyw43_wifi_join() (cyw43_ctrl.c) does `wifi_join_state = WIFI_JOIN_STATE_ACTIVE` - a plain
+    assignment, not an OR - the instant the SSID ack itself arrives, so every join event must come
+    *after* that ack or its bits get wiped out moments later (see bus.py's module docstring)."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_set_ssid_request(request_id=5))
+
+    ack = _read_f2_response(master)
+    assert ack[5] & 0x0F == CONTROL_HEADER
+    flags = int.from_bytes(ack[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
+    assert (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT == 5
+
+    events = [_parse_async_event(_read_f2_response(master)) for _ in range(5)]
+    event_types = [event[0] for event in events]
+    assert event_types == [CYW43_EV_SET_SSID, CYW43_EV_AUTH, CYW43_EV_ASSOC, CYW43_EV_PSK_SUP, CYW43_EV_LINK]
+    assert all(event[1] == CYW43_STATUS_SUCCESS for event in events if event[0] != CYW43_EV_PSK_SUP)
+    psk_sup = events[3]
+    assert psk_sup[1] == 6  # WLC_SUP_KEYED (cyw43_ctrl.c)
+    link = events[4]
+    assert link[2] & 1  # flags bit 0 - link up
+    assert link[3] == 0  # CYW43_ITF_STA
+
+
+def test_queued_rx_packets_are_delivered_as_separate_reads_not_concatenated():
+    """Regression coverage for the step 3g queue_rx_packet() change from a single slot to a real
+    FIFO (_rx_queue) - queuing a second packet before the first is drained must not clobber it or
+    merge the two into one oversized read."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    first, second = b"\x01\x02\x03", b"\xaa\xbb"
+    bus.queue_rx_packet(first)
+    bus.queue_rx_packet(second)
+
+    assert master.read_register(WLAN_FUNCTION, 0, len(first)) == int.from_bytes(first, "little")
+    status_mid = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    assert (status_mid & STATUS_F2_PKT_LEN_MASK) >> STATUS_F2_PKT_LEN_SHIFT == len(second)
+    assert master.read_register(WLAN_FUNCTION, 0, len(second)) == int.from_bytes(second, "little")
+
+    status_end = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+    assert not status_end & STATUS_F2_PKT_AVAILABLE
