@@ -470,6 +470,42 @@ def test_f2_read_consumes_the_packet_and_clears_pending_status():
     assert not interrupt & F2_PACKET_AVAILABLE
 
 
+def test_interrupt_register_host_write_clears_the_written_bits_not_sets_them():
+    """SPI_INTERRUPT_REGISTER is real hardware's own write-1-to-clear (W1C) status register
+    (cyw43_spi.h's own comments on DATA_UNAVAILABLE/COMMAND_ERROR/DATA_ERROR - "Clear by writing a
+    1"/"Cleared by writing 1" - and cyw43_ll_sdpcm_poll_device()'s own ack-by-echo pattern both
+    confirm this for the whole register, not just those bits), unlike every other F0 register. A
+    host write of some bits must clear exactly those bits, not store them verbatim, or a
+    `queue_rx_packet()`-set `F2_PACKET_AVAILABLE` bit sitting alongside them survives the write
+    unexpectedly (and vice versa - see the next test for the actual bug this reproduces)."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    bus.queue_rx_packet(b"\xaa\xbb")  # sets F2_PACKET_AVAILABLE (0x0020) via _activate_rx_packet().
+    assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == F2_PACKET_AVAILABLE
+
+    master.write_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2, F2_PACKET_AVAILABLE)
+
+    assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == 0
+
+
+def test_interrupt_register_host_write_of_error_bits_does_not_set_them():
+    """Direct regression test for the spurious "[CYW43] Bus error condition detected 0xb9" real
+    firmware prints right after "Initializing..." during a live boot (found + fixed 2026-08-13,
+    see docs/records/0027-cyw43-wifi.md's dated entry). `cyw43_ll_bus_init()` writes
+    `DATA_UNAVAILABLE(0x01) | COMMAND_ERROR(0x08) | DATA_ERROR(0x10) | F1_OVERFLOW(0x80)` = `0x99`
+    to this register right after the word-length/endian switch, with the comment "Make sure error
+    interrupt bits are clear" - i.e. it means to *clear* those bits (none were actually set - the
+    register starts at 0). Before this fix, `_write_f0()` stored `0x99` verbatim, genuinely
+    *setting* `F1_OVERFLOW`; the very next `_activate_rx_packet()` (the first real ioctl response)
+    OR-ing in `F2_PACKET_AVAILABLE` on top produced `0xb9`, which then tripped real firmware's own
+    `spi_int & BUS_OVERFLOW_UNDERFLOW` bus-error check for a condition that never actually
+    occurred."""
+    _rp2040, _bus, master = _wire_up_with_bus()
+
+    master.write_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 1, 0x99)
+
+    assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == 0
+
+
 def test_queuing_a_packet_while_idle_raises_the_shared_irq_pin():
     """Real firmware's cyw43_cb_read_host_interrupt_pin() (cyw43_ctrl.c) polls WL_D's own level
     directly, independent of any SPI transaction - the mechanism that lets a real driver's GPIO
