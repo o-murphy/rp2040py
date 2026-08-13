@@ -71,6 +71,7 @@ and `reference/` for those). The structure itself is decided in
 - [0017](records/0017-perf-python-vs-v8.md) performance: pure-Python vs V8 → 0011, 0013, 0015, 0016
 - [0018](records/0018-raw-repl-txfifo.md) raw-REPL cross-thread `tx_fifo` (postmortem) → 0014
 - [0024](records/0024-cyw43-protocol.md) CYW43439 protocol reverse-engineering → 0027, 0028, 0029, 0030
+- [0040](records/0040-time-monotonic-vs-cimport.md) `time.monotonic()` vs `cimport`'d clock in `native/_simulator.pyx` → 0031, 0034, 0039
 
 ## Reference (living, unnumbered)
 
