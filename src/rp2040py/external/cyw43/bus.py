@@ -94,6 +94,71 @@ ignored, matching this class's existing no-op-rather-than-raise stance for unimp
 Real firmware/CLM downloads (step 3e) don't touch `WLAN_FUNCTION` at all -
 `cyw43_download_resource()` writes through `BACKPLANE_FUNCTION` instead, already covered
 generically by the F1 block-transfer path above.
+
+**Async events + scripted scan/join (step 3g).** Two of `_write_wlan()`'s ioctl/iovar requests get
+real scripted behavior on top of the generic ack every other request already gets: a `WLC_SET_VAR`
+whose payload's iovar name is `"escan"` (`cyw43_ll_wifi_scan()`) and `WLC_SET_SSID` itself
+(`cyw43_ll_wifi_join()`'s own tail end, `cyw43_ll.c:2051`, read in full for this step - the
+ioctl/iovar sequence *before* it, `ampdu_ba_wsize`/`WLC_SET_WSEC`/the `bsscfg:sup_*` iovars/
+`WLC_SET_INFRA`/`WLC_SET_AUTH`/`mfp`/`WLC_SET_WPA_AUTH`/the event-mask iovar, all still use the
+plain generic ack - only the SSID write itself needs scripted follow-up). Both queue their normal
+generic ack first, then queue one or more `ASYNCEVENT_HEADER` frames behind it via the same
+`queue_rx_packet()` mechanism (step 3e) - now a real FIFO (`_rx_queue`), not a single slot, since
+the ack and its follow-on event(s) must be delivered as separate, independently-framed reads, not
+concatenated into one.
+
+An async event is a fake *inbound* Ethernet frame wrapped in the same BDC header ordinary data
+frames use (`sdpcm_process_rx_packet()`'s `ASYNCEVENT_HEADER` case, `cyw43_ll.c`): EtherType
+`0x886c` at the conventional offset, the Broadcom OUI (`00:10:18`) right after it, then a
+`bcmeth_hdr_t`-shaped 10-byte header (subtype/length/version/oui/usr_subtype - only the OUI is
+actually checked). The real `cyw43_async_event_t` (`cyw43_ll.h`) starts right after that: 2
+reserved bytes, `flags` (u16, big-endian on the wire), `event_type`/`status`/`reason` (u32 each,
+big-endian), 30 reserved bytes, `interface`, 1 reserved byte, then a union whose only member is
+`cyw43_ev_scan_result_t` for `CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_PARTIAL` events - confirmed
+field-by-field from `cyw43_ll_parse_async_event()`'s own alignment-fixup copy (it relocates the
+struct 2 bytes to satisfy Cortex-M0's alignment fault, but the *byte offsets* it ends up reading
+are identical to the un-relocated wire buffer's own offsets - `ev->flags` is wire byte 2,
+`ev->event_type` is wire byte 4, and so on).
+
+`escan`'s response needs *two* events, not the one the original plan estimated: one
+`CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_PARTIAL` carrying the populated `cyw43_ev_scan_result_t` (a
+fixed fake AP, `RP2040PY-GUEST` - the rest of the shape mirrors Wokwi's own real captured AP
+(`bssid=42:13:37:55:aa:01`, `channel=6`, `rssi=-87`, open/no-privacy - see
+docs/records/0024-cyw43-protocol.md) since this project isn't Wokwi and shouldn't claim to be one
+over the air), *then* a second
+`CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_SUCCESS` completion event with no scan-result payload -
+`cyw43_cb_process_async_event()` (`cyw43_ctrl.c`) only sets `wifi_scan_state = 2` (scan done) on
+that `status == 0` event; without it `network_cyw43_scan()`'s own `mp_event_wait_ms()` loop
+(`extmod/network_cyw43.c`) blocks for its full 10s timeout on every `scan()` call instead of
+returning as soon as the one fake result is in.
+
+`cyw43_ev_scan_result_t`'s bytes are also read through a second, richer struct
+(`cyw43_ll_wifi_parse_scan_result()`'s own `_scan_result_t`/`cyw43_scan_result_internal_t`, an
+overlapping reinterpretation of the *same* memory, not a separate structure) that computes
+`auth_mode` from an RSN/WPA information-element scan and writes it back through the public struct -
+`_build_scan_result_bytes()` builds bytes valid under *both* interpretations at once (real firmware
+struct padding computed by hand for each field, not a natural dataclass layout): setting
+`ie_length = 0` skips the IE scan entirely (open network, `auth_mode` computes to 0, matching the
+real captured value this fake AP's shape is otherwise based on) without needing to fabricate real
+802.11 IEs.
+
+`WLC_SET_SSID`'s scripted sequence is `WLC_E_SET_SSID`/`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`, all
+`status=0` except `_PSK_SUP` (`status=6`, `WLC_SUP_KEYED` - `cyw43_ctrl.c`) and `_LINK` (`flags=1`,
+"link up", `interface=CYW43_ITF_STA`) - sent unconditionally regardless of the auth type actually
+requested (confirmed safe by reading `cyw43_cb_process_async_event()`: every one of these is a
+plain OR into `self->wifi_join_state`'s bitmask, so an extra `_PSK_SUP` for an open network that
+already got its `KEYED` bit set synchronously by `cyw43_wifi_join()` itself is a harmless no-op,
+not a correctness risk - avoids needing to track auth type across the whole ioctl/iovar sequence
+just to decide which events to send). **Ordering relative to the `WLC_SET_SSID` ack itself matters
+and was confirmed by reading `cyw43_wifi_join()` (`cyw43_ctrl.c`), not assumed:** that function does
+`self->wifi_join_state = WIFI_JOIN_STATE_ACTIVE;` - a plain *assignment*, not an OR - the instant
+`cyw43_ll_wifi_join()` returns (i.e. the instant the SSID ack itself is received via
+`cyw43_do_ioctl()`'s own response-wait loop). Any join event delivered *before* that ack would have
+its bits wiped out by this assignment moments later, so the whole scripted sequence is queued
+*behind* the ack, not interleaved with or ahead of it - picked up on whatever later poll drains the
+queue (`cyw43_ll_process_packets()`/`cyw43_poll_func()`), the same way real firmware's own
+over-the-air join handshake genuinely completes some time after the SSID command itself is
+acknowledged, not synchronously with it.
 """
 
 from dataclasses import dataclass
@@ -109,6 +174,7 @@ __all__ = (
     "AIRC_RESET",
     "AI_IOCTRL_OFFSET",
     "AI_RESETCTRL_OFFSET",
+    "ASYNCEVENT_HEADER",
     "BACKPLANE_ADDR_MASK",
     "BACKPLANE_FUNCTION",
     "BUS_FUNCTION",
@@ -118,6 +184,14 @@ __all__ = (
     "CORE_SOCRAM",
     "CORE_WLAN_ARM",
     "CYW43_BACKPLANE_READ_PAD_LEN_BYTES",
+    "CYW43_EV_ASSOC",
+    "CYW43_EV_AUTH",
+    "CYW43_EV_ESCAN_RESULT",
+    "CYW43_EV_LINK",
+    "CYW43_EV_PSK_SUP",
+    "CYW43_EV_SET_SSID",
+    "CYW43_STATUS_PARTIAL",
+    "CYW43_STATUS_SUCCESS",
     "DATA_HEADER",
     "F2_PACKET_AVAILABLE",
     "IOCTL_HEADER_LEN",
@@ -162,6 +236,8 @@ __all__ = (
     "TEST_PATTERN",
     "WLAN_ARMCM3_BASE_ADDRESS",
     "WLAN_FUNCTION",
+    "WLC_SET_SSID",
+    "WLC_SET_VAR",
     "WORD_LENGTH_32",
     "WRAPPER_REGISTER_OFFSET",
     "GSPIBus",
@@ -305,9 +381,44 @@ IOCTL_HEADER_LEN = 16
 CONTROL_HEADER = 0
 DATA_HEADER = 2
 # ioctl_header_t.flags: the requesting id lives in the top 16 bits - sdpcm_process_rx_packet()
-# (cyw43_ll.c) drops any response whose echoed id doesn't match the driver's own last-sent id.
+# (cyw43_ll.c) drops any response whose echoed id doesn't match the driver's own last-sent one.
 CDCF_IOC_ID_SHIFT = 16
 CDCF_IOC_ID_MASK = 0xFFFF0000
+
+# Async events + scripted scan/join (step 3g) - cyw43_ll.c's own #defines (WLC_* ioctl cmd
+# numbers, cyw43_ll.h's CYW43_EV_*/CYW43_STATUS_* event constants).
+WLC_SET_SSID = 26  # cyw43_ll_wifi_join()'s own final ioctl, past the generic-ack-only prefix.
+WLC_SET_VAR = 263  # iovar dispatch (name-prefixed payload) - only "escan" gets scripted follow-up.
+ASYNCEVENT_HEADER = 1  # sdpcm_header_t.channel_and_flags low nibble - chip-to-host only.
+
+CYW43_EV_SET_SSID = 0
+CYW43_EV_AUTH = 3
+CYW43_EV_ASSOC = 7
+CYW43_EV_PSK_SUP = 46
+CYW43_EV_LINK = 16
+CYW43_EV_ESCAN_RESULT = 69
+
+CYW43_STATUS_SUCCESS = 0
+CYW43_STATUS_PARTIAL = 8
+
+# Fixed fake AP (module docstring's "Async events + scripted scan/join" section) - this project's
+# own SSID (not Wokwi's - this isn't Wokwi's emulator), but the rest of the shape mirrors Wokwi's
+# own real captured AP (docs/records/0024-cyw43-protocol.md): open/no-privacy, so
+# cyw43_ll_wifi_parse_scan_result()'s computed auth_mode comes out 0 without needing real 802.11
+# IEs (see _build_scan_result_bytes()).
+_FAKE_AP_SSID = b"RP2040PY-GUEST"
+_FAKE_AP_BSSID = b"\x42\x13\x37\x55\xaa\x01"
+_FAKE_AP_CHANNEL = 6
+_FAKE_AP_RSSI = -87
+
+# Async event Ethernet framing (sdpcm_process_rx_packet()'s ASYNCEVENT_HEADER case) - only the
+# EtherType and OUI are actually checked by the driver; dest/src MAC and the bcmeth_hdr_t's own
+# subtype/version/usr_subtype fields are never inspected, so these are realistic placeholders, not
+# derived from a specific real capture.
+_EVENT_ETHERTYPE = b"\x88\x6c"
+_BROADCOM_OUI = b"\x00\x10\x18"
+_EVENT_DEST_MAC = b"\xff\xff\xff\xff\xff\xff"
+_EVENT_SRC_MAC = b"\x00\x10\x18\x00\x00\x00"
 
 
 @dataclass(frozen=True)
@@ -409,7 +520,15 @@ class GSPIBus:
         self._response_bit_index = 0
         # F2 (WLAN_FUNCTION) inbound packet queue (step 3e) - staged by queue_rx_packet(), drained
         # by _read_wlan(). Empty means "nothing pending", matching STATUS_F2_PKT_AVAILABLE unset.
+        # _rx_packet is the one frame currently being read out over F2; _rx_queue holds later
+        # frames not yet visible on the bus (step 3g - a scripted ioctl response followed by one or
+        # more async events must be delivered as separate, independently-framed reads, not
+        # concatenated - see queue_rx_packet()). Invariant: _rx_queue is only ever non-empty while
+        # _rx_packet is too (queue_rx_packet() only appends instead of activating immediately when
+        # something is already active), so _rx_packet alone remains a correct "anything pending at
+        # all" check wherever that's needed (e.g. _on_cs_change()'s IRQ-pin reflection).
         self._rx_packet = b""
+        self._rx_queue: list[bytes] = []
         # SDPCM bus_data_credit (step 3f) - matches the real driver's own initial
         # wwd_sdpcm_last_bus_data_credit (cyw43_ll_init(), cyw43_ll.c). Incremented once per ioctl
         # response we send (_build_ioctl_success_response()) - see that method for why it must
@@ -514,16 +633,27 @@ class GSPIBus:
     # -- F2 (WLAN_FUNCTION) inbound packet queue (step 3e) --------------------------------------
 
     def queue_rx_packet(self, data: bytes) -> None:
-        """Stages `data` as the next inbound F2 packet - the generic delivery mechanism step
-        3f/3g's SDPCM ioctl responses and async events will use, not anything protocol-specific
-        itself. Sets `SPI_STATUS_REGISTER`'s `STATUS_F2_PKT_AVAILABLE` bit + length field and
-        `SPI_INTERRUPT_REGISTER`'s `F2_PACKET_AVAILABLE` bit - what real firmware's
-        `cyw43_ll_sdpcm_poll_device()` actually polls for (cyw43_ll.c, SPI variant) - and, if CS is
-        currently deasserted, immediately raises the shared `WL_D` pin's own IRQ level too, since
-        that's a separate GPIO-level signal (`cyw43_cb_read_host_interrupt_pin()`, real hardware's
-        `CYW43_PIN_WL_HOST_WAKE`) a real driver's interrupt handler can notice without any SPI
-        transaction happening at all - `_on_cs_change()` alone wouldn't reflect a packet queued
-        while already idle."""
+        """Stages `data` as an inbound F2 packet - the generic delivery mechanism step 3f/3g's
+        SDPCM ioctl responses and async events use, not anything protocol-specific itself. If
+        nothing is currently pending, activates `data` immediately (see `_activate_rx_packet()`);
+        otherwise appends it to `_rx_queue` to be activated once every earlier packet has been
+        fully read out - step 3g's scripted responses (an ioctl ack followed by one or more async
+        events) call this several times in a row for exactly this reason, and each call must stay
+        a distinct, separately-framed F2 read, not get concatenated into one."""
+        if self._rx_packet:
+            self._rx_queue.append(data)
+            return
+        self._activate_rx_packet(data)
+
+    def _activate_rx_packet(self, data: bytes) -> None:
+        """Makes `data` the current F2-visible packet: sets `SPI_STATUS_REGISTER`'s
+        `STATUS_F2_PKT_AVAILABLE` bit + length field and `SPI_INTERRUPT_REGISTER`'s
+        `F2_PACKET_AVAILABLE` bit - what real firmware's `cyw43_ll_sdpcm_poll_device()` actually
+        polls for (cyw43_ll.c, SPI variant) - and, if CS is currently deasserted, immediately
+        raises the shared `WL_D` pin's own IRQ level too, since that's a separate GPIO-level signal
+        (`cyw43_cb_read_host_interrupt_pin()`, real hardware's `CYW43_PIN_WL_HOST_WAKE`) a real
+        driver's interrupt handler can notice without any SPI transaction happening at all -
+        `_on_cs_change()` alone wouldn't reflect a packet queued while already idle."""
         self._rx_packet = data
         status = self._read_f0(SPI_STATUS_REGISTER, 4) | STATUS_F2_PKT_AVAILABLE
         status = (status & ~STATUS_F2_PKT_LEN_MASK) | ((len(data) << STATUS_F2_PKT_LEN_SHIFT) & STATUS_F2_PKT_LEN_MASK)
@@ -536,14 +666,21 @@ class GSPIBus:
         """F2 reads are always against a fixed FIFO address on real hardware - `cyw43_read_bytes()`
         always passes `addr=0` (see `cyw43_ll_sdpcm_poll_device()`), so `addr` itself is unused
         here, mirroring that. Delivers up to `size` bytes of whatever `queue_rx_packet()` staged,
-        consuming them; once the queue is empty, clears `STATUS_F2_PKT_AVAILABLE`/
-        `F2_PACKET_AVAILABLE` - the shared IRQ pin itself drops on the next `_on_cs_change()`
-        deselect, which by then sees an empty `_rx_packet`, so nothing needs touching here."""
+        consuming them; once the current packet is empty, activates the next queued one (step 3g)
+        if there is one, keeping `STATUS_F2_PKT_AVAILABLE`/`F2_PACKET_AVAILABLE`/the shared IRQ
+        pin continuously asserted across the transition - only once `_rx_queue` is also empty do
+        those get cleared. The shared IRQ pin itself drops on the next `_on_cs_change()` deselect,
+        which by then sees an empty `_rx_packet`, so nothing needs touching here for that part."""
         data, self._rx_packet = self._rx_packet[:size], self._rx_packet[size:]
         if not self._rx_packet:
-            status = self._read_f0(SPI_STATUS_REGISTER, 4) & ~(STATUS_F2_PKT_AVAILABLE | STATUS_F2_PKT_LEN_MASK)
-            self._write_f0(SPI_STATUS_REGISTER, 4, status)
-            self._write_f0(SPI_INTERRUPT_REGISTER, 2, self._read_f0(SPI_INTERRUPT_REGISTER, 2) & ~F2_PACKET_AVAILABLE)
+            if self._rx_queue:
+                self._activate_rx_packet(self._rx_queue.pop(0))
+            else:
+                status = self._read_f0(SPI_STATUS_REGISTER, 4) & ~(STATUS_F2_PKT_AVAILABLE | STATUS_F2_PKT_LEN_MASK)
+                self._write_f0(SPI_STATUS_REGISTER, 4, status)
+                self._write_f0(
+                    SPI_INTERRUPT_REGISTER, 2, self._read_f0(SPI_INTERRUPT_REGISTER, 2) & ~F2_PACKET_AVAILABLE
+                )
         return int.from_bytes(data, "little")
 
     # -- F2 (WLAN_FUNCTION) outbound SDPCM/ioctl (step 3f) --------------------------------------
@@ -619,18 +756,144 @@ class GSPIBus:
         )
         return sdpcm_header + ioctl_header + payload
 
+    def _build_async_event(
+        self,
+        event_type: int,
+        status: int,
+        *,
+        reason: int = 0,
+        interface: int = 0,
+        flags: int = 0,
+        scan_result: bytes = b"",
+    ) -> bytes:
+        """A scripted `ASYNCEVENT_HEADER` frame (step 3g) - see the module docstring's "Async
+        events + scripted scan/join" section for the full byte-offset derivation. `scan_result`,
+        when given, must already be `_build_scan_result_bytes()`'s own shape - only
+        `CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_PARTIAL` events carry one."""
+        event_core = (
+            bytes(2)  # 2 reserved bytes - never read by cyw43_ll_parse_async_event()
+            + flags.to_bytes(2, "big")
+            + event_type.to_bytes(4, "big")
+            + status.to_bytes(4, "big")
+            + reason.to_bytes(4, "big")
+            + bytes(30)  # reserved
+            + bytes([interface, 0])  # interface, then 1 reserved byte
+            + scan_result
+        )
+        bcmeth_header = (
+            (0x8000).to_bytes(2, "big")  # subtype: BCMILCP_SUBTYPE_VENDOR_LONG
+            + len(event_core).to_bytes(2, "big")
+            + bytes([0])  # version
+            + _BROADCOM_OUI
+            + (1).to_bytes(2, "big")  # usr_subtype: BCMILCP_BCM_SUBTYPE_EVENT
+        )
+        ethernet_frame = _EVENT_DEST_MAC + _EVENT_SRC_MAC + _EVENT_ETHERTYPE + bcmeth_header + event_core
+        bdc_header = bytes([0x20, 0, interface, 0])  # flags/priority/flags2(itf)/data_offset
+        payload = bdc_header + ethernet_frame
+        size = SDPCM_HEADER_LEN + len(payload)
+        self._bus_data_credit = (self._bus_data_credit + 1) & 0xFF
+        sdpcm_header = (
+            size.to_bytes(2, "little")
+            + (~size & 0xFFFF).to_bytes(2, "little")
+            + bytes([0, ASYNCEVENT_HEADER, 0, SDPCM_HEADER_LEN, 0, self._bus_data_credit])
+            + bytes(2)  # reserved
+        )
+        return sdpcm_header + payload
+
+    def _build_scan_result_bytes(self) -> bytes:
+        """The fixed fake AP's `cyw43_ev_scan_result_t` payload (module docstring's "Async events
+        + scripted scan/join" section has the full field-by-field derivation, including why this
+        must also satisfy `cyw43_ll_wifi_parse_scan_result()`'s own overlapping
+        `_scan_result_t`/`cyw43_scan_result_internal_t` reinterpretation of the same bytes).
+        Everything not set explicitly stays zero, which is exactly what's needed:
+        `bss.capability`/`bss.ie_offset`/`bss.ie_length` all zero means an open network (no RSN/WPA
+        IE, no privacy bit) - `auth_mode` computes to 0, matching the real captured value this fake
+        AP's shape is otherwise based on - without needing to fabricate real 802.11 information
+        elements."""
+        buf = bytearray(140)  # 12-byte outer header + 128-byte cyw43_scan_result_internal_t
+        buf[16:20] = (128).to_bytes(4, "little")  # bss.length (validates ie_offset+ie_length<=it)
+        buf[20:26] = _FAKE_AP_BSSID  # bss.bssid == the public struct's own bssid offset
+        buf[30] = len(_FAKE_AP_SSID)  # bss.ssid_len == the public struct's own ssid_len offset
+        buf[31 : 31 + len(_FAKE_AP_SSID)] = _FAKE_AP_SSID  # bss.ssid == the public struct's ssid
+        buf[84:86] = _FAKE_AP_CHANNEL.to_bytes(2, "little")  # bss.chanspec == public "channel"
+        buf[90:92] = _FAKE_AP_RSSI.to_bytes(2, "little", signed=True)  # bss.rssi == public "rssi"
+        return bytes(buf)
+
+    def _queue_scan_events(self) -> None:
+        """`escan`'s response (step 3g) - see the module docstring for why this is two events, not
+        the one events originally estimated: a `CYW43_STATUS_PARTIAL` result carrying the fixed
+        fake AP, then a `CYW43_STATUS_SUCCESS` completion with no scan-result payload, needed to
+        end `network_cyw43_scan()`'s own wait loop promptly instead of blocking for its full
+        timeout."""
+        self.queue_rx_packet(
+            self._build_async_event(
+                CYW43_EV_ESCAN_RESULT, CYW43_STATUS_PARTIAL, scan_result=self._build_scan_result_bytes()
+            )
+        )
+        self.queue_rx_packet(self._build_async_event(CYW43_EV_ESCAN_RESULT, CYW43_STATUS_SUCCESS))
+
+    def _queue_join_events(self) -> None:
+        """`WLC_SET_SSID`'s scripted `WLC_E_*` sequence (step 3g) - see the module docstring for
+        why this fires unconditionally (regardless of the auth type actually requested) and why it
+        must queue *behind* the SSID ack rather than ahead of or interleaved with it."""
+        for event_type, status, flags in (
+            (CYW43_EV_SET_SSID, CYW43_STATUS_SUCCESS, 0),
+            (CYW43_EV_AUTH, CYW43_STATUS_SUCCESS, 0),
+            (CYW43_EV_ASSOC, CYW43_STATUS_SUCCESS, 0),
+            (CYW43_EV_PSK_SUP, 6, 0),  # WLC_SUP_KEYED (cyw43_ctrl.c)
+            (CYW43_EV_LINK, CYW43_STATUS_SUCCESS, 1),  # flags bit 0 = link up
+        ):
+            self.queue_rx_packet(self._build_async_event(event_type, status, flags=flags))
+
+    def _build_flow_control_response(self) -> bytes:
+        """A bare SDPCM header carrying no ioctl/payload - `sdpcm_process_rx_packet()`'s own named
+        "flow control packet with no data" case (`cyw43_ll.c`: `if (header->size ==
+        SDPCM_HEADER_LEN) { ... Ignoring flow control packet ... }`, checked purely on size, before
+        the `channel_and_flags` switch - real hardware genuinely sends these when it has nothing
+        else to say but still needs to keep credit flowing).
+
+        **Needed for outbound `DATA_HEADER` (Ethernet) writes - found live-booting real firmware
+        (2026-08-13), not by reading source alone.** This bus doesn't answer them with real content
+        (step 4's NAT bridge, not built), but `cyw43_sdpcm_send_common()`'s STALL pre-send check
+        (`cyw43_ll.c:648-691`) shares the *same* `bus_data_credit`/`wwd_sdpcm_packet_transmit_
+        sequence_number` channel between ioctl *and* data sends - answering a data send with
+        nothing at all (the original step 3f/g behavior) never advances the driver's own
+        `last_bus_data_credit` for that send, while `packet_transmit_sequence_number` still
+        advances regardless (the send itself still went out). One such gap is enough to eventually
+        desync the two counters into permanent equality (confirmed via a direct reproduction, not
+        just the live boot: 20 ordinary ioctls track 1-credit-ahead forever as expected, then one
+        unanswered data send makes them exactly equal, and every ioctl after that stalls out
+        forever) - `cyw43_cb_tcpip_init()` sends at least one real outbound Ethernet frame (DHCP/ARP)
+        during `nic.active(True)` itself, so without this fix the whole SDPCM channel deadlocks
+        before `scan()`/`connect()` ever get a chance to run at all, regardless of anything this
+        step scripts for them."""
+        self._bus_data_credit = (self._bus_data_credit + 1) & 0xFF
+        size = SDPCM_HEADER_LEN
+        return (
+            size.to_bytes(2, "little")
+            + (~size & 0xFFFF).to_bytes(2, "little")
+            + bytes([0, CONTROL_HEADER, 0, SDPCM_HEADER_LEN, 0, self._bus_data_credit])
+            + bytes(2)
+        )
+
     def _write_wlan(self, data: bytes) -> None:
         """Real firmware's `cyw43_sdpcm_send_common()` sends the whole SDPCM(+ioctl+payload) blob
         as one F2 block write (`cyw43_write_bytes(WLAN_FUNCTION, 0, ...)`), so a single
         `write_register()` call already has the complete frame - no reassembly across calls
         needed. Validates the SDPCM header's own `size`/`~size_com` check, and - for
-        `CONTROL_HEADER` (ioctl) frames only - queues a generic success response that echoes the
+        `CONTROL_HEADER` (ioctl) frames - queues a generic success response that echoes the
         request's id and zero-fills a response payload the same length as the request's own
         payload (`_build_ioctl_success_response()` - see its own docstring for why a zero-filled
-        response, not just a zero-length ack, is required). Anything else (`DATA_HEADER` outbound
-        Ethernet frames - step 4's NAT bridge - or a malformed/too-short frame) is silently
-        ignored for now, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise stance
-        elsewhere in this class."""
+        response, not just a zero-length ack, is required). `DATA_HEADER` outbound Ethernet frames
+        (step 4's NAT bridge, not built) get a bare flow-control-only response instead
+        (`_build_flow_control_response()` - see its own docstring for why *some* response is
+        required even with no real content to answer with). A malformed/too-short frame is silently
+        ignored, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise stance elsewhere in
+        this class.
+
+        Two `CONTROL_HEADER` requests get real scripted behavior queued *behind* their own generic
+        ack (step 3g, see the module docstring's "Async events + scripted scan/join" section): a
+        `WLC_SET_VAR` whose payload's iovar name is `"escan"`, and `WLC_SET_SSID` itself."""
         if len(data) < SDPCM_HEADER_LEN:
             return
         size = int.from_bytes(data[0:2], "little")
@@ -638,12 +901,20 @@ class GSPIBus:
         if size != (~size_com & 0xFFFF):
             return
         kind = data[5] & 0x0F  # channel_and_flags, low nibble
+        if kind == DATA_HEADER:
+            self.queue_rx_packet(self._build_flow_control_response())
+            return
         if kind != CONTROL_HEADER or len(data) < SDPCM_HEADER_LEN + IOCTL_HEADER_LEN:
             return
+        cmd = int.from_bytes(data[SDPCM_HEADER_LEN : SDPCM_HEADER_LEN + 4], "little")
         flags = int.from_bytes(data[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
         request_id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT
-        request_payload_len = len(data) - SDPCM_HEADER_LEN - IOCTL_HEADER_LEN
-        self.queue_rx_packet(self._build_ioctl_success_response(request_id, request_payload_len))
+        request_payload = data[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :]
+        self.queue_rx_packet(self._build_ioctl_success_response(request_id, len(request_payload)))
+        if cmd == WLC_SET_VAR and request_payload.startswith(b"escan\x00"):
+            self._queue_scan_events()
+        elif cmd == WLC_SET_SSID:
+            self._queue_join_events()
 
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Returns whatever a real chip would answer for a `size`-byte read of `addr` on

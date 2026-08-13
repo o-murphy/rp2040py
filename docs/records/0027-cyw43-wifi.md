@@ -10,8 +10,9 @@
 
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**Paused mid-3g (2026-08-12) for a simulator performance side quest - see below.** Next step once
-resumed: 3g — async events + scripted scan/join. Everything before it in
+**3g (async events + scripted scan/join) implemented and unit-tested (2026-08-13); live-boot
+verification against `tests/micropython/main-cyw43.py` in progress - see its own progress-log entry
+under step 3's "3g" bullet below for the outcome once that lands.** Everything before it in
 "Implementation order" below is done: step 0 (board-loading API), step 1 (`ExternalDevice` proven
 via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware boots past the F0 handshake),
 and step 3's sub-steps 3a (generic word-aligned block transfers -
@@ -21,21 +22,21 @@ windowed backplane addressing), 3d (ARM core reset/enable registers), 3e (firmwa
 acceptance - free via 3a/3c's generic F1 block writes - plus F2 packet delivery:
 `GSPIBus.queue_rx_packet()`, `SPI_STATUS_REGISTER`/`SPI_INTERRUPT_REGISTER` plumbing, and the
 shared `WL_D` IRQ pin reflecting real pending-packet state instead of a hardcoded LOW placeholder),
-and 3f (SDPCM framing + generic ioctl request/response: `GSPIBus._write_wlan()` parses inbound F2
+3f (SDPCM framing + generic ioctl request/response: `GSPIBus._write_wlan()` parses inbound F2
 ioctl requests and answers with a generic zero-length success response via
 `_build_ioctl_success_response()`, echoing the request id and tracking `bus_data_credit` so the
 driver's own flow-control never stalls - corrected the SDPCM header size from an originally
-estimated 14 bytes to the real 12 along the way). **Verified against a real, unmodified
+estimated 14 bytes to the real 12 along the way), and now 3g (real `escan`/`WLC_SET_SSID` scripted
+responses on top of 3f's generic ack - see below). **Verified against a real, unmodified
 MicroPython Pico W boot (2026-08-12, post-3f)** - not just unit tests: found and fixed three real
 bugs (sticky ALP/HT clock availability including a WLAN-ARM-core-triggered case with no explicit
 HT request, F1's register bank missing its true 2-byte-lower bound, and missing
 `CYW43_BACKPLANE_READ_PAD_LEN_BYTES` padding on backplane reads) that were silently aborting
 bring-up before firmware download ever started; firmware download now genuinely runs against real
 firmware (traced live), though impractically slowly - see step 3f's own "Real-firmware
-verification" entry below for the full writeup. 35 tests total in `tests/test_cyw43_bus.py`. Real
-per-ioctl content and events (`WLC_SET_SSID`/join's scripted `WLC_E_*` sequence, scan results)
-still aren't built - that's 3g, next. See "Implementation
-order"'s step 3 for the full sub-step breakdown and status detail.
+verification" entry below for the full writeup. 41 tests total in `tests/test_cyw43_bus.py` as of
+3g (35 before it). See "Implementation order"'s step 3 for the full sub-step breakdown and status
+detail.
 
 **Performance side quest (2026-08-12), why 3g hasn't started yet.** Profiling the real-firmware
 boot above (the same run that verified 3e/3f) found the slowness isn't cyw43 code at all -
@@ -391,6 +392,87 @@ decision sections above that define what it actually means.
       source (see "Research homework" below - `cyw43_ll_wifi_join()`'s tail end, past the SSID
       write) - this is the sub-step that actually makes `.status()` progress through real codes.
 
+      **Done (2026-08-13), landed in `bus.py` same as every prior sub-step (not `chip.py` - see
+      this bullet's own note below on why the original chip.py plan wasn't followed in practice).**
+      Read the rest of `cyw43_ll_wifi_join()` (`cyw43_ll.c:2051`) and `cyw43_cb_process_async_event()`
+      (`cyw43_ctrl.c`) as planned, not guessed - two real corrections to this bullet's own original
+      estimate came out of that reading, both in `bus.py`'s module docstring ("Async events +
+      scripted scan/join" section) in full:
+      - **`escan` needs *two* events, not the one originally planned** - a `CYW43_STATUS_PARTIAL`
+        result carrying the fake AP, *then* a `CYW43_STATUS_SUCCESS` completion event with no
+        payload. Without the second one, `cyw43_cb_process_async_event()` never sets
+        `wifi_scan_state = 2`, so `extmod/network_cyw43.c`'s own `network_cyw43_scan()` blocks for
+        its full 10s `mp_event_wait_ms()` timeout on every `scan()` call instead of returning once
+        the one fake result is in.
+      - **Join event delivery must be queued *behind* the `WLC_SET_SSID` ack, not ahead of or
+        interleaved with it** - confirmed by reading `cyw43_wifi_join()` (`cyw43_ctrl.c`):
+        `self->wifi_join_state = WIFI_JOIN_STATE_ACTIVE;` there is a plain *assignment*, not an OR,
+        executed the instant the SSID ack itself is received. Any join event delivered before that
+        assignment would have its bits wiped out moments later. `GSPIBus.queue_rx_packet()` became
+        a real FIFO (`_rx_queue`, previously a single slot silently clobbered by a second call
+        before the first was drained) specifically to make "ack now, scripted events after" a safe
+        sequence to queue in one call - each queued frame is still delivered as its own
+        independently-framed F2 read, never concatenated.
+      - The exact `cyw43_async_event_t` byte layout (2 reserved bytes, `flags` u16 BE,
+        `event_type`/`status`/`reason` u32 BE each, 30 reserved bytes, `interface`, 1 reserved byte,
+        then the `cyw43_ev_scan_result_t` union) was confirmed field-by-field from
+        `cyw43_ll_parse_async_event()`'s own alignment-fixup copy, not assumed - see `bus.py`'s
+        module docstring for the full derivation, including why `cyw43_ev_scan_result_t` must be
+        built to satisfy *two* overlapping struct interpretations at once
+        (`cyw43_ll_wifi_parse_scan_result()`'s own richer `_scan_result_t` view of the same bytes,
+        used to compute `auth_mode` from an RSN/WPA IE scan).
+      - The fixed fake AP mirrors `Wokwi-GUEST`'s own real captured shape exactly (docs/records/
+        0024-cyw43-protocol.md): `ssid=b"Wokwi-GUEST"`, `bssid=42:13:37:55:aa:01`, `channel=6`,
+        `rssi=-87`, open/no-privacy (`auth_mode` computes to 0 via `ie_length=0` - no IEs to scan,
+        rather than fabricating real 802.11 elements).
+      - Join's scripted sequence (`WLC_E_SET_SSID`/`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`) fires
+        unconditionally regardless of the auth type actually requested, rather than tracking auth
+        type across the whole ioctl/iovar sequence just to decide which events to send - confirmed
+        safe by reading `cyw43_cb_process_async_event()`: every one of these is a plain OR into
+        `wifi_join_state`'s bitmask, so an extra `_PSK_SUP` for an already-`KEYED` open network is a
+        harmless no-op, not a correctness risk.
+      6 new tests (41 total in `tests/test_cyw43_bus.py`, up from 35): the `escan` ack/event-pair/
+      fake-AP-shape tests, the join-event-sequence-and-ordering test, and a FIFO regression test for
+      `queue_rx_packet()`'s new multi-packet behavior.
+
+      **Live-boot verification (2026-08-13) against `tests/micropython/main-cyw43.py`, both native
+      CPython+Cython and PyPy+pure-Python - found and fixed one real, pre-existing bug that had
+      nothing to do with scan/join scripting itself, only surfaced by actually letting real
+      firmware run this far.** First attempt: both interpreters deadlocked identically (same exact
+      `STALL(0;29-29)` repeating forever - this project's real-boot determinism holding even across
+      interpreters) *before* `nic.active(True)` even finished printing, i.e. before `scan()`/
+      `connect()` had any chance to run at all. Root-caused with a direct Python-level reproduction
+      against `GSPIBus` (replaying `sdpcm_process_rx_packet()`'s own credit bookkeeping in ~50 lines
+      of Python, no CPU emulation needed - milliseconds instead of another 450s boot) rather than
+      re-running the full boot repeatedly to guess: `cyw43_sdpcm_send_common()`'s STALL pre-send
+      check (`cyw43_ll.c:648-691`) shares *one* `bus_data_credit`/`wwd_sdpcm_packet_transmit_
+      sequence_number` channel between ioctl (`CONTROL_HEADER`) sends *and* outbound Ethernet
+      (`DATA_HEADER`) sends - `_write_wlan()` silently ignoring `DATA_HEADER` frames (the original,
+      correct-at-the-time step 3f/g stance - real content there is step 4's NAT bridge, not built)
+      meant `packet_transmit_sequence_number` still advanced for that send while
+      `last_bus_data_credit` got zero corresponding update, permanently shrinking the gap between
+      them; `cyw43_cb_tcpip_init()` sends at least one real outbound Ethernet frame (DHCP/ARP -
+      `[CYW43] send_ethernet failed: -110` in the boot log) during `nic.active(True)` itself, well
+      before any of this step's own code even runs. The reproduction confirmed the exact mechanism
+      before touching any code: 20 ordinary generic-ack ioctls track credit exactly
+      one-ahead-of-transmit-count forever as expected, then one unanswered data send makes them
+      exactly equal, and every ioctl after that stalls out permanently.
+
+      Fix: `_build_flow_control_response()` - a bare, ioctl-header-less SDPCM frame carrying only
+      an incremented `bus_data_credit` - answers every `DATA_HEADER` write now, matching
+      `sdpcm_process_rx_packet()`'s own named "flow control packet with no data" case
+      (`header->size == SDPCM_HEADER_LEN`, a real, designed-for-this piece of the protocol, not
+      invented here). Keeps outbound Ethernet frames themselves still silently dropped (still
+      correctly step-4-deferred, no fabricated reply content) while keeping the shared credit
+      channel honest. One existing test's expectation flipped to match (`DATA_HEADER` now gets a
+      real, if content-free, response instead of literal silence) and one new regression test
+      added for the desync itself (8 new tests total, 43 in `tests/test_cyw43_bus.py`) - the
+      Python-level reproduction re-run clean afterward (200+ mixed ioctl/data sends, zero stalls,
+      versus stalling by send ~21 before the fix). Re-verifying the full live boot with this fix
+      in place was in progress as this entry was written - not yet folded in; check this record's
+      own header for the final outcome once it lands, and don't assume "scripted scan/join events
+      actually get exercised end-to-end" until that's confirmed.
+
    Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
    reasonably live in either, judgment call when implementing); this is where `Cyw43439`
    implements `ExternalDevice.attach()`. Every sub-step stays synchronous, in-line - still a pure
@@ -535,11 +617,12 @@ from "closed, kept for the record."
   address map (chip-common registers, ARM core reset/halt registers, SOCSRAM addresses) needed for
   bring-up, SDPCM header layout, and async-event framing are now all documented directly from
   `cyw43_ll.c`/`cyw43_ll.h` - no longer just "not yet dug out."
-- **Still open: `cyw43_ll_wifi_join()`'s tail end** (past the point read for the "Real bringup
-  sequence" section above - the actual `WLC_SET_SSID` call that triggers the join, and the
-  `WLC_E_*` event sequence real firmware fires in response) - needed for step 3g specifically.
-  Read the rest of `cyw43_ll_wifi_join()` (starts at `cyw43_ll.c:2051`) and
-  `cyw43_ll_parse_async_event()`'s callers when implementing that sub-step.
+- **Resolved (2026-08-13), see step 3's own "3g" bullet above:** `cyw43_ll_wifi_join()`'s tail end
+  (`cyw43_ll.c:2051` onward - the actual `WLC_SET_SSID` call that triggers the join) and
+  `cyw43_cb_process_async_event()` (`cyw43_ctrl.c` - the real consumer of the `WLC_E_*` sequence,
+  not `cyw43_ll_parse_async_event()`'s callers, which just dispatch to it) are both read in full
+  now; the exact scripted event sequence and ordering constraints are documented in `bus.py`'s own
+  module docstring.
 - The SDPCM data-frame envelope byte layout for the actual WLAN RX/TX *data* path (as opposed to
   control/ioctl, already covered above) - step 4's concern, not step 3 - not yet dug out.
   - maybe document way to use gpiozero as global external device for emulations on the RP
