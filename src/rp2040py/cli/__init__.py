@@ -402,6 +402,16 @@ def _validate_console_mode(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _validate_littlefs_fat12(args: argparse.Namespace) -> None:
+    """`--littlefs` and `--fat12` are for two different, mutually-exclusive modes (plain
+    MicroPython filesystem vs. CircuitPython's FAT12 filesystem) - which one actually took effect
+    used to be decided implicitly by `--circuitpython`, silently dropping the other flag with no
+    warning if both were given (docs/records/0036-littlefs-fat12-exclusivity.md)."""
+    if args.littlefs is not None and args.fat12 is not None:
+        _logger.error("--littlefs and --fat12 are mutually exclusive")
+        sys.exit(1)
+
+
 async def _await_shutdown(simulator: Simulator) -> "int | None":
     """Async equivalent of `Simulator.wait_for_shutdown()`'s poll loop, for a caller already
     running on `simulator`'s own loop (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape").
@@ -427,6 +437,7 @@ async def _await_shutdown(simulator: Simulator) -> "int | None":
 
 async def _micropython_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
+    _validate_littlefs_fat12(args)
     # -c/-m/<filename> ("exec mode") runs one device.exec() call and exits based on its own
     # stdout/stderr (see below) - it never reaches the interactive/--tcp-port/--pty console loop
     # that either replaces, or that --expect-text's on_data watcher is wired into, so combining any
