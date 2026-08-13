@@ -55,7 +55,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — wild-execution fixed by 0035; CPU/PIO scheduling livelock fixed by 0037 (incl. a same-day follow-up fix for a regression 0037 itself introduced); `nic.active(True)` on v1.28.0 still exceeds 10min — root-caused via a real symbol-matched local build to raw per-instruction throughput inside `cyw43_delay_ms()`'s busy-wait, not a scheduling/correctness bug (v1.23.0 completes quickly); CI dropped 1.28.0 from the pico_w WLAN job as a pragmatic workaround; main-spi.py hang still open
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — ioctl-response correctness bug found + fixed; `nic.active(True)` on v1.28.0 now blocked purely on the known raw-throughput ceiling; main-spi.py hang still open
 - [ ] [0036](records/0036-littlefs-fat12-exclusivity.md) `--littlefs`/`--fat12` mutual exclusivity | Proposed — documented only
 
 ### Rejected / Superseded

@@ -540,6 +540,30 @@ def test_ioctl_response_size_and_checksum_are_self_consistent():
     assert size == (~size_com & 0xFFFF)
 
 
+def test_ioctl_response_zero_fills_a_payload_matching_the_request_length():
+    """Regression test for the real `nic.active(True)` bug found 2026-08-13 (see
+    docs/records/0027-cyw43-wifi.md and _build_ioctl_success_response()'s own docstring): a
+    zero-length response left a SDPCM_GET caller's own pre-filled request buffer unmodified, so
+    e.g. cyw43_ll_wifi_update_multicast_filter()'s `mcast_list` query read the literal ASCII bytes
+    of its own iovar name back as a ~1.9 billion-entry loop count and walked memcmp() off the end
+    of SRAM. Mirrors that exact shape: a request payload whose first bytes are the iovar name
+    (like a real `mcast_list` query's own buffer, name-prefixed before the result-count field)
+    must come back as fresh zeros the same length as the request, not echoed back verbatim (a
+    first-attempt fix that reproduced the same bug via a different path - real responses overwrite
+    the request buffer's name prefix too, see the docstring) and not silently dropped to zero
+    length either."""
+    _rp2040, master = _wire_up()
+    payload = b"mcast_list" + bytes(2) + bytes(4 + 10 * 6)  # matches real mcast_list's own shape
+    _send_wlan_frame(master, _build_ioctl_request(request_id=3, payload=payload))
+
+    response = _read_f2_response(master)
+
+    assert len(response) == SDPCM_HEADER_LEN + IOCTL_HEADER_LEN + len(payload)
+    response_len_field = int.from_bytes(response[SDPCM_HEADER_LEN + 4 : SDPCM_HEADER_LEN + 8], "little")
+    assert response_len_field == len(payload)
+    assert response[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :] == bytes(len(payload))
+
+
 def test_ioctl_response_keeps_wireless_flow_control_zero():
     """A nonzero wireless_flow_control stalls every later host send
     (cyw43_sdpcm_send_common(), cyw43_ll.c) - must always be 0 for a chip model that never

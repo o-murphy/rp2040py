@@ -81,10 +81,14 @@ deliver whatever `queue_rx_packet()` staged (step 3e: `_read_wlan()`,
 when idle) - the generic inbound-delivery mechanism step 3f's own ioctl responses now use, and 3g's
 async events will too. F2 writes parse SDPCM+ioctl requests generically (step 3f, `_write_wlan()`/
 `_build_ioctl_success_response()`): validates the SDPCM header's `size`/`~size_com` check, and for
-`CONTROL_HEADER` frames queues a zero-length success response echoing the request's own id
-(`CDCF_IOC_ID_MASK`) with a monotonically increasing `bus_data_credit` - satisfies the bulk of the
-real `WLC_*`/iovar vocabulary bring-up sends without per-ioctl content (step 3g still owns the
-handful - `WLC_SET_SSID`/join - that need real scripted behavior instead of this generic ack).
+`CONTROL_HEADER` frames queues a success response echoing the request's own id
+(`CDCF_IOC_ID_MASK`), a monotonically increasing `bus_data_credit`, and - critically, see
+`_build_ioctl_success_response()`'s own docstring - a response payload zero-filled to the same
+length as the request's own payload (not a bare zero-length ack, which left `SDPCM_GET` callers
+reading their own unmodified request buffer, iovar-name prefix included, as if it were real
+response data) - satisfies the bulk of the real `WLC_*`/iovar vocabulary bring-up sends without
+per-ioctl content (step 3g still owns the handful - `WLC_SET_SSID`/join - that need real scripted
+behavior instead of this generic zero-fill).
 `DATA_HEADER` outbound Ethernet frames (step 4's NAT bridge) and anything malformed are silently
 ignored, matching this class's existing no-op-rather-than-raise stance for unimplemented paths.
 Real firmware/CLM downloads (step 3e) don't touch `WLAN_FUNCTION` at all -
@@ -544,14 +548,49 @@ class GSPIBus:
 
     # -- F2 (WLAN_FUNCTION) outbound SDPCM/ioctl (step 3f) --------------------------------------
 
-    def _build_ioctl_success_response(self, request_id: int) -> bytes:
-        """Generic zero-length "success" SDPCM+ioctl response - satisfies the bulk of the real
-        `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/`cyw43_ll_wifi_join()` send during bring-up
-        without needing per-ioctl content (step 3g is where the handful that actually need
-        scripted behavior - `WLC_SET_SSID`/join - get real responses instead of this).
+    def _build_ioctl_success_response(self, request_id: int, response_len: int = 0) -> bytes:
+        """Generic "success" SDPCM+ioctl response, its payload `response_len` bytes of zeros -
+        satisfies the bulk of the real `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/
+        `cyw43_ll_wifi_join()` send during bring-up without needing per-ioctl content (step 3g is
+        where the handful that actually need scripted behavior - `WLC_SET_SSID`/join - get real
+        responses instead of this).
 
-        Two things `sdpcm_process_rx_packet()`/`cyw43_sdpcm_send_common()` (cyw43_ll.c) actually
-        enforce on whatever we send back, both handled here:
+        **Must not stay zero-length unconditionally** (an earlier version of this did) - found by
+        booting real firmware (2026-08-13), not by reading source alone. `cyw43_do_ioctl()`
+        (`cyw43_ll.c`) does `memmove(buf, res_buf, min(len, res_len))` on every response
+        regardless of GET/SET, where `res_len` is this response's own payload length
+        (`sdpcm_process_rx_packet()` computes it as `header->size` minus the fixed header
+        overhead - confirmed directly from that function) and `buf` is the *same* buffer the
+        request itself was built in. A zero-length response leaves that buffer completely
+        untouched by the `memmove()`, so a `SDPCM_GET` caller reads back its own *request*
+        content as if it were the answer. For `cyw43_ll_wifi_update_multicast_filter()`'s
+        `mcast_list` query this manifested as `n = cyw43_get_le32(buf)` reading the literal ASCII
+        bytes of the iovar name `"mcast_list"` itself (the first 4 bytes of the un-overwritten
+        request buffer) as a ~1.9 billion-entry loop count, which then walked `memcmp()` off the
+        end of SRAM for the remainder of the run - looked exactly like a raw
+        interpretation-throughput ceiling (CPU genuinely executing varied, real instructions the
+        whole time) until live-traced with register-level detail against a symbol-matched build;
+        see docs/records/0027-cyw43-wifi.md's dated entry for the full derivation.
+
+        **The response payload must be freshly zeroed bytes, not the request's own payload echoed
+        back verbatim** - a first attempt at this fix tried the latter and did not resolve the
+        bug: real iovar responses overwrite `buf` starting at offset 0 with *only* the answer
+        value, with no iovar-name prefix (confirmed from `cyw43_ll_wifi_get_mac()`, which reads
+        its answer via `memcpy(addr, buf, 6)` - straight from offset 0, even though the request
+        buffer it reuses starts with the 14-byte string `"cur_etheraddr\\0"`) - so an echo of the
+        verbatim request bytes reproduces the exact same `"mcast_list"`-as-garbage-length bug,
+        just via a different code path (a real, confirmed dead end, not a hypothetical one).
+        Zero-filling instead correctly overwrites *any* iovar-name prefix a GET request happens
+        to have, at any offset, without needing to know that prefix's length - `response_len`
+        equal to the request's own payload length is enough to guarantee the whole thing gets
+        overwritten (`min(len, res_len)` in the driver's own copy is then just `len`), and an
+        all-zero answer is a safe, generic "empty"/"unset" value for every `WLC_GET_VAR` query
+        this bus answers generically during bring-up. Also a no-op for `SDPCM_SET` calls (their
+        response payload isn't meaningfully used beyond this same `memmove()`, and a `SET`
+        request's `len` here is usually 0 anyway).
+
+        Two more things `sdpcm_process_rx_packet()`/`cyw43_sdpcm_send_common()` (cyw43_ll.c)
+        actually enforce on whatever we send back, both handled here:
         - The response's `ioctl_header_t.flags` must echo the request's own id
           (`CDCF_IOC_ID_MASK`) - `sdpcm_process_rx_packet()` silently drops anything whose id
           doesn't match the driver's last-sent one.
@@ -561,13 +600,14 @@ class GSPIBus:
           response keeps exactly one ahead, matching this chip model's synchronous
           one-request-one-response shape. `wireless_flow_control` must also stay 0 - any nonzero
           value has the same stalling effect, unconditionally, on every later send."""
+        payload = bytes(response_len)
         ioctl_header = (
             (0).to_bytes(4, "little")  # cmd - not inspected by the driver on a response
-            + (0).to_bytes(4, "little")  # len (output length) - zero-length success
+            + response_len.to_bytes(4, "little")  # len (output length)
             + ((request_id << CDCF_IOC_ID_SHIFT) & CDCF_IOC_ID_MASK).to_bytes(4, "little")  # flags
             + (0).to_bytes(4, "little")  # status = success
         )
-        size = SDPCM_HEADER_LEN + len(ioctl_header)
+        size = SDPCM_HEADER_LEN + len(ioctl_header) + len(payload)
         self._bus_data_credit = (self._bus_data_credit + 1) & 0xFF
         sdpcm_header = (
             size.to_bytes(2, "little")
@@ -577,18 +617,20 @@ class GSPIBus:
             + bytes([0, CONTROL_HEADER, 0, SDPCM_HEADER_LEN, 0, self._bus_data_credit])
             + bytes(2)  # reserved
         )
-        return sdpcm_header + ioctl_header
+        return sdpcm_header + ioctl_header + payload
 
     def _write_wlan(self, data: bytes) -> None:
         """Real firmware's `cyw43_sdpcm_send_common()` sends the whole SDPCM(+ioctl+payload) blob
         as one F2 block write (`cyw43_write_bytes(WLAN_FUNCTION, 0, ...)`), so a single
         `write_register()` call already has the complete frame - no reassembly across calls
         needed. Validates the SDPCM header's own `size`/`~size_com` check, and - for
-        `CONTROL_HEADER` (ioctl) frames only - queues a generic zero-length success response
-        echoing the request's id (`_build_ioctl_success_response()`). Anything else (`DATA_HEADER`
-        outbound Ethernet frames - step 4's NAT bridge - or a malformed/too-short frame) is
-        silently ignored for now, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise
-        stance elsewhere in this class."""
+        `CONTROL_HEADER` (ioctl) frames only - queues a generic success response that echoes the
+        request's id and zero-fills a response payload the same length as the request's own
+        payload (`_build_ioctl_success_response()` - see its own docstring for why a zero-filled
+        response, not just a zero-length ack, is required). Anything else (`DATA_HEADER` outbound
+        Ethernet frames - step 4's NAT bridge - or a malformed/too-short frame) is silently
+        ignored for now, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise stance
+        elsewhere in this class."""
         if len(data) < SDPCM_HEADER_LEN:
             return
         size = int.from_bytes(data[0:2], "little")
@@ -600,7 +642,8 @@ class GSPIBus:
             return
         flags = int.from_bytes(data[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
         request_id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT
-        self.queue_rx_packet(self._build_ioctl_success_response(request_id))
+        request_payload_len = len(data) - SDPCM_HEADER_LEN - IOCTL_HEADER_LEN
+        self.queue_rx_packet(self._build_ioctl_success_response(request_id, request_payload_len))
 
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Returns whatever a real chip would answer for a `size`-byte read of `addr` on
