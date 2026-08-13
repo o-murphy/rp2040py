@@ -69,7 +69,12 @@ cdef class SimulationClock:
         cdef ClockAlarm alarm_list_item = self._next_alarm
         cdef ClockAlarm last_item = None
         alarm.nanos = self._nanos_counter + nanos
-        while alarm_list_item is not None and alarm_list_item.nanos < alarm.nanos:
+        # `<=`, not `<`: a same-timestamp alarm already in the list must fire before one just
+        # inserted "at" that same instant (FIFO tie-break), or a self-rescheduling zero-delay
+        # producer (e.g. a DMA TX channel) can perpetually cut in front of an already-pending
+        # zero-delay consumer alarm (e.g. that same transfer's paired RX channel) and starve it -
+        # see docs/tasks/main-spi-hang.md.
+        while alarm_list_item is not None and alarm_list_item.nanos <= alarm.nanos:
             last_item = alarm_list_item
             alarm_list_item = alarm_list_item.next
         if last_item is not None:

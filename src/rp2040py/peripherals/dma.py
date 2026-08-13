@@ -335,6 +335,16 @@ class RPDMA(BasePeripheral):
         self.dreq: dict[int, bool] = {}
 
     def reset(self) -> None:
+        # `self.dreq` is deliberately left untouched here: it mirrors each DREQ-capable
+        # peripheral's own live FIFO-occupancy signal (set/cleared from RPSPI/RPUART/etc's
+        # _update_dma_tx()/_update_dma_rx()-equivalents), not DMA-controller-owned state - a DMA
+        # reset doesn't touch peripheral FIFOs on real silicon, so it shouldn't fabricate a
+        # "nothing ready" dreq state either. Clearing it here used to desync the cache from
+        # reality until the next unrelated FIFO push/pop happened to resync it (e.g. a
+        # peripheral's own constructor sets its initial dreq level, then this reset - run once
+        # at RP2040.__init__ - immediately wiped it back out, permanently starving any DMA
+        # channel gated on that dreq until something else nudged the peripheral's FIFO) -
+        # see docs/tasks/main-spi-hang.md.
         for channel in self.channels:
             channel.transfer_alarm.cancel()
             channel.reset()
@@ -347,7 +357,6 @@ class RPDMA(BasePeripheral):
         self._timer1 = 0
         self._timer2 = 0
         self._timer3 = 0
-        self.dreq.clear()
         self.check_interrupts()
 
     @property
