@@ -60,7 +60,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, and now live-boot-verified (2026-08-13): `scan()` returns the fake AP, `connect()` drives the full link-layer join sequence to `LINK_NOIP`, stopping exactly where step 4 begins - see `docs/tasks/cyw43-3g-live-boot-verification.md`; main-spi.py hang still open; step 4 (real network bridge) not started
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, live-boot-verified on both v1.23.0 and v1.28.0 (2026-08-13/14, see 0042/0043 fixes); `main-spi.py` hang still open, not root-caused - see `docs/tasks/main-spi-hang.md`; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 

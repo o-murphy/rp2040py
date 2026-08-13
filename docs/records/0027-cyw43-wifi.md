@@ -769,6 +769,11 @@ Narrowed by elimination, correcting an earlier theory in this same investigation
   listener, on a delay, matching real SPI clock timing) rather than raw-REPL exec - so this may be
   a previously never-exercised combination, not a new regression in the ordinary sense.
 
+**Still open (2026-08-14)** - given its own dedicated working note now,
+[docs/tasks/main-spi-hang.md](../tasks/main-spi-hang.md). Checked against 0043 below (a real
+PIO/DMA-timing fix landed the same day, same general shape) on the chance it was the same root
+cause - it isn't; the hang reproduces unchanged post-0043.
+
 ## Wild-execution finding root-caused and fixed (2026-08-12) - see 0035
 
 The "wild-execution" entry above is resolved - root cause was `device/load_flash.py`'s
