@@ -229,7 +229,7 @@ class RP2040:
     def read_uint32(self, address: int) -> int:
         address = u32(address)
         if address & 0x3:
-            self.logger.error(LOG_NAME, f"read from address {address:x}, which is not 32 bit aligned")
+            self.logger.warning(LOG_NAME, f"read from address {address:x}, which is not 32 bit aligned")
 
         bootrom = self.bootrom
         if address < self.bootrom_byte_size:

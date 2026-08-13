@@ -1,3 +1,9 @@
+**Resolved 2026-08-13 — root cause + fix in [docs/records/0041-cyw43-post-data-header-freeze-fix.md](../records/0041-cyw43-post-data-header-freeze-fix.md).**
+Kept below as-is (investigation history), not rewritten - see that record for what actually
+happened: an uncaught `RuntimeError` from an over-severe `.error()` log call silently killed
+`Simulator.execute()`'s task, and every caller waiting on device-produced state hung forever with
+nothing left to ever produce it.
+
 # Task: CYW43 live-boot freezes solid (0% CPU) after early outbound `DATA_HEADER` traffic
 
 Not a `docs/records/` entry - a working note for whoever picks this up next. Found while doing
