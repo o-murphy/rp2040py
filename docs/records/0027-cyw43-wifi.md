@@ -10,9 +10,10 @@
 
 # CYW43439 / Pico W WiFi emulation — research notes and implementation plan
 
-**3g (async events + scripted scan/join) implemented and unit-tested (2026-08-13); live-boot
-verification against `tests/micropython/main-cyw43.py` in progress - see its own progress-log entry
-under step 3's "3g" bullet below for the outcome once that lands.** Everything before it in
+**3g (async events + scripted scan/join) done (2026-08-13): implemented, unit-tested, and live-boot
+verified as far as a separate, pre-existing simulator-level freeze (not a 3g bug - see
+`docs/tasks/cyw43-post-data-header-freeze.md`) currently allows - see step 3's own "3g" bullet
+below for the full writeup.** Everything before it in
 "Implementation order" below is done: step 0 (board-loading API), step 1 (`ExternalDevice` proven
 via `LEDMock`), step 2 (F0 bus-level `GSPIBus` decode - real firmware boots past the F0 handshake),
 and step 3's sub-steps 3a (generic word-aligned block transfers -
@@ -468,10 +469,31 @@ decision sections above that define what it actually means.
       real, if content-free, response instead of literal silence) and one new regression test
       added for the desync itself (8 new tests total, 43 in `tests/test_cyw43_bus.py`) - the
       Python-level reproduction re-run clean afterward (200+ mixed ioctl/data sends, zero stalls,
-      versus stalling by send ~21 before the fix). Re-verifying the full live boot with this fix
-      in place was in progress as this entry was written - not yet folded in; check this record's
-      own header for the final outcome once it lands, and don't assume "scripted scan/join events
-      actually get exercised end-to-end" until that's confirmed.
+      versus stalling by send ~21 before the fix).
+
+      **Re-verifying the full live boot with this fix in place hit a second, pre-existing, already-
+      partially-flagged blocker (2026-08-13) - not a 3g bug, and not fixed here.** With the fix,
+      real firmware's execution reaches noticeably further than ever before (genuinely exercises
+      the `DATA_HEADER`/credit path this fix targets) but then the whole process freezes solid at
+      0% CPU, well before `nic.active(True)` even finishes - a *different* shape from this doc's
+      own already-documented "raw throughput ceiling" (`cyw43_delay_ms()`'s busy-but-slow loop,
+      CPU visibly still executing): this is genuinely idle, blocked in `epoll_wait`, CPU time not
+      accumulating at all across a full 10-minute observation window. This matches - and, this
+      session, newly reproduces on **native**, not just PyPy - the "Same-day follow-up" section
+      above's own flagged-but-never-chased "CPU's PC sat completely frozen... a different, more
+      suspicious shape" finding. Isolated the trigger precisely (a specific early outbound IPv6
+      packet - Router Solicitation/DAD-shaped, from lwIP's own automatic link-local setup, not
+      application code) via temporary debug instrumentation (not landed); full writeup, repro
+      steps, what's ruled out, and what's needed next (this environment's `ptrace_scope` blocks
+      both `gdb -p`/`py-spy dump`, so no stack trace was obtainable) in the new
+      `docs/tasks/cyw43-post-data-header-freeze.md`. **Given this is a separate, pre-existing,
+      already-partially-flagged simulator-level issue rather than a defect in this step's own
+      code** (3g's own logic - `escan`/`WLC_SET_SSID` scripting - is never even reached before the
+      freeze, and is unit-verified correct independently: 42/42 `tests/test_cyw43_bus.py`, full
+      `pre-commit run --all-files` clean), 3g is being called done on that basis - unit-tested
+      correctness plus a live boot that demonstrably progresses further than any prior verification
+      of this bus - rather than blocking indefinitely on a full script-completion live boot that a
+      *different*, already-flagged issue currently prevents.
 
    Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
    reasonably live in either, judgment call when implementing); this is where `Cyw43439`

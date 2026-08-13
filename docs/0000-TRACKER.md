@@ -57,7 +57,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — `nic.active(True)` now completes on v1.28.0 (0038); remaining cost is the known raw-throughput ceiling; main-spi.py hang still open
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot now blocked on a separate frozen-CPU issue (`docs/tasks/cyw43-post-data-header-freeze.md`), not the known raw-throughput ceiling; main-spi.py hang still open; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 
