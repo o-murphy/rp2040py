@@ -4,7 +4,8 @@
 - Conceived: 2026-08-12
 - Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency) · research
   note 0024 · fixes 0035 (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response
-  correctness bug), 0041 (post-`DATA_HEADER` freeze)
+  correctness bug), 0041 (post-`DATA_HEADER` freeze), 0042 (`SPI_INTERRUPT_REGISTER` W1C fix), 0043
+  (`RPPIO` CTRL-enable first-batch/DMA-refill race, MicroPython v1.23.0 boot)
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1-72 -->
 
@@ -1190,3 +1191,56 @@ the same already-tracked raw-throughput ceiling (now correctly scoped to just th
 bounded `STALL` retry loop, not an unbounded walk). Full derivation, the fix itself, and the timed
 verification are in 0038 - not duplicated here since it's a fix to shared bus-response logic with
 its own clear before/after, not cyw43-implementation-order-specific.
+
+## `[CYW43] Bus error condition detected 0xb9` root-caused and fixed (2026-08-13) - see 0042
+
+A live-boot verification pass (following step 3g's own live-boot verification) noticed one line of
+real-firmware chatter right after `Initializing...` that had never been investigated:
+`[CYW43] Bus error condition detected 0xb9`. Same class of finding as 0038 - real firmware itself
+printing something worth taking at face value rather than dismissing as benign - and the same
+method: temporary `print()` instrumentation in `GSPIBus._read_f0()`/`_write_f0()` against a live
+boot pinned the exact byte sequence. Root cause: `SPI_INTERRUPT_REGISTER` (F0 offset 4) is real
+hardware's own write-1-to-clear (W1C) status register (`cyw43_spi.h`'s own per-bit comments say so
+directly), but `GSPIBus._write_f0()` treated it as plain storage like every other F0 register.
+`cyw43_ll_bus_init()`'s own "make sure error interrupt bits are clear" write (`0x99`, meant to
+*clear* those bits) was instead stored verbatim, genuinely setting `F1_OVERFLOW`; the next real ioctl
+response's `F2_PACKET_AVAILABLE` OR-in on top produced exactly `0xb9`, tripping real firmware's own
+`BUS_OVERFLOW_UNDERFLOW` check for a condition that never actually occurred. Fixed by AND-clearing
+against the current value specifically for host writes to this one register
+(`GSPIBus.write_register()`), leaving `_write_f0()` and every other F0 register's plain-storage
+semantics untouched. Two regression tests added; the warning is gone on a live re-run with no other
+change in behavior (`active: True`, `scan()`/`connect()` output unchanged). Full derivation, the fix
+itself, and verification are in [0042](0042-cyw43-interrupt-register-w1c-fix.md) - not duplicated
+here for the same reason 0038 wasn't: a fix to shared bus-write logic with its own clear
+before/after, not cyw43-implementation-order-specific.
+
+## MicroPython v1.23.0's CYW43 boot root-caused and fixed (2026-08-14) - see 0043
+
+`v1.23.0` (`uv run rp2040py --log-level error micropython --board pico_w --image v1.23.0
+tests/micropython/main-cyw43.py`) used to fail differently from the already-working `v1.28.0`:
+`active()` printed `False` (expected - see below) and `scan()` raised `OSError(EPERM)`. Root cause,
+confirmed via live wire-level tracing plus the real, matching `cyw43-driver`/`pico-sdk` source
+pinned by each MicroPython release (a real, populated `micropython` checkout with submodules on
+this machine, read-only, used only for `git diff`/`git show` against its pinned commits - never
+written to): `cyw43_ll_bus_init()`'s very first large (68-byte) firmware-download block write gets
+its CS transaction cut short mid-transfer, permanently desyncing `GSPIBus`'s wire decode, so the
+driver eventually times out waiting for `SBSDIO_HT_AVAIL` and returns `-CYW43_EIO` - leaving
+`itf_state` at 0, which is exactly what `cyw43_wifi_scan()`'s own `itf_state == 0` gate turns into
+`EPERM`. Not a `GSPIBus`/CYW43-protocol bug at all: `RPPIO.write_uint32()`'s `CTRL` branch
+(`peripherals/pio.py`) used to run a newly-enabled state machine's first ~1000 steps synchronously,
+inline, inside the very same MMIO write, with no `SimulationClock.tick()` calls interleaved during
+that burst - letting a DMA-fed PIO TX FIFO (4 words deep, draining in ~8 steps) outrun its own
+DMA channel's alarm-paced refill and hit a premature `FDEBUG_TXSTALL`. `v1.23.0`'s older pico-sdk
+polls `PIO.FDEBUG` directly for that stall with no other synchronization; `v1.28.0`'s newer pico-sdk
+happens to mask the identical race by waiting on the DMA channel's own completion status first
+instead - a version-specific difference in exposure, not a version-specific bug in the driver logic
+itself. Fixed in `peripherals/pio.py`, not `external/cyw43/`: the same "shared simulator
+infrastructure, not CYW43-specific" theme as 0037 (this record's own direct predecessor - a residual
+gap in 0037's own "first batch runs synchronously inline" shortcut). `active()` printing `False` for
+`v1.23.0` turned out to be correct, unrelated behavior - that release's own `network_cyw43_active()`
+getter reflects real WiFi link status, not "is the interface up" (rewritten in `v1.28.0` to a
+separately-tracked flag) - confirmed from MicroPython's own `extmod/network_cyw43.c` diff between
+the two releases, not this emulator's doing. Full derivation, the fix, the new regression test, and
+before/after live-boot verification (both `v1.23.0` and `v1.28.0`, `v1.28.0` unchanged) are in
+[0043](0043-pio-dma-first-batch-race.md) - not duplicated here for the same reason 0038/0042
+weren't: a fix to shared PIO/DMA scheduling, not cyw43-implementation-order-specific.
