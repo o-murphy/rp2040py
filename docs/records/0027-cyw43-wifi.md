@@ -507,9 +507,13 @@ decision sections above that define what it actually means.
       exceptions; every caller waiting on device-produced state now unblocks with a real error
       instead of hanging forever if the engine room ever dies again). Re-running this same 3g
       live-boot script post-fix now completes end to end (`active`/`scan`/`connect`/`config`/
-      `ipconfig`, exit 0, ~50s native / PyPy both) - 3g's own full live-boot verification (not just
-      "progresses further than before") is unblocked, though not yet separately re-run/re-recorded
-      as such here.
+      `ipconfig`, exit 0, ~50s native / PyPy both) with no traceback - the freeze itself is
+      genuinely gone. **Correction, same session**: exit 0/no-traceback only proves nothing
+      *crashed*, not that scan()/connect() actually exercised 3g's scripted event sequence to a
+      real result - the script never prints `scan()`'s own return value or polls `isconnected()`
+      after `connect()`. Whether 3g's live boot *completes meaningfully*, not just "no longer
+      hangs," is still unverified - see `docs/tasks/cyw43-3g-live-boot-verification.md` (flagged,
+      not started).
 
    Lives in `external/cyw43/chip.py` (3d onward - 3a is `external/cyw43/bus.py`, 3b/3c could
    reasonably live in either, judgment call when implementing); this is where `Cyw43439`

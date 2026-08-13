@@ -59,7 +59,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot's frozen-CPU blocker (`docs/tasks/cyw43-post-data-header-freeze.md`) root-caused + fixed (0041) - step 3g's own live-boot verification unblocked, not yet re-run; main-spi.py hang still open; step 4 (real network bridge) not started
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot's frozen-CPU blocker (`docs/tasks/cyw43-post-data-header-freeze.md`) root-caused + fixed (0041); whether 3g's scripted scan/join actually *completes* on a live boot (not just "script no longer crashes") is unverified - see `docs/tasks/cyw43-3g-live-boot-verification.md`; main-spi.py hang still open; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 
