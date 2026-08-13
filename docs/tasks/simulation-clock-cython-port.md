@@ -1,5 +1,10 @@
 # Task: native/Cython port of `SimulationClock`
 
+**Done - see [docs/records/0039](../records/0039-simulation-clock-native-port.md) (2026-08-13)**
+for the landed decision, verification, and measured numbers (including the `powersave`-governor
+caveat and why the literal 0038 repro wasn't re-run). Kept below as the original working note, not
+rewritten to match what actually landed - 0039 is the authoritative record.
+
 Not a `docs/records/` entry - a working note for whoever picks up the next round of the
 "Performance side quest" (0013 → 0031 → 0034, most recently motivating 0038's own leftover
 finding). See those records for the historical wins this follows the same pattern as.

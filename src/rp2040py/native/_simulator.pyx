@@ -4,30 +4,37 @@ otherwise-fully-native CPU core/bus (docs/records/0013-cython-core.md's own "not
 ~43-47% of profiled time was still this loop itself, since only execute_instruction() - the
 handler it calls - was ever ported, not the while loop driving it).
 
-Only the loop's own control flow moves here. rp2040/core are already-native (cimported, typed via
-their own .pxd - core.execute_instruction()/rp2040.core field access resolve to direct C calls),
-but clock (SimulationClock, clock/simulation_clock.py) is not natively ported at all - even native
-RP2040 holds it as a plain Python object (native/_rp2040.pyx imports it directly from
-clock.simulation_clock) - so clock.tick() and its two properties stay ordinary Python calls here,
-the same accepted boundary as StateMachine.rp2040.gpio/.dma staying object-typed in
-native/_state_machine.pyx (see docs/records/0031-pio-cython-tick-batching.md's own "not yet
-tried" #4). simulator itself (rp2040py.simulator.Simulator) is likewise plain Python - its own
-.stopped flag needs a fresh read every iteration (a cross-thread stop() call must be able to
-interrupt a running batch, per Simulator.stop()'s own docstring), so it's read via ordinary
-attribute access every iteration, same as clock.
+Only the loop's own control flow moves here. rp2040/core/clock are all already-native (cimported,
+typed via their own .pxd - core.execute_instruction()/rp2040.core/clock.tick() field access all
+resolve to direct C calls, see native/_simulation_clock.pyx's own module docstring for why clock
+was the last piece of this to get ported). RPPIO isn't natively typed (no native/_pio.pyx), so
+`pio.step()`/`pio.check_interrupts()` stay the accepted object-typed boundary, same as
+StateMachine.rp2040.gpio/.dma staying object-typed in native/_state_machine.pyx (see
+docs/records/0031-pio-cython-tick-batching.md's own "not yet tried" #4). simulator itself
+(rp2040py.simulator.Simulator) is likewise plain Python - its own .stopped flag needs a fresh read
+every iteration (a cross-thread stop() call must be able to interrupt a running batch, per
+Simulator.stop()'s own docstring), so it's read via ordinary attribute access every iteration.
 
 Called only when the facade in simulator.py has already confirmed both
 rp2040py._native_gate.native_disabled() is False and the caller's own Simulator.rp2040 is actually
 the native RP2040 class (not a bare pure-Python one manually constructed while native extensions
 happen to be installed) - nothing here re-checks that; the `cdef RP2040 rp2040 = simulator.rp2040`
 assignment below would raise a TypeError instead of silently misbehaving if that invariant were
-ever violated, but the facade is what's relied on to avoid hitting it.
+ever violated, but the facade is what's relied on to avoid hitting it. Same accepted risk covers
+the new `cdef SimulationClock clock = simulator.clock` assignment: every real construction path in
+this codebase (Simulator() defaulting to its own fresh clock, or Simulator(rp2040=...) sourcing
+self.clock from rp2040.clock - see simulator.py's own __init__) keeps simulator.clock and
+simulator.rp2040.clock as the same SimulationClock-or-subclass instance (MockClock included - see
+native/_simulation_clock.pyx's docstring); a caller passing mismatched, non-SimulationClock
+clock=/rp2040= arguments by hand would hit the same kind of TypeError as the rp2040 case above,
+not a silent correctness bug.
 """
 
 import time
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._rp2040 cimport RP2040
+from rp2040py.native._simulation_clock cimport SimulationClock
 
 cdef double CYCLE_NANOS = 1e9 / 125_000_000  # 125 MHz
 
@@ -56,14 +63,14 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     Simulator imports, since Simulator itself stays a plain Python class either way)."""
     cdef RP2040 rp2040 = simulator.rp2040
     cdef CortexM0Core core = rp2040.core
-    clock = simulator.clock
+    cdef SimulationClock clock = simulator.clock
     # Stepped once per loop iteration below (both the idle-jump and busy-instruction paths - real
     # PIO keeps running independent of CPU sleep state), the same "driven directly by this loop,
     # not a competing asyncio.Task" pattern clock.tick() itself already uses - see
     # _execute_batch.py's own comment on the mirrored line and
     # docs/records/0037-pio-clock-coupled-stepping.md. RPPIO isn't natively typed (no
-    # native/_pio.pyx), so this is an ordinary Python attribute/method call from here, same
-    # boundary as clock itself.
+    # native/_pio.pyx), so this stays an ordinary Python attribute/method call from here, unlike
+    # clock (see native/_simulation_clock.pyx's docstring for why clock alone got ported).
     pios = rp2040.pio
 
     cdef long i = 0

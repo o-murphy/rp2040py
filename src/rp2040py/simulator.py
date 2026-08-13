@@ -144,8 +144,9 @@ class Simulator:
 
         The loop itself lives in execute_batch.py's facade (native/_simulator.pyx when available,
         _execute_batch.py's pure-Python reference otherwise - see both modules' own docstrings for
-        the full rationale, including why `clock.tick()` stays a plain Python call even in the
-        native path)."""
+        the full rationale, including how `clock.tick()` is dispatched in each case - a direct
+        C-level call in the native path (native/_simulation_clock.pyx), an ordinary Python call in
+        the pure-Python one)."""
         execute_batch(self, clock_tick_batch_size())
 
     async def execute(self) -> None:
