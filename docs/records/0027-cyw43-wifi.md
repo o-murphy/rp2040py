@@ -2,7 +2,9 @@
 
 - Status: In progress
 - Conceived: 2026-08-12
-- Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency) · research note 0024
+- Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency) · research
+  note 0024 · fixes 0035 (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response
+  correctness bug)
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1-72 -->
 
@@ -1026,125 +1028,19 @@ CPU frequency governor silently sitting in `powersave` for stretches of the sess
 any wall-clock timing comparison in this kind of investigation, not after a result looks
 surprising.
 
-## `nic.active(True)` real root cause: a `GSPIBus` ioctl-response bug, not (only) a throughput ceiling (2026-08-13, new session, new machine)
+## `nic.active(True)` real root cause found and fixed (2026-08-13) - see 0038
 
-Picked back up from the entry above ("Same-day follow-up: several throughput ideas tried live, all
-rejected") on a different machine than that session used - the previously-built local debug-symbol
-`v1.28.0` firmware (`micropython/ports/rp2/build-RPI_PICO_W/firmware.elf`/`.uf2`) didn't carry over,
-but an equivalent pre-built copy was already sitting at `rp2040py/tmp/firmware.{elf,uf2}` on this
-machine (confirmed `v1.28.0-dirty`, built same-day, `arm-none-eabi-strings` version check),
-reused as-is rather than rebuilt. **The while-loop PIO-stepping idea (this doc's own "most
-promising lead" from the prior entry) was already retried on this machine and had no effect -
-skipped entirely this session, not re-tried.** `scaling_governor`/`scaling_cur_freq` checked
-before any measurement per the lesson above (this machine's `powersave` governor was confirmed
-not to distort timing here, unlike the prior machine).
-
-**Live-traced, not guessed**: booting `tests/micropython/main-cyw43.py` against the local
-`v1.28.0-dirty` firmware and periodically sampling `mcu.core.pc`/`mcu.pio[1].machines[0]`/
-`mcu.dma.channels[*]` (via a throwaway `async` harness driving `MicroPythonDevice` directly -
-`device/mp_device.py`'s own `async with MicroPythonDevice(path, board="pico_w") as device:` /
-`await device.aexec_file(script, timeout=None)`, bounded with `asyncio.wait_for()`) reproduced the
-prior session's exact signature: real gSPI/DMA/PIO transactions running cleanly through roughly
-t=0-48s, then PIO1 SM0 stalling permanently (`waiting=True`, `cycles` frozen) while `core.pc` kept
-visibly varying for the rest of a 90s bounded run - "genuinely executing, not livelocked," matching
-the prior entry's own conclusion.
-
-**Where the prior entry's "raw throughput ceiling" conclusion was incomplete**: `arm-none-eabi-
-addr2line -f -C -e firmware.elf <pc>` on the varying addresses resolved to
-`cyw43_ll_wifi_update_multicast_filter()` (`cyw43_ll.c:1929`) and `memcmp` (`newlib`), not
-`cyw43_delay_ms()` this time - this build/session reaches further into `cyw43_ll_wifi_on()` than
-the prior one did (past the ALP/HT/core-reset/firmware-download phase the prior entry's fix
-unblocked). Reading that function found a `for (uint32_t i = 0; i < n; ++i) { memcmp(buf + i * 6,
-addr, 6); ... }` loop, where `n = cyw43_get_le32(buf)` is read from the *same* buffer the driver
-just sent as its own `WLC_GET_VAR "mcast_list"` request. **Confirmed live, not just read from
-source**: a targeted trace sampling `core.registers[0..2]` (memcmp's AAPCS `r0`/`r1`/`r2` args)
-every 10ms while `pc` sat inside `memcmp`'s address range showed `r0` (the `buf + i * 6` pointer)
-climbing *monotonically* across many consecutive samples - from `0x20024...` past `0x2029...`,
-well beyond RP2040 SRAM's real upper bound (`~0x20042000`) - while a sibling sample of `r4` (live
-inside `cyw43_ll_wifi_update_multicast_filter()`'s own body) read exactly `0x7361636d`, the first 4
-bytes of the ASCII string `"mcast_list"` interpreted as a little-endian `uint32_t`. That is `n`
-itself: not a real result count, but the driver's own request buffer read back unmodified, with
-`memcmp()` walking `buf + i * 6` off the end of SRAM for (at that value of `n`) up to roughly 1.9
-billion iterations - looking exactly like sustained, varied, real CPU execution (which it
-genuinely was) rather than a bug, until this trace pinned the exact mechanism.
-
-**Root cause, confirmed against `cyw43_do_ioctl()`/`sdpcm_process_rx_packet()` source, not
-guessed**: `cyw43_do_ioctl()` (`cyw43_ll.c:1154`) does `memmove(buf, res_buf, len < res_len ? len :
-res_len)` on every response regardless of `SDPCM_GET`/`SDPCM_SET`, where `res_len` is computed by
-`sdpcm_process_rx_packet()` (`cyw43_ll.c:822`) as the response frame's own total size minus fixed
-header overhead - i.e. exactly this bus's response *payload* length, not a separate field.
-`GSPIBus._build_ioctl_success_response()` (step 3f, `external/cyw43/bus.py`) built a response with
-**zero payload bytes**, always - a deliberate simplification ("one generic 'echo a zero-length
-success response' handler - no branching on `cmd` at all," per step 3f's own original design note
-above) that satisfied every ioctl this bus had been exercised against so far (mostly
-`SDPCM_SET`-shaped bring-up calls, whose response payload the driver doesn't read back
-meaningfully). A zero-length response means `res_len = 0`, so `memmove(buf, res_buf, 0)` copies
-nothing - any `SDPCM_GET` caller's request buffer (which `cyw43_ll_wifi_update_multicast_filter()`
-pre-fills with the iovar name `"mcast_list\0"` followed by a zeroed result-count-and-list region,
-*before* sending) comes back completely untouched, and the driver reads its own request content
-back as if it were the answer.
-
-**First fix attempt was wrong, corrected before landing, not after**: initially changed the
-response to echo the *request's own payload bytes back verbatim* (same content, same length) -
-this still passed this file's own new regression test but genuinely did not fix the live boot (the
-`memcmp`/`mcast_list` signature reproduced identically against it, confirmed by re-running the same
-live trace). The reason, found by reading `cyw43_ll_wifi_get_mac()` (`cyw43_ll.c:1916`) alongside
-`cyw43_ll_wifi_update_multicast_filter()`: real iovar `GET` responses overwrite `buf` starting at
-offset 0 with *only* the answer value, dropping the iovar-name prefix entirely -
-`cyw43_ll_wifi_get_mac()`'s own `memcpy(addr, buf, 6)` reads the MAC straight from offset 0, even
-though that same `buf` was populated with the 14-byte string `"cur_etheraddr\0"` before the
-request was sent. Echoing the verbatim request bytes back reproduces the *exact same* garbage - a
-different code path to the identical bug, confirmed by re-tracing rather than assumed.
-
-**Actual fix, verified live**: `_build_ioctl_success_response()` now takes a `response_len`
-(matching the request's own payload length, computed once in `_write_wlan()`) and returns
-`response_len` bytes of zeros as the payload, instead of echoing anything. This unconditionally
-overwrites whatever the request buffer held - including any iovar-name prefix, at any offset,
-without this bus needing to know that prefix's length - with a safe, generic "empty"/"unset"
-answer, matching the existing "no branching on `cmd`" design exactly. Confirmed harmless for
-`SDPCM_SET` calls (their response payload isn't read back meaningfully by the driver, and a `SET`
-request's own `len` here is usually 0 anyway, so the response stays zero-length exactly as before)
-and for zero-payload `SDPCM_SET` calls like `WLC_UP` (`cyw43_do_ioctl(..., WLC_UP, 0, NULL, ...)` -
-`response_len` computes to 0, response unchanged from the prior zero-length-ack behavior).
-`tests/test_cyw43_bus.py` gained `test_ioctl_response_zero_fills_a_payload_matching_the_request_length`
-(a regression test replaying the exact `mcast_list` request shape - iovar name prefix, zeroed
-count-and-list tail - and asserting the response payload comes back as fresh zeros, not the
-request echoed and not zero-length), the old `_build_ioctl_success_response()` docstring rewritten
-to document why both a bare zero-length response *and* a verbatim-echo response are real, tried,
-rejected shapes, not just the one that shipped. All 36 tests in that file pass; full
-`pre-commit run --all-files` (mypy/ruff/pytest, both pure-Python and native builds) passes clean.
-
-**Verified live against the real boot, not just unit tests**: re-running the same trace after the
-fix shows the `memcmp`/`mcast_list` signature is completely gone - the CPU moves on to different
-code entirely (`cyw43_sdpcm_send_common()`/`cyw43_ll_sdpcm_poll_device()`/`gpio_get()`,
-`cyw43_ll.c:656-690` and `:1006`) within the same run.
-
-**Still open, and now correctly scoped - a real but bounded, already-documented raw-throughput
-ceiling, not a new bug**: `nic.active(True)` still does not complete within a 240s bounded run
-after this fix. Read against source: `cyw43_sdpcm_send_common()`'s own `STALL` branch
-(`cyw43_ll.c:648-691`) is a `for (;;)` loop bounded by a **1,000,000us (1 *simulated* second)**
-hard timeout (`if (cur_us - start_us > 1000000) return -ETIMEDOUT`), retrying
-`cyw43_ll_sdpcm_poll_device()` with only a cheap `cyw43_yield()` between attempts
-(`CYW43_SDPCM_SEND_COMMON_WAIT` in `ports/rp2/cyw43_configport.h:86` - confirmed to expand to just
-`mp_event_handle_nowait()` on this port, same conclusion the prior entry already reached for
-`CYW43_EVENT_POLL_HOOK`). This is provably bounded by design (unlike the `memcmp` bug above, which
-was not), but advancing even this one simulated second through real, busy-executing instructions
-still costs far more than 240 real seconds in this emulator - the exact same *class* of limitation
-the prior two entries already root-caused and left open (`cyw43_delay_ms()`'s busy-wait,
-`docs/BACKLOG.md`'s "Performance side quest"), just now correctly isolated to this one loop instead
-of conflated with the `memcmp` bug this entry fixes. **Not fixed here** - still needs the same
-already-identified next step (most likely a native/Cython port of `SimulationClock.tick()`,
-`clock/simulation_clock.py` - flagged as an explicit "not yet tried" boundary in
-`native/_simulator.pyx`'s own module docstring, and the only piece of the per-instruction hot path
-never natively ported despite three prior confirmed wins from the same lever, 0013/0031/0034) -
-not attempted this session; this entry's own scope was root-causing and fixing the correctness bug
-above, not the underlying interpretation-throughput ceiling.
-
-**Net effect of this session, precisely**: a real, previously-undiagnosed correctness bug
-(unbounded ~1.9-billion-iteration walk off SRAM, masquerading as sustained real CPU execution) is
-now fixed and regression-tested. The remaining slowness after this fix is smaller in scope than
-believed at the end of the prior session - it no longer includes any unbounded loop - but is not
-eliminated: the underlying raw per-instruction interpretation throughput ceiling this doc has
-tracked since "Performance side quest" is still real, still unfixed, and is the correct next thing
-to pick up (Cython `SimulationClock` port, most likely), not a further protocol-level fix in
-`GSPIBus`.
+The prior entry's "raw throughput ceiling" conclusion was real but incomplete: a live,
+register-level trace against a symbol-matched build (new session, new machine) found a genuine,
+previously-undiagnosed correctness bug underneath it - `GSPIBus`'s ioctl responses (step 3f) always
+carried zero payload bytes, so a `SDPCM_GET` caller (`cyw43_ll_wifi_update_multicast_filter()`'s
+`mcast_list` query) read its own unmodified request buffer back as the answer, misreading the ASCII
+bytes of the iovar name itself as a ~1.9-billion-entry loop count and walking `memcmp()` off the end
+of SRAM - indistinguishable from sustained real CPU execution until this trace pinned the exact
+mechanism. Fixed by zero-filling the response payload to the request's own length instead. Verified
+end-to-end: `v1.28.0` now completes `nic.active(True)` (and the rest of `main-cyw43.py`) in ~450s
+native / ~212s under PyPy, `active: True`, no unhandled exception - the remaining per-call cost is
+the same already-tracked raw-throughput ceiling (now correctly scoped to just the driver's own
+bounded `STALL` retry loop, not an unbounded walk). Full derivation, the fix itself, and the timed
+verification are in 0038 - not duplicated here since it's a fix to shared bus-response logic with
+its own clear before/after, not cyw43-implementation-order-specific.
