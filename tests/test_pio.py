@@ -12,6 +12,7 @@ import pytest
 from utils.cortex_test_driver import ICortexTestDriver
 from utils.create_test_driver import create_test_driver
 
+from rp2040py.simulator import Simulator
 from rp2040py.utils.pio_assembler import (
     PIO_COND_ALWAYS,
     PIO_COND_NOTEMPTYOSR,
@@ -632,3 +633,111 @@ def test_updates_rxfnempty_flag_in_intr_according_to_the_level_of_the_rx_fifo_is
     cpu.write_uint32(NVIC_ICPR, PIO_IRQ0)
     assert (cpu.read_uint32(INTR) & INTR_SM0_RXNEMPTY) == 0
     assert (cpu.read_uint32(NVIC_ISPR) & PIO_IRQ0) == 0
+
+
+def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator_owns_the_rp2040():
+    """Regression test for docs/records/0043-pio-dma-first-batch-race.md - found investigating
+    0027's v1.23.0-vs-v1.28.0 CYW43 WiFi regression. Real MicroPython v1.23.0's `cyw43-driver`
+    (an older pinned pico-sdk) enables its gSPI PIO state machine, then immediately busy-polls
+    `PIO.FDEBUG` directly for the TX-stall bit, with no other synchronization; v1.28.0's newer
+    pico-sdk instead waits on the DMA channel's own completion status first, which happened to mask
+    the same underlying race rather than avoid it - see this record for the full derivation.
+
+    `RPPIO.write_uint32()`'s `CTRL` branch used to call `self._step_batch()` (up to 1000 PIO steps)
+    synchronously, inline, inside the very same MMIO write that transitions a stopped PIO instance
+    to running - with no `SimulationClock.tick()` calls interleaved during that burst at all
+    (`tick()` only ever runs from `_execute_batch.py`/`native/_simulator.pyx`'s own outer
+    per-CPU-instruction loop). A DMA-fed PIO TX FIFO (4 words deep) drains in ~8 `step()` calls
+    here (a plain `pull`+`jmp` 2-instruction loop, no GPIO/pin config needed to reproduce this) -
+    far short of the 1000-step ceiling - so that burst could genuinely outrun the DMA channel's own
+    alarm-paced refill (`RPDMAChannel.schedule_transfer()`, `peripherals/dma.py`) and leave the
+    state machine prematurely `FDEBUG_TXSTALL`'d with most of a larger transfer still undelivered,
+    the instant a real `Simulator` owns this `RP2040` - exactly `cyw43_bus_pio_spi.c`'s own
+    TX-only `cyw43_spi_transfer()` shape for CYW43's firmware/CLM download block writes.
+
+    Uses a real `Simulator()`, not the no-owning-`Simulator` `cpu` fixture the rest of this file
+    uses - the bug is specific to `rp2040.simulator is not None` (see `RPPIO.write_uint32()`'s own
+    CTRL-branch comment for why `tests/test_pio.py`'s fixture never hit it: driving `RPPIO` with no
+    outer per-instruction loop to defer to still needs the synchronous first batch)."""
+    simulator = Simulator()
+    rp2040 = simulator.rp2040
+
+    word_count = 9  # more than the 4-word-deep TX FIFO, so one synchronous burst can't finish it.
+    src_addr = 0x2001_0000
+    for i in range(word_count):
+        rp2040.write_uint32(src_addr + i * 4, 0xA000_0000 | i)
+
+    # PIO0 SM0 program: PULL (block until TX FIFO has data) then loop back unconditionally -
+    # consumes exactly one FIFO word per two step() calls.
+    rp2040.write_uint32(INSTR_MEM0, pio_pull(False, False))
+    rp2040.write_uint32(INSTR_MEM1, pio_jmp(0, PIO_COND_ALWAYS))
+
+    # RP2040.reset() (run once during construction) ends with RPDMA.reset()'s own
+    # `self.dreq.clear()` - correct on real silicon's own reset behavior, but this simulator only
+    # recomputes a channel's DREQ *level* on the next `StateMachine.write_fifo()`/`read_fifo()`
+    # call, not continuously - so SM0's construction-time DREQ_PIO0_TX0=True (set before that
+    # clear) is lost and nothing re-establishes it until its FIFO state actually changes again.
+    # Real firmware never notices (`cyw43_bus_pio_spi.c` always does `pio_sm_put()`/DMA writes that
+    # touch the FIFO before ever relying on DREQ) - this test needs the same one-time nudge, via the
+    # public TXF0 write path (StateMachine.write_fifo() recomputes the DREQ level as a side effect)
+    # rather than a native-Cython-inaccessible private method. The extra word just becomes SM0's
+    # own first pull, ahead of the DMA-fed ones - harmless, this test only checks word *count*/
+    # completion, not content.
+    rp2040.write_uint32(TXF0, 0)
+
+    # DMA channel 0: word_count 32-bit transfers from src_addr into PIO0 SM0's own TX FIFO
+    # register (TXF0), paced by that SM's own TX dreq - the same shape
+    # cyw43_bus_pio_spi.c's cyw43_spi_transfer() sets up for a TX-only gSPI transfer.
+    dma_base = 0x5000_0000
+    read_addr, write_addr, trans_count, ctrl_trig = (
+        dma_base,
+        dma_base + 0x4,
+        dma_base + 0x8,
+        dma_base + 0xC,
+    )
+    rp2040.write_uint32(read_addr, src_addr)
+    rp2040.write_uint32(write_addr, TXF0)
+    rp2040.write_uint32(trans_count, word_count)
+    dreq_pio0_tx0 = 0
+    en_bit, incr_read_bit, data_size_32 = 1, 1 << 4, 2 << 2
+    rp2040.write_uint32(ctrl_trig, en_bit | incr_read_bit | data_size_32 | (dreq_pio0_tx0 << 15))
+
+    # Let the DMA channel's own alarm chain fill the FIFO (up to 4 words) - a few idle
+    # _execute_batch() passes reproduce the same clock.tick() cadence real CPU instructions would,
+    # without needing an actual ARM program loaded.
+    rp2040.core.waiting = True
+    for _ in range(4):
+        simulator.stopped = False
+        simulator._execute_batch()
+    simulator.stop()
+
+    machine = rp2040.pio[0].machines[0]
+    assert machine.cycles == 0  # SM0 not yet enabled - only DMA has run so far.
+
+    # Enable SM0 - the exact MMIO write cyw43_bus_pio_spi.c's pio_sm_set_enabled(true) performs,
+    # immediately followed (in real firmware) by a tight poll of PIO.FDEBUG.
+    rp2040.write_uint32(CTRL, 1 | (1 << 4))  # SM0 enable (bit 0) + SM0 restart (bit 4)
+
+    # The fix under test: this write must not have run any steps synchronously - only
+    # _execute_batch()'s own per-CPU-instruction loop may step a Simulator-owned RPPIO, so
+    # clock.tick() (which is what lets the DMA channel's pending alarm actually refill the FIFO)
+    # always gets a turn between every single PIO step. Before the fix, _step_batch() ran inline
+    # right here and both of these were already false.
+    assert machine.cycles == 0
+    assert not (rp2040.pio[0].fdebug & FDEBUG_TXSTALL)
+
+    # Now genuinely drive it forward the way a real boot does (via _execute_batch()'s own outer
+    # loop) - the whole transfer must complete correctly, not just the first FIFO's worth.
+    dma_ctrl = 0
+    busy_bit = 1 << 24
+    for _ in range(20):
+        simulator.stopped = False
+        simulator._execute_batch()
+        dma_ctrl = rp2040.read_uint32(ctrl_trig)
+        if not (dma_ctrl & busy_bit):
+            break
+    simulator.stop()
+
+    assert not (dma_ctrl & busy_bit)  # DMA channel finished, not stuck mid-transfer.
+    assert rp2040.read_uint32(trans_count) == 0
+    assert machine.cycles > 0  # SM0 genuinely ran (not just DMA looping without a consumer).

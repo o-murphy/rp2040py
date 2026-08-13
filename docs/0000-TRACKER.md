@@ -55,6 +55,8 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0038](records/0038-cyw43-ioctl-response-zero-fill.md) `GSPIBus` ioctl-response zero-fill fix | fixes `nic.active(True)` real root cause (was misdiagnosed as throughput-only)
 - [x] [0039](records/0039-simulation-clock-native-port.md) `SimulationClock` native Cython port | follow-up of 0013/0031/0034, closes 0034's own leftover gap; ~2.7x on a synthetic busy-spin benchmark, `powersave` governor caveat, literal 0038 repro not re-run
 - [x] [0041](records/0041-cyw43-post-data-header-freeze-fix.md) CYW43 live-boot freeze root cause + fix | fixes `docs/tasks/cyw43-post-data-header-freeze.md`; unblocks 0027 step 3g live-boot verification
+- [x] [0042](records/0042-cyw43-interrupt-register-w1c-fix.md) `GSPIBus` `SPI_INTERRUPT_REGISTER` write-1-to-clear (W1C) fix | fixes spurious `[CYW43] Bus error condition detected 0xb9` warning during live boot
+- [x] [0043](records/0043-pio-dma-first-batch-race.md) `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes MicroPython v1.23.0's CYW43 boot (`scan()` raising `EPERM`), follow-up of 0037
 
 ### In progress / Proposed
 

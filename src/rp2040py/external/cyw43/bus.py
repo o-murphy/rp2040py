@@ -936,6 +936,42 @@ class GSPIBus:
         downloads (step 3e) don't go through here at all, since `cyw43_download_resource()` writes
         through `BACKPLANE_FUNCTION` instead (`cyw43_ll.c`), already covered by step 3a/3c."""
         if function == BUS_FUNCTION:
+            if addr == SPI_INTERRUPT_REGISTER:
+                # SPI_INTERRUPT_REGISTER is real hardware's own interrupt/error-status register -
+                # a genuine write-1-to-clear (W1C) register, unlike every other F0 register
+                # (SPI_BUS_CONTROL/SPI_STATUS_ENABLE/SPI_INTERRUPT_ENABLE_REGISTER/etc., all plain
+                # read-write storage). `cyw43_spi.h`'s own comments on the individual bits
+                # ("Clear by writing a 1" on DATA_UNAVAILABLE, "Cleared by writing 1" on
+                # COMMAND_ERROR/DATA_ERROR) say so directly, and `cyw43_ll_sdpcm_poll_device()`'s
+                # own ack pattern confirms it applies to the whole register, not just those three
+                # bits: `if (spi_int) { cyw43_write_reg_u16(self, BUS_FUNCTION,
+                # SPI_INTERRUPT_REGISTER, spi_int); }` - echoing back exactly whatever bits it just
+                # read, specifically to clear them (the driver would never intentionally *set* its
+                # own already-observed status bits back onto the chip).
+                #
+                # Found live-booting real firmware (2026-08-13) printing a spurious "[CYW43] Bus
+                # error condition detected 0xb9" right after "Initializing...", traced to this
+                # exact write: `cyw43_ll_bus_init()` does `cyw43_write_reg_u8(BUS_FUNCTION,
+                # SPI_INTERRUPT_REGISTER, DATA_UNAVAILABLE | COMMAND_ERROR | DATA_ERROR |
+                # F1_OVERFLOW)` right after the word-length/endian switch, with the comment "Make
+                # sure error interrupt bits are clear" - i.e. 0x99, meant to *clear* those bits.
+                # Treated as a plain store (the bug, before this fix), the register was left
+                # holding 0x99 - genuinely set, the opposite of the driver's intent - and the very
+                # next `_activate_rx_packet()` OR-ing in F2_PACKET_AVAILABLE (0x20) on top (for the
+                # first real ioctl response) produced exactly 0xb9, which then tripped
+                # `cyw43_ll_sdpcm_poll_device()`'s `spi_int & BUS_OVERFLOW_UNDERFLOW` check via the
+                # F1_OVERFLOW (0x80) bit - a spurious warning over a register nothing had actually
+                # overflowed. `_read_f0()`/plain `size`-width masking below still applies, so a
+                # sub-word write (like this real 1-byte one, touching only the low byte) only
+                # clears bits within the byte(s) actually written, leaving the rest of the register
+                # untouched - matching real W1C hardware.
+                #
+                # This only rewrites the *host's* own writes (routed through here, the real
+                # `write_register()` wire-write entry point) - `_activate_rx_packet()`/
+                # `_read_wlan()` still call `_write_f0()` directly to set/clear
+                # `F2_PACKET_AVAILABLE` themselves, representing the chip's own internal status
+                # changes rather than a host command, so those stay plain sets/clears, not W1C.
+                value = self._read_f0(addr, size) & ~value
             self._write_f0(addr, size, value)
         elif function == BACKPLANE_FUNCTION:
             if addr & SBSDIO_SB_ACCESS_2_4B_FLAG:

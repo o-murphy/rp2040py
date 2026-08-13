@@ -228,20 +228,47 @@ class RPPIO(BasePeripheral):
             should_run = value & 0xF
             if self.stopped and should_run:
                 self.stopped = False
-                # First batch runs synchronously inline, same as always (most PIO programs are
-                # short enough that a caller reading FIFO/register state right after this write
-                # already sees the result, with no yield in between). Only the continuation - if
-                # the program is still going after 1000 steps, e.g. it wraps/waits - needs
-                # scheduling as a task: write_uint32() itself can't `await` (it's called
-                # synchronously from execute_instruction()'s bus dispatch, which must stay
-                # synchronous). When a real Simulator owns this RP2040, its own _execute_batch()
-                # already steps every non-stopped RPPIO once per CPU instruction/idle-jump (see
-                # __init__'s _run_task comment) - self.stopped staying False here is enough for
-                # that to pick the continuation up on its very next iteration, no task needed. The
-                # task path below is only for tests driving RPPIO directly with no Simulator at
-                # all, which need their own loop running for this specific case (see
-                # tests/test_pio.py's fixture).
-                self._step_batch()
+                # **Only run the first batch synchronously inline when no Simulator owns this
+                # RP2040** (docs/records/0043-pio-dma-first-batch-race.md - found investigating
+                # 0027's v1.23.0-vs-v1.28.0 CYW43 regression, same "shared simulator
+                # infrastructure, not CYW43-specific" theme as 0037, which this directly follows
+                # up). The comment this replaces justified running `_step_batch()` (up to 1000 PIO
+                # steps) synchronously, right here inside the MMIO write itself, as a convenience -
+                # "most PIO programs are short enough that a caller reading FIFO/register state
+                # right after this write already sees the result, with no yield in between." That's
+                # true for a program with no other peripheral dependency, but a DMA-fed transfer
+                # (exactly `cyw43_bus_pio_spi.c`'s own gSPI TX, this project's own paced-by-DREQ
+                # `RPDMAChannel`/`peripherals/dma.py`) needs `SimulationClock` alarms to fire
+                # between FIFO drains to keep refilling it - and those alarms only fire from
+                # `clock.tick()`, called once per CPU instruction by
+                # `_execute_batch.py`/`native/_simulator.pyx`'s own outer loop, *never* from inside
+                # this write handler's own call stack. A up-to-1000-step synchronous burst here can
+                # drain a DMA-fed PIO TX FIFO (4 words deep, ~64 steps per 32-bit word for
+                # `cyw43_bus_pio_spi.pio`'s bit-at-a-time program - so a couple hundred steps, well
+                # under 1000) faster than any DMA alarm gets a chance to run, since none of those
+                # alarms are serviced during this burst - producing a real (if premature and
+                # transient) `FDEBUG_TXSTALL` the moment the FIFO runs dry mid-transfer, which a
+                # driver polling `PIO.FDEBUG` directly (as `cyw43_spi_transfer()`'s TX-only branch
+                # in the pico-sdk pinned by MicroPython v1.23.0's `cyw43-driver` does) reads as "the
+                # whole transfer is done" after only the first few words - not what MicroPython
+                # v1.28.0's newer pico-sdk observes, since it inserts
+                # `dma_channel_wait_for_finish_blocking()` (polling the DMA channel's own transfer
+                # count, not FDEBUG, via ordinary CPU instructions that a real Simulator's own
+                # `_execute_batch()` loop already correctly interleaves with `clock.tick()`) before
+                # ever reaching the same FDEBUG poll, by which point the real transfer has already
+                # finished - masking the identical race rather than avoiding it. Skipping the
+                # synchronous burst here and letting `_execute_batch()`'s own "step every
+                # non-stopped RPPIO once per CPU instruction" loop (see __init__'s `_run_task`
+                # comment) pick this SM up on its very next iteration - exactly how the >1000-step
+                # "continuation" already had to work - guarantees `clock.tick()` runs between every
+                # single PIO step whenever a real Simulator owns this RP2040, so a DMA-fed FIFO can
+                # never be observably outrun. Only `tests/test_pio.py`'s no-owning-`Simulator`
+                # fixture (which drives `RPPIO` directly, with no per-instruction outer loop to fall
+                # back on) still needs the synchronous burst - the same `rp2040.simulator is None`
+                # distinction the task-scheduling branch immediately below this already draws, now
+                # extended to gate the first batch too, not just the continuation.
+                if self.rp2040.simulator is None:
+                    self._step_batch()
                 if not self.stopped and self.rp2040.simulator is None:
                     self._run_task = asyncio.get_running_loop().create_task(self.run())
             if not should_run:
