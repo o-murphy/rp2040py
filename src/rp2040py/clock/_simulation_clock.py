@@ -57,7 +57,12 @@ class SimulationClock(IClock):
         alarm.nanos = self.nanos + nanos
         alarm_list_item = self._next_alarm
         last_item = None
-        while alarm_list_item and alarm_list_item.nanos < alarm.nanos:
+        # `<=`, not `<`: a same-timestamp alarm already in the list must fire before one just
+        # inserted "at" that same instant (FIFO tie-break), or a self-rescheduling zero-delay
+        # producer (e.g. a DMA TX channel) can perpetually cut in front of an already-pending
+        # zero-delay consumer alarm (e.g. that same transfer's paired RX channel) and starve it -
+        # see docs/tasks/main-spi-hang.md.
+        while alarm_list_item and alarm_list_item.nanos <= alarm.nanos:
             last_item = alarm_list_item
             alarm_list_item = alarm_list_item.next
         if last_item:

@@ -1,4 +1,5 @@
 from rp2040py.clock.mock_clock import MockClock
+from rp2040py.peripherals.dma import DREQChannel
 from rp2040py.utils.bit import bit
 
 CH2_WRITE_ADDR = 0x50000084
@@ -24,6 +25,21 @@ TREQ_SEL_SHIFT = 15
 BUSY = bit(24)
 
 TREQ_PERMANENT = 0x3F
+
+SPI0_BASE = 0x4003C000
+SSPCR1 = SPI0_BASE + 0x004
+SSPDR = SPI0_BASE + 0x008
+SSE = bit(1)
+
+CH0_READ_ADDR = DMA_BASE + 0x000
+CH0_WRITE_ADDR = DMA_BASE + 0x004
+CH0_TRANS_COUNT = DMA_BASE + 0x008
+CH0_AL1_CTRL = DMA_BASE + 0x010
+CH1_READ_ADDR = DMA_BASE + 0x040
+CH1_WRITE_ADDR = DMA_BASE + 0x044
+CH1_TRANS_COUNT = DMA_BASE + 0x048
+CH1_AL1_CTRL = DMA_BASE + 0x050
+MULTI_CHAN_TRIGGER = DMA_BASE + 0x430
 
 
 def test_dma_channel_chaining(rp2040_factory):
@@ -104,3 +120,67 @@ def test_offset_past_channels_does_not_dispatch_to_nonexistent_channel(rp2040_fa
     # It must not be routed to channel index 12 (0x300 >> 6), which does not exist.
     cpu.read_uint32(PAST_CHANNELS)
     cpu.write_uint32(PAST_CHANNELS, 0x1234)
+
+
+def test_spi_dma_paired_tx_rx_transfer_completes_without_listener(rp2040_factory):
+    """Regression test for docs/tasks/main-spi-hang.md: a DMA-driven SPI write (the shape
+    machine_spi.c's machine_spi_transfer() uses for any transfer >= 32 bytes - two DMA channels,
+    one paced by DREQ_SPIx_TX feeding SSPDR, one paced by DREQ_SPIx_RX draining it) used to hang
+    forever with RPSPI's default (no real completion-timing listener wired - the raw-REPL exec
+    path this bug was found on never wires one, unlike tests/micropython_spi_run.py's own
+    delayed listener) `on_transmit`, for any transfer longer than the 8-deep RX FIFO. Two
+    independent bugs stacked to cause it, both exercised here: RPDMA.reset() (run once during
+    RP2040.__init__) used to wipe RPSPI's already-correct construction-time DREQ_SPI0_TX level,
+    stalling the TX channel before its first byte; and SimulationClock.link_alarm()'s same-
+    timestamp tie-break used to let a self-rescheduling zero-delay TX channel perpetually cut in
+    front of its own already-pending zero-delay RX alarm, starving RX until TX finished and
+    overflowing the RX FIFO along the way."""
+    clock = MockClock()
+    cpu = rp2040_factory(clock)
+
+    src_addr = 0x2001_0000
+    dst_addr = 0x2002_0000
+    # Longer than the 8-deep RX FIFO, so a starved RX channel would provably never keep up -
+    # matches main-spi.py's own third `spi.write()` call (48 bytes, over the 32-byte DMA
+    # threshold `machine_spi_transfer()` uses to pick the DMA path over a blocking byte loop).
+    message = b"0123456789abcdef0123456789abcdef0123456789abcdef"
+    for i, value in enumerate(message):
+        cpu.write_uint8(src_addr + i, value)
+
+    cpu.write_uint32(SSPCR1, SSE)  # spi_init()-equivalent: enable the SPI peripheral.
+
+    # Channel 0 = TX: src_addr -> SSPDR, paced by DREQ_SPI0_TX, chained to itself (no chaining).
+    cpu.write_uint32(CH0_READ_ADDR, src_addr)
+    cpu.write_uint32(CH0_WRITE_ADDR, SSPDR)
+    cpu.write_uint32(CH0_TRANS_COUNT, len(message))
+    cpu.write_uint32(
+        CH0_AL1_CTRL,
+        EN | INCR_READ | (0 << CHAIN_TO_SHIFT) | (DREQChannel.DREQ_SPI0_TX << TREQ_SEL_SHIFT),
+    )
+
+    # Channel 1 = RX: SSPDR -> dst_addr, paced by DREQ_SPI0_RX, chained to itself.
+    cpu.write_uint32(CH1_READ_ADDR, SSPDR)
+    cpu.write_uint32(CH1_WRITE_ADDR, dst_addr)
+    cpu.write_uint32(CH1_TRANS_COUNT, len(message))
+    cpu.write_uint32(
+        CH1_AL1_CTRL,
+        EN | (1 << CHAIN_TO_SHIFT) | (DREQChannel.DREQ_SPI0_RX << TREQ_SEL_SHIFT),
+    )
+
+    # dma_start_channel_mask((1u << chan_rx) | (1u << chan_tx)): start both together.
+    cpu.write_uint32(MULTI_CHAN_TRIGGER, bit(0) | bit(1))
+
+    # Real firmware's dma_channel_wait_for_finish_blocking() would busy-poll BUSY forever here
+    # if either channel got stuck - a generous but bounded amount of simulated time is enough to
+    # prove genuine completion rather than merely "hasn't hung yet in the time we happened to
+    # check", the same distinction this bug's own task file could never settle for real firmware.
+    clock.advance(1_000_000)  # 1 simulated second.
+
+    assert cpu.read_uint32(CH0_TRANS_COUNT) == 0
+    assert not cpu.dma.channels[0].active
+    assert cpu.read_uint32(CH1_TRANS_COUNT) == 0
+    assert not cpu.dma.channels[1].active
+    # RPSPI's default `on_transmit` always echoes back 0 (no real full-duplex loopback modeled) -
+    # this asserts the RX DMA channel actually wrote real per-byte completions, not that it
+    # merely stopped being busy.
+    assert bytes(cpu.read_uint8(dst_addr + i) for i in range(len(message))) == bytes(len(message))
