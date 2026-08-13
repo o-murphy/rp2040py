@@ -968,23 +968,31 @@ def _shared_arg_parser(*names: str) -> argparse.ArgumentParser:
 
 
 def _cmd_install_completion(args: argparse.Namespace) -> None:
-    shell = os.environ.get("SHELL", "bash")
-    rc_file = "~/.zshrc" if "zsh" in shell else "~/.bashrc"
-    expanded_path = os.path.expanduser(rc_file)
+    # We define the configuration file more reliably
+    shell = os.environ.get("SHELL", "")
+    if "zsh" in shell:
+        rc_file = "~/.zshrc"
+    elif "bash" in shell:
+        rc_file = "~/.bashrc"
+    else:
+        # By default for Linux/macOS, zsh (in modern macOS) or bash are more commonly used
+        rc_file = "~/.zshrc" if os.path.exists(os.path.expanduser("~/.zshrc")) else "~/.bashrc"
 
-    completion_cmd = 'eval "$(register-python-argcomplete rp2040py)"\n'
+    expanded_path = os.path.expanduser(rc_file)
+    completion_cmd = 'eval "$(register-python-argcomplete rp2040py)"'
 
     try:
-        with open(expanded_path, "r") as f:
+        with open(expanded_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         content = ""
 
-    if completion_cmd.strip() not in content:
-        with open(expanded_path, "a") as f:
-            f.write(f"\n# rp2040py auto-completion\n{completion_cmd}")
+    # Check for the presence of a command more flexibly (without taking into account extra spaces)
+    if completion_cmd not in content:
+        with open(expanded_path, "a", encoding="utf-8") as f:
+            f.write(f"\n# rp2040py auto-completion\n{completion_cmd}\n")
         print(f"Autocomplete successfully added to {rc_file}!")
-        print(f"Run: source {rc_file} (or restart terminal)")
+        print(f"Run this command to apply changes now:\n   source {rc_file}")
     else:
         print(f"Autocomplete is already configured in {rc_file}.")
 
