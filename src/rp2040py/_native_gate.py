@@ -11,8 +11,15 @@ import. This has to be checked at every one of those three call sites instead.
 
 import os
 
+__all__ = ("native_disabled", "raise_import_error_on_native_disabled")
+
 
 def native_disabled() -> bool:
     """True if RP2040PY_SKIP_CYTHON=1 is set, forcing every facade to use its pure-Python
     implementation even when rp2040py.native is installed and importable."""
     return os.environ.get("RP2040PY_SKIP_CYTHON") == "1"
+
+
+def raise_import_error_on_native_disabled() -> None:
+    if native_disabled():
+        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
