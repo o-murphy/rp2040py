@@ -58,13 +58,13 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | Proposed — isolated test done
-- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested; live boot's frozen-CPU blocker (`docs/tasks/cyw43-post-data-header-freeze.md`) root-caused + fixed (0041); whether 3g's scripted scan/join actually *completes* on a live boot (not just "script no longer crashes") is unverified - see `docs/tasks/cyw43-3g-live-boot-verification.md`; main-spi.py hang still open; step 4 (real network bridge) not started
+- [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, and now live-boot-verified (2026-08-13): `scan()` returns the fake AP, `connect()` drives the full link-layer join sequence to `LINK_NOIP`, stopping exactly where step 4 begins - see `docs/tasks/cyw43-3g-live-boot-verification.md`; main-spi.py hang still open; step 4 (real network bridge) not started
 
 ### Rejected / Superseded
 
 - [ ] [0014](records/0014-threading-model.md) threading model | **Superseded → 0025**
 - [ ] [0015](records/0015-memcpy-hle.md) HLE memcpy hook | **Rejected** — net negative (measurements kept)
+- [ ] [0016](records/0016-jit-fusion.md) basic-block fusion / mini-JIT | **Rejected** — net negative in every real integration attempt; Cython interpreter core (0013) used instead
 
 ## Notes (no state row — linked from ideas)
 
