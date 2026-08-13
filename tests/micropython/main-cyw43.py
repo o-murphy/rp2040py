@@ -11,12 +11,12 @@ nic.active(True)
 print("active:", nic.active())
 
 print("Scan for networks")
-nic.scan()  # scan for access points
+print(nic.scan())  # scan for access points
 
 print("Connected", nic.isconnected())  # check if the station is connected to an AP
-nic.connect('RP2040PY-GUEST', 'key') # connect to an AP
-nic.config('mac')          # get the interface's MAC address
-nic.ipconfig('addr4')
+print(nic.connect('RP2040PY-GUEST', 'key')) # connect to an AP
+print(nic.config('mac'))      # get the interface's MAC address
+print(nic.ipconfig('addr4'))
 
 # ap = network.WLAN(network.WLAN.IF_AP) # create access-point interface
 # ap.config(ssid='RP2-AP')              # set the SSID of the access point
