@@ -11,6 +11,7 @@
 # `rp2040.core` resolve as an attribute from outside Cython in the first place.
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
+from rp2040py.native._simulation_clock cimport SimulationClock
 
 
 cdef class RP2040:
@@ -22,6 +23,17 @@ cdef class RP2040:
     # same backing buffers (correctness unaffected) - see the `property` blocks in _rp2040.pyx,
     # which wrap them in a real memoryview() for Python-facing access.
     cdef public CortexM0Core core
+    # `public`, not plain `cdef`: read from plain Python outside this module too (simulator.py's
+    # own `self.clock`/`rp2040.clock` juggling in Simulator.__init__, every peripheral's
+    # `self.clock.create_alarm(...)`). Typed as the concrete SimulationClock (not `object`) so
+    # native/_simulator.pyx's per-instruction hot loop can bind `clock` to a statically-typed
+    # local and call tick()/nanos_to_next_alarm/has_scheduled_alarm as direct C-level dispatch
+    # instead of through the Python attribute/method boundary - the other half of the win the
+    # native SimulationClock port exists for (see native/_simulation_clock.pyx's own docstring).
+    # `MockClock` (clock/mock_clock.py) subclasses whichever SimulationClock the
+    # clock.simulation_clock facade resolves to, so it satisfies this typed field too - see that
+    # module's docstring for why this doesn't shut out other IClock implementations.
+    cdef public SimulationClock clock
     cdef unsigned char[:] _sram
     cdef unsigned char[:] _flash
     cdef unsigned char[:] _usb_dpram

@@ -7,17 +7,22 @@ views into the same bytearray/array.array buffers, not copies - so external code
 rp2040.flash[...]  etc. still works, see tests/test_ssi.py) and read_uint8/16/32 / write_uint8/16/32
 branch on them directly instead of going through Python-level bytearray indexing.
 
-Everything else - the ~30 peripheral objects (UART, I2C, DMA, PIO, GPIO, ...), the clock, the
-peripherals dict, on_break, clk_sys/clk_peri - is constructed exactly as in _rp2040.py and stored
-as plain Python attributes (`cdef dict __dict__` below opts this class into normal dynamic
-attribute support). None of that is on the per-instruction hot path, so typing it further would
-add real duplication-drift risk for no measurable benefit.
+Everything else - the ~30 peripheral objects (UART, I2C, DMA, PIO, GPIO, ...), the peripherals
+dict, on_break, clk_sys/clk_peri - is constructed exactly as in _rp2040.py and stored as plain
+Python attributes (`cdef dict __dict__` below opts this class into normal dynamic attribute
+support). None of that is on the per-instruction hot path, so typing it further would add real
+duplication-drift risk for no measurable benefit.
+
+`clock` is the one exception: typed as the concrete native SimulationClock (see _rp2040.pxd),
+not left in the `__dict__` bucket above, so native/_simulator.pyx's hot loop can bind it to a
+statically-typed local and call tick()/nanos_to_next_alarm/has_scheduled_alarm as direct C-level
+dispatch - see native/_simulation_clock.pyx's own module docstring for the full rationale.
 """
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
+from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
-from rp2040py.clock.simulation_clock import SimulationClock
 from rp2040py.gpio_pin import GPIOPin
 from rp2040py.irq import IRQ
 from rp2040py.memory_map import (

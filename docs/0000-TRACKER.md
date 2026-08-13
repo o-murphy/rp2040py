@@ -53,6 +53,7 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0036](records/0036-littlefs-fat12-exclusivity.md) `--littlefs`/`--fat12` mutual exclusivity | explicit validation, matches `--tcp-port`/`--pty` pattern
 - [x] [0037](records/0037-pio-clock-coupled-stepping.md) couple `RPPIO` stepping to the CPU's own instruction loop | fixes CYW43 native-mode livelock, follow-up of 0031/0034
 - [x] [0038](records/0038-cyw43-ioctl-response-zero-fill.md) `GSPIBus` ioctl-response zero-fill fix | fixes `nic.active(True)` real root cause (was misdiagnosed as throughput-only)
+- [x] [0039](records/0039-simulation-clock-native-port.md) `SimulationClock` native Cython port | follow-up of 0013/0031/0034, closes 0034's own leftover gap; ~2.7x on a synthetic busy-spin benchmark, `powersave` governor caveat, literal 0038 repro not re-run
 
 ### In progress / Proposed
 
