@@ -58,7 +58,7 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0042](records/0042-cyw43-interrupt-register-w1c-fix.md) `GSPIBus` `SPI_INTERRUPT_REGISTER` write-1-to-clear (W1C) fix | fixes spurious `[CYW43] Bus error condition detected 0xb9` warning during live boot
 - [x] [0043](records/0043-pio-dma-first-batch-race.md) `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes MicroPython v1.23.0's CYW43 boot (`scan()` raising `EPERM`), follow-up of 0037
 - [x] [0044](records/0044-spi-dma-tx-rx-starvation-fix.md) DMA-driven SPI TX/RX hang fix | fixes `docs/tasks/main-spi-hang.md` (stale DREQ cache after `RPDMA.reset()` + same-tick `SimulationClock` alarm starvation), confirmed unrelated to CYW43/0027
-- [x] [0040](records/0040-time-monotonic-vs-cimport.md) `cimport` `time.monotonic()`/`float("inf")` in `native/_simulator.pyx`'s hot loop | `cpython.time`'s portable monotonic-clock C API (not a raw POSIX syscall) + `libc.math.INFINITY`, no platform-conditional code needed, follow-up of 0031/0034/0039
+- [x] [0040](records/0040-time-monotonic-vs-cimport.md) `native/_simulator.pyx` hot loop: `libc.math.INFINITY` for `float("inf")` | kept; `cpython.time cimport monotonic` was also tried but **reverted** - broke real CI (`PyTime_t` not in the limited-API surface until 3.13, this project's `Py_LIMITED_API` floor is 3.11), back to plain `time.monotonic()`, follow-up of 0031/0034/0039
 
 ### In progress / Proposed
 
