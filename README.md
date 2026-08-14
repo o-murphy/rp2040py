@@ -540,12 +540,14 @@ Everything above is the CLI, but the emulator is also usable programmatically - 
 import asyncio
 from rp2040py.device import MicroPythonDevice
 
+
 async def main():
     async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
         stdout, stderr = await device.aexec("print(1 + 1)")
         assert stdout == b"2\r\n"
 
         stdout, stderr = await device.aexec_file("my_script.py")
+
 
 asyncio.run(main())
 ```

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Kaluma (https://kaluma.io/) UF2 runner with a USB CDC console.
 
 Usage: python demo/kaluma_run.py [--image firmware.uf2] [--gdb] [--littlefs littlefs.img]

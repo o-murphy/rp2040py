@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Generate a raw-REPL script that writes files into MicroPython's filesystem via plain
 `open()`/`write()` calls, for use with `rp2040py micropython --dump-fs <path> <script>` - an
 alternative to the `mklittlefs` subcommand that needs no `littlefs-python` (the optional `fs`

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Generic hex/uf2 firmware runner with a GDB server, for local testing.
 
 Usage: python demo/emulator_run.py [--image path/to/firmware.hex|.uf2]

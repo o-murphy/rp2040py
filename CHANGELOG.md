@@ -280,6 +280,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given GPIO (`press()`/`release()` drive it high/low, `active_high` picks the polarity) - not
   attached to any built-in `--board`, available for a library caller composing a custom board via
   `attach_external_devices()` directly (see `boards.py`'s own docstring).
+- `external/epd2in9g.py`'s new `Epd2in9G`: an `ExternalDevice` emulating a Waveshare 2.9" e-Paper
+  (G) panel (128x296 BWYR, 2 bits/pixel) over SPI - decodes the real wire protocol from Waveshare's
+  own `epd2in9g.py` driver (CS/DC/RST/BUSY plus one `RPSPI`'s `on_transmit`), firing `on_frame(buf)`
+  with the raw packed frame buffer every time firmware issues a display refresh. No image-library
+  dependency in `src/` on purpose - decoding the raw bytes into an actual picture is left to
+  whichever caller wants one. Not attached to any built-in `--board` (arbitrary user-wired
+  hardware, like `KeyMock` above) - wire it in via `attach_external_devices()` directly. Ported
+  forward from a stale, never-merged `component/epd2in9g` branch and promoted from an ad hoc
+  demo-only class to a real `ExternalDevice` (`attach(rp2040)` instead of taking `mcu` in
+  `__init__`); `demo/eink_run.py` (now runnable standalone via `uv run demo/eink_run.py`, using
+  PEP 723 inline script metadata for its own Pillow dependency) and `demo/mp_eink_demo.py` remain
+  the runnable example, updated for the async-native device API (docs/records/0046).
 
 ### Changed
 - **Breaking: the device library API (`rp2040py.device`) is now async-native only.**
