@@ -7,11 +7,13 @@ through a real C function-pointer table (DISPATCH_TABLE), not a Python-level lis
 methods - both were measured necessary to get a real speedup (a field-only port measured ~2-9%;
 this pattern measured ~11x on a realistic instruction mix in isolation).
 
-self.rp2040 stays a plain Python object reference: bus reads/writes (read_uint32 etc.) are still
-regular Python method calls from here. Porting the RP2040 bus's own hot paths (rp2040py/native/
-rp2040.pyx) narrows that boundary further, but every instruction fetch crosses it regardless, so
-this alone does not reach the isolated ~11x figure - see docs/BACKLOG.md for real, measured
-full-boot numbers.
+self.rp2040 is typed as the concrete native RP2040 (see _cortex_m0_core.pxd's own comment), not
+`object` - bus reads/writes (read_uint32 etc.) on essentially every load/store instruction resolve
+as direct C-level cpdef calls from here, not Python attribute lookup + method calls. That still
+isn't the whole hot path, though: every instruction fetch also crosses into RP2040.core (plain
+Python `def`-called Simulator/peripheral code beyond the bus itself) and PIO stepping
+(rp2040py/peripherals/pio.py has no native counterpart), so this alone does not reach the isolated
+~11x figure - see docs/BACKLOG.md for real, measured full-boot numbers.
 
 Semantics (flag formulas, cycle counts, PC handling, shift-by-0/32 edge cases) are transcribed
 1:1 from _cortex_m0_core.py - that file remains the readable reference; comments here are limited
