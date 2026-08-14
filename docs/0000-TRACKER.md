@@ -84,3 +84,4 @@ and `reference/` for those). The structure itself is decided in
 
 - [reference/porting-checklist.md](reference/porting-checklist.md) — port checklist + minor known differences
 - [reference/mpremote.md](reference/mpremote.md) — using mpremote with rp2040py
+- [reference/os-compatibility.md](reference/os-compatibility.md) — OS × feature compatibility matrix
