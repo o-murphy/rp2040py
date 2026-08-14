@@ -63,6 +63,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0027](records/0027-cyw43-wifi.md) CYW43439 / Pico W WiFi (epic) | In progress — step 3g (scripted scan/join) done, unit-tested, live-boot-verified on both v1.23.0 and v1.28.0 (2026-08-13/14, see 0042/0043 fixes); `main-spi.py` hang fixed but confirmed unrelated to this epic - see 0044; step 4 (real network bridge) not started
+- [ ] [0045](records/0045-cyw43-nat-libslirp-cython.md) CYW43 step 4 NAT bridge: bind real `libslirp`, native-only | Proposed — supersedes 0027's own "plain Python, not libslirp" call; `bus.py`/`chip.py` stay pure Python unchanged; implementation not started
 - [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md); observed on Windows + Ubuntu `pre-commit` CI (2026-08-14), unrelated to 0040/0044
 
 ### Rejected / Superseded

@@ -2,10 +2,11 @@
 
 - Status: In progress
 - Conceived: 2026-08-12
-- Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency) · research
-  note 0024 · fixes 0035 (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response
-  correctness bug), 0041 (post-`DATA_HEADER` freeze), 0042 (`SPI_INTERRUPT_REGISTER` W1C fix), 0043
-  (`RPPIO` CTRL-enable first-batch/DMA-refill race, MicroPython v1.23.0 boot)
+- Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency), 0045 (step
+  4 NAT bridge: libslirp + Cython-only, proposed) · research note 0024 · fixes 0035
+  (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response correctness bug), 0041 (post-
+  `DATA_HEADER` freeze), 0042 (`SPI_INTERRUPT_REGISTER` W1C fix), 0043 (`RPPIO` CTRL-enable
+  first-batch/DMA-refill race, MicroPython v1.23.0 boot)
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1-72 -->
 
@@ -557,6 +558,19 @@ decision sections above that define what it actually means.
    `vmnet.framework` on macOS, or an installed TAP driver on Windows. Like real SLIRP/QEMU user-mode
    networking, inbound connections don't pass through without an explicit forwarded port (see the
    WebREPL note in "Open questions" below).
+
+   **Proposed revision (2026-08-14), not yet implemented — see
+   [0045](0045-cyw43-nat-libslirp-cython.md).** The "not libslirp" call above is being reconsidered:
+   its own stated reason (avoiding TUN/TAP/root) describes QEMU's `tap` netdev mode specifically,
+   not `libslirp` itself — `libslirp` *is* the library behind QEMU's no-root, no-TAP `-netdev user`
+   mode, the same properties this paragraph asks for. 0045 proposes binding real `libslirp` as a
+   **native-only** extension for the NAT/TCP bridge specifically, added to this project's existing
+   dual-mode `native/`-plus-pure-Python-fallback pattern rather than replacing it —
+   `external/cyw43/bus.py`/`chip.py` (steps 0-3g) stay pure Python, unchanged, and `pico_w` keeps
+   attaching a real `Cyw43439` unconditionally either way; only the step-4 NAT bridge itself is
+   native-only, with pure-Python builds keeping today's existing ack-only `DATA_HEADER` behavior
+   until a pure-Python NAT is separately designed (not scheduled). Kept here unedited per this doc's
+   append-only convention; 0045 is the decision record to read for the current direction on step 4.
 
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1016-1143 -->
