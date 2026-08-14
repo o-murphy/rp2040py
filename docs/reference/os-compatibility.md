@@ -36,7 +36,7 @@ the same reason applies.
 | `--expect-text` / `--expect-regex` scripted exit | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Ctrl+C (SIGINT) shutdown | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Graceful shutdown on `SIGTERM` (`kill <pid>`) | ✅ | ✅ | ❌ <sup>[[13]](#fn13)</sup> | ✅ | — | — |
-| `[fs]` littlefs image tooling (`--littlefs`, `mklittlefs`) | ✅ | ✅ | ✅ | ⚠️ <sup>[[14]](#fn14)</sup> | ❌ <sup>[[1]](#fn1)</sup> | ❌ <sup>[[1]](#fn1)</sup> |
+| `[fs]` littlefs image tooling (`--littlefs`, `mklittlefs`) | ✅ | ✅ | ✅ | ✅ <sup>[[14]](#fn14)</sup> | ❌ <sup>[[1]](#fn1)</sup> | ❌ <sup>[[1]](#fn1)</sup> |
 | `--dump-fs` (littlefs-python-free FS dump) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `--fat12 <image>` (consume a pre-built FAT12 image) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
@@ -115,7 +115,6 @@ back to Ctrl+C only, matching this command's pre-asyncio behavior. See `cli/__in
 [records/0021-shutdown-coordinator.md](../records/0021-shutdown-coordinator.md).
 
 <a id="fn14"></a>
-**[14]** The `[fs]` extra pulls in `littlefs-python`, a compiled C dependency. Compiled extensions
-do load on Android, but `littlefs-python` specifically hasn't been confirmed by hand there — hence
-⚠️. Everywhere `[fs]` is unavailable, `--dump-fs` is the littlefs-python-free alternative for
-reading a filesystem back out.
+**[14]** The `[fs]` extra pulls in `littlefs-python`, a compiled C dependency. Confirmed working by
+hand on Android under **both** Termux and Pydroid 3. Where `[fs]` is unavailable (iOS — see [1]),
+`--dump-fs` is the littlefs-python-free alternative for reading a filesystem back out.
