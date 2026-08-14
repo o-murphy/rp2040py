@@ -151,6 +151,162 @@ the first mitigation to try is configuring `PyTCP`'s interface to treat the enti
 model doesn't fit and falling back to `lwIP`/`gVisor` per the "Alternatives considered" section
 above.
 
+**Resolved (2026-08-14): plain accept does not work, and the proposed mitigation does not apply -
+the embedding model as designed here doesn't fit.** Tested empirically against real `pytcp==2.7.6`
+(pinned via `uv add pytcp`, see "Packaging findings" below), by driving `pytcp.lib.stack`'s
+internal singletons directly (see next finding) and injecting a hand-built raw Ethernet/IPv4/TCP
+SYN frame, source `10.0.0.2:54321`, destination `93.184.216.243:80` (a foreign address, never
+assigned to the stack) - reproducible via the throwaway scratchpad script this session used
+(no tracked files touched by the script itself):
+
+- **Baseline (stack owns `10.0.0.1/24`, matching the record's own gateway address):** the SYN is
+  dropped at the IPv4 layer before ever reaching TCP. `pytcp/protocols/ip4/phrx.py`'s `_phrx_ip4()`
+  has an unconditional destination-ownership check - `if self.ip4_unicast and packet_rx.ip4.dst not
+  in {*self.ip4_unicast, *self.ip4_multicast, *self.ip4_broadcast}: drop` - and logs exactly `IP
+  packet not destined for this stack, dropping`. `self.ip4_unicast` is a flat list built from
+  individually DAD/ARP-probed `Ip4Host` entries (`packet_handler.py`'s `ip4_unicast` property, fed
+  by `assign_ip4_address()`) - there is no CIDR/subnet-range membership check anywhere in this
+  path, only exact-address set membership.
+- **The record's own proposed mitigation ("treat the entire guest-visible `10.0.0.0/16` subnet as
+  locally-owned, proxy-ARP-shaped") turns out not to apply to this failure mode at all, independent
+  of whether it could be implemented:** a real internet destination like `93.184.216.243` is never
+  a member of the guest-local `10.0.0.0/16` range in the first place. "Claiming the guest subnet"
+  only ever helps the stack answer for guest-adjacent addresses (e.g. spoofing a second gateway-side
+  host on the same LAN) - it does nothing for the actual guest→internet NAT case the whole splice
+  architecture exists for. The mitigation as literally described was based on an incomplete model of
+  the gap; there is no revision of it that fits without also solving the next bullet.
+- **A second, independent, and unconditional gate exists on the TX side with no equivalent
+  bypass.** Tested a workaround (never call `assign_ip4_address()`, disable DHCP, so
+  `ip4_host`/`ip4_unicast` stay permanently empty - `packet_handler.py`'s `acquire_ip4_addresses()`
+  then auto-sets `config.IP4_SUPPORT = False`, so this needs additionally forcing
+  `config.IP4_SUPPORT` back to `True` after `start()` to even get frames dispatched to `_phrx_ip4`
+  at all). With that double workaround in place, the empty `self.ip4_unicast` does make the RX-side
+  check above vacuously pass (`if self.ip4_unicast and ...` short-circuits on the empty list) - the
+  SYN reaches the TCP layer, matches a wildcard (`0.0.0.0:80`) listening socket via
+  `tcp_listening_socket_patterns` (which does support a local-address wildcard, independent of the
+  IP-layer check), creates a new socket keyed to the real remote peer
+  (`93.184.216.243/80/10.0.0.2/54321`), and transitions `LISTEN -> SYN_RCVD`. But the attempt to
+  transmit the resulting SYN+ACK is then dropped by `pytcp/protocols/ip4/phtx.py`'s `_phtx_ip4()`,
+  which has its own, separate, **unconditional** (no empty-list short-circuit) source-ownership
+  check - `if ip4_src not in {*self.ip4_unicast, *self.ip4_multicast, *self.ip4_broadcast,
+  Ip4Address(0)}: drop` - logging `Unable to sent out IPv4 packet, stack doesn't own IPv4 address
+  93.184.216.243, dropping`. The connection retries via PyTCP's own retransmit timer and never
+  completes the handshake. No config flag or documented hook disables this check; it is fundamental
+  to PyTCP's identity as a host stack (RFC-compliant hosts do not originate packets claiming a
+  source address they don't own) rather than a bug or oversight.
+- **Conclusion: the embedding model this record designed - PyTCP terminating the guest's TCP
+  connection to an arbitrary internet destination in-process, unmodified - does not fit.** Both
+  gates (RX destination-ownership, TX source-ownership) would need bypassing via unofficial
+  monkeypatching of `PacketHandler`/`_phtx_ip4` internals, not configuration, to make PyTCP
+  originate traffic under an address it doesn't own - which undermines the record's own core
+  rationale for choosing PyTCP over a hand-rolled reflector in the first place (reusing an
+  already-correct, unmodified, tested implementation rather than new/risky protocol logic). Per this
+  section's own next step: this should be read as "the current embedding model doesn't fit" and the
+  session picking this up next should evaluate the `lwIP`/`gVisor` fallback candidates from
+  "Alternatives considered" instead of continuing to force-fit `PyTCP` into a router-grade role its
+  own README already disclaimed.
+
+**Packaging findings (2026-08-14), incidental to the above but worth keeping:**
+
+- `pip install pytcp` on this project's `requires-python = ">=3.10"` resolves to `2.7.6` (the
+  version tested above) since the newest `2.7.x`, `pytcp==2.7.10`, requires Python `>=3.12`, and
+  `pytcp==3.0.9` (a much larger, restructured release) requires Python `>=3.14`.
+  `pytcp==2.7.10`'s published wheel on PyPI is itself broken independent of this project's own
+  Python floor - it ships only `pytcp/__init__.py` and `pytcp/config.py`; the `pytcp.lib`,
+  `pytcp.protocols`, and `pytcp.subsystems` subpackages `__init__.py` imports from are entirely
+  absent from the distributed wheel, so `import pytcp` itself raises `ModuleNotFoundError: No
+  module named 'pytcp.lib'` - not evaluated further since `2.7.6` (this project's actual resolved
+  version) is unaffected and complete.
+- `pytcp` briefly landed via a plain `uv add pytcp` as a hard entry in `[project.dependencies]`
+  (not the optional-dependency group this record's "Decision" section calls for) while the PoC
+  above was running - reverted afterward (`pyproject.toml`/`uv.lock` back to their pre-session
+  state) once the embedding model was shown not to fit; not left in place.
+- The installed `2.7.6`'s public `TcpIpStack` class (`pytcp/__init__.py`) has **no programmatic
+  frame-injection constructor at all** - `__init__` unconditionally `os.open("/dev/net/tun")`s and
+  issues a `TUNSETIFF` ioctl to attach a real kernel TAP interface (needs `CAP_NET_ADMIN`), contrary
+  to this record's "Not designed here" section's framing of `add_interface()` as the relevant
+  surface to figure out. The PoC above bypassed `TcpIpStack` entirely and drove `pytcp.lib.stack`'s
+  internal `packet_handler`/`rx_ring`/`tx_ring`/`arp_cache`/`nd_cache`/`timer` singletons directly,
+  same sequence as `TcpIpStack.start()`, but calling `rx_ring.start(fd)`/`tx_ring.start(fd)` with an
+  `AF_UNIX`/`SOCK_DGRAM` `socketpair()` fd instead of a TAP fd (those two methods accept any
+  select()-able fd, not specifically a TAP device). This works but reaches around the public API
+  into implementation details with no compatibility guarantee across `PyTCP` releases.
+
+## `lwIP`/`gVisor` fallback evaluation (2026-08-14)
+
+Per the resolved finding above, comparing the two fallback candidates this record's own "Alternatives
+considered" section already named, specifically against the exact RX-destination-ownership /
+TX-source-ownership gap that sank `PyTCP` - not a general survey, a check of whether each one
+actually closes that specific gap.
+
+**`lwIP`:** the vendored copy this project's guest-firmware submodule points to
+(`/home/murphy/pyproj/micropython/lib/lwip`, uninitialized before this session - initialized
+read-only to inspect it, upstream `lwip-tcpip/lwip` @ `77dcd25a`, v2.2.x, BSD-style license) is a
+separate concern from any host-side use (it's the *guest's own* stack, used by the emulated
+MicroPython target itself) but was inspected directly here as the closest real copy of the code a
+host-side binding would vendor too:
+
+- Real IP-layer forwarding exists (`IP_FORWARD` config option, `opt.h:756-761`, default off; real
+  `ip4_forward()` in `src/core/ipv4/ip4.c`) - genuine multi-netif routing between a guest-facing and
+  a host-facing `netif`, architecturally distinct from `PyTCP`'s single-stack-identity design.
+- But plain upstream `lwIP` has **no NAPT** (address/port translation) - grepped the whole vendored
+  tree for `IP_NAPT`/`napt`, found nothing. Bare `IP_FORWARD` routes packets between interfaces
+  unchanged; it does not rewrite the guest's private source address into anything a real internet
+  host could route a reply back to, which is the actual thing step 4 needs. NAT specifically exists
+  only in downstream forks (most notably Espressif's `esp-lwip`, patched for ESP32 Wi-Fi AP-to-STA
+  NAT) - not in this project's vendored copy or upstream `lwip-tcpip/lwip`.
+- Two integration shapes, neither designed further here: (a) port/reimplement NAPT on top of
+  `IP_FORWARD` - a scoped, well-precedented problem (rewrite src IP/port + recompute checksums
+  outbound, reverse it inbound, tracked in a translation table) unlike inventing a new TCP state
+  machine; or (b) skip forwarding and use `lwIP`'s own raw/netconn socket API the way `PyTCP`'s was
+  going to be used - but that risks hitting the identical RX/TX ownership-check tension host stacks
+  share by design, **not verified against `lwIP`'s own source this session** - flagged, not assumed.
+- Either shape still needs a real Cython/C binding (this project's `native/` dual-mode pattern) across
+  the whole `cibuildwheel` matrix - lighter than `libslirp`'s `glib` dependency (`lwIP` needs only
+  libc) but real build-system work, the same class of cost that sank the original `libslirp`
+  proposal, just smaller.
+
+**`gVisor` `pkg/tcpip`:** verified via web research this session (not source-read, unlike everything
+else in this record - flagged as a lower-confidence source than the direct `pytcp`/`lwIP` source
+inspection above) that `tcpip.Stack` ships first-class, public, documented API for **exactly** the
+two gaps that sank `PyTCP`:
+
+- `Stack.SetPromiscuousMode(nicID, true)` - accept inbound traffic not addressed to the NIC's own
+  configured address (closes `PyTCP`'s RX-side gap).
+- `Stack.SetSpoofing(nicID, true)` - documented as "allowing endpoints to bind to any address in the
+  NIC" (closes `PyTCP`'s TX-side gap - the one with *no* bypass at all in `PyTCP`).
+- This is not hypothetical: Tailscale's own userspace-networking mode (used for subnet
+  routers/exit nodes on non-Linux platforms, or whenever running unprivileged) is built on exactly
+  this - per Tailscale's own docs, it "terminates TCP and UDP connections from the origin ... peer
+  and makes new outbound connections to the target ..., stitching them together" - the identical
+  splice architecture this record designed around `PyTCP`, running in production today, at scale,
+  against arbitrary real internet destinations.
+- License: Apache-2.0 - MIT-compatible, none of `PyTCP`'s "optional dependency to dodge GPL"
+  complication.
+- Real cost: Go, not Python - this project currently has no Go toolchain/build-system presence at
+  all. Two integration shapes, neither designed in detail here: (a) `go build -buildmode=c-shared` +
+  a `ctypes`/Cython binding - in-process, but reintroduces hand-declared struct-layout risk across
+  the 9-target `cibuildwheel` matrix, needs `cgo` (a C compiler - already true for `native/`) per
+  target, needs Go's Android cross-compilation (`GOOS=android`) verified per-target, not done here;
+  or (b) a small Go subprocess speaking a length-prefixed raw-Ethernet-frame protocol over a
+  UNIX/named-pipe socket - structurally identical to the `passt` integration this record already
+  evaluated and rejected, except a from-scratch Go binary isn't tied to `passt`'s Linux-only
+  `epoll`/`io_uring`/`seccomp` internals, sidestepping `passt`'s specific rejection reason while
+  keeping its main advantage (plain non-blocking socket I/O fits the existing engine-room `asyncio`
+  loop directly, no in-process struct-layout risk).
+
+**Recommendation, not a decision** (this evaluation doesn't re-supersede the "Decision" section
+above - that needs its own explicit go-ahead per this repo's document-vs-implement convention):
+`gVisor` is the substantially closer technical fit - built for, and proven in production at, exactly
+this splice architecture, closing both gaps `PyTCP` couldn't via first-class public API rather than
+internals-reaching workarounds. `lwIP`'s forwarding mode is real but incomplete for NAT without
+porting NAPT from a downstream fork, and its alternative socket-API route carries an unverified
+version of `PyTCP`'s exact problem. The build-system cost is real either way but not obviously
+smaller for `lwIP` - it trades `libslirp`'s `glib` dependency for a same-shape Cython/C binding
+effort, while `gVisor` trades that same effort for a Go-toolchain one instead. Left for the session
+that picks this up to actually choose between them (or a `passt`-shaped Go subprocess vs. an
+in-process `cgo` binding, within the `gVisor` option itself) and write a superseding "Decision".
+
 ## Related finding: an absent CYW43 device doesn't hang real firmware (live-verified 2026-08-14)
 
 Not load-bearing for the decision above (attach gating isn't part of this plan - see "Decision"),
