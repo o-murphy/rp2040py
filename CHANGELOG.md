@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CYW43 / PIO performance (~2.6x on a Pico W boot to `nic.scan()`)**: the per-PIO-clock-edge pin
+  cascade that drives the emulated CYW43439 gSPI was the biggest remaining pure-Python cost. Three
+  parts (see [record 0047](docs/records/0047-cyw43-pio-gpio-hotpath.md)): `RPPIO.check_changed_pins`
+  now walks only the *changed* GPIO pins (~1.18 per call) instead of scanning all 30 every step (an
+  algorithmic fix that also speeds up PyPy); `GPIOPin` and `RPPIO` gained native Cython ports behind
+  the usual facade (`gpio_pin.py`/`peripherals/pio.py`), collapsing the pin-state `@property`
+  cascade and the PIO step loop into inline C. `RPPIO` satisfies the `Peripheral` Protocol
+  structurally rather than inheriting the pure-Python `BasePeripheral` (a `cdef class` can't). No
+  effect on non-PIO workloads; the resident-script performance table in the README is unchanged.
+  PyPy remains the fastest backend for CPU-bound runs (~1.16x ahead even here).
+
+### Added
+- **Type stubs (`.pyi`) for the compiled `rp2040py.native.*` backend**: each re-exports its
+  pure-Python reference sibling's public API, so `mypy`/IDEs type-check code that goes through the
+  native facades instead of falling back to `Any`.
+
+### Fixed
+- **`clock.IClock` protocol** was missing `tick()`/`nanos_to_next_alarm`/`has_scheduled_alarm`
+  (driven every simulated instruction and provided by every implementation) — now declared, so
+  `clock: IClock` callers type-check.
+- **`KeyMock.press()`/`release()`** called a non-existent `GPIOPin.drive_input()` (a latent
+  `AttributeError`); the method is `set_input_value()`. Surfaced by the new native type stubs.
+
 ## [0.2.0] - 2026-08-14
 
 ### Added
