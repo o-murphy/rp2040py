@@ -30,7 +30,8 @@ clock=/rp2040= arguments by hand would hit the same kind of TypeError as the rp2
 not a silent correctness bug.
 """
 
-import time
+from cpython.time cimport monotonic
+from libc.math cimport INFINITY
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._rp2040 cimport RP2040
@@ -75,20 +76,20 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
 
     cdef long i = 0
     cdef int ticks_since_check = 0
-    cdef double batch_start = time.monotonic()
+    cdef double batch_start = monotonic()
     cdef double pending_nanos = 0.0
     cdef int pending_count = 0
     cdef double nanos_budget
     cdef double delta_nanos
     cdef int cycles
 
-    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
 
     while i < BATCH_INSTRUCTION_CEILING and not simulator.stopped:
         ticks_since_check += 1
         if ticks_since_check >= TIME_CHECK_INTERVAL:
             ticks_since_check = 0
-            if time.monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
+            if monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
                 break
         if core.waiting:
             if pending_nanos:
@@ -97,7 +98,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                 pending_count = 0
             clock.tick(clock.nanos_to_next_alarm)
             if tick_batch > 1:
-                nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+                nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
         else:
             cycles = core.execute_instruction()
             delta_nanos = cycles * CYCLE_NANOS
@@ -111,7 +112,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                     clock.tick(pending_nanos)
                     pending_nanos = 0.0
                     pending_count = 0
-                    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else float("inf")
+                    nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
         for pio in pios:
             if not pio.stopped and _has_runnable_machine(pio):
                 pio.step()
