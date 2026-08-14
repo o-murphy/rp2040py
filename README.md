@@ -18,11 +18,13 @@ See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) f
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
     - [Environments without compiled-extension support (iOS)](#environments-without-compiled-extension-support-ios)
+    - [Shell completions](#shell-completions)
   - [Run the demo project](#run-the-demo-project)
     - [Native code](#native-code)
     - [MicroPython code](#micropython-code)
       - [mpremote](#mpremote)
       - [Filesystem support](#filesystem-support)
+      - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
     - [CircuitPython code](#circuitpython-code)
       - [Filesystem support](#filesystem-support-1)
     - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
@@ -75,6 +77,20 @@ This is the exact same artifact `rp2040py`'s own release pipeline builds and pub
 release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
 not a degraded or unsupported build, just the emulator without the compiled speedup.
 
+### Shell completions
+
+`rp2040py install-completion` sets up tab completion for every subcommand and flag (`--board`,
+`--log-level`, `--littlefs`, ...) in Bash or Zsh, via [`argcomplete`](https://github.com/kislyuk/argcomplete):
+
+```sh
+rp2040py install-completion
+# then open a new shell, or:
+source ~/.bashrc   # or ~/.zshrc
+```
+
+This appends the shell's `register-python-argcomplete` hook to `~/.bashrc`/`~/.zshrc` (detected
+from `$SHELL`) - a one-time setup step, not something run on every invocation.
+
 To confirm you actually got it:
 - **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
   `rp2040py-<version>-py3-none-any.whl`, with no platform/ABI tag (e.g. no `cp310-abi3-manylinux...`)
@@ -123,6 +139,11 @@ same [src/rp2040py/cli](src/rp2040py/cli) code):
 | `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
 | `rp2040py kaluma ...`      | `uv run python demo/kaluma_run.py ...`      |
 | `rp2040py bench ...`       | `uv run python demo/benchmark.py ...`       |
+
+`--board {pico,pico_w}` (default `pico`) is available on all four and picks which board's fixed
+extras get attached alongside the RP2040 itself - currently just the onboard LED, except for
+`pico_w`, which also attaches an emulated CYW43439 WiFi/Bluetooth chip; see
+[WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) below.
 
 ### Native code
 
@@ -334,6 +355,33 @@ rp2040py micropython --littlefs littlefs.img --dump-fs littlefs.img -c "open('lo
 > version/behavior a given firmware boots with instead of whatever `littlefs-python` happens to
 > bundle.
 
+#### WiFi (Pico W / CYW43439)
+
+`--board pico_w` (default: `pico`) attaches an emulated CYW43439 - the WiFi/Bluetooth chip on a
+real Pico W - over the same gSPI bus real firmware drives it through:
+
+```sh
+rp2040py micropython --board pico_w
+```
+
+`network.WLAN` works against it: `nic.active(True)`, `nic.scan()`, and `nic.connect(ssid, key)`
+all complete, answered by a fixed fake `"RP2040PY-GUEST"` access point built into the emulation
+rather than anything real - there's no bridge to an actual network yet. Live-boot verified against
+real, unmodified MicroPython firmware on both 1.23.0 and 1.28.0:
+
+```python
+import network
+
+nic = network.WLAN(network.WLAN.IF_STA)
+nic.active(True)
+print(nic.scan())
+print(nic.connect("RP2040PY-GUEST", "key"))
+```
+
+See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for the full picture,
+including exactly what's emulated at the gSPI/SDPCM protocol level and what's left (a real network
+bridge, `network.WLAN.IF_AP`).
+
 ### CircuitPython code
 
 To run the CircuitPython demo, follow the directions above for MicroPython but add `--circuitpython`:
@@ -475,21 +523,34 @@ the ROM image on the fly, no separate conversion step needed. A local `.bin` (e.
 
 ### Library API
 
-Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
+Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image (optionally for a specific `board`, e.g. `board="pico_w"`) and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
 
-**Blocking** (`exec()`/`exec_file()`) is the simplest form - each call returns once the device finishes, or raises `TimeoutError` after `timeout` elapses (30s by default, since unlike the CLI there's no Ctrl+C to fall back on):
+> [!NOTE]
+> **Async-native only, no blocking API.** `MicroPythonDevice`/`KalumaDevice`/`BaseDevice` boot and
+> run as coroutines on an `asyncio` event loop (the same "engine room" the CLI itself runs on) -
+> there is no blocking `start()`/`exec()`/`exec_file()` and no synchronous `with device:` form.
+> Calling a blocking wrapper's `Future.result()` from the same loop it would need to run on
+> deadlocks (the loop can't process the coroutine that resolves the Future while its own thread is
+> stuck waiting on it), so this project stopped offering one rather than ship that footgun - wrap
+> a call in `asyncio.run(...)` yourself if you want blocking behavior from a plain script.
+
+**asyncio**, via `astart()`/`aexec()`/`aexec_file()`, entered as an `async with` context manager:
 
 ```python
+import asyncio
 from rp2040py.device import MicroPythonDevice
 
-with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
-    stdout, stderr = device.exec("print(1 + 1)")
-    assert stdout == b"2\r\n"
+async def main():
+    async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+        stdout, stderr = await device.aexec("print(1 + 1)")
+        assert stdout == b"2\r\n"
 
-    stdout, stderr = device.exec_file("my_script.py")
+        stdout, stderr = await device.aexec_file("my_script.py")
+
+asyncio.run(main())
 ```
 
-**Callback style**, via `exec_async()`'s `concurrent.futures.Future` - no separate API needed, `Future.add_done_callback()` does this out of the box:
+**Callback style**, via `exec_async()`'s `concurrent.futures.Future` - no separate API needed, `Future.add_done_callback()` does this out of the box. Requires the device already started (`astart()`/`start_async()` first, or already inside `async with`):
 
 ```python
 def on_done(future):
@@ -500,15 +561,7 @@ def on_done(future):
 device.exec_async("print(1 + 1)").add_done_callback(on_done)
 ```
 
-**asyncio**, via `astart()`/`aexec()`/`aexec_file()`:
-
-```python
-async def main():
-    async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
-        stdout, stderr = await device.aexec("print(1 + 1)")
-```
-
-All of these - blocking, callback, and asyncio - share one `ThreadPoolExecutor(max_workers=1)` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start()`/`start_async()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you.
+Both share one `asyncio.Lock` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start_async()`/`astart()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you - `stop()` itself stays a plain synchronous call.
 
 ## Performance
 
@@ -580,6 +633,11 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
   [Pythonista](#environments-without-compiled-extension-support-ios)).
+- **Pico W / CYW43439 WiFi emulation** (`--board pico_w`) - real `network.WLAN` calls
+  (`active()`/`scan()`/`connect()`) against a real, unmodified MicroPython firmware's CYW43439
+  driver are answered at the actual gSPI/SDPCM protocol level, not stubbed out - something
+  rp2040js has no equivalent of at all (no `--board` concept, no WiFi chip emulation). See
+  [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above.
 
 See [docs/reference/porting-checklist.md#known-differences-from-rp2040js](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,

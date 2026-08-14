@@ -30,10 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independently-found `USBCDC.tx_fifo` races between whatever thread was driving `execute()` and a
   separate thread touching CDC state directly (interactive stdin, GDB's `process_gdb_message()`) -
   the same class of bug that once corrupted a raw-REPL upload
-  (see [docs/ASYNCIO_MIGRATION_BACKLOG.md](docs/ASYNCIO_MIGRATION_BACKLOG.md) for the full,
-  phase-by-phase writeup and every race found along the way). No public sync API changed shape:
-  `Simulator.submit()`/`call()` return/accept the same types their threading predecessors did, and
-  `cli/__init__.py` needed zero changes.
+  (see [docs/records/0025-full-asyncio-migration.md](docs/records/0025-full-asyncio-migration.md)
+  for the full, phase-by-phase writeup and every race found along the way).
+  `Simulator.submit()`/`call()` return/accept the same types their threading predecessors did.
+  **Update:** the sentence that used to be here ("no public sync API changed shape, `cli/__init__.py`
+  needed zero changes") no longer holds - see "**Breaking: the device library API is now
+  async-native only**" further down, which removed `cli/__init__.py`'s own remaining blocking
+  calls along with `BaseDevice`/`MicroPythonDevice`/`KalumaDevice`'s blocking API.
 - `GDBTCPServer.close()`: stops and joins its engine-room thread so the process can actually exit.
   That thread is deliberately non-daemon ("a listening GDB server should keep the process alive by
   itself", matching Node's `net.Server.listen()`), which is exactly why nothing previously called a
@@ -204,7 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rp2040py.native` Cython ports), PWM/DMA/PPB peripheral state (`RPPWM.reset()` already existed;
   `RPDMA.reset()` is new), and USB-CDC enumeration state (`USBCDC.reset()`/
   `RPUSBController.reset()`, both new) - then jumps back to flash's entry point, mirroring
-  `connect_blocking()`'s own cold-boot sequence. Flash content is preserved
+  `_aconnect()`'s own cold-boot sequence (`connect_blocking()` at the time this was written - see
+  the device-library **Breaking** entry above). Flash content is preserved
   (`RP2040.reset(preserve_flash=True)`, a new parameter - existing callers unaffected, still wipe
   flash by default) and every externally-referenced peripheral object keeps its identity (notably
   `mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct reference to) rather
@@ -225,8 +229,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same practical need (multiple expected messages) with much simpler, more predictable
   semantics. Shared by `micropython`, `kaluma`, and `bench` (all three already shared
   `--expect-text` via the same `_shared_arg_parser` helper).
+- **CYW43439 / Pico W WiFi emulation** (`external/cyw43/`): `--board pico_w` (new, default
+  remains `pico`) attaches an emulated CYW43439 - the WiFi/Bluetooth chip on a real Pico W - over
+  the same gSPI bus real firmware drives it through. Built on a new `ExternalDevice` protocol
+  (`external/device.py`) and board registry (`boards.py`, `BOARDS`/`build_rp2040()`) that compose
+  fixed extras (an `LEDMock` proof-of-concept plus, for `pico_w`, the CYW43439) onto a plain
+  `RP2040` instead of subclassing it (docs/records/0028 module layout, 0029 board composition,
+  0030 `ExternalDevice` concurrency decisions). The emulation itself implements the F0 bus
+  handshake, ALP/HT/KSO clock handshake, F1 windowed backplane addressing, ARM core reset/enable,
+  firmware/CLM download acceptance, F2 packet delivery over SDPCM framing with generic ioctl
+  request/response, and scripted `escan`/`WLC_SET_SSID` responses answering `network.WLAN`'s
+  `scan()`/`connect()` against a fixed fake `"RP2040PY-GUEST"` access point. Live-boot verified
+  against real, unmodified MicroPython Pico W firmware on both v1.23.0 and v1.28.0 - see
+  docs/records/0027 for the full phase-by-phase writeup and README.md's new "WiFi (Pico W /
+  CYW43439)" section; step 4 (bridging to a real network) hasn't started.
+- Native perf: PIO `StateMachine` Cython port plus an opt-in batched `clock.tick()`
+  (`RP2040PY_CLOCK_TICK_BATCH`, default off, docs/records/0031), a native Cython port of
+  `Simulator._execute_batch()`'s own per-instruction dispatch/idle loop - previously the last
+  pure-Python hot path even with a fully native CPU core/bus (docs/records/0034), and a native
+  Cython port of `SimulationClock` (docs/records/0039) - closing the shared-simulator-
+  infrastructure bottlenecks found while profiling a real CYW43439 firmware boot. Combined, ~9.2x
+  more PIO steps completed in the same wall-clock profiling window (see docs/records/0027's
+  "Performance side quest" entry for the full numbers); no behavior change, same fallback-to-
+  pure-Python story as the rest of `rp2040py.native`.
+- `install-completion` subcommand: sets up Bash/Zsh tab completion for every `rp2040py`
+  subcommand and flag via [`argcomplete`](https://github.com/kislyuk/argcomplete), appending the
+  `register-python-argcomplete rp2040py` shell hook to `~/.bashrc`/`~/.zshrc` (docs/records/0033).
+  File-taking flags (`--littlefs`, `--fat12`, script/image positionals) also gained suffix
+  validation as part of the same change.
+- Engineering docs restructured from a handful of large, mixed-purpose `docs/*_BACKLOG.md` files
+  into numbered, append-only records under [docs/records/](docs/records/), indexed by
+  [docs/0000-TRACKER.md](docs/0000-TRACKER.md) (docs/records/0032) - durable design/decisions and
+  volatile status no longer share one file. Doc links throughout this file and README.md that used
+  to point at `docs/PORTING.md`/`docs/mpremote.md`/`docs/BACKLOG.md` now point at
+  `docs/reference/porting-checklist.md`/`docs/reference/mpremote.md`/the specific record that
+  covers that topic; the old paths still exist as short redirect stubs.
+- Board-aware firmware retrieval: `firmware_retrieve.retrieve()` (moved from
+  `cli/firmware_retrieve.py` to `utils/firmware_retrieve.py`) now takes a `board` argument and
+  resolves a version tag against that board's own download URL for firmware that genuinely differs
+  by board (MicroPython/CircuitPython/Kaluma each ship separate Pico-W-specific builds with the
+  network stack compiled in) - `--board pico_w` now fetches the matching `RPI_PICO_W`/... build
+  automatically instead of the plain-Pico one. `FirmwareSpec.boards: dict[board, dict[tag, url]]`
+  replaces the old flat `known_versions`/template-substitution shape for those three; BOOTROM stays
+  flat (board-agnostic - a mask ROM baked into the die, identical across every board). New
+  `scripts/fetch_firmware.py` (dev-only) scrapes MicroPython's/CircuitPython's/Kaluma's/the RP2040
+  bootrom's own real release sources and regenerates the committed `firmware_specs.json` index -
+  re-run it and commit the diff to pick up new releases instead of guessing filenames/URLs at
+  request time.
+- `external/key_mock.py`'s new `KeyMock`: an `ExternalDevice` simulating a button/key wired to a
+  given GPIO (`press()`/`release()` drive it high/low, `active_high` picks the polarity) - not
+  attached to any built-in `--board`, available for a library caller composing a custom board via
+  `attach_external_devices()` directly (see `boards.py`'s own docstring).
 
 ### Changed
+- **Breaking: the device library API (`rp2040py.device`) is now async-native only.**
+  `BaseDevice`/`MicroPythonDevice`/`KalumaDevice` no longer have a blocking `start()`, and
+  `MicroPythonDevice` no longer has blocking `exec()`/`exec_file()` - only `astart()`/`aexec()`/
+  `aexec_file()` (asyncio) and `start_async()`/`exec_async()`/`exec_file_async()` (non-blocking,
+  return a `concurrent.futures.Future`, for callback style) remain. The synchronous `with device:`
+  context-manager form is gone too - only `async with device:` (`__aenter__`/`__aexit__`) works
+  now; `stop()` alone stays a plain synchronous call. A blocking wrapper calling
+  `Future.result()` from the same loop `astart()` would bind to deadlocks (the loop can't process
+  the coroutine that resolves the Future while its own thread sits blocked waiting on it), so this
+  was a footgun worth removing rather than keeping - wrap a call in `asyncio.run(...)` yourself for
+  blocking behavior from a plain script. `cli/__init__.py`'s own `micropython -c/-m/<filename>`
+  exec mode is rewritten around this - `_cmd_micropython`/`_cmd_kaluma` are now thin
+  `asyncio.run()` wrappers around an `async def ..._async()` body driving `device.astart()`/
+  `device.aexec()` directly - superseding the "no public sync API changed shape,
+  `cli/__init__.py` needed zero changes" claim in the original "Full `asyncio` migration" entry
+  above, which was accurate for that entry's own scope but not the final state. Both device
+  constructors also gained a `board: str = "pico"` keyword argument (see "CYW43439 / Pico W WiFi
+  emulation", above) - `MicroPythonDevice("...", board="pico_w")` boots against the CYW43439-
+  equipped board instead of a plain Pico. See README.md's updated "Library API" section for
+  current usage.
 - `StdioInteractiveRepl(cdc, simulator, on_quit=...)` - `simulator` is now a required constructor
   argument (**breaking**, on top of the `on_quit` change below). Needed so stdin forwarding can
   register `loop.add_reader()` on `Simulator`'s own engine-room loop (see "Full `asyncio` migration"
@@ -248,10 +323,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on_quit`-consuming loop (`Simulator.wait_for_shutdown`, for every current caller).
 - **Breaking:** `micropython --expect-text` combined with `-c`/`-m`/`<filename>` (exec mode) is now
   a clear error (`sys.exit(1)`) instead of being silently accepted and ignored. Exec mode runs one
-  `device.exec()` call and exits based on its own stdout/stderr - it never reaches the console loop
-  `--expect-text`'s `on_data` watcher is wired into, so the combination never did anything a caller
-  passing both would reasonably expect. Same treatment `--tcp-port` already got for the identical
-  reason (see Added, above).
+  `device.aexec()` call (`device.exec()` at the time this was written - see the device-library
+  **Breaking** entry above) and exits based on its own stdout/stderr - it never reaches the console
+  loop `--expect-text`'s `on_data` watcher is wired into, so the combination never did anything a
+  caller passing both would reasonably expect. Same treatment `--tcp-port` already got for the
+  identical reason (see Added, above).
+- **Breaking:** `--littlefs`/`--fat12` on `micropython`/`kaluma`/`bench` are now mutually
+  exclusive - passing both is a clear `sys.exit(1)` instead of silently letting `--circuitpython`
+  decide which one took effect, matching the pattern already used for `--tcp-port`/`--pty`
+  (docs/records/0036).
 
 ### Fixed
 - `tests/test_mpremote_missing_list_ports_backend.py` failed on real Android CI
@@ -361,6 +441,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole, so a slow-but-progressing transfer is unaffected) with manual chunked streaming; a partial
   file left behind by a download that dies mid-transfer is now cleaned up so a retry re-downloads
   instead of finding a corrupt "cached" image.
+- `--board pico_w` could "wild-execute" (CPU ending up at `0xfffffffe`): the MicroPython/
+  CircuitPython/Kaluma filesystem's flash offset was computed the same way regardless of board,
+  but real ARM/GCC startup code (`crt0`) runs a table-driven flash→RAM copy whose layout depends on
+  the board's own linker script - root-caused via disassembly + runtime tracing against real
+  MicroPython source and fixed board-aware (docs/records/0035).
+- `RPPIO` stepping, decoupled from the CPU's own instruction loop, could livelock: real firmware's
+  `cyw43_bus_pio_spi.c` transfer helper (traced live against a disassembled real boot) chains two
+  DMA channels to a PIO1 SM0 gSPI bit-bang program and busy-waits/retries, so a PIO that never gets
+  its own turn between CPU batches never completes the transfer the CPU is waiting on
+  (`nic.active(True)` never returning). Fixed by coupling `RPPIO` stepping to the CPU's own
+  instruction loop instead of a separate schedule (docs/records/0037).
+- `GSPIBus` ioctl responses weren't zero-filled to the length the requesting driver expected -
+  looked like `nic.active(True)` hanging on real firmware, and was initially misdiagnosed as a
+  pure per-instruction throughput ceiling rather than a correctness bug (see 0037, above). Fixed by
+  zero-filling the response body to the expected length (docs/records/0038).
+- A genuine freeze during real CYW43439 firmware boot, reproducing ~30-35s into a live
+  `v1.28.0` `RPI_PICO_W` boot (0% CPU, blocked in `ep_poll`, not the known throughput ceiling) -
+  root-caused and fixed; unblocked docs/records/0027 step 3g's own live-boot verification
+  (docs/records/0041).
+- `GSPIBus`'s `SPI_INTERRUPT_REGISTER` wasn't write-1-to-clear: real firmware's own
+  read-modify-write clear sequence re-set bits it meant to clear, producing a spurious
+  `[CYW43] Bus error condition detected 0xb9` warning on every live boot. Fixed to actual W1C
+  semantics (docs/records/0042).
+- `RPPIO`'s CTRL-enable path had a first-batch/DMA-refill race that broke MicroPython v1.23.0's
+  CYW43439 boot specifically (`nic.scan()` raising `EPERM`) - a residual gap in 0037's own "first
+  batch" shortcut, not present on v1.28.0. Fixed (docs/records/0043).
+- DMA-driven SPI TX/RX could hang: a stale DREQ cache survived `RPDMA.reset()`, and a same-tick
+  `SimulationClock` alarm could starve a DMA channel waiting on a later one scheduled in the same
+  tick. Both root-caused and fixed - found investigating a real SPI hang, confirmed unrelated to
+  the CYW43439 work above despite surfacing during it (docs/records/0044).
 
 ## [0.1.0] - 2026-08-04
 

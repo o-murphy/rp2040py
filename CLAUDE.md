@@ -4,13 +4,21 @@
 
 Engineering notes live as numbered, append-only records under [docs/records/](docs/records/),
 indexed by [docs/0000-TRACKER.md](docs/0000-TRACKER.md) (the scheme itself is
-[record 0032](docs/records/0032-docs-restructure.md)). Two records track the active work -
-check both before assuming what's done:
+[record 0032](docs/records/0032-docs-restructure.md)). Working notes for an investigation that
+isn't root-caused (or otherwise ready to become a record) yet live under
+[docs/tasks/](docs/tasks/) instead - the tracker's own "In progress / Proposed" section says which
+ones are still open; a task file gets folded into a proper record once it's actually resolved (see
+e.g. 0041/0044, both created from a `docs/tasks/*.md` note).
+
+Two records track the active work - check both before assuming what's done:
 
 - [docs/records/0026-main-thread-asyncio.md](docs/records/0026-main-thread-asyncio.md) - engine-room
   concurrency model. **Done**, all 5 phases landed and verified.
 - [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) - CYW43439/Pico W WiFi emulation.
-  In progress; the record's own header states exactly which step is current.
+  In progress: steps 0-3g done and live-boot-verified against real MicroPython Pico W firmware
+  (v1.23.0/v1.28.0); step 4 (bridging to a real network) not started. The record's own header
+  states exactly which step is current - don't assume this summary stays accurate as work
+  continues.
 
 Records keep a "Progress log"/inline status markers per phase/step - read those rather than
 assuming from the filename alone whether something landed.
