@@ -10,7 +10,7 @@
 # rp2040py = { path = "..", editable = true }
 # ///
 """Boots MicroPython with a virtual Waveshare 2.9inch e-Paper (G) display attached over SPI1,
-pushes demo/mp_eink_demo.py to it over the raw REPL (a from-scratch driver + a small wipe
+pushes demo/mp_eink_demo.py to it over the raw REPL (a from-scratch driver + a small sunrise
 animation - see that file's docstring), and shows every refreshed frame either in a live Tkinter
 window or as a numbered PNG screenshot sequence.
 

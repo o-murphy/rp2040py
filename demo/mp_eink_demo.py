@@ -7,6 +7,7 @@
 # Pin wiring matches demo/eink_run.py / rp2040py.external.epd2in9g's defaults (Pico ePaper HAT on
 # SPI1): SCK=10, MOSI=11, CS=9, DC=8, RST=12, BUSY=13.
 
+
 import machine
 import utime
 
@@ -150,28 +151,93 @@ class EPD2in9G:
         self._data(0xA5)
 
 
-def make_wipe_frame(threshold, accent):
-    """One row of the frame (BLACK left of `threshold`, `accent`-colored at it, WHITE right of
-    it), replicated for every row - every row is identical, so building one and repeating it is
-    both far less MicroPython bytecode to run and the same bytes `_decode_frame()` expects."""
-    row_bytes = EPD_WIDTH // 4
+HORIZON_Y = EPD_HEIGHT - 40  # rows >= this are the black "ground" band
+SUN_CX = EPD_WIDTH // 2
+SUN_MIN_CY = 60  # how high above the horizon the sun's center reaches at t=1
+SUN_MIN_RADIUS = 26
+SUN_MAX_RADIUS = 42
+
+# Row buffers are cached across the *whole* animation, not just within one frame - sky/ground
+# never change color, and the sun's disc only ever has a handful of distinct chord half-widths
+# (0..SUN_MAX_RADIUS) across all 6 frames combined, however many of `EPD_HEIGHT`'s rows actually
+# cross it each frame - so this is at most a few dozen bytearrays built total for the whole demo,
+# not one per row per frame. Plain integer Newton's-method `_isqrt` instead of `math.sqrt`
+# on purpose: real Cortex-M0 has no hardware FPU, so `float` sqrt is emulated via a softfloat
+# library call - measurably expensive per call in this project's own software CPU interpreter -
+# while integer division/arithmetic isn't.
+_solid_row_cache = {}
+_sun_row_cache = {}
+
+
+def _isqrt(n):
+    if n <= 0:
+        return 0
+    x = n
+    y = (x + 1) // 2
+    while y < x:
+        x = y
+        y = (x + n // x) // 2
+    return x
+
+
+def _solid_row(color, row_bytes):
+    row = _solid_row_cache.get(color)
+    if row is None:
+        packed = (color << 6) | (color << 4) | (color << 2) | color
+        row = bytearray(row_bytes)
+        for i in range(row_bytes):
+            row[i] = packed
+        _solid_row_cache[color] = row
+    return row
+
+
+def _sun_row(half_width, row_bytes):
+    """One row crossing the sun's disc: YELLOW within `half_width` of center, a thin RED rim just
+    inside the edge (a cheap two-color "glow"), WHITE (sky) beyond it. Cached by `half_width` -
+    every row at that same chord width looks identical regardless of which row/frame it came
+    from."""
+    row = _sun_row_cache.get(half_width)
+    if row is not None:
+        return row
+    rim = half_width // 4 if half_width > 4 else 1
     row = bytearray(row_bytes)
     for xb in range(row_bytes):
         packed = 0
         for i in range(4):
-            x = xb * 4 + i
-            if x < threshold:
-                color = BLACK
-            elif x == threshold:
-                color = accent
-            else:
+            dx = xb * 4 + i - SUN_CX
+            if dx < 0:
+                dx = -dx
+            if dx > half_width:
                 color = WHITE
+            elif dx > half_width - rim:
+                color = RED
+            else:
+                color = YELLOW
             packed = (packed << 2) | color
         row[xb] = packed
-    # bytearray * int repetition isn't supported on this MicroPython build - extend() in a loop
-    # instead (still just row_bytes bytes copied per row, not a per-pixel Python loop).
+    _sun_row_cache[half_width] = row
+    return row
+
+
+def make_sunrise_frame(t, row_bytes):
+    """`t` from 0 (sun just below the horizon) to 1 (fully risen) - a growing sun climbing out of
+    a black horizon into a white sky. Sky/ground rows reuse one cached buffer each (see
+    `_solid_row`); rows crossing the sun's disc reuse one cached buffer per chord half-width (see
+    `_sun_row`) instead of a fresh per-pixel build every time."""
+    cy = int(HORIZON_Y - t * (HORIZON_Y - SUN_MIN_CY))
+    radius = int(SUN_MIN_RADIUS + t * (SUN_MAX_RADIUS - SUN_MIN_RADIUS))
     buf = bytearray()
-    for _ in range(EPD_HEIGHT):
+    for y in range(EPD_HEIGHT):
+        if y >= HORIZON_Y:
+            row = _solid_row(BLACK, row_bytes)
+        else:
+            dy = y - cy
+            if dy < 0:
+                dy = -dy
+            if dy > radius:
+                row = _solid_row(WHITE, row_bytes)
+            else:
+                row = _sun_row(_isqrt(radius * radius - dy * dy), row_bytes)
         buf.extend(row)
     return buf
 
@@ -185,11 +251,10 @@ busy = machine.Pin(13, machine.Pin.IN)
 epd = EPD2in9G(spi, cs, dc, rst, busy)
 epd.init()
 
-N_FRAMES = 3
-accents = (RED, YELLOW, RED, YELLOW)
+N_FRAMES = 5
+row_bytes = EPD_WIDTH // 4
 for frame in range(N_FRAMES + 1):
-    threshold = EPD_WIDTH * frame // N_FRAMES
-    epd.display_frame(make_wipe_frame(threshold, accents[frame]))
+    epd.display_frame(make_sunrise_frame(frame / N_FRAMES, row_bytes))
     print("frame", frame, "of", N_FRAMES, "done")
 
 epd.sleep()
