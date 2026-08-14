@@ -1,13 +1,22 @@
-# 0045. CYW43 step 4 (NAT bridge): embed `PyTCP`, optional runtime dependency
+# 0045. CYW43 step 4 (NAT bridge): embed `gVisor`'s `pkg/tcpip` via a `cgo` shared library
 
 - Status: Proposed
 - Conceived: 2026-08-14
 - Related: 0027 (epic, step 4), 0028 (module layout - `external/cyw43/nat.py`), 0024 (protocol
   research - SLIRP-style NAT rationale), 0030 (external-device concurrency -
-  `schedule_threadsafe()`), 0013 (Cython interpreter core - the dual-mode pattern this record no
-  longer follows, see "Why not native/Cython after all" below)
+  `schedule_threadsafe()`), 0013 (Cython interpreter core - the dual-mode pattern this record
+  returns to below, after a same-day detour through pure-Python `PyTCP`)
 
-## Decision (proposed, not yet implemented)
+## Decision (revised 2026-08-14, third same-day revision - see "Latest decision" below)
+
+**Superseded again, same day - see "Latest decision: `gVisor` via `cgo`" further down this
+record.** The `PyTCP` direction below was itself empirically tested this session and found not to
+fit (see "Load-bearing open question" section's "Resolved" text); `gVisor`'s `pkg/tcpip` was then
+evaluated and empirically confirmed working as a replacement, and the user picked the in-process
+`cgo`-shared-library integration shape over a subprocess. The text immediately below is kept
+verbatim for the append-only trail, not because it's still the plan.
+
+## Decision (proposed, not yet implemented) [SUPERSEDED - see above]
 
 Supersedes this same record's own earlier same-day text (2026-08-14), which proposed binding the
 real, upstream `libslirp` C library as a native-only Cython extension (`native/`-style, gated on a
@@ -306,6 +315,138 @@ smaller for `lwIP` - it trades `libslirp`'s `glib` dependency for a same-shape C
 effort, while `gVisor` trades that same effort for a Go-toolchain one instead. Left for the session
 that picks this up to actually choose between them (or a `passt`-shaped Go subprocess vs. an
 in-process `cgo` binding, within the `gVisor` option itself) and write a superseding "Decision".
+
+## `gVisor` empirical verification (2026-08-14), and a Rust survey
+
+Per explicit go-ahead this same session ("try doing gVisor - Go is available"), the `gVisor`
+recommendation above was tested the same way `PyTCP` was - a real, compiled program, not just
+documentation reading - before any decision was made to commit to it. A parallel, lighter survey of
+Rust candidates was also run at the same time, per a separate explicit request this session.
+
+**`gVisor` PoC (Go, throwaway scratchpad program, no tracked files touched by the program itself):**
+mirrors the `PyTCP` PoC's structure exactly - `stack.New()` with `ipv4`+`tcp` protocols, a
+`channel.Endpoint` NIC (gVisor's own in-memory test link endpoint, no real TAP/root needed, same
+role as the `PyTCP` PoC's `socketpair()`), `SetPromiscuousMode`/`SetSpoofing` both enabled, a
+`tcp.NewForwarder` registered as the transport handler, **zero addresses ever assigned to the
+stack** (stricter than `PyTCP`'s baseline test - this stack never owned any address at all), then
+injecting a hand-built SYN via `gVisor`'s own `header.IPv4`/`header.TCP` encoders (source
+`10.0.0.2:54321`, destination `93.184.216.243:80`, a foreign address). Result:
+
+```
+[inject] sent SYN frame, dst=93.184.216.243:80 (not the stack's own address)
+[forwarder] connection request local=93.184.216.243:80 remote=10.0.0.2:54321
+[RESULT] TRANSMITTED outbound packet src=93.184.216.243 dst=10.0.0.2 (stack does NOT own src)
+[RESULT] TCP flags= S  A    sport=80 dport=54321
+```
+
+The forwarder fired for the foreign destination (closes `PyTCP`'s RX gap), and the stack actually
+**transmitted a real SYN+ACK packet claiming `93.184.216.243` as its source address** - the exact
+operation `PyTCP`'s unconditional TX-side ownership check refused outright, with no bypass. Both
+gaps that sank `PyTCP` are confirmed closed empirically, not just per documentation. (The PoC's own
+`accepted`-channel readback raced against `CreateEndpoint()` blocking on full handshake completion -
+a harness synchronization detail, not a `gVisor` finding; the transmitted-packet capture is the
+authoritative result and needed no such synchronization.)
+
+**Packaging finding, `gVisor` side (2026-08-14):** the canonical `gvisor.dev/gvisor` module is
+**not reliably consumable via plain `go build`/`go get`** - confirmed both by hitting it directly
+(`go build` on `gvisor.dev/gvisor@latest` and on the pinned release tag `release-20260810.0` both
+fail identically: `found packages stack (addressable_endpoint_state.go) and bridge
+(bridge_test.go) in .../pkg/tcpip/stack`) and by finding this is a known, recurring, long-standing
+upstream issue (`google/gvisor` issues #11600, #5636 - present since at least a 2025-03 report,
+still reproducing on this session's date) rooted in `gVisor` being a Bazel-first project whose
+`go.mod`/source tree isn't first-class-maintained for standard Go tooling. The working fix used
+here: `github.com/sagernet/gvisor`'s `go` branch - an actively-maintained fork whose own README
+states it exists specifically "to be compatible with standard `go` tooling for convenience," and
+which is what `sing-box` (a real, cross-platform, production TUN-based proxy tool) actually depends
+on for this exact use case. Two catches worth keeping: (1) it doesn't work as a `replace
+gvisor.dev/gvisor => github.com/sagernet/gvisor ...` directive, because the fork's own `go.mod`
+declares its module path as `github.com/sagernet/gvisor`, not `gvisor.dev/gvisor` - source imports
+need to reference the fork's path directly; (2) its published pseudo-versions
+(`v0.0.0-...-sing-box-mod.1.0...`) aren't indexed on the public Go checksum database
+(`sum.golang.org` 404s), needing `GOSUMDB=off` for that module to resolve at all - both fixable, but
+neither obvious, and worth a real design note (vendoring vs. a documented fork+flags pin) whenever
+this becomes an actual build-system integration rather than a scratchpad PoC.
+
+**Rust survey, per explicit separate request this session** - lighter-weight than the Go work above
+(web research only, no PoC run), covering the four candidates named: `smoltcp`, `ipstack`
+(`narrowlink`), `tcp_ip` (`rustp2p`), `fake-tcp`:
+
+- **`smoltcp`** - the Rust analogue of `lwIP`/`PyTCP` in maturity (widely used, embedded + userspace,
+  MIT/Apache-2.0). Has a documented `any_ip` interface mode, but per its own docs that's scoped to
+  "a route prefix ... specifies one of the interface's `ip_addrs` as its gateway" - the same
+  locally-routed-prefix shape as the proxy-ARP mitigation already found not to apply to `PyTCP`
+  (real internet destinations aren't part of any locally-routed prefix either way). More promising:
+  its address list is runtime-mutable (`Interface::update_ip_addrs()`), suggesting a per-flow
+  "temporarily own the real destination address, drop it when the flow closes" technique - structurally
+  different from `gVisor`'s stack-wide promiscuous/spoofing toggle and from `PyTCP`'s fixed,
+  unconditional ownership checks. **Not verified this session** - flagged, not assumed, matching
+  this record's own standard for every other claim in it.
+- **`ipstack`** (`narrowlink/ipstack`) - purpose-built for exactly this use case: `accept()` yields
+  TCP/UDP streams straight off a TUN device for arbitrary destinations, no promiscuous-mode dance
+  needed since that's the crate's whole reason for existing (its own docs example forwards an
+  accepted connection to `1.1.1.1:80` directly). Best architectural fit of any candidate surveyed,
+  including `gVisor` - but far less proven than any other option this record has looked at (85
+  GitHub stars, small single-maintainer project, no visible evidence of `PyTCP`-grade RFC-audit or
+  test coverage, no confirmation its TCP implementation has real congestion control vs. a simpler
+  approximation). Apache-2.0, requires `tokio`.
+- **`tcp_ip`** (`rustp2p/tcp_ip`) - general-purpose userspace TCP/IP stack for peer-to-peer use
+  cases, not specifically NAT/proxy-shaped - not evaluated further.
+- **`fake-tcp`** - this is, by its own README's description ("TUN interface based ... TCP stack
+  that allows packet oriented tunneling with minimum overhead," built for Datong Sun's `phantun`
+  UDP-over-fake-TCP firewall-bypass tool) the same "hand-rolled reflector, no independent congestion
+  control" category this record already evaluated and rejected once (see "Alternatives considered"
+  above) - not re-evaluated in depth for the same reason it was rejected there.
+
+**Where this leaves the decision:** `gVisor` is now the only fallback candidate in this record with
+an actual empirical confirmation (not just documentation or a maturity argument) that it closes both
+gaps that sank `PyTCP`, using a real compiled program producing real packet bytes.
+
+## Latest decision: `gVisor` via `cgo`, superseding the `PyTCP` decision above (2026-08-14)
+
+Per explicit user direction this session ("cgo is probably the better option since it'll work
+everywhere except iOS"): the integration shape is a `cgo` shared library (`go build
+-buildmode=c-shared`), not a Go subprocess. This **returns the project to the `native/` dual-mode
+pattern** (record 0013) this record's title originally referenced and then moved away from for
+`PyTCP`'s sake - `nat.py`'s `gVisor` binding becomes a compiled extension, gated the same way
+`native/` already is (build/Cython/compiler-availability optional, skip gracefully when absent),
+not a plain-Python `try: import` gate the way `PyTCP` would have been.
+
+- **iOS caveat checked against this project's actual target matrix and found moot:**
+  `pyproject.toml`'s `[tool.cibuildwheel]` only ever targets Linux (x64/x86/ARM64/ARMv7), Windows
+  (x64/x86/ARM64), macOS (Apple Silicon/Intel), and Android (`cp313-android_*`/`cp314-android_*`) -
+  confirmed directly against the current `pyproject.toml`, no iOS wheel is built at all. The
+  reasoning behind picking `cgo` holds without even needing the iOS exception - there is no
+  platform in this project's own matrix `cgo` doesn't cover.
+- **Still open, not decided here:** the Python-side binding mechanism (`ctypes` calling the
+  `cgo`-produced `.so`/`.dll`/`.dylib` directly, vs. a thin Cython `.pyx` wrapper around it) - the
+  "Alternatives considered" section's own rejection of a `ctypes` binding to `libslirp` was about
+  *hand-declaring struct layouts* for a complex C API; a `cgo`-exported API can be designed with a
+  deliberately narrow, `ctypes`-friendly C ABI (a handful of `extern "C"` functions passing only
+  primitives/byte buffers, no complex structs) specifically to sidestep that risk - not designed in
+  detail here.
+- **Still open, not decided here:** which of the two packaging catches found above becomes the
+  real answer - vendoring the `SagerNet/gvisor` fork's source directly into this repo (avoids the
+  `GOSUMDB=off`/module-path fragility of depending on its Go-module publishing at all) vs. pinning
+  it as an ordinary Go module dependency with those two flags/fixes documented in the build.
+  Vendoring fits this project's existing pattern more closely (e.g. the local `pico-sdk`/
+  `cyw43-driver` checkouts `bus.py`/`chip.py` already source protocol details from), but adds a
+  second git-managed copy of a large upstream tree to keep in sync.
+- **Still open, not decided here:** a Go toolchain needs adding to this project's CI/build matrix
+  (currently zero Go presence) - which CI images/`cibuildwheel` container setup step installs it,
+  how per-target cross-compilation (`GOOS`/`GOARCH`, plus `CGO_ENABLED=1` and a matching C
+  cross-compiler per target - already partially true for `native/`'s own existing Cython builds) is
+  wired into the existing `[tool.cibuildwheel]` matrix, and how `cp313-android_*`/`cp314-android_*`
+  specifically get a working `cgo` Android cross-compile (needs the Android NDK's C toolchain,
+  `CC`/`CXX` env vars per ABI) - none of this attempted yet.
+- **Still open, not decided here:** the same sub-step breakdown (`4a`/`4b`/...) and
+  `bus.py`-integration/`schedule_threadsafe()` questions the original `PyTCP`-based "Not designed
+  here" section already deferred - none of that is resolved just because the underlying engine
+  changed from `PyTCP` to `gVisor`.
+
+This is a real decision (which engine, which integration shape) but still stops short of being a
+finished implementation plan - the items above are genuine unknowns, not administrative detail, and
+this record continues to hold off on writing actual `nat.py`/build-system code until those are
+worked through, per this repo's document-vs-implement convention.
 
 ## Related finding: an absent CYW43 device doesn't hang real firmware (live-verified 2026-08-14)
 
