@@ -3,7 +3,11 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "pillow>=12.3.0",
+#     "rp2040py",
 # ]
+#
+# [tool.uv.sources]
+# rp2040py = { path = "..", editable = true }
 # ///
 """Boots MicroPython with a virtual Waveshare 2.9inch e-Paper (G) display attached over SPI1,
 pushes demo/mp_eink_demo.py to it over the raw REPL (a from-scratch driver + a small wipe
