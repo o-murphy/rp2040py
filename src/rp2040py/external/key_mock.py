@@ -30,7 +30,7 @@ class KeyMock:
 
         # We determine the logical voltage level depending on the circuitry
         high_level = self.active_high
-        self._rp2040.gpio[self.gpio].drive_input(high_level)
+        self._rp2040.gpio[self.gpio].set_input_value(high_level)
 
     def release(self) -> None:
         """Simulates releasing a button."""
@@ -40,7 +40,7 @@ class KeyMock:
 
         # Level when button is released (opposite of pressing)
         high_level = not self.active_high
-        self._rp2040.gpio[self.gpio].drive_input(high_level)
+        self._rp2040.gpio[self.gpio].set_input_value(high_level)
 
     def click(self) -> None:
         """Fast short click simulator (press and immediately release)."""
