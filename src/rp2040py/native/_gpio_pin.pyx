@@ -15,8 +15,6 @@ isn't natively typed, so cimporting buys nothing here.
 """
 import logging
 
-from rp2040py.native._pio cimport RPPIO
-
 from rp2040py._gpio_pin import (
     FUNCTION_PIO0,
     FUNCTION_PIO1,
@@ -24,7 +22,12 @@ from rp2040py._gpio_pin import (
     FUNCTION_SIO,
     GPIOPinState,
 )
-from rp2040py.peripherals.pio import WaitType
+
+# WaitType from pio_registers (its real home), NOT the peripherals.pio facade: the facade pulls in
+# native._pio, and native._pio cimports GPIOPin from this module - importing WaitType via the facade
+# would make _gpio_pin depend on _pio and turn that one-way cimport into a fragile circular runtime
+# import. Sourcing WaitType directly keeps _gpio_pin free of any _pio dependency.
+from rp2040py.peripherals.pio_registers import WaitType
 
 _logger = logging.getLogger(__name__)
 
@@ -36,6 +39,10 @@ cdef object _S_INPUT = GPIOPinState.INPUT
 cdef object _S_PULLUP = GPIOPinState.INPUT_PULL_UP
 cdef object _S_PULLDOWN = GPIOPinState.INPUT_PULL_DOWN
 cdef object _S_BUSKEEPER = GPIOPinState.INPUT_BUS_KEEPER
+
+# Indexed by GPIOPinState integer value (LOW=0, HIGH=1, INPUT=2, PULL_UP=3, PULL_DOWN=4,
+# BUS_KEEPER=5) - lets _value()/check_for_updates() turn a C state code back into the enum member.
+cdef tuple _STATES = (_S_LOW, _S_HIGH, _S_INPUT, _S_PULLUP, _S_PULLDOWN, _S_BUSKEEPER)
 
 cdef unsigned int _FUNCTION_PWM = FUNCTION_PWM
 cdef unsigned int _FUNCTION_SIO = FUNCTION_SIO
@@ -62,19 +69,7 @@ cdef inline bint _apply_override_c(bint value, unsigned int override_type):
 
 
 cdef class GPIOPin:
-    cdef public object rp2040
-    cdef public unsigned int index
-    cdef public str name
-    cdef public bint _always_output_enabled
-    cdef public bint _raw_input_value
-    cdef public bint _driven
-    cdef public unsigned int ctrl
-    cdef public unsigned int pad_value
-    cdef public unsigned int irq_enable_mask
-    cdef public unsigned int irq_force_mask
-    cdef public unsigned int irq_status
-    cdef public object _last_value
-    cdef public object _listeners
+    # Fields are declared in _gpio_pin.pxd (so native/_pio.pyx can cimport this class).
 
     def __init__(self, rp2040, unsigned int index, name=None, bint always_output_enabled=False):
         self.rp2040 = rp2040
@@ -89,7 +84,7 @@ cdef class GPIOPin:
         # deterministically yielding GPIOPinState.INPUT, before the real defaults below.
         self.ctrl = 0
         self.pad_value = 0
-        self._last_value = self._value()
+        self._last_state = self._state_code()
 
         self.ctrl = 0x1F
         self.pad_value = 0b0110110
@@ -111,9 +106,9 @@ cdef class GPIOPin:
         if fsel == _FUNCTION_SIO:
             return (<unsigned int>rp.sio.gpio_output_enable) & bitmask
         if fsel == _FUNCTION_PIO0:
-            return (<RPPIO?>rp.pio[0]).pin_directions & bitmask
+            return (<unsigned int>rp.pio[0].pin_directions) & bitmask
         if fsel == _FUNCTION_PIO1:
-            return (<RPPIO?>rp.pio[1]).pin_directions & bitmask
+            return (<unsigned int>rp.pio[1].pin_directions) & bitmask
         return False
 
     cdef bint _raw_output_value(self, unsigned int fsel):
@@ -124,9 +119,9 @@ cdef class GPIOPin:
         if fsel == _FUNCTION_SIO:
             return (<unsigned int>rp.sio.gpio_value) & bitmask
         if fsel == _FUNCTION_PIO0:
-            return (<RPPIO?>rp.pio[0]).pin_values & bitmask
+            return (<unsigned int>rp.pio[0].pin_values) & bitmask
         if fsel == _FUNCTION_PIO1:
-            return (<RPPIO?>rp.pio[1]).pin_values & bitmask
+            return (<unsigned int>rp.pio[1].pin_values) & bitmask
         return False
 
     cdef bint _eff_raw_input(self):
@@ -139,7 +134,7 @@ cdef class GPIOPin:
             return False
         return self._raw_input_value
 
-    cdef object _value(self):
+    cdef int _state_code(self):
         cdef unsigned int ctrl = self.ctrl
         cdef unsigned int fsel = ctrl & 0x1F
         cdef unsigned int pad
@@ -149,23 +144,30 @@ cdef class GPIOPin:
         cdef bint pu
         if oe:
             ov = _apply_override_c(self._raw_output_value(fsel), (ctrl >> 8) & 0x3)
-            return _S_HIGH if ov else _S_LOW
+            return 1 if ov else 0  # HIGH / LOW
         pad = self.pad_value
         pd = (pad & 4) != 0
         pu = (pad & 8) != 0
         if pd and pu:
-            return _S_BUSKEEPER
+            return 5  # BUS_KEEPER
         if pd:
-            return _S_PULLDOWN
+            return 4  # PULL_DOWN
         if pu:
-            return _S_PULLUP
-        return _S_INPUT
+            return 3  # PULL_UP
+        return 2  # INPUT
+
+    cdef object _value(self):
+        return _STATES[self._state_code()]
 
     cpdef check_for_updates(self):
-        cdef object value = self._value()
-        cdef object last_value = self._last_value
-        if value != last_value:
-            self._last_value = value
+        # Compare the state as a plain C int; only materialise the GPIOPinState objects (for the
+        # listeners) on an actual change, avoiding a per-call enum box + object richcompare.
+        cdef int s = self._state_code()
+        cdef int last = self._last_state
+        if s != last:
+            self._last_state = s
+            value = _STATES[s]
+            last_value = _STATES[last]
             for listener in self._listeners:
                 listener(value, last_value)
 

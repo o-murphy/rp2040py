@@ -3,7 +3,7 @@ from collections.abc import Callable
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from rp2040py.peripherals.pio import WaitType
+from rp2040py.peripherals.pio_registers import WaitType
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040

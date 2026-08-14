@@ -65,6 +65,25 @@ from rp2040py.peripherals.pio_registers import (
 # ever active when native `_state_machine` is too (setup.py builds both, the facade gates both on
 # native_disabled() identically), so the concrete native class is always the right one here.
 from rp2040py.native._state_machine cimport StateMachine
+# GPIOPin, cimported for a direct C-level check_for_updates() call in check_changed_pins (mutual
+# cimport with _gpio_pin.pyx, which cimports RPPIO - the paired .pxd files resolve the cycle).
+from rp2040py.native._gpio_pin cimport GPIOPin
+
+
+# Portable count-trailing-zeros (index of the lowest set bit), no Python boxing - replaces
+# `(x & -x).bit_length() - 1`, which converted the C uint to a Python int every iteration of
+# check_changed_pins' set-bit walk. GCC/Clang use __builtin_ctz; MSVC (the Windows wheels) has no
+# such builtin, so a _BitScanForward shim keeps it portable. Caller guarantees x != 0.
+cdef extern from *:
+    """
+    #if defined(_MSC_VER)
+    #include <intrin.h>
+    static unsigned int rp2040py_ctz(unsigned int x) { unsigned long i; _BitScanForward(&i, x); return (unsigned int)i; }
+    #else
+    static unsigned int rp2040py_ctz(unsigned int x) { return (unsigned int)__builtin_ctz(x); }
+    #endif
+    """
+    unsigned int rp2040py_ctz(unsigned int x) nogil
 
 
 cdef class RPPIO:
@@ -349,9 +368,9 @@ cdef class RPPIO:
             n = len(gpio)
             remaining = changed_pins
             while remaining:
-                gpio_index = (remaining & (0 - remaining)).bit_length() - 1
+                gpio_index = rp2040py_ctz(remaining)
                 if gpio_index < n:
-                    gpio[gpio_index].check_for_updates()
+                    (<GPIOPin>gpio[gpio_index]).check_for_updates()
                 remaining &= remaining - 1
 
     cpdef step(self):
