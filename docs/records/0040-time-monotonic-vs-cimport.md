@@ -1,7 +1,8 @@
 # 0040. `native/_simulator.pyx`'s hot loop: `time.monotonic()` and `float("inf")`, then `cimport`'d
 
-- Status: Implemented — verified (2026-08-14)
-- Recorded: 2026-08-13 · Implemented: 2026-08-14
+- Status: `INFINITY` implemented — verified (2026-08-14). `cpython.time cimport monotonic`
+  implemented, then reverted same day - broke real CI (see below); back to plain `time.monotonic()`.
+- Recorded: 2026-08-13 · Implemented: 2026-08-14 · Reverted (monotonic only): 2026-08-14
 - Related: 0031 (PIO Cython + `clock.tick()` batching), 0034 (`_execute_batch()` native port), 0039
   (`SimulationClock` native Cython port)
 
@@ -56,6 +57,56 @@ correctness/consistency win (matching how `RP2040`/`CortexM0Core`/`SimulationClo
 `cimport`'d in the same file) once the portability blocker turned out to have a real fix, not
 because the performance calculus changed.
 
+## Reverted (2026-08-14) — `cpython.time` breaks real CI under this project's `Py_LIMITED_API` floor
+
+The `monotonic()` swap above compiled and passed everywhere it was actually tested locally
+(pure-Python and native-Cython `pytest`, CPython 3.10 - this project's dev default, see
+`.python-version`) - but 3.10 is *below* this project's own abi3 floor (`_ABI3_FLOOR = (3, 11)` in
+`setup.py`), so `USE_LIMITED_API` is `False` there and the build never actually exercises the
+`Py_LIMITED_API` code path at all. Pushed anyway; real CI (`ci-micropython.yml`'s `cpython-3.14`
+matrix entries, 9 of them) failed immediately:
+
+```
+src/rp2040py/native/_simulator.c:1156:32: error: unknown type name 'PyTime_t'
+        #define __Pyx_PyTime_t PyTime_t
+```
+
+Root cause: `cpython/time.pxd`'s own generated C picks its branch based on the *actual compiler's*
+Python version (`#if PY_VERSION_HEX >= 0x030d00b1 ... use PyTime_t/PyTime_MonotonicRaw`) - on
+CPython 3.14 that condition is true, so it assumes the modern, *stable-ABI* `PyTime_t`/
+`PyTime_MonotonicRaw()` symbols are available. They're not, here: this project compiles with
+`-DPy_LIMITED_API=0x030B0000` (the 3.11 floor `setup.py`'s own docstring already explains, chosen
+for typed-memoryview buffer-protocol support, unrelated to this) regardless of which real Python
+version does the compiling - and `PyTime_t`/`PyTime_MonotonicRaw()` were only added to the
+*limited* API surface in CPython 3.13, not 3.11. `Python.h` respects the requested
+`Py_LIMITED_API` level, not the real interpreter version, when deciding what to declare - so 3.14's
+own headers still hide those symbols when asked for the 3.11-level limited API, and Cython's
+version check (based on the real compiler, not the requested API floor) has no way to know that.
+`cpython-3.10` jobs in the same CI matrix never hit this: below the abi3 floor, `USE_LIMITED_API`
+is `False` there too, so those compile against the *full* (non-limited) API directly, where the
+symbols always exist for a 3.10+ compiler regardless of `PyTime_t`'s API-surface history.
+
+This is the same *shape* of trap as the `posix.time`/Windows issue already caught before
+implementing this (an assumption baked into upstream Cython code that doesn't hold for this
+project's specific build configuration), just one layer deeper - portable *across platforms* isn't
+the same guarantee as portable *across `Py_LIMITED_API` floors*, and nothing about `cpython.time`
+signals that distinction up front.
+
+Reverted `native/_simulator.pyx` back to `import time` / `time.monotonic()` at both call sites.
+Verified against the *exact* failing condition, not just theory: built the extension locally
+against a real CPython 3.14 interpreter with `Py_LIMITED_API=0x030B0000` (`setup.py build_ext`
+directly, bypassing `uv sync`'s own Python-version selection) - failed with the identical
+`PyTime_t` error before this revert, compiled clean after it. `INFINITY` (`libc.math`, a plain ISO
+C99 macro with no CPython API-surface involvement at all) is unaffected and stays - not implicated
+in the failure, not reverted.
+
+A real fix that keeps the C-level `monotonic()` call *and* the `Py_LIMITED_API` floor at 3.11 would
+need to branch at Cython-compile-time on `Py_LIMITED_API`'s own definedness (a genuine `cdef
+extern from *:` verbatim-C case, unlike the plain arithmetic this file's own bit-twiddling
+functions - see `_bit.pyx` - never needed one for) - not attempted, given the "not hot-path"
+reasoning at the top of this record already established there's no measurable win being chased
+here in the first place.
+
 ## Implemented (2026-08-14) — `INFINITY` from `libc.math`
 
 Found while reviewing the `monotonic()` diff above: `execute_batch()`'s `nanos_budget`
@@ -73,12 +124,18 @@ POSIX-only extension (unlike the `posix.time` trap above), so no platform-condit
 needed here either: every target this repo builds wheels for (`publish.yml`: Linux, macOS,
 Windows, Android) has a C99-conforming `<math.h>`.
 
-`from libc.math cimport INFINITY` added alongside `cpython.time cimport monotonic`; all three
-`float("inf")` sites in `execute_batch()` replaced with the bare `INFINITY` constant.
+`from libc.math cimport INFINITY` added (originally alongside `cpython.time cimport monotonic`,
+which was reverted above - this import stayed on its own); all three `float("inf")` sites in
+`execute_batch()` replaced with the bare `INFINITY` constant. Unaffected by the revert above:
+`libc.math` is a plain C99 header declaration, not a CPython C-API surface, so it carries no
+`Py_LIMITED_API`-floor dependency at all.
 
 ## Verification
 
-`uv run pre-commit run --all-files` (mypy, ruff, pytest, both pure-Python and native-Cython
-builds - native extension rebuild confirmed via `.so` mtime, not just a green pre-commit run, per
-0044's own note about `uv sync` alone not reliably rebuilding `.pyx` changes) passes clean. Re-ran
+Final state (`time.monotonic()` restored, `INFINITY` kept): `uv run pre-commit run --all-files`
+(mypy, ruff, pytest, both pure-Python and native-Cython builds - native extension rebuild confirmed
+via `.so` mtime, not just a green pre-commit run, per 0044's own note about `uv sync` alone not
+reliably rebuilding `.pyx` changes) passes clean, on CPython 3.10 (dev default) *and* built cleanly
+against a real CPython 3.14 interpreter with `Py_LIMITED_API=0x030B0000` (see the revert section
+above for how that was actually verified, not just asserted). Re-ran
 `docs/tasks/main-spi-hang.md`'s own repro command as a smoke test - still exits 0.
