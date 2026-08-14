@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Benchmark CortexM0Core.execute_instruction() throughput.
 
 Two modes:

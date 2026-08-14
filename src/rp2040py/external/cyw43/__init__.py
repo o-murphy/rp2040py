@@ -9,3 +9,7 @@ follows, just big enough (bus/chip/nat) to warrant its own subpackage instead of
 - `external/cyw43/chip.py` - the chip/backplane + SDPCM/`WLC_*` ioctl model (step 3, not built yet).
 - `external/cyw43/nat.py` - the SLIRP-style userspace NAT bridge (step 4, not built yet).
 """
+
+from rp2040py.external.cyw43.chip import Cyw43439
+
+__all__ = ("Cyw43439",)

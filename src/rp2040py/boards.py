@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rp2040py.clock.clock import IClock
-from rp2040py.external.cyw43.chip import Cyw43439
+from rp2040py.external.cyw43 import Cyw43439
 from rp2040py.external.device import ExternalDevice, attach_external_devices
 from rp2040py.external.led_mock import LEDMock
 from rp2040py.rp2040 import RP2040

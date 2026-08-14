@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """MicroPython / CircuitPython UF2 runner with a USB CDC console.
 
 Usage: python demo/micropython_run.py [--image firmware.uf2] [--gdb] [--circuitpython]

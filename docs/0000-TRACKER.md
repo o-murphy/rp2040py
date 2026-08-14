@@ -59,6 +59,7 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0043](records/0043-pio-dma-first-batch-race.md) `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes MicroPython v1.23.0's CYW43 boot (`scan()` raising `EPERM`), follow-up of 0037
 - [x] [0044](records/0044-spi-dma-tx-rx-starvation-fix.md) DMA-driven SPI TX/RX hang fix | fixes `docs/tasks/main-spi-hang.md` (stale DREQ cache after `RPDMA.reset()` + same-tick `SimulationClock` alarm starvation), confirmed unrelated to CYW43/0027
 - [x] [0040](records/0040-time-monotonic-vs-cimport.md) `native/_simulator.pyx` hot loop: `libc.math.INFINITY` for `float("inf")` | kept; `cpython.time cimport monotonic` was also tried but **reverted** - broke real CI (`PyTime_t` not in the limited-API surface until 3.13, this project's `Py_LIMITED_API` floor is 3.11), back to plain `time.monotonic()`, follow-up of 0031/0034/0039
+- [x] [0046](records/0046-epd2in9g-external-device.md) `epd2in9g` virtual e-paper ported forward + promoted to `ExternalDevice` | ported from the stale `component/epd2in9g` branch (fixes API drift vs. async-native `MicroPythonDevice`/`utils/firmware_retrieve.py`), moved `src/rp2040py/external/epd2in9g.py` alongside `external/cyw43/`, no Pillow dependency in `src/`, follow-up of 0029/0030
 
 ### In progress / Proposed
 
