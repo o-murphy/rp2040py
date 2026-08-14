@@ -11,7 +11,7 @@ repos:
         args: ["lock", "--upgrade"]
         language: system
         pass_filenames: false
-        files: '^(pyproject\.toml|uv\.lock)$'
+        # files: '^(pyproject\.toml|uv\.lock)$'
 
       - id: uv-sync
         name: uv sync before hooks

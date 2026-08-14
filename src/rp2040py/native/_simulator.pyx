@@ -30,7 +30,8 @@ clock=/rp2040= arguments by hand would hit the same kind of TypeError as the rp2
 not a silent correctness bug.
 """
 
-from cpython.time cimport monotonic
+import time
+
 from libc.math cimport INFINITY
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
@@ -76,7 +77,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
 
     cdef long i = 0
     cdef int ticks_since_check = 0
-    cdef double batch_start = monotonic()
+    cdef double batch_start = time.monotonic()
     cdef double pending_nanos = 0.0
     cdef int pending_count = 0
     cdef double nanos_budget
@@ -89,7 +90,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
         ticks_since_check += 1
         if ticks_since_check >= TIME_CHECK_INTERVAL:
             ticks_since_check = 0
-            if monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
+            if time.monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
                 break
         if core.waiting:
             if pending_nanos:
