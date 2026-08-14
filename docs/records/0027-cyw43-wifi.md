@@ -3,7 +3,7 @@
 - Status: In progress
 - Conceived: 2026-08-12
 - Related: decisions 0028 (module layout), 0029 (board composition), 0030 (concurrency), 0045 (step
-  4 NAT bridge: libslirp + Cython-only, proposed) · research note 0024 · fixes 0035
+  4 NAT bridge: PyTCP, optional runtime dependency, proposed) · research note 0024 · fixes 0035
   (wild-execution), 0037 (PIO/CPU scheduling), 0038 (ioctl-response correctness bug), 0041 (post-
   `DATA_HEADER` freeze), 0042 (`SPI_INTERRUPT_REGISTER` W1C fix), 0043 (`RPPIO` CTRL-enable
   first-batch/DMA-refill race, MicroPython v1.23.0 boot)
@@ -560,17 +560,14 @@ decision sections above that define what it actually means.
    WebREPL note in "Open questions" below).
 
    **Proposed revision (2026-08-14), not yet implemented — see
-   [0045](0045-cyw43-nat-libslirp-cython.md).** The "not libslirp" call above is being reconsidered:
-   its own stated reason (avoiding TUN/TAP/root) describes QEMU's `tap` netdev mode specifically,
-   not `libslirp` itself — `libslirp` *is* the library behind QEMU's no-root, no-TAP `-netdev user`
-   mode, the same properties this paragraph asks for. 0045 proposes binding real `libslirp` as a
-   **native-only** extension for the NAT/TCP bridge specifically, added to this project's existing
-   dual-mode `native/`-plus-pure-Python-fallback pattern rather than replacing it —
-   `external/cyw43/bus.py`/`chip.py` (steps 0-3g) stay pure Python, unchanged, and `pico_w` keeps
-   attaching a real `Cyw43439` unconditionally either way; only the step-4 NAT bridge itself is
-   native-only, with pure-Python builds keeping today's existing ack-only `DATA_HEADER` behavior
-   until a pure-Python NAT is separately designed (not scheduled). Kept here unedited per this doc's
-   append-only convention; 0045 is the decision record to read for the current direction on step 4.
+   [0045](0045-cyw43-nat-libslirp-cython.md).** The "not libslirp" call above is being reconsidered,
+   though not by binding libslirp itself: 0045 was first revised toward a native `libslirp`
+   extension, then revised again the same day toward `PyTCP` (github.com/ccie18643/PyTCP) - a pure-
+   Python, RFC-audited, zero-runtime-dependency TCP/IP stack, embedded in-process, doing the real
+   work a hand-written pure-Python NAT would have had to build from scratch. `external/cyw43/bus.py`/
+   `chip.py` (steps 0-3g) stay pure Python, unchanged either way, and `pico_w` keeps attaching a real
+   `Cyw43439` unconditionally. Kept here unedited per this doc's append-only convention; 0045 is the
+   decision record to read for the current direction on step 4.
 
 
 <!-- migrated verbatim from docs/CYW43_WIFI_BACKLOG.md lines 1016-1143 -->
@@ -701,8 +698,14 @@ from "closed, kept for the record."
   not `cyw43_ll_parse_async_event()`'s callers, which just dispatch to it) are both read in full
   now; the exact scripted event sequence and ordering constraints are documented in `bus.py`'s own
   module docstring.
-- The SDPCM data-frame envelope byte layout for the actual WLAN RX/TX *data* path (as opposed to
-  control/ioctl, already covered above) - step 4's concern, not step 3 - not yet dug out.
+- **Resolved (2026-08-14), see [0045](0045-cyw43-nat-libslirp-cython.md)'s own "Resolved research
+  finding" section:** the SDPCM `DATA_HEADER` data-frame envelope byte layout for the actual WLAN
+  RX/TX *data* path (as opposed to control/ioctl, already covered above) is now documented directly
+  from `cyw43_ll.c` (`cyw43_ll_send_ethernet()` / `sdpcm_process_rx_packet()`'s `DATA_HEADER` case,
+  in the local `pico-sdk`/`cyw43-driver` checkout): a 12-byte `sdpcm_header_t` with `header_length`
+  set to 14 for `DATA_HEADER` frames specifically, 2 bytes of padding, a 4-byte `sdpcm_bdc_header_t`
+  (`flags=0x20, priority=0, flags2=<interface>, data_offset=0`), then the raw Ethernet payload -
+  matching the shape `bus.py`'s own `_build_async_event()` already uses for its BDC header.
   - maybe document way to use gpiozero as global external device for emulations on the RP
 
 ## Performance side quest, continued (2026-08-12) - wild-execution finding, not yet root-caused
