@@ -15,6 +15,8 @@ isn't natively typed, so cimporting buys nothing here.
 """
 import logging
 
+from rp2040py.native._pio cimport RPPIO
+
 from rp2040py._gpio_pin import (
     FUNCTION_PIO0,
     FUNCTION_PIO1,
@@ -109,9 +111,9 @@ cdef class GPIOPin:
         if fsel == _FUNCTION_SIO:
             return (<unsigned int>rp.sio.gpio_output_enable) & bitmask
         if fsel == _FUNCTION_PIO0:
-            return (<unsigned int>rp.pio[0].pin_directions) & bitmask
+            return (<RPPIO?>rp.pio[0]).pin_directions & bitmask
         if fsel == _FUNCTION_PIO1:
-            return (<unsigned int>rp.pio[1].pin_directions) & bitmask
+            return (<RPPIO?>rp.pio[1]).pin_directions & bitmask
         return False
 
     cdef bint _raw_output_value(self, unsigned int fsel):
@@ -122,9 +124,9 @@ cdef class GPIOPin:
         if fsel == _FUNCTION_SIO:
             return (<unsigned int>rp.sio.gpio_value) & bitmask
         if fsel == _FUNCTION_PIO0:
-            return (<unsigned int>rp.pio[0].pin_values) & bitmask
+            return (<RPPIO?>rp.pio[0]).pin_values & bitmask
         if fsel == _FUNCTION_PIO1:
-            return (<unsigned int>rp.pio[1].pin_values) & bitmask
+            return (<RPPIO?>rp.pio[1]).pin_values & bitmask
         return False
 
     cdef bint _eff_raw_input(self):
