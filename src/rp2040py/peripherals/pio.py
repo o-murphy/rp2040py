@@ -342,11 +342,19 @@ class RPPIO(BasePeripheral):
             self.old_pin_directions = self.pin_directions
             self.old_pin_values = self.pin_values
 
-            # Notify GPIO about the changed pins
+            # Notify GPIO about the changed pins. Iterate only the set bits of `changed_pins`
+            # (typically ~1) rather than scanning all 30 GPIO every step: during a PIO-driven
+            # transfer (e.g. CYW43's bit-banged SPI) this runs once per PIO clock edge, and the
+            # old full 30-slot scan spent ~97% of its iterations bit-testing unchanged pins.
+            # Set-bit iteration preserves the original low-to-high visitation order.
             gpio = self.rp2040.gpio
-            for gpio_index in range(len(gpio)):
-                if changed_pins & (1 << gpio_index):
+            n = len(gpio)
+            remaining = changed_pins
+            while remaining:
+                gpio_index = (remaining & -remaining).bit_length() - 1
+                if gpio_index < n:
                     gpio[gpio_index].check_for_updates()
+                remaining &= remaining - 1
 
     def step(self) -> None:
         for machine in self.machines:
