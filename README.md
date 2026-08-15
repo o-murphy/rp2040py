@@ -195,10 +195,21 @@ file already on disk:
 >
 > | Interpreter | Time |
 > |---|---|
-> | CPython 3.10 | 188.98s |
-> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 25.83s (~7.3x) |
-> | CPython 3.14 + `PYTHON_JIT=1` | 113.77s (~1.7x) |
-> | PyPy 3.10 | 8.75s (~22x) |
+> | CPython 3.10 | 133.3s |
+> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 11.3s (~11.8x) |
+> | CPython 3.14 + `PYTHON_JIT=1` | 79.9s (~1.7x) |
+> | PyPy 3.10 | 8.9s (~15x) |
+>
+> Re-measured 2026-08-14 (best-of-N, 3-5 runs each) on a 4-core Intel Xeon @2.8GHz shared/containerised host,
+> booting MicroPython **1.28.0** to the resident script's first output; run-to-run contention on
+> that host reached ~2x, so these are best-of-N minima, not single runs. Absolute seconds are
+> host-specific - the *ratios* and ordering are the portable takeaway. The headline change since the
+> original round: **the native core has closed the gap to PyPy** - it was ~3x slower than PyPy then
+> (25.83s vs 8.75s), and is ~1.3x now (11.3s vs 8.9s), after the native `_execute_batch()` and
+> `SimulationClock` ports landed (records
+> [0031](docs/records/0031-pio-cython-tick-batching.md)/[0034](docs/records/0034-execute-batch-native-port.md)/[0039](docs/records/0039-simulation-clock-native-port.md)).
+> The historical/analytical figures in the paragraphs below (46.65s→25.83s Cython history, the
+> 33.90s abi3 gap, the 1.21-vs-1.28 numbers) are kept from that original measurement round.
 >
 > The `rp2040py.native` figure improved from an earlier 46.65s (~4.1x) after fixing two Cython
 > compilation gotchas in the bus/interpreter hot path (untyped `address`/`value` parameters forcing
