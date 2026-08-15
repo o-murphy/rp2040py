@@ -147,6 +147,15 @@ request for the gateway → ARP reply → (now) TCP SYN.
   `pre-commit run --all-files` clean. `tests/micropython/main-cyw43.py` extended to call
   `mip.install("os-path")` after the existing TCP probe; live-booted against both `v1.23.0` and
   `v1.28.0` - `mip` now resolves `micropython.org`, downloads, and installs successfully.
+- 2026-08-16: A first push of this session's work to `feat/cyw43-tcp-reflector` (the 4a-4d commit
+  only, before 4e existed) hit a real CI flake on `windows-latest`:
+  `test_tcp_reflector_sends_rst_on_a_refused_connection`'s fixed `asyncio.sleep(0.2)` wasn't long
+  enough there - a closed-port loopback connect attempt takes measurably longer to fail on Windows
+  than on Linux, so `_read_f2_response()` returned an empty frame (`IndexError` unwrapping it).
+  Fixed by replacing every fixed post-write `asyncio.sleep()` in `tests/test_cyw43_nat.py` (6 call
+  sites, not just the one that happened to flake first) with a `_wait_for_pending_packet()` helper
+  that polls `SPI_STATUS_REGISTER`'s own pending bit instead of guessing a duration. Verified
+  locally (`pre-commit run --all-files` clean); not yet re-pushed to confirm on CI.
 
 ## Deferred, not designed here
 
@@ -160,3 +169,53 @@ bridge's advertised guest-facing receive window - an accepted v1 simplification,
 straightforward to add later (shrink the advertised window by
 `transport.get_write_buffer_size()`) if a slow real destination + fast guest sender ever proves it
 matters in practice.
+
+## Known gaps for full functionality (documented 2026-08-16, not designed/fixed here)
+
+A user-requested honest inventory of what's still missing before this module could be called a
+complete WiFi emulation, not just "the happy path works." Grouped by severity - this is a doc note
+only, per this repo's document-vs-implement convention; none of this is designed or fixed here.
+
+**Real correctness gaps** (not missing features - the existing code's behavior is wrong in these
+cases):
+
+- **A real remote RST is silently turned into a clean FIN.** `TcpReflector._pump_host_to_guest()`
+  catches `ConnectionResetError` (an `OSError` subclass) the same as ordinary EOF and sends the
+  guest a FIN - the guest ends up believing the connection closed normally when the real peer
+  actually reset it.
+- **`disconnect()` from the guest has no effect.** Only link-*up* is ever scripted
+  (`_queue_join_events()`'s `CYW43_EV_LINK` with `flags=1`) - `bus.py` has no `WLC_DISASSOC`/
+  deauth handling and never sends a link-down event, so a guest that calls `disconnect()` keeps
+  believing it's still connected.
+- **A real connection attempt that never resolves leaks its flow-table entry forever.** If the
+  real SYN is black-holed (dropped, not refused) rather than actively refused, `_open_and_pump()`'s
+  `asyncio.open_connection()` has no timeout/watchdog - the `TcpFlow` sits in `TcpReflector._flows`
+  indefinitely even after the guest itself gives up retrying.
+- No backpressure from the real destination's write-buffer onto the guest's advertised window (see
+  the paragraph immediately above this section - restated here for completeness of this inventory).
+
+**Entirely unbuilt, not partially-done:**
+
+- **AP mode** (`network.WLAN.IF_AP`) - not implemented at all; `tests/micropython/main-cyw43.py`
+  still has it commented out.
+- **Only one fixed fake AP/SSID exists** (`RP2040PY-GUEST`) - no multi-network scan results, no
+  hidden-SSID case, no auth-type variation. Join is scripted unconditionally regardless of the
+  password given, so a *wrong* password currently "succeeds" too - there's no negative-auth path
+  to test against.
+- **UDP beyond port 53 is dropped entirely**, same as DNS was before 4e - `ntptime`, mDNS, or any
+  custom UDP server/client the guest tries will fail exactly the way `mip.install()` failed before
+  4e landed.
+- **No IPv6.**
+- **Single-guest-only architecture** - `GUEST_IP`/`GATEWAY_IP`/`GATEWAY_MAC` are fixed module
+  constants (see the "Deferred" paragraph above); no config surface, no multi-device scenario ever
+  exercised.
+
+**Unverified, not necessarily broken:**
+
+- **CircuitPython** has never been live-booted through this bus/NAT path at all - only MicroPython
+  `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this record's own
+  earlier reasoning), but not confirmed.
+- **Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice is
+  payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
+  fetch inside `mip.install()` has been (that succeeded, which is at least indirect evidence for
+  this).
