@@ -69,6 +69,18 @@ if connected:
     except Exception as exc:
         print("mip.install / os.path failed:", type(exc).__name__, exc)
 
+    # Step 4e's generalization: a real UDP round trip NOT addressed to the gateway's DNS port -
+    # relayed straight to its own real destination (pool.ntp.org resolved via the DNS relay above,
+    # then a real NTP query on port 123), not through the fixed DNS-only upstream. Before this
+    # generalization, this would have failed exactly like DNS did (silently dropped).
+    print("Attempting ntptime.settime() (needs general UDP, not just DNS)...")
+    import ntptime  # type: ignore[import-not-found]
+    try:
+        ntptime.settime()
+        print("ntptime.settime() succeeded, RTC now:", time.gmtime())
+    except Exception as exc:
+        print("ntptime.settime() failed:", type(exc).__name__, exc)
+
 # ap = network.WLAN(network.WLAN.IF_AP) # create access-point interface
 # ap.config(ssid='RP2-AP')              # set the SSID of the access point
 # ap.config(max_clients=10)             # set how many clients can connect to the network

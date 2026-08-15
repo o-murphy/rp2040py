@@ -156,6 +156,17 @@ request for the gateway → ARP reply → (now) TCP SYN.
   sites, not just the one that happened to flake first) with a `_wait_for_pending_packet()` helper
   that polls `SPI_STATUS_REGISTER`'s own pending bit instead of guessing a duration. Verified
   locally (`pre-commit run --all-files` clean); not yet re-pushed to confirm on CI.
+- 2026-08-16: Picked up 3 of the 4 easy/high-value items from the "Known gaps" section below (user
+  chose everything except the CircuitPython live-boot check): the real-RST-vs-FIN bug, the
+  connect-timeout/flow-leak gap, and generalizing `DnsRelay` into `UdpRelay` (see that section's
+  own now-annotated bullets for the technical detail on each). `tests/micropython/main-cyw43.py`
+  further extended with an `ntptime.settime()` call (needs a real UDP round trip *not* addressed to
+  the gateway's DNS port - exactly what the `UdpRelay` generalization was for) - live-booted
+  against both `v1.23.0` and `v1.28.0`: RTC gets set to the real current time via a real NTP
+  round trip through the emulator. 4 new/changed hermetic tests added (real-RST-via-`SO_LINGER`,
+  connect-timeout-via-injectable-`connect_fn`, general-UDP-relay-to-a-real-destination, DHCP-
+  still-wins-over-the-generalized-relay) - full suite (17 tests in `test_cyw43_nat.py`) stable
+  across repeated local runs, `pre-commit run --all-files` clean. Still not pushed.
 
 ## Deferred, not designed here
 
@@ -179,20 +190,30 @@ only, per this repo's document-vs-implement convention; none of this is designed
 **Real correctness gaps** (not missing features - the existing code's behavior is wrong in these
 cases):
 
-- **A real remote RST is silently turned into a clean FIN.** `TcpReflector._pump_host_to_guest()`
-  catches `ConnectionResetError` (an `OSError` subclass) the same as ordinary EOF and sends the
-  guest a FIN - the guest ends up believing the connection closed normally when the real peer
-  actually reset it.
+- ~~A real remote RST is silently turned into a clean FIN.~~ **Fixed 2026-08-16**:
+  `_pump_host_to_guest()` now catches `ConnectionResetError` specifically (before the generic
+  `OSError` handler) and sends the guest a real `TCP_RST|TCP_ACK` instead of a FIN. Verified with
+  a new hermetic test that forces a real kernel-level RST via `SO_LINGER`
+  (`test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin`).
 - **`disconnect()` from the guest has no effect.** Only link-*up* is ever scripted
   (`_queue_join_events()`'s `CYW43_EV_LINK` with `flags=1`) - `bus.py` has no `WLC_DISASSOC`/
   deauth handling and never sends a link-down event, so a guest that calls `disconnect()` keeps
-  believing it's still connected.
-- **A real connection attempt that never resolves leaks its flow-table entry forever.** If the
-  real SYN is black-holed (dropped, not refused) rather than actively refused, `_open_and_pump()`'s
-  `asyncio.open_connection()` has no timeout/watchdog - the `TcpFlow` sits in `TcpReflector._flows`
-  indefinitely even after the guest itself gives up retrying.
+  believing it's still connected. **Still open** - needs the same kind of protocol research 4a-4c
+  needed (real `cyw43-driver` ioctl/event shape for disassoc), not attempted this pass.
+- ~~A real connection attempt that never resolves leaks its flow-table entry forever.~~ **Fixed
+  2026-08-16**: `TcpReflector` gained a `connect_timeout` (default 10s) wrapping the real connect
+  in `asyncio.wait_for()` - a timeout now gets the same synthesized-RST-and-evict treatment as any
+  other connect failure. Also fixed a latent bug found while making this change: the pre-existing
+  UDP relay's own timeout handler caught bare `TimeoutError`, which is a *different* class from
+  `asyncio.TimeoutError` on Python 3.10 (they only become the same class on 3.11+) - this project's
+  own floor is `>=3.10`, so on 3.10 that except clause silently never fired at all. Both places now
+  catch `asyncio.TimeoutError` explicitly. `TcpReflector` also gained an injectable `connect_fn`
+  (defaults to `asyncio.open_connection`) specifically so this timeout path could be tested
+  hermetically (a connect that provably never resolves) rather than needing a real black-holed
+  network condition, which isn't reliably reproducible in a test environment.
 - No backpressure from the real destination's write-buffer onto the guest's advertised window (see
   the paragraph immediately above this section - restated here for completeness of this inventory).
+  **Still open.**
 
 **Entirely unbuilt, not partially-done:**
 
@@ -202,9 +223,9 @@ cases):
   hidden-SSID case, no auth-type variation. Join is scripted unconditionally regardless of the
   password given, so a *wrong* password currently "succeeds" too - there's no negative-auth path
   to test against.
-- **UDP beyond port 53 is dropped entirely**, same as DNS was before 4e - `ntptime`, mDNS, or any
-  custom UDP server/client the guest tries will fail exactly the way `mip.install()` failed before
-  4e landed.
+- ~~UDP beyond port 53 is dropped entirely.~~ **Fixed 2026-08-16**: `DnsRelay` generalized into
+  `UdpRelay` - see the dedicated Progress log entry below. `ntptime`/mDNS/custom UDP now work the
+  same way DNS itself did once 4e landed.
 - **No IPv6.**
 - **Single-guest-only architecture** - `GUEST_IP`/`GATEWAY_IP`/`GATEWAY_MAC` are fixed module
   constants (see the "Deferred" paragraph above); no config surface, no multi-device scenario ever

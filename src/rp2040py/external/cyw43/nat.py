@@ -15,10 +15,9 @@ Three responders, composed behind one entry point:
   leg only needs handshake spoofing, seq/ack bookkeeping, guest-window flow control, and FIN/RST
   propagation - see the record's "Decision" section for why: `GSPIBus.queue_rx_packet()` is already
   an in-process, lossless, in-order FIFO, not a real lossy network.
-- `DnsRelay` (step 4e) - a one-shot UDP relay to a fixed public resolver, opaque to DNS message
-  content (no parsing needed - unlike TCP, UDP has no connection/sequence state to spoof at all,
-  so this is just "forward the query bytes, forward the response bytes back," addressed to look
-  like it came from the gateway).
+- `UdpRelay` (step 4e) - a one-shot UDP relay: DNS (guest -> gateway:53) to a fixed public
+  resolver, anything else relayed directly to its own real destination - opaque either way (no
+  message parsing needed, unlike TCP there's no connection/sequence state to spoof at all).
 
 Fixed addressing (hardcoded, matching this bus's existing fixed-fake-AP precedent - no config
 surface added this pass, see the record's "Deferred" section).
@@ -27,7 +26,7 @@ surface added this pass, see the record's "Deferred" section).
 import asyncio
 import enum
 import random
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -43,11 +42,11 @@ __all__ = (
     "SUBNET_MASK",
     "ArpResponder",
     "DhcpServer",
-    "DnsRelay",
     "NatBridge",
     "TcpFlow",
     "TcpFlowKey",
     "TcpReflector",
+    "UdpRelay",
 )
 
 GUEST_IP = bytes([10, 0, 0, 2])
@@ -154,12 +153,21 @@ class _OneShotDatagramProtocol(asyncio.DatagramProtocol):
             self._on_response.set_exception(exc)
 
 
-class DnsRelay:
-    """Step 4e - a one-shot UDP relay to a fixed public resolver. No DNS message parsing at all:
-    the query/response bytes are opaque, forwarded verbatim - the same principle the TCP reflector
-    uses for TLS/HTTP payload, just one datagram instead of a byte stream. No connection table
-    either - UDP has no sequence/ack state to spoof, so each query gets its own short-lived real
-    socket, independent of any other in-flight query."""
+class UdpRelay:
+    """Step 4e - a one-shot UDP relay, generalized beyond DNS (originally `DnsRelay`, port 53
+    only - broadened same session after confirming `ntptime`/other UDP-based guest code hit the
+    identical "silently dropped" gap DNS did before this existed). No message parsing at all for
+    either case: the query/response bytes are opaque, forwarded verbatim - the same principle the
+    TCP reflector uses for TLS/HTTP payload, just one datagram instead of a byte stream. No
+    connection table either - UDP has no sequence/ack state to spoof, so each query gets its own
+    short-lived real socket, independent of any other in-flight query.
+
+    Two addressing modes, distinguished by destination:
+    - guest -> `gateway_ip:53` (DNS - DHCP handed out the gateway itself as the DNS server via
+      option 6): relayed to a fixed real resolver instead, since the gateway isn't a real one.
+    - guest -> anything else (a real, off-subnet destination, addressed exactly like a TCP flow
+      already is): relayed directly to that same destination - no DNS-specific behavior at all.
+    """
 
     def __init__(
         self,
@@ -168,49 +176,66 @@ class DnsRelay:
         *,
         gateway_ip: bytes = GATEWAY_IP,
         gateway_mac: bytes = GATEWAY_MAC,
-        upstream: "tuple[str, int]" = ("1.1.1.1", 53),
+        dns_upstream: "tuple[str, int]" = ("1.1.1.1", 53),
         timeout: float = 5.0,
     ) -> None:
         self._rp2040 = rp2040
         self._queue_ethernet_frame = queue_ethernet_frame
         self._gateway_ip = gateway_ip
         self._gateway_mac = gateway_mac
-        self._upstream = upstream
+        self._udp_upstream = dns_upstream
         self._timeout = timeout
 
     def maybe_handle(self, eth: "net.EthernetFrame") -> bool:
-        """`True` if `eth` was a UDP packet addressed to port 53 (handled asynchronously,
-        fire-and-forget - no synchronous reply, same shape as a new TCP SYN). `False` otherwise,
-        so `NatBridge` can still try other UDP-addressed handlers."""
+        """`True` if `eth` was any UDP packet (handled asynchronously, fire-and-forget - no
+        synchronous reply, same shape as a new TCP SYN). `False` otherwise, so `NatBridge` can
+        still try other UDP-addressed handlers (DHCP)."""
         if eth.ethertype != net.ETHERTYPE_IPV4:
             return False
         ip = net.parse_ipv4(eth.payload)
         if ip is None or ip.proto != net.IP_PROTO_UDP:
             return False
         udp = net.parse_udp(ip.payload)
-        if udp is None or udp.dst_port != 53:
+        if udp is None:
             return False
-        self._rp2040.schedule_threadsafe(self._relay(eth.src_mac, ip.src_ip, udp.src_port, udp.payload))
+        if ip.dst_ip == self._gateway_ip and udp.dst_port == 53:
+            upstream = self._udp_upstream
+            reply_src_ip, reply_src_port = self._gateway_ip, 53
+        else:
+            upstream = (_ip_to_str(ip.dst_ip), udp.dst_port)
+            reply_src_ip, reply_src_port = ip.dst_ip, udp.dst_port
+        self._rp2040.schedule_threadsafe(
+            self._relay(eth.src_mac, ip.src_ip, udp.src_port, udp.payload, upstream, reply_src_ip, reply_src_port)
+        )
         return True
 
-    async def _relay(self, guest_mac: bytes, guest_ip: bytes, guest_port: int, query: bytes) -> None:
+    async def _relay(
+        self,
+        guest_mac: bytes,
+        guest_ip: bytes,
+        guest_port: int,
+        query: bytes,
+        upstream: "tuple[str, int]",
+        reply_src_ip: bytes,
+        reply_src_port: int,
+    ) -> None:
         loop = asyncio.get_running_loop()
         on_response: asyncio.Future[bytes] = loop.create_future()
         try:
             transport, _ = await loop.create_datagram_endpoint(
-                lambda: _OneShotDatagramProtocol(on_response), remote_addr=self._upstream
+                lambda: _OneShotDatagramProtocol(on_response), remote_addr=upstream
             )
         except OSError:
             return
         try:
             transport.sendto(query)
             response = await asyncio.wait_for(on_response, timeout=self._timeout)
-        except (OSError, TimeoutError):
+        except (OSError, asyncio.TimeoutError):
             return
         finally:
             transport.close()
-        udp_reply = net.pack_udp(self._gateway_ip, guest_ip, 53, guest_port, response)
-        ip_reply = net.pack_ipv4(self._gateway_ip, guest_ip, net.IP_PROTO_UDP, udp_reply)
+        udp_reply = net.pack_udp(reply_src_ip, guest_ip, reply_src_port, guest_port, response)
+        ip_reply = net.pack_ipv4(reply_src_ip, guest_ip, net.IP_PROTO_UDP, udp_reply)
         frame = net.pack_ethernet(guest_mac, self._gateway_mac, net.ETHERTYPE_IPV4, ip_reply)
         self._queue_ethernet_frame(frame)
 
@@ -249,9 +274,18 @@ class TcpFlow:
 
 
 class TcpReflector:
-    def __init__(self, rp2040: "RP2040", queue_ethernet_frame: "Callable[[bytes], None]") -> None:
+    def __init__(
+        self,
+        rp2040: "RP2040",
+        queue_ethernet_frame: "Callable[[bytes], None]",
+        *,
+        connect_timeout: float = 10.0,
+        connect_fn: "Callable[[str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]] | None" = None,
+    ) -> None:
         self._rp2040 = rp2040
         self._queue_ethernet_frame = queue_ethernet_frame
+        self._connect_timeout = connect_timeout
+        self._connect_fn = connect_fn if connect_fn is not None else asyncio.open_connection
         self._flows: dict[TcpFlowKey, TcpFlow] = {}
 
     def maybe_handle(self, eth: "net.EthernetFrame", ip: "net.Ipv4Packet") -> bool:
@@ -292,12 +326,17 @@ class TcpReflector:
     async def _open_and_pump(self, flow: TcpFlow) -> None:
         """Runs as a real `asyncio.Task` on the engine-room loop itself (self-registered via
         `asyncio.current_task()` so a later, synchronous RST handler on the same loop can cancel
-        it). On connect failure, synthesizes an immediate RST instead of letting the guest wait
-        out its own SYN retransmit timeout for something already known to have failed."""
+        it). On connect failure - including a real connect attempt that never resolves at all
+        (a black-holed SYN, no RST/refusal ever coming back - `_connect_timeout` bounds this so
+        the flow-table entry can't leak forever) - synthesizes an immediate RST instead of letting
+        the guest wait out its own SYN retransmit timeout for something already known to have
+        failed."""
         flow.pump_task = asyncio.current_task()
         try:
-            reader, writer = await asyncio.open_connection(host=_ip_to_str(flow.key.dst_ip), port=flow.key.dst_port)
-        except OSError:
+            reader, writer = await asyncio.wait_for(
+                self._connect_fn(_ip_to_str(flow.key.dst_ip), flow.key.dst_port), timeout=self._connect_timeout
+            )
+        except (OSError, asyncio.TimeoutError):
             self._queue_ethernet_frame(self._build_tcp_frame(flow, flags=net.TCP_RST | net.TCP_ACK, seq=0))
             self._flows.pop(flow.key, None)
             return
@@ -323,6 +362,14 @@ class TcpReflector:
                     break
                 self._queue_ethernet_frame(self._build_tcp_frame(flow, flags=net.TCP_ACK | net.TCP_PSH, payload=chunk))
                 flow.bytes_relayed_to_guest += len(chunk)
+        except ConnectionResetError:
+            # The real peer actually reset the connection - must reach the guest as a real RST,
+            # not the clean FIN below, or the guest wrongly believes it closed normally.
+            self._queue_ethernet_frame(self._build_tcp_frame(flow, flags=net.TCP_RST | net.TCP_ACK))
+            if flow.writer is not None:
+                flow.writer.close()
+            self._flows.pop(flow.key, None)
+            return
         except OSError:
             pass
         flow.host_fin_sent = True
@@ -407,15 +454,13 @@ class NatBridge:
     def __init__(self, rp2040: "RP2040", queue_ethernet_frame: "Callable[[bytes], None]") -> None:
         self._arp = ArpResponder()
         self._dhcp = DhcpServer()
-        self._dns = DnsRelay(rp2040, queue_ethernet_frame)
+        self._udp = UdpRelay(rp2040, queue_ethernet_frame)
         self._tcp = TcpReflector(rp2040, queue_ethernet_frame)
         self._queue_ethernet_frame = queue_ethernet_frame
 
     def handle_outbound_ethernet_frame(self, frame: bytes) -> None:
         """Called synchronously from `GSPIBus._write_wlan()` - must never block. Tries
-        ARP -> DHCP -> DNS -> TCP in order (mutually exclusive by EtherType/protocol/port); any
-        other UDP traffic is silently ignored, matching this bus's existing no-op-rather-than-raise
-        stance."""
+        ARP -> DHCP -> UDP relay -> TCP in order (mutually exclusive by EtherType/protocol/port)."""
         eth = net.parse_ethernet(frame)
         if eth is None:
             return
@@ -434,7 +479,7 @@ class NatBridge:
             if reply is not None:
                 self._queue_ethernet_frame(reply)
                 return
-            self._dns.maybe_handle(eth)
+            self._udp.maybe_handle(eth)
             return
         if ip.proto == net.IP_PROTO_TCP:
             self._tcp.maybe_handle(eth, ip)

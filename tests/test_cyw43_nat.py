@@ -16,6 +16,7 @@ real background thread/`start_execution()`/`simulator.stop()` is needed either.
 
 import asyncio
 import socket
+import struct
 
 from test_cyw43_bus import (
     _FakeGSPIMaster,
@@ -34,7 +35,16 @@ from rp2040py.external.cyw43.bus import (
     STATUS_F2_PKT_AVAILABLE,
     GSPIBus,
 )
-from rp2040py.external.cyw43.nat import GATEWAY_IP, GATEWAY_MAC, GUEST_IP, ArpResponder, DhcpServer, DnsRelay, NatBridge
+from rp2040py.external.cyw43.nat import (
+    GATEWAY_IP,
+    GATEWAY_MAC,
+    GUEST_IP,
+    ArpResponder,
+    DhcpServer,
+    NatBridge,
+    TcpReflector,
+    UdpRelay,
+)
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 
@@ -494,13 +504,134 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
     _run(_body())
 
 
-# -- DNS relay (4e) -----------------------------------------------------------------------------
+async def _rst_after_one_read_server(reader: "asyncio.StreamReader", writer: "asyncio.StreamWriter") -> None:
+    """Reads exactly once, then aborts the connection with a real TCP RST (`SO_LINGER` with a
+    zero timeout - the standard trick to make the kernel send RST instead of a graceful FIN on
+    close) rather than closing cleanly - `_echo_server`'s own clean close is what the other tests
+    already cover."""
+    await reader.read(4096)
+    sock = writer.get_extra_info("socket")
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    writer.close()
 
 
-class _CannedDnsServerProtocol(asyncio.DatagramProtocol):
-    """Hermetic stand-in for a real upstream DNS resolver - replies to *any* datagram with a fixed
-    canned response, so tests don't depend on real internet or real DNS message parsing (neither
-    does `DnsRelay` itself - it never inspects the bytes)."""
+def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin():
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        master = _FakeGSPIMaster(rp2040)
+
+        server = await asyncio.start_server(_rst_after_one_read_server, "127.0.0.1", 0)
+        dest_port = server.sockets[0].getsockname()[1]
+        dest_ip = bytes([127, 0, 0, 1])
+        guest_port = 54324
+        guest_iss = 4000
+
+        syn = net.pack_tcp(
+            GUEST_IP, dest_ip, guest_port, dest_port, seq=guest_iss, ack=0, flags=net.TCP_SYN, window=8192, mss=1460
+        )
+        syn_ip = net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, syn)
+        syn_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, syn_ip)
+        _send_wlan_frame(master, _build_data_header_frame(syn_frame))
+        _read_f2_response(master)  # flow-control ack
+        await _wait_for_pending_packet(master)
+        syn_ack_frame = _read_f2_response(master)
+        syn_ack_tcp = net.parse_tcp(
+            net.parse_ipv4(net.parse_ethernet(_parse_data_frame(syn_ack_frame)).payload).payload
+        )
+        host_iss = syn_ack_tcp.seq
+
+        # Complete the handshake and send one byte - the server reads it, then RSTs.
+        data_segment = net.pack_tcp(
+            GUEST_IP,
+            dest_ip,
+            guest_port,
+            dest_port,
+            seq=(guest_iss + 1) & 0xFFFFFFFF,
+            ack=(host_iss + 1) & 0xFFFFFFFF,
+            flags=net.TCP_ACK | net.TCP_PSH,
+            window=8192,
+            payload=b"x",
+        )
+        data_ip = net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, data_segment)
+        data_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, data_ip)
+        _send_wlan_frame(master, _build_data_header_frame(data_frame))
+        _read_f2_response(master)  # flow-control ack
+        _read_f2_response(master)  # our own immediate ack of the guest's data
+
+        await _wait_for_pending_packet(master)  # let the real RST arrive at our pump task
+
+        rst_frame = _read_f2_response(master)
+        rst_eth = net.parse_ethernet(_parse_data_frame(rst_frame))
+        assert rst_eth is not None
+        rst_ip = net.parse_ipv4(rst_eth.payload)
+        assert rst_ip is not None
+        rst_tcp = net.parse_tcp(rst_ip.payload)
+        assert rst_tcp is not None
+        assert rst_tcp.flags & net.TCP_RST
+        assert not rst_tcp.flags & net.TCP_FIN  # must NOT look like a clean close
+        assert bus.nat_bridge._tcp._flows == {}
+
+        server.close()
+        await server.wait_closed()
+
+    _run(_body())
+
+
+async def _never_connects(host: str, port: int) -> "tuple[asyncio.StreamReader, asyncio.StreamWriter]":
+    await asyncio.Event().wait()  # never resolves - simulates a black-holed SYN, no RST/refusal ever
+    raise AssertionError("unreachable")
+
+
+def test_tcp_reflector_times_out_a_connect_that_never_resolves():
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        bus.nat_bridge._tcp = TcpReflector(
+            rp2040, bus.queue_rx_ethernet_frame, connect_timeout=0.3, connect_fn=_never_connects
+        )
+        master = _FakeGSPIMaster(rp2040)
+
+        dest_ip = bytes([203, 0, 113, 1])  # TEST-NET-3 (RFC 5737) - never actually dialed, see connect_fn
+        guest_port = 54325
+        guest_iss = 5000
+
+        syn = net.pack_tcp(
+            GUEST_IP, dest_ip, guest_port, 80, seq=guest_iss, ack=0, flags=net.TCP_SYN, window=8192, mss=1460
+        )
+        syn_ip = net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, syn)
+        syn_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, syn_ip)
+        _send_wlan_frame(master, _build_data_header_frame(syn_frame))
+        _read_f2_response(master)  # flow-control ack
+
+        await _wait_for_pending_packet(master, timeout=5.0)  # past connect_timeout=0.3
+
+        rst_frame = _read_f2_response(master)
+        rst_eth = net.parse_ethernet(_parse_data_frame(rst_frame))
+        assert rst_eth is not None
+        rst_tcp = net.parse_tcp(net.parse_ipv4(rst_eth.payload).payload)
+        assert rst_tcp is not None
+        assert rst_tcp.flags & net.TCP_RST
+        assert bus.nat_bridge._tcp._flows == {}  # the flow-table entry didn't leak
+
+    _run(_body())
+
+
+# -- UDP relay (4e - DNS + general) --------------------------------------------------------------
+
+
+class _CannedUdpServerProtocol(asyncio.DatagramProtocol):
+    """Hermetic stand-in for a real upstream server (DNS resolver or otherwise) - replies to *any*
+    datagram with a fixed canned response, so tests don't depend on real internet or real message
+    parsing (neither does `UdpRelay` itself - it never inspects the bytes)."""
 
     def __init__(self, response: bytes) -> None:
         self._response = response
@@ -526,7 +657,7 @@ def _reserve_a_free_udp_port() -> int:
     return port
 
 
-def test_dns_relay_forwards_a_query_and_relays_the_response_back():
+def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back():
     async def _body() -> None:
         simulator = Simulator()
         simulator.bind_loop()
@@ -536,16 +667,17 @@ def test_dns_relay_forwards_a_query_and_relays_the_response_back():
         bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
         master = _FakeGSPIMaster(rp2040)
 
-        canned_response = b"not a real DNS message - DnsRelay never parses this"
-        server_protocol = _CannedDnsServerProtocol(canned_response)
+        canned_response = b"not a real DNS message - UdpRelay never parses this"
+        server_protocol = _CannedUdpServerProtocol(canned_response)
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(lambda: server_protocol, local_addr=("127.0.0.1", 0))
         server_port = transport.get_extra_info("sockname")[1]
-        # Override the default real-internet upstream (1.1.1.1:53) with the hermetic fake server.
-        bus.nat_bridge._dns = DnsRelay(rp2040, bus.queue_rx_ethernet_frame, upstream=("127.0.0.1", server_port))
+        # Override the default real-internet DNS upstream (1.1.1.1:53) with the hermetic fake server.
+        bus.nat_bridge._udp = UdpRelay(rp2040, bus.queue_rx_ethernet_frame, dns_upstream=("127.0.0.1", server_port))
 
-        query = b"a fake DNS query - opaque bytes as far as DnsRelay is concerned"
+        query = b"a fake DNS query - opaque bytes as far as UdpRelay is concerned"
         guest_port = 33333
+        # Addressed to the gateway's own IP on port 53 - the DNS-specific addressing mode.
         udp_query = net.pack_udp(GUEST_IP, GATEWAY_IP, guest_port, 53, query)
         ip_query = net.pack_ipv4(GUEST_IP, GATEWAY_IP, net.IP_PROTO_UDP, udp_query)
         frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_query)
@@ -561,7 +693,7 @@ def test_dns_relay_forwards_a_query_and_relays_the_response_back():
         assert reply_eth is not None
         reply_ip = net.parse_ipv4(reply_eth.payload)
         assert reply_ip is not None
-        assert reply_ip.src_ip == GATEWAY_IP
+        assert reply_ip.src_ip == GATEWAY_IP  # DNS replies always appear to come from the gateway
         assert reply_ip.dst_ip == GUEST_IP
         reply_udp = net.parse_udp(reply_ip.payload)
         assert reply_udp is not None
@@ -574,7 +706,58 @@ def test_dns_relay_forwards_a_query_and_relays_the_response_back():
     _run(_body())
 
 
-def test_dns_relay_stays_silent_on_no_response():
+def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination():
+    """4e's own generalization: a UDP packet NOT addressed to the gateway's DNS port (e.g. NTP,
+    port 123, the way `ntptime` uses it) is relayed straight to whatever real destination the
+    guest itself addressed - not to the fixed DNS upstream - and the reply appears to come from
+    that same real destination, not from the gateway."""
+
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        master = _FakeGSPIMaster(rp2040)
+
+        canned_response = b"\x00" * 48  # NTP-shaped placeholder - UdpRelay never inspects it
+        server_protocol = _CannedUdpServerProtocol(canned_response)
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(lambda: server_protocol, local_addr=("127.0.0.1", 0))
+        server_ip = bytes([127, 0, 0, 1])
+        server_port = transport.get_extra_info("sockname")[1]
+
+        query = b"a fake NTP request"
+        guest_port = 44444
+        udp_query = net.pack_udp(GUEST_IP, server_ip, guest_port, server_port, query)
+        ip_query = net.pack_ipv4(GUEST_IP, server_ip, net.IP_PROTO_UDP, udp_query)
+        frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_query)
+
+        _send_wlan_frame(master, _build_data_header_frame(frame))
+        _read_f2_response(master)  # flow-control ack
+
+        await _wait_for_pending_packet(master)
+
+        reply_frame = _read_f2_response(master)
+        reply_eth = net.parse_ethernet(_parse_data_frame(reply_frame))
+        assert reply_eth is not None
+        reply_ip = net.parse_ipv4(reply_eth.payload)
+        assert reply_ip is not None
+        assert reply_ip.src_ip == server_ip  # NOT the gateway - the real destination itself
+        assert reply_ip.dst_ip == GUEST_IP
+        reply_udp = net.parse_udp(reply_ip.payload)
+        assert reply_udp is not None
+        assert (reply_udp.src_port, reply_udp.dst_port) == (server_port, guest_port)
+        assert reply_udp.payload == canned_response
+        assert server_protocol.received == [query]
+
+        transport.close()
+
+    _run(_body())
+
+
+def test_udp_relay_stays_silent_on_no_response():
     async def _body() -> None:
         simulator = Simulator()
         simulator.bind_loop()
@@ -584,8 +767,8 @@ def test_dns_relay_stays_silent_on_no_response():
         bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
         master = _FakeGSPIMaster(rp2040)
         dead_port = _reserve_a_free_udp_port()
-        bus.nat_bridge._dns = DnsRelay(
-            rp2040, bus.queue_rx_ethernet_frame, upstream=("127.0.0.1", dead_port), timeout=1.0
+        bus.nat_bridge._udp = UdpRelay(
+            rp2040, bus.queue_rx_ethernet_frame, dns_upstream=("127.0.0.1", dead_port), timeout=1.0
         )
 
         udp_query = net.pack_udp(GUEST_IP, GATEWAY_IP, 33334, 53, b"query")
@@ -603,13 +786,29 @@ def test_dns_relay_stays_silent_on_no_response():
     _run(_body())
 
 
-def test_dns_relay_ignores_udp_traffic_on_unrelated_ports():
-    _rp2040, _bus, master = _wire_up_with_nat_bridge()
-    udp = net.pack_udp(GUEST_IP, GATEWAY_IP, 12345, 9999, b"not dns or dhcp")
-    ip_packet = net.pack_ipv4(GUEST_IP, GATEWAY_IP, net.IP_PROTO_UDP, udp)
-    frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_packet)
+def test_dhcp_still_takes_priority_over_the_general_udp_relay():
+    """DHCP (port 67) must be handled by `DhcpServer`, not fall through to `UdpRelay` - a DHCP
+    packet is broadcast to 255.255.255.255, which isn't the gateway's own IP, so without this
+    ordering it would incorrectly match `UdpRelay`'s general (non-DNS) addressing path instead -
+    a real DHCPDISCOVER (not just a malformed payload DhcpServer would reject anyway) is used here
+    so the assertion actually proves DhcpServer won, not merely that nothing crashed."""
+    _rp2040, bus, master = _wire_up_with_nat_bridge()
+    dhcp = net.pack_dhcp(net.DHCP_OP_REQUEST, 0x1234, _GUEST_MAC, bytes(4), {53: bytes([net.DHCP_MSG_DISCOVER])})
+    udp = net.pack_udp(bytes(4), bytes([255, 255, 255, 255]), 68, 67, dhcp)
+    ip_packet = net.pack_ipv4(bytes(4), bytes([255, 255, 255, 255]), net.IP_PROTO_UDP, udp)
+    frame = net.pack_ethernet(bytes([0xFF] * 6), _GUEST_MAC, net.ETHERTYPE_IPV4, ip_packet)
 
     _send_wlan_frame(master, _build_data_header_frame(frame))
+    _read_f2_response(master)  # flow-control ack
 
-    response = _read_f2_response(master)
-    assert len(response) == SDPCM_HEADER_LEN  # only the flow-control ack, nothing else queued
+    reply_frame = _read_f2_response(master)
+    reply_eth = net.parse_ethernet(_parse_data_frame(reply_frame))
+    assert reply_eth is not None
+    reply_ip = net.parse_ipv4(reply_eth.payload)
+    assert reply_ip is not None
+    reply_udp = net.parse_udp(reply_ip.payload)
+    assert reply_udp is not None
+    reply_dhcp = net.parse_dhcp(reply_udp.payload)
+    assert reply_dhcp is not None
+    assert reply_dhcp.options[53] == bytes([net.DHCP_MSG_OFFER])  # DhcpServer answered, not UdpRelay
+    assert bus.nat_bridge._udp is not None  # sanity: the relay exists and simply wasn't the one used
