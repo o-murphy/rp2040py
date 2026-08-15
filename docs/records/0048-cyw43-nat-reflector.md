@@ -91,6 +91,14 @@ request for the gateway → ARP reply → (now) TCP SYN.
   lease and is about to send an off-subnet packet).
 - **4d - the TCP reflector itself.** Hard-depends on 4a+4b+4c - none of them optional, all three
   needed before a live boot ever produces a TCP SYN to intercept.
+- **4e - DNS relay.** Added same day, after confirming empirically (`mip.install()` against real
+  firmware, `OSError -2`) that hostname-based connections fail without it - `getaddrinfo()` never
+  even attempts a TCP connection if the name doesn't resolve first. Architecturally much smaller
+  than 4d: UDP has no connection/sequence state to spoof at all, so this is a one-shot relay (query
+  bytes forwarded verbatim to a fixed public resolver, response bytes forwarded back verbatim,
+  re-addressed to look like it came from the gateway) - no DNS message parsing, no connection
+  table, one short-lived real socket per query. Depends on 4b/4c (DHCP hands out the gateway IP as
+  the DNS server via option 6; ARP resolves the gateway's MAC) but not on 4d.
 
 ## Progress log
 
@@ -126,15 +134,21 @@ request for the gateway → ARP reply → (now) TCP SYN.
   `--expect-text` check) - touching the real internet from CI was an explicit, deliberate choice
   this session (the alternative, a local-only verification script, was considered and rejected in
   favor of also exercising 4d, not just 4a-4c).
+- 2026-08-16: **4e (DNS relay) implemented and live-boot verified, same session.** Confirmed the
+  gap empirically first: `mip.install("os-path")` against real `v1.28.0` firmware failed fast with
+  `OSError -2` (name resolution failure, not a hang - lwIP's own DNS resolver gives up on its own)
+  - no TCP connection was ever attempted, exactly as the "Deferred" section below predicted.
+  `DnsRelay` added to `nat.py` (`_OneShotDatagramProtocol` + `asyncio.create_datagram_endpoint()`
+  against a fixed public resolver, `1.1.1.1:53`, matching the `1.1.1.1:80` precedent already used
+  for 4d's own live-boot test), wired into `NatBridge`'s UDP dispatch behind `DhcpServer` (port 53
+  vs. port 67) - no `bus.py` changes needed, since it reuses the exact same `queue_ethernet_frame`
+  path 4b/4d already established. Unit + integration tests added (hermetic fake resolver on
+  `127.0.0.1`, a no-response/timeout case, and an unrelated-UDP-port no-op case) - all passing,
+  `pre-commit run --all-files` clean. `tests/micropython/main-cyw43.py` extended to call
+  `mip.install("os-path")` after the existing TCP probe; live-booted against both `v1.23.0` and
+  `v1.28.0` - `mip` now resolves `micropython.org`, downloads, and installs successfully.
 
 ## Deferred, not designed here
-
-UDP/DNS relay for hostname-based connections. `urequests`/websocket-shaped guest code resolves
-hostnames via a UDP query to port 53 before ever opening the TCP connection this record's reflector
-handles; this bridge only does the TCP splice plus the DHCP/ARP prerequisites above, not general UDP
-forwarding. A real DNS relay is architecturally much smaller than the TCP reflector (single-shot
-UDP query/response, no connection/session state at all) but is a distinct, separate piece of work,
-left for a future record/sub-step.
 
 No config surface (`Cyw43439(guest_ip=..., ...)` or similar) was added this pass - guest/gateway IP
 and MAC are hardcoded module constants in `nat.py`, matching the existing fixed-fake-AP precedent

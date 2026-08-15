@@ -27,11 +27,14 @@ from test_cyw43_bus import (
 from rp2040py.external.cyw43 import net
 from rp2040py.external.cyw43.bus import (
     BDC_HEADER_LEN,
+    BUS_FUNCTION,
     DATA_HEADER,
     SDPCM_HEADER_LEN,
+    SPI_STATUS_REGISTER,
+    STATUS_F2_PKT_AVAILABLE,
     GSPIBus,
 )
-from rp2040py.external.cyw43.nat import GATEWAY_IP, GATEWAY_MAC, GUEST_IP, ArpResponder, DhcpServer, NatBridge
+from rp2040py.external.cyw43.nat import GATEWAY_IP, GATEWAY_MAC, GUEST_IP, ArpResponder, DhcpServer, DnsRelay, NatBridge
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 
@@ -60,6 +63,23 @@ def _parse_data_frame(frame: bytes) -> bytes:
     assert frame[5] & 0x0F == DATA_HEADER
     payload = frame[SDPCM_HEADER_LEN:]
     return payload[2 + BDC_HEADER_LEN :]  # skip the 2-byte pad + 4-byte BDC header
+
+
+async def _wait_for_pending_packet(master: _FakeGSPIMaster, *, timeout: float = 5.0) -> None:
+    """Polls `SPI_STATUS_REGISTER`'s own pending-packet bit instead of a fixed `asyncio.sleep()` -
+    a real `asyncio.open_connection()`/UDP round trip (even to loopback) has no fixed duration,
+    and a hardcoded sleep long enough on one OS/CI runner isn't necessarily long enough on another
+    (confirmed: `test_tcp_reflector_sends_rst_on_a_refused_connection`'s original fixed 0.2s sleep
+    flaked on `windows-latest` CI - a closed-port loopback connect attempt takes measurably longer
+    to fail there than on Linux)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+        if status & STATUS_F2_PKT_AVAILABLE:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out after {timeout}s waiting for a pending F2 packet")
 
 
 # -- ArpResponder (unit) ---------------------------------------------------------------------------
@@ -292,7 +312,7 @@ def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server():
         flow_control_ack = _read_f2_response(master)
         assert len(flow_control_ack) == SDPCM_HEADER_LEN
 
-        await asyncio.sleep(0.2)  # let the real asyncio.open_connection() to 127.0.0.1 complete
+        await _wait_for_pending_packet(master)  # let the real asyncio.open_connection() to 127.0.0.1 complete
 
         syn_ack_frame = _read_f2_response(master)
         syn_ack_eth = net.parse_ethernet(_parse_data_frame(syn_ack_frame))
@@ -332,7 +352,7 @@ def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server():
         assert our_ack_tcp is not None
         assert our_ack_tcp.payload == b""
 
-        await asyncio.sleep(0.2)  # let the real echo round trip happen
+        await _wait_for_pending_packet(master)  # let the real echo round trip happen
 
         echoed_frame = _read_f2_response(master)
         echoed_eth = net.parse_ethernet(_parse_data_frame(echoed_frame))
@@ -365,7 +385,7 @@ def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server():
         our_fin_ack_frame = _read_f2_response(master)  # our own immediate ack of the guest's FIN
         assert net.parse_tcp(net.parse_ipv4(net.parse_ethernet(_parse_data_frame(our_fin_ack_frame)).payload).payload)
 
-        await asyncio.sleep(0.3)  # let the real half-close round trip (echo server -> our pump task)
+        await _wait_for_pending_packet(master)  # let the real half-close round trip (echo server -> our pump task)
 
         final_fin_frame = _read_f2_response(master)
         final_eth = net.parse_ethernet(_parse_data_frame(final_fin_frame))
@@ -408,7 +428,7 @@ def test_tcp_reflector_sends_rst_on_a_refused_connection():
         _send_wlan_frame(master, _build_data_header_frame(syn_frame))
         _read_f2_response(master)  # flow-control ack
 
-        await asyncio.sleep(0.2)  # let the real (refused) connect attempt fail
+        await _wait_for_pending_packet(master)  # let the real (refused) connect attempt fail
 
         rst_frame = _read_f2_response(master)
         rst_eth = net.parse_ethernet(_parse_data_frame(rst_frame))
@@ -446,7 +466,7 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
         syn_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, syn_ip)
         _send_wlan_frame(master, _build_data_header_frame(syn_frame))
         _read_f2_response(master)
-        await asyncio.sleep(0.2)
+        await _wait_for_pending_packet(master)
         _read_f2_response(master)  # drain the SYN-ACK
 
         assert len(bus.nat_bridge._tcp._flows) == 1
@@ -472,3 +492,124 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
         await echo_server.wait_closed()
 
     _run(_body())
+
+
+# -- DNS relay (4e) -----------------------------------------------------------------------------
+
+
+class _CannedDnsServerProtocol(asyncio.DatagramProtocol):
+    """Hermetic stand-in for a real upstream DNS resolver - replies to *any* datagram with a fixed
+    canned response, so tests don't depend on real internet or real DNS message parsing (neither
+    does `DnsRelay` itself - it never inspects the bytes)."""
+
+    def __init__(self, response: bytes) -> None:
+        self._response = response
+        self.transport: asyncio.DatagramTransport | None = None
+        self.received: list[bytes] = []
+
+    def connection_made(self, transport: "asyncio.DatagramTransport") -> None:
+        self.transport = transport
+
+    def datagram_received(self, data: bytes, addr: "tuple[str, int]") -> None:
+        self.received.append(data)
+        assert self.transport is not None
+        self.transport.sendto(self._response, addr)
+
+
+def _reserve_a_free_udp_port() -> int:
+    """Binds then immediately closes a UDP socket - the port is free again but nothing is bound
+    there, so a subsequent send typically gets a prompt ICMP port-unreachable on loopback."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port
+
+
+def test_dns_relay_forwards_a_query_and_relays_the_response_back():
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        master = _FakeGSPIMaster(rp2040)
+
+        canned_response = b"not a real DNS message - DnsRelay never parses this"
+        server_protocol = _CannedDnsServerProtocol(canned_response)
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(lambda: server_protocol, local_addr=("127.0.0.1", 0))
+        server_port = transport.get_extra_info("sockname")[1]
+        # Override the default real-internet upstream (1.1.1.1:53) with the hermetic fake server.
+        bus.nat_bridge._dns = DnsRelay(rp2040, bus.queue_rx_ethernet_frame, upstream=("127.0.0.1", server_port))
+
+        query = b"a fake DNS query - opaque bytes as far as DnsRelay is concerned"
+        guest_port = 33333
+        udp_query = net.pack_udp(GUEST_IP, GATEWAY_IP, guest_port, 53, query)
+        ip_query = net.pack_ipv4(GUEST_IP, GATEWAY_IP, net.IP_PROTO_UDP, udp_query)
+        frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_query)
+
+        _send_wlan_frame(master, _build_data_header_frame(frame))
+        flow_control_ack = _read_f2_response(master)
+        assert len(flow_control_ack) == SDPCM_HEADER_LEN
+
+        await _wait_for_pending_packet(master)  # let the real (loopback) UDP round trip happen
+
+        reply_frame = _read_f2_response(master)
+        reply_eth = net.parse_ethernet(_parse_data_frame(reply_frame))
+        assert reply_eth is not None
+        reply_ip = net.parse_ipv4(reply_eth.payload)
+        assert reply_ip is not None
+        assert reply_ip.src_ip == GATEWAY_IP
+        assert reply_ip.dst_ip == GUEST_IP
+        reply_udp = net.parse_udp(reply_ip.payload)
+        assert reply_udp is not None
+        assert (reply_udp.src_port, reply_udp.dst_port) == (53, guest_port)
+        assert reply_udp.payload == canned_response
+        assert server_protocol.received == [query]
+
+        transport.close()
+
+    _run(_body())
+
+
+def test_dns_relay_stays_silent_on_no_response():
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        master = _FakeGSPIMaster(rp2040)
+        dead_port = _reserve_a_free_udp_port()
+        bus.nat_bridge._dns = DnsRelay(
+            rp2040, bus.queue_rx_ethernet_frame, upstream=("127.0.0.1", dead_port), timeout=1.0
+        )
+
+        udp_query = net.pack_udp(GUEST_IP, GATEWAY_IP, 33334, 53, b"query")
+        ip_query = net.pack_ipv4(GUEST_IP, GATEWAY_IP, net.IP_PROTO_UDP, udp_query)
+        frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_query)
+
+        _send_wlan_frame(master, _build_data_header_frame(frame))
+        _read_f2_response(master)  # flow-control ack
+
+        await asyncio.sleep(2.5)  # comfortably past the relay's own 1s timeout on a slow CI runner too
+
+        status = master.read_register(BUS_FUNCTION, SPI_STATUS_REGISTER, 4)
+        assert not status & STATUS_F2_PKT_AVAILABLE  # no reply was ever queued
+
+    _run(_body())
+
+
+def test_dns_relay_ignores_udp_traffic_on_unrelated_ports():
+    _rp2040, _bus, master = _wire_up_with_nat_bridge()
+    udp = net.pack_udp(GUEST_IP, GATEWAY_IP, 12345, 9999, b"not dns or dhcp")
+    ip_packet = net.pack_ipv4(GUEST_IP, GATEWAY_IP, net.IP_PROTO_UDP, udp)
+    frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_packet)
+
+    _send_wlan_frame(master, _build_data_header_frame(frame))
+
+    response = _read_f2_response(master)
+    assert len(response) == SDPCM_HEADER_LEN  # only the flow-control ack, nothing else queued

@@ -55,6 +55,20 @@ if connected:
     except OSError as exc:
         print("Real TCP connection failed:", exc)
 
+    # Step 4e: a real DNS query, relayed out to a fixed public resolver - mip.install() resolves
+    # a hostname (micropython.org) before it ever opens a TCP connection, so this is the thing
+    # that made mip fail outright (OSError -2, confirmed empirically before 4e was built) even
+    # though 4d's own raw-IP TCP splice already worked.
+    print("Attempting mip.install (needs DNS)...")
+    import mip  # type: ignore[import-not-found]
+    try:
+        mip.install("os-path")
+        print("mip.install succeeded")
+        import os.path  # type: ignore[import-not-found]  # the package mip.install() just fetched
+        print("os.path.join test:", os.path.join('a', 'b'))
+    except Exception as exc:
+        print("mip.install / os.path failed:", type(exc).__name__, exc)
+
 # ap = network.WLAN(network.WLAN.IF_AP) # create access-point interface
 # ap.config(ssid='RP2-AP')              # set the SSID of the access point
 # ap.config(max_clients=10)             # set how many clients can connect to the network
