@@ -167,6 +167,21 @@ request for the gateway → ARP reply → (now) TCP SYN.
   connect-timeout-via-injectable-`connect_fn`, general-UDP-relay-to-a-real-destination, DHCP-
   still-wins-over-the-generalized-relay) - full suite (17 tests in `test_cyw43_nat.py`) stable
   across repeated local runs, `pre-commit run --all-files` clean. Still not pushed.
+- 2026-08-16: A second push (PR #37) hit a second real CI flake on `windows-latest`, this time in
+  the RST-propagation test just added above: `test_tcp_reflector_propagates_a_real_reset_as_rst_
+  not_a_clean_fin` observed `flags=17` (`TCP_ACK|TCP_FIN`) instead of `TCP_RST` - the `SO_LINGER`
+  "force a real kernel RST" trick this test used (mentioned in the entry directly above, since
+  corrected) is documented to request a hard/abortive close on Windows too, but didn't reliably
+  surface as `ConnectionResetError` through Python's asyncio there in practice. Read as: the
+  underlying `nat.py` fix itself was never in question (the reflector correctly forwarded whatever
+  it actually observed from the real socket - a clean FIN, because that's what Windows' asyncio
+  layer actually delivered) - this was purely a test-portability bug, chasing OS-specific
+  socket-close semantics instead of testing the exception-handling code path directly. Rewrote the
+  test to inject a fake `connect_fn`/reader (`_ImmediatelyResetReader`, reusing the same
+  `connect_fn` injection seam the connect-timeout test already established) that raises
+  `ConnectionResetError` directly - no real socket, no OS dependency, faster (no real I/O) and
+  strictly more precisely targeted at the code this test exists to cover. Verified stable across 5
+  repeated local runs; `pre-commit run --all-files` clean. Still not pushed.
 
 ## Deferred, not designed here
 

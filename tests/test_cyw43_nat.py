@@ -16,7 +16,6 @@ real background thread/`start_execution()`/`simulator.stop()` is needed either.
 
 import asyncio
 import socket
-import struct
 
 from test_cyw43_bus import (
     _FakeGSPIMaster,
@@ -504,15 +503,39 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
     _run(_body())
 
 
-async def _rst_after_one_read_server(reader: "asyncio.StreamReader", writer: "asyncio.StreamWriter") -> None:
-    """Reads exactly once, then aborts the connection with a real TCP RST (`SO_LINGER` with a
-    zero timeout - the standard trick to make the kernel send RST instead of a graceful FIN on
-    close) rather than closing cleanly - `_echo_server`'s own clean close is what the other tests
-    already cover."""
-    await reader.read(4096)
-    sock = writer.get_extra_info("socket")
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    writer.close()
+class _ImmediatelyResetReader:
+    """Fake `asyncio.StreamReader` whose `read()` always raises `ConnectionResetError` - used to
+    test `_pump_host_to_guest()`'s exception handling directly, decoupled from actually provoking
+    a real OS-level RST. A prior version of this test tried forcing a real RST via `SO_LINGER`
+    against a real hermetic server; that's documented to request a hard/abortive close on Windows
+    too, but didn't reliably surface as `ConnectionResetError` through Python's asyncio there in
+    practice (confirmed: flaked on `windows-latest` CI, observed a clean FIN instead) - testing the
+    code path directly, not the OS's own socket-close semantics, is both more portable and more
+    precisely targeted at what this test actually cares about."""
+
+    async def read(self, n: int) -> bytes:
+        raise ConnectionResetError
+
+
+class _NoOpWriter:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    def can_write_eof(self) -> bool:
+        return True
+
+    def write_eof(self) -> None:
+        pass
+
+
+async def _connect_with_immediate_reset(host: str, port: int) -> "tuple[_ImmediatelyResetReader, _NoOpWriter]":
+    return _ImmediatelyResetReader(), _NoOpWriter()
 
 
 def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin():
@@ -523,48 +546,31 @@ def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin():
         bus = GSPIBus()
         bus.attach_gpio(rp2040)
         bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        bus.nat_bridge._tcp = TcpReflector(
+            rp2040, bus.queue_rx_ethernet_frame, connect_fn=_connect_with_immediate_reset
+        )
         master = _FakeGSPIMaster(rp2040)
 
-        server = await asyncio.start_server(_rst_after_one_read_server, "127.0.0.1", 0)
-        dest_port = server.sockets[0].getsockname()[1]
         dest_ip = bytes([127, 0, 0, 1])
         guest_port = 54324
         guest_iss = 4000
 
         syn = net.pack_tcp(
-            GUEST_IP, dest_ip, guest_port, dest_port, seq=guest_iss, ack=0, flags=net.TCP_SYN, window=8192, mss=1460
+            GUEST_IP, dest_ip, guest_port, 80, seq=guest_iss, ack=0, flags=net.TCP_SYN, window=8192, mss=1460
         )
         syn_ip = net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, syn)
         syn_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, syn_ip)
         _send_wlan_frame(master, _build_data_header_frame(syn_frame))
         _read_f2_response(master)  # flow-control ack
+
+        # The fake connect_fn "succeeds" immediately, so _open_and_pump() queues a SYN-ACK first
+        # (as always), then _pump_host_to_guest() starts pumping and hits the reader's
+        # ConnectionResetError on its very first read - no real handshake/data exchange needed to
+        # provoke it here, unlike the real-socket version this replaced.
         await _wait_for_pending_packet(master)
-        syn_ack_frame = _read_f2_response(master)
-        syn_ack_tcp = net.parse_tcp(
-            net.parse_ipv4(net.parse_ethernet(_parse_data_frame(syn_ack_frame)).payload).payload
-        )
-        host_iss = syn_ack_tcp.seq
+        _read_f2_response(master)  # the SYN-ACK, queued before the reset is even noticed
 
-        # Complete the handshake and send one byte - the server reads it, then RSTs.
-        data_segment = net.pack_tcp(
-            GUEST_IP,
-            dest_ip,
-            guest_port,
-            dest_port,
-            seq=(guest_iss + 1) & 0xFFFFFFFF,
-            ack=(host_iss + 1) & 0xFFFFFFFF,
-            flags=net.TCP_ACK | net.TCP_PSH,
-            window=8192,
-            payload=b"x",
-        )
-        data_ip = net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, data_segment)
-        data_frame = net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, data_ip)
-        _send_wlan_frame(master, _build_data_header_frame(data_frame))
-        _read_f2_response(master)  # flow-control ack
-        _read_f2_response(master)  # our own immediate ack of the guest's data
-
-        await _wait_for_pending_packet(master)  # let the real RST arrive at our pump task
-
+        await _wait_for_pending_packet(master)
         rst_frame = _read_f2_response(master)
         rst_eth = net.parse_ethernet(_parse_data_frame(rst_frame))
         assert rst_eth is not None
@@ -575,9 +581,6 @@ def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin():
         assert rst_tcp.flags & net.TCP_RST
         assert not rst_tcp.flags & net.TCP_FIN  # must NOT look like a clean close
         assert bus.nat_bridge._tcp._flows == {}
-
-        server.close()
-        await server.wait_closed()
 
     _run(_body())
 
