@@ -509,3 +509,13 @@ section's existing per-item resolution-date convention.
 This record documents the decision and its rationale only, per this repo's own document-vs-implement
 convention. No source file changes, no build changes, and no `pytcp` dependency were added as part
 of writing this record.
+
+## Superseded (2026-08-16): engine choice only
+
+[0048](0048-cyw43-nat-reflector.md) supersedes this record's `gVisor`-via-`cgo` engine choice with a
+custom, hand-rolled reflector - the "Alternatives considered" section's own hand-rolled-reflector
+option, previously set aside above for "new, unaudited protocol logic," picked back up once both
+`PyTCP` (architecturally) and `gVisor` (toolchain cost) turned out not to fit the goal of a genuinely
+minimal step 4. This record is kept verbatim below this note, per this repo's append-only
+convention - its research (the `PyTCP` negative result, the `gVisor` empirical PoC, the SDPCM
+`DATA_HEADER` envelope derivation 0048 itself reuses directly) all stays valid and citable.
