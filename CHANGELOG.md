@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-16
+
 ### Added
 - **CYW43 step 4: a real network bridge for the emulated Pico W WiFi interface** (see
   [record 0048](docs/records/0048-cyw43-nat-reflector.md), which supersedes 0045's heavier
@@ -916,7 +918,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/o-murphy/rp2040py/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/o-murphy/rp2040py/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/o-murphy/rp2040py/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/o-murphy/rp2040py/compare/v0.1.0rc2...v0.1.0
