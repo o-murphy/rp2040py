@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-17
+
 ### Added
 - **Writing your own external device or board**: a new how-to,
   [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md),
@@ -999,7 +1001,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/o-murphy/rp2040py/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/o-murphy/rp2040py/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/o-murphy/rp2040py/compare/v0.1.0...v0.2.0
