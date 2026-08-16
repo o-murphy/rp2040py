@@ -42,6 +42,7 @@ from rp2040py.peripherals.io import RPIO
 from rp2040py.peripherals.pads import RPPADS
 from rp2040py.peripherals.peripheral import UnimplementedPeripheral
 from rp2040py.peripherals.vreg_and_chip_reset import RPVREGAndChipReset
+from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.ppb import RPPPB
@@ -176,6 +177,7 @@ cdef class RP2040:
         self.logger = ConsoleLogger(LogLevel.DEBUG, True)
 
         self.peripherals = {
+            0x14000: RPXIPCtrl(self, "XIP_CTRL_BASE"),
             0x18000: RPSSI(self, "SSI"),
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: RP2040SysCfg(self, "SYSCFG"),

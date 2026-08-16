@@ -38,6 +38,7 @@ from rp2040py.peripherals.uart import RPUART, IUARTDMAChannels
 from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.peripherals.vreg_and_chip_reset import RPVREGAndChipReset
 from rp2040py.peripherals.watchdog import RPWatchdog
+from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.peripherals.xosc import RPXOSC
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.sio import RPSIO
@@ -158,6 +159,7 @@ class RP2040:
         self.logger: Logger = ConsoleLogger(LogLevel.DEBUG, True)
 
         self.peripherals: dict[int, Peripheral] = {
+            0x14000: RPXIPCtrl(self, "XIP_CTRL_BASE"),
             0x18000: RPSSI(self, "SSI"),
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: RP2040SysCfg(self, "SYSCFG"),

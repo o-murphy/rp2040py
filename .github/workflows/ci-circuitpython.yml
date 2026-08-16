@@ -14,20 +14,27 @@ on:
 
 jobs:
   test-circuitpython:
-    name: CircuitPython ${{ matrix.circuitpython_version.tag }} / ${{ matrix.python_runtime }}
+    name: CircuitPython ${{ matrix.tag }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        circuitpython_version:
-          - tag: "8.0.2" # this project's own default (README)
+        # Deliberately small. A CircuitPython boot costs minutes of emulated time, so this matrix
+        # buys *firmware* coverage, not interpreter coverage - ci-micropython.yml already runs the
+        # full pypy/cpython-3.10/cpython-3.14 spread on every release it tests, and nothing about
+        # CircuitPython exercises the host interpreter differently. Three jobs, one runtime.
+        include:
+          # The project's own default (README), and the oldest thing we claim to support.
+          - tag: "8.0.2"
+            wlan: false
+          # WiFi through the CYW43 NAT bridge. Pinned to 9.2.9 because that is the version
+          # tests/circuitpython/main-cyw43.py was actually verified against (0048); moving it to
+          # 10.x needs a live re-verification first, not just a matrix edit.
           - tag: "9.2.9"
-          - tag: "10.2.1" # the version that used to hang - see records/0050
-            pico_w: true
-        python_runtime:
-          - pypy-3.10
-          - cpython-3.10
-          - cpython-3.14
+            wlan: true
+          # Regression test for 0050 - this is the version that used to hang forever.
+          - tag: "10.2.1"
+            wlan: false
 
     steps:
       - uses: actions/checkout@v7
@@ -41,33 +48,23 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Setup Python ${{ matrix.python_runtime }}
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          python-version: ${{ matrix.python_runtime }}
-          github-token: ${{ github.token }}
-
       # Same reasoning as ci-micropython.yml: pull (and cache) the UF2 outside the timed steps, and
       # don't fail the job on a flaky download - the real step right after gives a clearer signal.
-      - name: Warm up CircuitPython ${{ matrix.circuitpython_version.tag }} download cache
+      - name: Warm up CircuitPython ${{ matrix.tag }} download cache
         continue-on-error: true
-        run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.circuitpython_version.tag }} --fetch-fw-only
+        run: uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --fetch-fw-only
 
-      # Boots to the friendly REPL and exits on the banner. This is the check that CircuitPython
-      # 10.x currently fails (zero output, never reaches this string).
-      - name: Test CircuitPython ${{ matrix.python_runtime }}-${{ matrix.circuitpython_version.tag }} boots
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.circuitpython_version.tag }} --expect-text "Adafruit CircuitPython"
-        env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+      # Boots to the friendly REPL and exits as soon as the banner appears - the emulated boot
+      # itself is the cost here, so there is nothing to shorten beyond exiting on first match.
+      - name: Test CircuitPython ${{ matrix.tag }} boots
+        run: timeout 10m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --expect-text "Adafruit CircuitPython"
 
       # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step, and soft-failing for
       # the same reason: it opens a real TCP connection and a real DNS query to the internet
       # through the emulator's NAT bridge, so a CI-runner network hiccup is not an emulator
       # regression.
-      - name: Test CircuitPython pico-w WLAN ${{ matrix.python_runtime }}-${{ matrix.circuitpython_version.tag }}
-        if: ${{ matrix.circuitpython_version.pico_w }}
+      - name: Test CircuitPython pico-w WLAN ${{ matrix.tag }}
+        if: ${{ matrix.wlan }}
         run: |
-          timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.circuitpython_version.tag }} --board pico_w tests/circuitpython/main-cyw43.py || \
-            echo "::warning title=CircuitPython pico-w WLAN test failed::${{ matrix.python_runtime }}-${{ matrix.circuitpython_version.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script opens a real TCP connection to 1.1.1.1:80 and resolves a real hostname through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
-        env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+          timeout 15m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --board pico_w tests/circuitpython/main-cyw43.py || \
+            echo "::warning title=CircuitPython pico-w WLAN test failed::${{ matrix.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script opens a real TCP connection to 1.1.1.1:80 and resolves a real hostname through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
