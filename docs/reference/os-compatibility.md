@@ -27,6 +27,7 @@ the same reason applies.
 | MockLED — onboard LED (`external/led_mock.py`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | WiFi (Pico W / CYW43439, `--board pico_w`) — scan/join against the built-in fake AP | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> |
 | …and real network access through its NAT bridge (guest TCP/UDP → host sockets) | ✅ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> |
+| BOOTSEL button (`external/bootsel_button.py`, both boards) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Waveshare 2.9″ e-Paper (`Epd2in9G` external device) | ✅ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> |
 | GDB server (`run`, TCP port 3333) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `--tcp-port` (socket REPL, `socket://host:port`) | ✅ | ✅ | ✅ | ✅ | ✅ <sup>[[7]](#fn7)</sup> | ✅ <sup>[[7]](#fn7)</sup> |
@@ -62,8 +63,8 @@ Everything still runs, just via the pure-Python path.
 this half is pure protocol emulation with no host dependency at all. Scan/join is live-boot-verified
 against real MicroPython Pico W firmware (v1.23.0/v1.28.0), but the AP is a fixture: one fake
 `"RP2040PY-GUEST"` network, any password "succeeds," no hidden-SSID or auth-failure path,
-`disconnect()` is a no-op, and there's no AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest
-only. See [records/0027-cyw43-wifi.md](../records/0027-cyw43-wifi.md) (and
+and there's no AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest only. (`disconnect()` *was*
+a no-op here; fixed in [0054](../records/0054-cyw43-disassoc.md).) See [records/0027-cyw43-wifi.md](../records/0027-cyw43-wifi.md) (and
 [0048](../records/0048-cyw43-nat-reflector.md)'s "Known gaps" for the full inventory).
 
 <a id="fn5"></a>
@@ -73,9 +74,11 @@ needs real outbound network access (and inherits whatever the host's firewall/sa
 bridge's own hermetic test suite (`tests/test_cyw43_nat.py`, real loopback sockets) runs in CI on
 Linux, macOS **and** Windows — that's how two Windows-specific bugs were caught — so the code path
 is exercised on all three desktop platforms. What is Linux-only is the *live* verification: the
-`pico_w` job that boots real firmware and opens a real TCP connection to `1.1.1.1:80`, resolves DNS
-via `mip.install()` and round-trips NTP runs on `ubuntu-latest` only (`ci-micropython.yml`), and
-that's also where it's been run by hand. Hence ✅ on Linux, ⚠️ (works in tests, never live-booted)
+`pico_w` jobs that boot real firmware and open a real TCP connection to `1.1.1.1:80` run on
+`ubuntu-latest` only - `ci-micropython.yml` (MicroPython: TCP, DNS via `mip.install()`, NTP, TLS),
+`ci-circuitpython.yml` (CircuitPython's `wifi`/`socketpool`) and `ci-kaluma.yml` (Kaluma's
+`require('wifi')`/`net`). All three stacks drive the same emulated bus; that is also where each has
+been run by hand. Hence ✅ on Linux, ⚠️ (works in tests, never live-booted)
 on macOS/Windows, ❓ on mobile, where app-sandbox network behavior is untested. See
 [records/0048-cyw43-nat-reflector.md](../records/0048-cyw43-nat-reflector.md).
 
