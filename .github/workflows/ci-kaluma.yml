@@ -110,7 +110,7 @@ jobs:
       # read low regardless of the pull, which looked identical to GP22 being pulled to GND, i.e.
       # "skip loading"). No mklittlefs step needed - the program stages directly from the file.
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
@@ -135,6 +135,6 @@ jobs:
       # README's Kaluma section), and matches its own printed result rather than the racy
       # boot-time "Welcome to Kaluma" banner.
       - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

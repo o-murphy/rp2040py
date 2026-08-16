@@ -60,7 +60,7 @@ from typing import Any
 
 import argcomplete
 
-from rp2040py.boards import BOARDS, build_rp2040
+from rp2040py.boards import BOARDS, BoardSpec, FlashLayout, build_rp2040, build_rp2040_from_spec, resolve_board_spec
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.pty_repl import PtyInteractiveRepl
@@ -80,7 +80,15 @@ from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import ShutdownRequest, Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
-from rp2040py.utils.firmware_retrieve import BOOTROM, CIRCUITPYTHON, KALUMA, MICROPYTHON, flash_layout, retrieve
+from rp2040py.utils.firmware_retrieve import (
+    BOOTROM,
+    CIRCUITPYTHON,
+    KALUMA,
+    MICROPYTHON,
+    FirmwareSpec,
+    flash_layout,
+    retrieve,
+)
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
@@ -191,6 +199,25 @@ def _maybe_exit_after_fetch(
     sys.exit(0)
 
 
+def _resolve_run_mcu(args: argparse.Namespace) -> "RP2040 | None":
+    """Resolves `--board`/`--board-spec`/`RP2040PY_BOARD_SPEC` (mutually exclusive - docs/records/
+    0049's "Accepted design" section) into a constructed `RP2040` for `run`, or `None` (already
+    logged) on failure. Unlike `micropython`/`kaluma`/`mklittlefs`, `--image` here is never routed
+    through a `BoardSpec` at all - it's always a raw local program, not board-family-versioned
+    firmware, so it stays fully independent of whichever of `--board`/`--board-spec` picked the
+    mcu/extras."""
+    board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
+    if board_spec_source is not None:
+        if args.board is not None:
+            _logger.error("--board-spec is mutually exclusive with --board")
+            return None
+        board = _load_board_spec_target(board_spec_source)
+        if board is None:
+            return None
+        return build_rp2040_from_spec(board)
+    return build_rp2040(args.board if args.board is not None else "pico")
+
+
 async def _run_async(args: argparse.Namespace) -> int:
     """`run`'s real body - a coroutine driven by `_cmd_run()`'s own `asyncio.run()` call, per
     docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape": this coroutine's own task *is* the
@@ -199,9 +226,11 @@ async def _run_async(args: argparse.Namespace) -> int:
     migrated (see that doc's "Phased plan") - `micropython`/`kaluma` still use the older
     `Simulator.start_execution()`/`wait_for_shutdown()` model via `BaseDevice`, unchanged for now.
     """
-    simulator = Simulator(rp2040=build_rp2040(args.board))
+    mcu = _resolve_run_mcu(args)
+    if mcu is None:
+        return 1
+    simulator = Simulator(rp2040=mcu)
     simulator.bind_loop()
-    mcu = simulator.rp2040
 
     mcu.load_bootrom(_resolve_bootrom_words(args.bootrom))
     mcu.logger = ConsoleLogger(_console_log_level(args))
@@ -406,6 +435,85 @@ def _validate_littlefs_fat12(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _load_board_spec_target(target_attr: str) -> "BoardSpec | None":
+    """Resolves `--board-spec`/`RP2040PY_BOARD_SPEC`'s `target:attr` (docs/records/0049's
+    "Accepted design" section) into a `BoardSpec` instance. `target` is a file path (loaded via
+    `importlib.util.spec_from_file_location` - no package required) or a dotted module path
+    (`importlib.import_module`, for an installed package); `attr` names a module-level `BoardSpec`
+    instance on it. Returns `None` (already logged) on any failure, rather than raising - same
+    error-reporting shape as `retrieve()`/`resolve_board_spec()`'s own callers already expect."""
+    if ":" not in target_attr:
+        _logger.error("--board-spec must be target:attr (e.g. my_board.py:BOARD), got %r", target_attr)
+        return None
+    target, _, attr = target_attr.rpartition(":")
+
+    if Path(target).exists():
+        module_spec = importlib.util.spec_from_file_location("_rp2040py_board_spec", target)
+        if module_spec is None or module_spec.loader is None:
+            _logger.error("Could not load board spec file: %s", target)
+            return None
+        module = importlib.util.module_from_spec(module_spec)
+        try:
+            module_spec.loader.exec_module(module)
+        except Exception as exc:  # noqa: BLE001 - a user's own board file, any exception is plausible
+            _logger.error("Error loading board spec file %s: %s", target, exc)
+            return None
+    else:
+        try:
+            module = importlib.import_module(target)
+        except ImportError as exc:
+            _logger.error("Could not import board spec module %r: %s", target, exc)
+            return None
+
+    try:
+        board = getattr(module, attr)
+    except AttributeError:
+        _logger.error("%s has no attribute %r", target, attr)
+        return None
+    if not isinstance(board, BoardSpec):
+        _logger.error("%s:%s is not a BoardSpec instance (got %s)", target, attr, type(board).__name__)
+        return None
+    return board
+
+
+def _validate_board_spec_flags(args: argparse.Namespace) -> None:
+    """`--board-spec`'s incompatible-flag set (docs/records/0049's "Accepted design" flag-
+    compatibility table: `--image`/`--fetch-fw-only` don't mean anything once a `BoardSpec`
+    already carries a concrete, resolved `image` - there's no tag/URL left to resolve or
+    pre-fetch). Validated by hand, same pattern as `_validate_littlefs_fat12()` (0036)."""
+    incompatible = [flag for flag, given in (("--image", args.image), ("--fetch-fw-only", args.fetch_fw_only)) if given]
+    if incompatible:
+        _logger.error("--board-spec is mutually exclusive with %s", ", ".join(incompatible))
+        sys.exit(1)
+
+
+def _resolve_board(args: argparse.Namespace, firmware_spec: FirmwareSpec) -> "BoardSpec | None":
+    """Resolves `--board`/`--board-spec`/`RP2040PY_BOARD_SPEC` (mutually exclusive - docs/records/
+    0049's "Accepted design" section) into one ready-to-run `BoardSpec`, or `None` (already
+    logged) on failure. `firmware_spec` (MICROPYTHON/CIRCUITPYTHON/KALUMA) is only consulted for
+    the `--board` path - a `--board-spec` `BoardSpec` already carries its own resolved
+    `image`/`layout`, nothing left here to look up against a firmware family."""
+    board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
+    if board_spec_source is not None:
+        if args.board is not None:
+            _logger.error("--board-spec is mutually exclusive with --board")
+            return None
+        _validate_board_spec_flags(args)
+        board = _load_board_spec_target(board_spec_source)
+        if board is None:
+            return None
+        if board.image is None:
+            _logger.error("--board-spec %s: BoardSpec.image is not set", board_spec_source)
+            return None
+        return board
+
+    board = resolve_board_spec(args.board if args.board is not None else "pico", firmware_spec, args.image)
+    if board.image is None:
+        _logger.error("Could not find firmware image: %s", args.image)
+        return None
+    return board
+
+
 async def _await_shutdown(simulator: Simulator) -> "int | None":
     """Async equivalent of `Simulator.wait_for_shutdown()`'s poll loop, for a caller already
     running on `simulator`'s own loop (docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape").
@@ -454,13 +562,13 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
             _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
             return 1
 
-    image_name = retrieve(CIRCUITPYTHON if args.circuitpython else MICROPYTHON, args.image, board=args.board)
-    if image_name is None:
-        _logger.error("Could not find micropython image: %s", args.image)
+    board = _resolve_board(args, CIRCUITPYTHON if args.circuitpython else MICROPYTHON)
+    if board is None:
         return 1
+    assert board.image is not None  # _resolve_board() never returns a BoardSpec with image=None
 
-    _logger.info("Loading uf2 image: %s", image_name)
-    _maybe_exit_after_fetch(args, image_path=image_name, bootrom_source=args.bootrom)
+    _logger.info("Loading uf2 image: %s", board.image)
+    _maybe_exit_after_fetch(args, image_path=Path(board.image), bootrom_source=args.bootrom)
     littlefs = (
         args.littlefs if not args.circuitpython and args.littlefs is not None and Path(args.littlefs).exists() else None
     )
@@ -474,8 +582,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
 
     try:
         device = MicroPythonDevice(
-            image_name,
-            board=args.board,
+            board=board,
             littlefs=littlefs,
             fat12=fat12,
             circuitpython=args.circuitpython,
@@ -556,13 +663,13 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
 async def _kaluma_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
-    image_name = retrieve(KALUMA, args.image, board=args.board)
-    if image_name is None:
-        _logger.error("Could not find kaluma image: %s", args.image)
+    board = _resolve_board(args, KALUMA)
+    if board is None:
         return 1
+    assert board.image is not None  # _resolve_board() never returns a BoardSpec with image=None
 
-    _logger.info("Loading uf2 image: %s", image_name)
-    _maybe_exit_after_fetch(args, image_path=image_name, bootrom_source=args.bootrom)
+    _logger.info("Loading uf2 image: %s", board.image)
+    _maybe_exit_after_fetch(args, image_path=Path(board.image), bootrom_source=args.bootrom)
     littlefs = args.littlefs if args.littlefs is not None and Path(args.littlefs).exists() else None
     if littlefs is not None:
         _logger.info("Loading littlefs image: %s", littlefs)
@@ -572,8 +679,7 @@ async def _kaluma_async(args: argparse.Namespace) -> "int | None":
 
     try:
         device = KalumaDevice(
-            image_name,
-            board=args.board,
+            board=board,
             littlefs=littlefs,
             program=args.filename,
             bootrom_words=_resolve_bootrom_words(args.bootrom),
@@ -688,7 +794,7 @@ def _bench_firmware(
 
     if littlefs:
         try:
-            load_micropython_flash_image(littlefs, rp2040, board)
+            load_micropython_flash_image(littlefs, rp2040, FlashLayout(**flash_layout(MICROPYTHON, board)))
         except ValueError as exc:
             _logger.error("%s", exc)
             sys.exit(1)
@@ -859,17 +965,55 @@ def _target_fs_layout(target: str, board: str) -> "tuple[int, int]":
     return layout["fs_blocksize"], layout["fs_blockcount"]
 
 
+def _resolve_mklittlefs_layout(args: argparse.Namespace) -> "tuple[int, int] | None":
+    """(block_size, block_count) for `mklittlefs`, from `--board-spec`'s own resolved
+    `BoardSpec.layout`, `--target`'s board-aware firmware-family lookup, or explicit
+    `--block-size`/`--block-count` - validated by hand (docs/records/0049's flag-compatibility
+    table: `--target` is incompatible with `--board-spec`, there's no board name left to resolve
+    it against once a `BoardSpec` already carries its own single, already-resolved layout).
+    Returns `None` (already logged) on failure."""
+    board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
+    if board_spec_source is not None:
+        if args.board is not None:
+            _logger.error("--board-spec is mutually exclusive with --board")
+            return None
+        if args.target is not None:
+            _logger.error("--board-spec is mutually exclusive with --target")
+            return None
+        board = _load_board_spec_target(board_spec_source)
+        if board is None:
+            return None
+        if args.block_size is not None and args.block_count is not None:
+            return args.block_size, args.block_count
+        if board.layout is None:
+            _logger.error(
+                "--board-spec %s: BoardSpec.layout is not set (needed unless both "
+                "--block-size/--block-count are given)",
+                board_spec_source,
+            )
+            return None
+        block_size = args.block_size if args.block_size is not None else board.layout.fs_blocksize
+        block_count = args.block_count if args.block_count is not None else board.layout.fs_blockcount
+        return block_size, block_count
+
+    board_name = args.board if args.board is not None else "pico"
+    if args.target is not None:
+        return _target_fs_layout(args.target, board_name)
+    default_block_size, default_block_count = _target_fs_layout("micropython", board_name)
+    block_size = args.block_size if args.block_size is not None else default_block_size
+    block_count = args.block_count if args.block_count is not None else default_block_count
+    return block_size, block_count
+
+
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
     if args.target is not None and (args.block_size is not None or args.block_count is not None):
         _logger.error("--target is mutually exclusive with --block-size/--block-count")
         sys.exit(1)
 
-    if args.target is not None:
-        block_size, block_count = _target_fs_layout(args.target, args.board)
-    else:
-        default_block_size, default_block_count = _target_fs_layout("micropython", args.board)
-        block_size = args.block_size if args.block_size is not None else default_block_size
-        block_count = args.block_count if args.block_count is not None else default_block_count
+    layout = _resolve_mklittlefs_layout(args)
+    if layout is None:
+        sys.exit(1)
+    block_size, block_count = layout
 
     try:
         build_littlefs_image(
@@ -906,7 +1050,15 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
 
 _IMAGE_TAG_HELP = "version tag, local file path, or omitted to download the default"
 _IMAGE_PATH_HELP = "local .hex/.uf2 image path"
-_BOARD_HELP = "which board's MCU/fixed extras to construct (default: %(default)s)"
+_BOARD_HELP = "which board's MCU/fixed extras to construct (default: pico)"
+_BOARD_SPEC_HELP = (
+    "target:attr pointing at a module-level BoardSpec instance - a file path (loaded without "
+    "needing a package) or a dotted module path; brings your own mcu/extras/image/layout instead "
+    "of --board's fixed registry. Mutually exclusive with --board and any flag that would "
+    "otherwise resolve a tag/version against it (see this command's own error messages for which) "
+    "(also settable via the RP2040PY_BOARD_SPEC env var, so it doesn't need typing every "
+    "invocation)"
+)
 _FETCH_FW_ONLY_HELP = (
     "download/cache the firmware image (and --bootrom, if a version tag) then exit, without "
     "starting the simulator - for pre-warming the local cache (e.g. before going offline, or in CI)"
@@ -1045,17 +1197,27 @@ def main(argv: "list[str] | None" = None) -> None:
 
     run_parser = subparsers.add_parser(
         "run",
-        parents=[_shared_arg_parser("board", "gdb-port", "bootrom", "fetch-fw-only")],
+        parents=[_shared_arg_parser("gdb-port", "bootrom", "fetch-fw-only")],
         help="run a native .hex/.uf2 image with a GDB server",
     )
-    run_parser.add_argument("--image", default="hello_uart.hex", help=f"{_IMAGE_PATH_HELP} (default: %(default)s)")
+    # See mp_parser's own --board/--board-spec comment above for why --board defaults to None
+    # here. Unlike micropython/kaluma/mklittlefs, --image is NOT part of the --board/--board-spec
+    # choice at all for `run` - it's always a raw local program, never board-family-versioned
+    # firmware, so it stays fully independent of either.
+    run_parser.add_argument("--board", choices=tuple(BOARDS), default=None, help=_BOARD_HELP)
+    run_parser.add_argument("--board-spec", default=None, metavar="target:attr", help=_BOARD_SPEC_HELP)
+    run_parser.add_argument(
+        "--image",
+        type=_mk_file_suffixes_validator(".hex", ".uf2"),
+        default="hello_uart.hex",
+        help=f"{_IMAGE_PATH_HELP} (default: %(default)s)",
+    )
     run_parser.set_defaults(func=_cmd_run)
 
     mp_parser = subparsers.add_parser(
         "micropython",
         parents=[
             _shared_arg_parser(
-                "board",
                 "gdb-port",
                 "gdb",
                 "bootrom",
@@ -1070,6 +1232,12 @@ def main(argv: "list[str] | None" = None) -> None:
         ],
         help="run a MicroPython/CircuitPython UF2 image",
     )
+    # --board's default is applied inside _resolve_board() (not here, via `default="pico"`) so
+    # None unambiguously means "the flag was never given" - the signal --board-spec's mutual-
+    # exclusion check (docs/records/0049) needs to tell "explicitly passed --board pico" apart
+    # from "--board defaulted".
+    mp_parser.add_argument("--board", choices=tuple(BOARDS), default=None, help=_BOARD_HELP)
+    mp_parser.add_argument("--board-spec", default=None, metavar="target:attr", help=_BOARD_SPEC_HELP)
     mp_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     mp_parser.add_argument("--circuitpython", action="store_true")
     mp_parser.add_argument("--fat12", type=_FAT_SUFIX_VALIDATOR, help="optional fat12.img to load")
@@ -1095,7 +1263,6 @@ def main(argv: "list[str] | None" = None) -> None:
         "kaluma",
         parents=[
             _shared_arg_parser(
-                "board",
                 "gdb-port",
                 "gdb",
                 "bootrom",
@@ -1110,6 +1277,9 @@ def main(argv: "list[str] | None" = None) -> None:
         ],
         help="run a Kaluma UF2 image (interactive REPL only)",
     )
+    # See mp_parser's own --board/--board-spec comment above for why --board defaults to None here.
+    kaluma_parser.add_argument("--board", choices=tuple(BOARDS), default=None, help=_BOARD_HELP)
+    kaluma_parser.add_argument("--board-spec", default=None, metavar="target:attr", help=_BOARD_SPEC_HELP)
     kaluma_parser.add_argument("--image", help=_IMAGE_TAG_HELP)
     kaluma_parser.add_argument(
         "filename",
@@ -1144,9 +1314,12 @@ def main(argv: "list[str] | None" = None) -> None:
     if _HAS_LITTLEFS:
         mklittlefs_parser = subparsers.add_parser(
             "mklittlefs",
-            parents=[_shared_arg_parser("board")],
             help="build a littlefs image for `micropython`'s filesystem support",
         )
+        # See mp_parser's own --board/--board-spec comment above for why --board defaults to None
+        # here rather than via _shared_arg_parser("board")'s usual default="pico".
+        mklittlefs_parser.add_argument("--board", choices=tuple(BOARDS), default=None, help=_BOARD_HELP)
+        mklittlefs_parser.add_argument("--board-spec", default=None, metavar="target:attr", help=_BOARD_SPEC_HELP)
         mklittlefs_parser.add_argument(
             "files",
             nargs="*",

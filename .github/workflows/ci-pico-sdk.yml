@@ -75,6 +75,6 @@ jobs:
       # (see docs/PORTING.md#known-differences-from-rp2040js). demo/micropython_run.py has zero
       # runtime dependencies, so no `uv sync` is needed here.
       - name: Test "Hello World" example ${{ matrix.python_runtime }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

@@ -15,9 +15,10 @@ import asyncio
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from os import PathLike
+from pathlib import Path
 from typing import TypeVar
 
-from rp2040py.boards import build_rp2040
+from rp2040py.boards import BoardSpec, build_rp2040_from_spec
 from rp2040py.device.load_flash import load_uf2
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.rp2040 import RP2040
@@ -48,14 +49,14 @@ class BaseDevice:
 
     def __init__(
         self,
-        image: PathLike,
         *,
-        board: str = "pico",
+        board: BoardSpec,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
+        assert board.image is not None, "board.image must already be resolved (see resolve_board_spec())"
         self.board = board
-        self.simulator = Simulator(rp2040=build_rp2040(board))
+        self.simulator = Simulator(rp2040=build_rp2040_from_spec(board))
         self.mcu: RP2040 = self.simulator.rp2040
 
         if bootrom_words is None:
@@ -65,7 +66,9 @@ class BaseDevice:
 
         self.mcu.load_bootrom(bootrom_words)
         self.mcu.logger = ConsoleLogger(log_level)
-        load_uf2(image, self.mcu)
+        # Path(...): BoardSpec.image is typed str | Path | None (a hand-built BoardSpec may
+        # reasonably set it to a plain string) - load_uf2() itself wants a real PathLike.
+        load_uf2(Path(board.image), self.mcu)
         self.cdc = USBCDC(self.mcu.usb_ctrl)
         self.mcu.watchdog.on_watchdog_trigger = self._on_watchdog_trigger
         self._started = False

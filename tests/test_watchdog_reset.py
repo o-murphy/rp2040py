@@ -7,8 +7,10 @@ directly, the same way tests/test_device.py's `garbage_image` fixture avoids boo
 for its own timeout/ordering tests.
 """
 
+import dataclasses
 import struct
 
+from rp2040py.boards import BOARDS
 from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.peripherals.watchdog import CTRL, TRIGGER
@@ -28,7 +30,8 @@ def _write_minimal_uf2(path, payload: bytes = b"\x00\x00\x00\x00") -> None:
 def _make_device(tmp_path) -> MicroPythonDevice:
     image = tmp_path / "garbage.uf2"
     _write_minimal_uf2(image, payload=b"\xab\xcd\xef\x01")
-    return MicroPythonDevice(str(image))
+    board = dataclasses.replace(BOARDS["pico"], image=str(image))
+    return MicroPythonDevice(board=board)
 
 
 def _trigger_watchdog(device: MicroPythonDevice) -> None:
