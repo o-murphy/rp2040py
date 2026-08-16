@@ -54,17 +54,19 @@ jobs:
         continue-on-error: true
         run: uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --fetch-fw-only
 
-      # Boots to the friendly REPL and exits as soon as the banner appears - the emulated boot
-      # itself is the cost here, so there is nothing to shorten beyond exiting on first match.
+      # Boots to the friendly REPL and exits as soon as the banner appears. Measured on a
+      # developer machine (2026-08-16): 16s for 8.0.2, 9s for 10.2.1. The 5m cap is a runner-speed
+      # allowance over that, not a guess - an earlier 10m here was ~40x the real cost and hid it.
       - name: Test CircuitPython ${{ matrix.tag }} boots
-        run: timeout 10m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --expect-text "Adafruit CircuitPython"
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --expect-text "Adafruit CircuitPython"
 
-      # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step, and soft-failing for
+      # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step (33s measured
+      # locally, 2026-08-16), and soft-failing for
       # the same reason: it opens a real TCP connection and a real DNS query to the internet
       # through the emulator's NAT bridge, so a CI-runner network hiccup is not an emulator
       # regression.
       - name: Test CircuitPython pico-w WLAN ${{ matrix.tag }}
         if: ${{ matrix.wlan }}
         run: |
-          timeout 15m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --board pico_w tests/circuitpython/main-cyw43.py || \
+          timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --board pico_w tests/circuitpython/main-cyw43.py || \
             echo "::warning title=CircuitPython pico-w WLAN test failed::${{ matrix.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script opens a real TCP connection to 1.1.1.1:80 and resolves a real hostname through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
