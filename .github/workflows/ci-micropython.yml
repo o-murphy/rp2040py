@@ -136,6 +136,6 @@ jobs:
         if: ${{ matrix.micropython_version.pico_w }}
         run: |
           timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --board pico_w tests/micropython/main-cyw43.py || \
-            echo "::warning title=pico-w WLAN test failed::${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md (known raw-throughput ceiling on v1.28.0)"
+            echo "::warning title=pico-w WLAN test failed::${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script now also opens a real TCP connection to 1.1.1.1:80 through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}

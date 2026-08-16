@@ -58,6 +58,7 @@ from rp2040py.external.cyw43.bus import (
     STATUS_F2_PKT_LEN_SHIFT,
     TEST_PATTERN,
     WLAN_FUNCTION,
+    WLC_GET_VAR,
     WLC_SET_SSID,
     WLC_SET_VAR,
     WORD_LENGTH_32,
@@ -623,6 +624,34 @@ def test_ioctl_response_keeps_wireless_flow_control_zero():
     assert response[8] == 0  # wireless_flow_control byte
 
 
+def test_cur_etheraddr_get_returns_a_real_mac_not_all_zero():
+    """Step 4a (docs/records/0048-cyw43-nat-reflector.md): `cyw43_ll_wifi_get_mac()`'s `cur_etheraddr`
+    WLC_GET_VAR only reads the response payload's first 6 bytes (`memcpy(addr, buf, 6)`) - must not
+    be the generic all-zero fill, or `config('mac')`/`netif->hwaddr` stay all-zero on a live boot."""
+    _rp2040, master = _wire_up()
+    payload = b"cur_etheraddr\x00" + bytes(6)
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1, cmd=WLC_GET_VAR, payload=payload))
+
+    response = _read_f2_response(master)
+
+    response_payload = response[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :]
+    assert len(response_payload) == len(payload)
+    assert response_payload[:6] == b"\x00\x10\x18\x00\x00\x02"
+    assert response_payload[6:] == bytes(len(payload) - 6)
+
+
+def test_other_get_var_requests_still_get_the_generic_zero_fill():
+    """Only `cur_etheraddr` is special-cased - any other WLC_GET_VAR iovar must still get the
+    existing generic all-zero response, not the MAC prefix."""
+    _rp2040, master = _wire_up()
+    payload = b"some_other_var\x00" + bytes(4)
+    _send_wlan_frame(master, _build_ioctl_request(request_id=1, cmd=WLC_GET_VAR, payload=payload))
+
+    response = _read_f2_response(master)
+
+    assert response[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :] == bytes(len(payload))
+
+
 def test_malformed_size_checksum_request_is_ignored():
     _rp2040, master = _wire_up()
     request = bytearray(_build_ioctl_request(request_id=1))
@@ -635,13 +664,13 @@ def test_malformed_size_checksum_request_is_ignored():
 
 
 def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer():
-    """DATA_HEADER (outbound Ethernet, step 4's NAT bridge) isn't built yet, so there's no real
-    content to answer with - but it must still get *some* response (a bare, ioctl-header-less
-    flow-control frame - real firmware's own named case for this, see
-    _build_flow_control_response()'s docstring for why silence here permanently desyncs
-    cyw43_sdpcm_send_common()'s shared credit/transmit-sequence channel, found live-booting real
-    firmware: an unanswered data send deadlocks every later ioctl too, well before scan()/
-    connect() ever run)."""
+    """A bare `GSPIBus()` (no `nat_bridge` attached, as here) must still answer a DATA_HEADER
+    write with *some* response (a bare, ioctl-header-less flow-control frame - real firmware's own
+    named case for this, see _build_flow_control_response()'s docstring for why silence here
+    permanently desyncs cyw43_sdpcm_send_common()'s shared credit/transmit-sequence channel, found
+    live-booting real firmware: an unanswered data send deadlocks every later ioctl too, well
+    before scan()/connect() ever run) - independent of whether a NAT bridge (step 4, docs/records/
+    0048-cyw43-nat-reflector.md) is attached to interpret the frame's actual Ethernet content."""
     _rp2040, master = _wire_up()
     request = bytearray(_build_ioctl_request(request_id=1))
     request[5] = DATA_HEADER  # override channel_and_flags's low nibble

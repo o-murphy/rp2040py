@@ -1,18 +1,15 @@
 """`Cyw43439` - the `ExternalDevice` (see `external/device.py`) that owns a `GSPIBus` (`bus.py`) and
-wires it onto a board's real WL_CLK/WL_D/WL_CS pins. Currently just that: `bus.py`'s F0/F1/F2
-decode is the entire chip model so far (docs/CYW43_WIFI_BACKLOG.md steps 3a-3f) - firmware/CLM
-block-write downloads are accepted (via the generic F1 block-transfer path), and real firmware's
-own SDPCM+ioctl requests now get a generic zero-length "success" response (`GSPIBus._write_wlan()`/
-`_build_ioctl_success_response()`), which is what `queue_rx_packet()`'s F2 delivery mechanism
-(step 3e) actually gets used for now. Real per-ioctl content and async events (`WLC_SET_SSID`/join,
-scan results) are still step 3g, so real firmware's init handshake, ALP/HT/KSO clock handshake,
-firmware download, and the bulk of `cyw43_ll_wifi_on()`'s own bring-up ioctls can all get past this
-model, but nothing that needs a scripted, content-aware response yet.
+wires it onto a board's real WL_CLK/WL_D/WL_CS pins, plus a `NatBridge` (`nat.py`, step 4 - docs/
+records/0048-cyw43-nat-reflector.md) onto `bus.nat_bridge`. `bus.py`'s F0/F1/F2 decode, SDPCM+ioctl
+framing, and scripted scan/join (step 3) are the wire-protocol side of the chip model; `nat.py` is
+what answers real outbound Ethernet traffic (`DATA_HEADER` frames) once the guest actually tries to
+use the link - MAC address, DHCP lease, gateway ARP, and the TCP reflector itself.
 """
 
 from typing import TYPE_CHECKING
 
 from rp2040py.external.cyw43.bus import GSPIBus
+from rp2040py.external.cyw43.nat import NatBridge
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -33,3 +30,4 @@ class Cyw43439:
 
     def attach(self, rp2040: "RP2040") -> None:
         self.bus.attach_gpio(rp2040, clk=self._clk, data=self._data, cs=self._cs)
+        self.bus.nat_bridge = NatBridge(rp2040, queue_ethernet_frame=self.bus.queue_rx_ethernet_frame)

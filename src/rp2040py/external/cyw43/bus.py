@@ -167,6 +167,7 @@ from typing import TYPE_CHECKING
 from rp2040py.gpio_pin import GPIOPinState
 
 if TYPE_CHECKING:
+    from rp2040py.external.cyw43.nat import NatBridge
     from rp2040py.gpio_pin import GPIOPin
     from rp2040py.rp2040 import RP2040
 
@@ -177,6 +178,7 @@ __all__ = (
     "ASYNCEVENT_HEADER",
     "BACKPLANE_ADDR_MASK",
     "BACKPLANE_FUNCTION",
+    "BDC_HEADER_LEN",
     "BUS_FUNCTION",
     "CDCF_IOC_ID_MASK",
     "CDCF_IOC_ID_SHIFT",
@@ -236,6 +238,7 @@ __all__ = (
     "TEST_PATTERN",
     "WLAN_ARMCM3_BASE_ADDRESS",
     "WLAN_FUNCTION",
+    "WLC_GET_VAR",
     "WLC_SET_SSID",
     "WLC_SET_VAR",
     "WORD_LENGTH_32",
@@ -372,14 +375,15 @@ AIRC_RESET = 1
 SDPCM_HEADER_LEN = 12
 # `struct ioctl_header_t` is 4 uint32 fields (cmd/len/flags/status) = 16 bytes.
 IOCTL_HEADER_LEN = 16
-# sdpcm_header_t.channel_and_flags low nibble - only CONTROL_HEADER (ioctl request/response) is
-# actually handled by _write_wlan() (everything else, including DATA_HEADER, falls through its
-# `kind != CONTROL_HEADER` check and is silently ignored). DATA_HEADER is still named here rather
-# than left a bare magic number, since it's the concrete "not yet built" case worth naming
-# (outbound Ethernet, step 4's NAT bridge). ASYNCEVENT_HEADER (step 3g, chip-to-host only) isn't
-# needed on this side yet.
+# sdpcm_header_t.channel_and_flags low nibble - CONTROL_HEADER (ioctl request/response) and
+# DATA_HEADER (outbound Ethernet, step 4's NAT bridge - docs/records/0048-cyw43-nat-reflector.md)
+# are both handled by _write_wlan(); ASYNCEVENT_HEADER (step 3g, chip-to-host only) isn't needed on
+# this side.
 CONTROL_HEADER = 0
 DATA_HEADER = 2
+# BDC (Broadcom Device Control) header - precedes the raw Ethernet frame in every DATA_HEADER
+# payload, both directions (cyw43_ll.c's sdpcm_bdc_header_t: flags/priority/flags2/data_offset).
+BDC_HEADER_LEN = 4
 # ioctl_header_t.flags: the requesting id lives in the top 16 bits - sdpcm_process_rx_packet()
 # (cyw43_ll.c) drops any response whose echoed id doesn't match the driver's own last-sent one.
 CDCF_IOC_ID_SHIFT = 16
@@ -389,7 +393,12 @@ CDCF_IOC_ID_MASK = 0xFFFF0000
 # numbers, cyw43_ll.h's CYW43_EV_*/CYW43_STATUS_* event constants).
 WLC_SET_SSID = 26  # cyw43_ll_wifi_join()'s own final ioctl, past the generic-ack-only prefix.
 WLC_SET_VAR = 263  # iovar dispatch (name-prefixed payload) - only "escan" gets scripted follow-up.
+WLC_GET_VAR = 262  # GET-side counterpart of WLC_SET_VAR - only "cur_etheraddr" (step 4a) is scripted.
 ASYNCEVENT_HEADER = 1  # sdpcm_header_t.channel_and_flags low nibble - chip-to-host only.
+
+# Step 4a (docs/records/0048-cyw43-nat-reflector.md) - a fixed, plausible MAC answered for the
+# cur_etheraddr GET (cyw43_ll_wifi_get_mac() only reads the first 6 bytes of the response payload).
+_GUEST_MAC = b"\x00\x10\x18\x00\x00\x02"
 
 CYW43_EV_SET_SSID = 0
 CYW43_EV_AUTH = 3
@@ -543,6 +552,10 @@ class GSPIBus:
         # Set by attach_gpio() - the pin this bus drives its response bits onto/samples host bits
         # from. None until attached (mirrors every other ExternalDevice-adjacent component here).
         self._data_pin: GPIOPin | None = None
+        # Set by Cyw43439.attach() (step 4, docs/records/0048-cyw43-nat-reflector.md). A public
+        # attribute, not a bare private one poked from outside - None here preserves today's exact
+        # drop-the-payload DATA_HEADER behavior for any caller that constructs a bare GSPIBus().
+        self.nat_bridge: NatBridge | None = None
 
     # -- wire word-length/endian transform ------------------------------------------------------
 
@@ -645,6 +658,31 @@ class GSPIBus:
             return
         self._activate_rx_packet(data)
 
+    def queue_rx_ethernet_frame(self, ethernet_frame: bytes, *, interface: int = 0) -> None:
+        """The `DATA_HEADER` counterpart to `queue_rx_packet()` - `nat_bridge`'s (step 4) only
+        entry point back into this bus, so `nat.py` never has to touch SDPCM/BDC framing itself."""
+        self.queue_rx_packet(self._build_data_frame(ethernet_frame, interface=interface))
+
+    def _build_data_frame(self, ethernet_frame: bytes, *, interface: int = 0) -> bytes:
+        """Inbound `DATA_HEADER` envelope for a synthesized reply (ARP reply, DHCP OFFER/ACK, TCP
+        SYN-ACK/data/FIN) - same 12-byte SDPCM header + BDC-header shape `_build_async_event()`
+        uses for its own inbound frames, but `kind=DATA_HEADER` and `header_length=
+        SDPCM_HEADER_LEN+2=14` (the 2-byte pad real `DATA_HEADER` frames carry, that
+        `ASYNCEVENT_HEADER` frames don't - see docs/records/0045-cyw43-nat-libslirp-cython.md's
+        "Resolved research finding" for the derivation, confirmed against `cyw43_ll.c`'s own
+        `sdpcm_process_rx_packet()` DATA_HEADER case)."""
+        bdc_header = bytes([0x20, 0, interface, 0])  # flags/priority/flags2(itf)/data_offset
+        payload = bytes(2) + bdc_header + ethernet_frame  # 2-byte pad, then BDC header, then the frame
+        size = SDPCM_HEADER_LEN + len(payload)
+        self._bus_data_credit = (self._bus_data_credit + 1) & 0xFF
+        sdpcm_header = (
+            size.to_bytes(2, "little")
+            + (~size & 0xFFFF).to_bytes(2, "little")
+            + bytes([0, DATA_HEADER, 0, SDPCM_HEADER_LEN + 2, 0, self._bus_data_credit])
+            + bytes(2)  # reserved
+        )
+        return sdpcm_header + payload
+
     def _activate_rx_packet(self, data: bytes) -> None:
         """Makes `data` the current F2-visible packet: sets `SPI_STATUS_REGISTER`'s
         `STATUS_F2_PKT_AVAILABLE` bit + length field and `SPI_INTERRUPT_REGISTER`'s
@@ -685,12 +723,20 @@ class GSPIBus:
 
     # -- F2 (WLAN_FUNCTION) outbound SDPCM/ioctl (step 3f) --------------------------------------
 
-    def _build_ioctl_success_response(self, request_id: int, response_len: int = 0) -> bytes:
+    def _build_ioctl_success_response(
+        self, request_id: int, response_len: int = 0, *, response_prefix: bytes = b""
+    ) -> bytes:
         """Generic "success" SDPCM+ioctl response, its payload `response_len` bytes of zeros -
         satisfies the bulk of the real `WLC_*`/iovar vocabulary `cyw43_ll_wifi_on()`/
         `cyw43_ll_wifi_join()` send during bring-up without needing per-ioctl content (step 3g is
         where the handful that actually need scripted behavior - `WLC_SET_SSID`/join - get real
         responses instead of this).
+
+        `response_prefix` (step 4a) overlays its bytes onto the start of the otherwise-zero
+        payload, still zero-padded/truncated to exactly `response_len` - used for `cur_etheraddr`
+        GET responses, whose only real content is a 6-byte MAC at offset 0
+        (`cyw43_ll_wifi_get_mac()`'s own `memcpy(addr, buf, 6)`). Keeps the zero-fill-to-
+        `response_len` correctness contract intact either way (see the next paragraph).
 
         **Must not stay zero-length unconditionally** (an earlier version of this did) - found by
         booting real firmware (2026-08-13), not by reading source alone. `cyw43_do_ioctl()`
@@ -737,7 +783,7 @@ class GSPIBus:
           response keeps exactly one ahead, matching this chip model's synchronous
           one-request-one-response shape. `wireless_flow_control` must also stay 0 - any nonzero
           value has the same stalling effect, unconditionally, on every later send."""
-        payload = bytes(response_len)
+        payload = (response_prefix + bytes(response_len))[:response_len]
         ioctl_header = (
             (0).to_bytes(4, "little")  # cmd - not inspected by the driver on a response
             + response_len.to_bytes(4, "little")  # len (output length)
@@ -885,11 +931,16 @@ class GSPIBus:
         request's id and zero-fills a response payload the same length as the request's own
         payload (`_build_ioctl_success_response()` - see its own docstring for why a zero-filled
         response, not just a zero-length ack, is required). `DATA_HEADER` outbound Ethernet frames
-        (step 4's NAT bridge, not built) get a bare flow-control-only response instead
+        always get a bare flow-control-only response first, unconditionally
         (`_build_flow_control_response()` - see its own docstring for why *some* response is
-        required even with no real content to answer with). A malformed/too-short frame is silently
-        ignored, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise stance elsewhere in
-        this class.
+        required even with no real content to answer with) - `nat_bridge` (step 4, docs/records/
+        0048-cyw43-nat-reflector.md), if attached, then gets the frame's Ethernet payload (BDC
+        header stripped) via `handle_outbound_ethernet_frame()`. Any real reply (ARP, DHCP,
+        TCP SYN-ACK/data/FIN) always arrives as a separate, later, independently-framed inbound
+        packet via `queue_rx_ethernet_frame()`/`queue_rx_packet()`'s FIFO - never synchronously
+        tied to the triggering write, matching 3g's own scripted-event shape. A malformed/too-short
+        frame is silently ignored, matching `WLAN_FUNCTION`'s existing no-op-rather-than-raise
+        stance elsewhere in this class.
 
         Two `CONTROL_HEADER` requests get real scripted behavior queued *behind* their own generic
         ack (step 3g, see the module docstring's "Async events + scripted scan/join" section): a
@@ -903,6 +954,9 @@ class GSPIBus:
         kind = data[5] & 0x0F  # channel_and_flags, low nibble
         if kind == DATA_HEADER:
             self.queue_rx_packet(self._build_flow_control_response())
+            frame_offset = SDPCM_HEADER_LEN + 2 + BDC_HEADER_LEN  # 2-byte pad + BDC header
+            if self.nat_bridge is not None and len(data) >= frame_offset:
+                self.nat_bridge.handle_outbound_ethernet_frame(data[frame_offset:])
             return
         if kind != CONTROL_HEADER or len(data) < SDPCM_HEADER_LEN + IOCTL_HEADER_LEN:
             return
@@ -910,7 +964,10 @@ class GSPIBus:
         flags = int.from_bytes(data[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
         request_id = (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT
         request_payload = data[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :]
-        self.queue_rx_packet(self._build_ioctl_success_response(request_id, len(request_payload)))
+        response_prefix = _GUEST_MAC if cmd == WLC_GET_VAR and request_payload.startswith(b"cur_etheraddr\x00") else b""
+        self.queue_rx_packet(
+            self._build_ioctl_success_response(request_id, len(request_payload), response_prefix=response_prefix)
+        )
         if cmd == WLC_SET_VAR and request_payload.startswith(b"escan\x00"):
             self._queue_scan_events()
         elif cmd == WLC_SET_SSID:

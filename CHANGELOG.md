@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CYW43 step 4: a real network bridge for the emulated Pico W WiFi interface** (see
+  [record 0048](docs/records/0048-cyw43-nat-reflector.md), which supersedes 0045's heavier
+  gVisor/`cgo` plan). Previously the emulated CYW43439 could complete a fake-AP link-layer join but
+  never actually reached a real IP address or the real internet; now it can. A custom, minimal
+  hand-rolled TCP reflector splices the guest's TCP connections onto real `asyncio` sockets — not a
+  real independent TCP/IP stack: the guest-facing leg reuses the bus's own lossless, in-order
+  delivery, so it needs no retransmission timers, congestion control, or reassembly, only handshake
+  spoofing, seq/ack bookkeeping, and FIN/RST propagation; the real internet-facing leg is a plain
+  OS socket, so the OS's own TCP stack does all the loss-prone work there. Also new: a real MAC
+  address (`config('mac')`), a DHCP lease (`ipconfig('addr4')`, so `isconnected()` genuinely becomes
+  `True`), gateway ARP resolution, and a UDP relay (DNS by default via a fixed public resolver, or
+  any other real UDP destination — e.g. `ntptime` — relayed directly). Verified against real,
+  unmodified MicroPython `v1.23.0`/`v1.28.0` firmware: real `socket` connections, `mip.install()`,
+  and `ntptime.settime()` all work end-to-end. Known limits: one fixed guest/gateway address (no
+  config surface), station mode only (no AP emulation), and `disconnect()` is currently a no-op —
+  full inventory in the record's own "Known gaps" section.
+
 ## [0.2.1] - 2026-08-15
 
 ### Changed
