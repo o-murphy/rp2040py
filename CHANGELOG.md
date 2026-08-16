@@ -16,6 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actual how-to). `external/device.py`/`external/led_mock.py`'s docstrings also had their dead
   `docs/CYW43_WIFI_BACKLOG.md` references (removed by the 2026-08-12 docs restructure) re-pointed
   to the real records that carry those sections (0027/0028/0029).
+- `boards/micropython/WEACTSTUDIO/` - a real, live-verified `--board-spec` example (against real
+  MicroPython `v1.28.0` firmware, all four of the board's flash-size variants) for
+  docs/reference/external-devices-and-boards.md: one `BoardSpec` per flash size
+  (`FLASH_2M`/`FLASH_4M`/`FLASH_8M`, and 16 MiB by default, matching MicroPython's own
+  `WEACTSTUDIO` board port), reusing built-in `LEDMock`/`BootselButton`/`KeyMock` throughout - no
+  board-specific device class needed, just parameterizing existing generic ones. Lives outside
+  `src/rp2040py` on purpose - a `--board-spec` target (`--board-spec
+  boards/micropython/WEACTSTUDIO/__init__.py:BOARD`, or `PYTHONPATH=. ... --board-spec
+  boards.micropython.WEACTSTUDIO:BOARD` as a dotted module - the same way a board organized as its
+  own multi-file package with relative imports would need to be loaded, `--board-spec`'s
+  file-path form intentionally stays single-file-only), not part of the installed package.
+
+### Fixed
+- `external.key_mock.KeyMock.release()` used to actively drive the pin to its "not pressed" level
+  (`set_input_value()`) instead of letting go of it (`GPIOPin.release_input()`, 0006's
+  pull-resistor-resolution model) — correct-looking whenever firmware configures the matching
+  internal pull-up/pull-down, but silently masking it if firmware forgot to, the same class of bug
+  `external/bootsel_button.py`'s own `release()` was already written to avoid. Fixed to mirror it:
+  `press()` still actively drives (a real short), `release()` now hands the pin back to its pull
+  resistor instead of asserting a value on its own.
 
 ### Changed
 - **Breaking:** `MicroPythonDevice`/`KalumaDevice`'s constructors no longer take `image`/`board:

@@ -437,10 +437,15 @@ def _validate_littlefs_fat12(args: argparse.Namespace) -> None:
 
 def _load_board_spec_target(target_attr: str) -> "BoardSpec | None":
     """Resolves `--board-spec`/`RP2040PY_BOARD_SPEC`'s `target:attr` (docs/records/0049's
-    "Accepted design" section) into a `BoardSpec` instance. `target` is a file path (loaded via
-    `importlib.util.spec_from_file_location` - no package required) or a dotted module path
-    (`importlib.import_module`, for an installed package); `attr` names a module-level `BoardSpec`
-    instance on it. Returns `None` (already logged) on any failure, rather than raising - same
+    "Accepted design" section) into a `BoardSpec` instance. `target` is a single-file path (loaded
+    via `importlib.util.spec_from_file_location` - no package required, no relative imports either
+    since it isn't given any package context) or a dotted module path (`importlib.import_module`,
+    for an installed package, or a local one made importable the same way `python -m`/`-c` already
+    would - e.g. `PYTHONPATH=.` - relative imports inside it work exactly as they would for any
+    other package, no special-casing needed here); `attr` names a module-level `BoardSpec`
+    instance on it. A board file that needs its own multi-file/`devices/`-style package layout
+    (see docs/reference/external-devices-and-boards.md) should use the dotted-module form, not the
+    file-path one. Returns `None` (already logged) on any failure, rather than raising - same
     error-reporting shape as `retrieve()`/`resolve_board_spec()`'s own callers already expect."""
     if ":" not in target_attr:
         _logger.error("--board-spec must be target:attr (e.g. my_board.py:BOARD), got %r", target_attr)

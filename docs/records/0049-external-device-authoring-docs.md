@@ -492,3 +492,44 @@ shape of the worked example (scenario 1) is left open, same as scenarios 2/3's a
 implementation. This record exists so the gap - and now the board-authoring design - is tracked
 rather than rediscovered; per this repo's document-vs-implement convention, turning any of it into
 code needs a separate go-ahead.
+
+## Addendum (2026-08-17): a real community-board example, plus one bug it surfaced
+
+Built `boards/micropython/WEACTSTUDIO/` - a live-verified `--board-spec` worked example for the
+how-to above, for the WeAct Studio RP2040 ("Pico Board RP2040" - see
+https://github.com/WeActTC/WeActStudio.RP2040CoreBoard), not the same board as "YD-RP2040" (VCC-GND
+Studio - a different vendor, an onboard NeoPixel this board lacks, USR button on a different pin).
+One `BoardSpec` per flash-size variant (`FLASH_2M`/`FLASH_4M`/`FLASH_8M`, 16 MiB by default),
+derived from MicroPython's own upstream `WEACTSTUDIO` board port - not guessed, cross-checked
+against two independent local copies at the v1.28.0 tag (`lib/pico-sdk/.../weact_studio_rp2040_
+{2,4,8,16}mb.h` and `ports/rp2/boards/WEACTSTUDIO/weactstudio_{2,4,8,16}MiB.h`, byte-for-byte
+identical). Reuses the built-in `LEDMock`/`BootselButton` for the onboard LED (GPIO25, wired
+exactly like a plain Pico) and BOOTSEL; the one board-specific pin (the USR button, GPIO23,
+internal pull-up, exposed as `board.key` by MicroPython's own `modules/board.py`) turned out to
+need no new device class either - `KeyMock(gpio=23, active_high=False)` already covers it, once
+the bug below was fixed. Lives outside `src/rp2040py` on purpose (a `--board-spec` target, not
+part of the installed package) - see `boards/__init__.py`.
+
+**Surfaced and fixed along the way: `external/key_mock.py`'s `release()` was actively driving the
+"not pressed" pin level (`set_input_value()`) instead of letting go of it
+(`GPIOPin.release_input()`, 0006's pull-resistor-resolution model)** - looks identical whenever
+firmware configures the matching pull correctly, but silently masks it if firmware forgets to, the
+exact class of bug `external/bootsel_button.py`'s own `release()` was already written to avoid
+(see that file's own comment). Fixed to mirror it: `press()` still actively drives (a real short),
+`release()` now hands the pin back to its pull resistor instead of asserting a value on its own.
+No existing caller depended on the old behavior (`KeyMock` had zero test coverage and zero
+production usage anywhere in this tree before this).
+
+**A `--board-spec` design question surfaced and then deliberately reverted, not shipped:** first
+built (then reverted after review) special-case handling in `_load_board_spec_target()` so the
+*file-path* form could also load a multi-file package with relative imports
+(`submodule_search_locations`, manual `sys.modules` registration/cleanup) and a bare-directory
+shorthand for `<dir>/__init__.py`. Reverted because it duplicated what the *dotted-module* form
+already does for free via the standard import system - `--board-spec
+boards.micropython.WEACTSTUDIO:BOARD` (with `PYTHONPATH=.`, the same way `python -m`/`-c` already
+puts the current directory on `sys.path`) already supports packages and relative imports with zero
+special-casing, "like `-m`". The file-path form's job stays single-file-only, matching its own
+"no package required" framing; a board that needs its own multi-file layout uses the dotted-module
+form instead, now with real `boards/__init__.py`/`boards/micropython/__init__.py` package files
+(added specifically so `boards.micropython.WEACTSTUDIO` resolves cleanly) rather than relying on
+implicit namespace packages.
