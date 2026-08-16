@@ -13,10 +13,12 @@ import os
 import time
 from pathlib import Path
 
+from rp2040py.boards import FlashLayout
 from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
 from rp2040py.gpio_pin import GPIOPinState
 from rp2040py.simulator import Simulator
 from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
+from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 
@@ -46,7 +48,7 @@ def main() -> None:
     littlefs = Path("littlefs-spi.img")
     if littlefs.exists():
         print(f"Loading littlefs image {littlefs}")
-        load_micropython_flash_image(littlefs, mcu, "pico")
+        load_micropython_flash_image(littlefs, mcu, FlashLayout(**_flash_layout(MICROPYTHON, "pico")))
 
     spi_buf = bytearray()
 

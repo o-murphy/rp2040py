@@ -1,10 +1,12 @@
 import asyncio
+import dataclasses
 import struct
 import threading
 import time
 
 import pytest
 
+from rp2040py.boards import BOARDS, BoardSpec
 from rp2040py.device.mp_device import DEFAULT_TIMEOUT, MicroPythonDevice
 from rp2040py.device.raw_repl import RawReplError
 
@@ -21,6 +23,10 @@ def _write_minimal_uf2(path, payload: bytes = b"\x00\x00\x00\x00") -> None:
     path.write_bytes(block)
 
 
+def _pico_board(image) -> BoardSpec:
+    return dataclasses.replace(BOARDS["pico"], image=image)
+
+
 @pytest.fixture
 def garbage_image(tmp_path) -> str:
     # Not real firmware - just enough to satisfy load_uf2()'s block framing. Its payload never
@@ -32,13 +38,13 @@ def garbage_image(tmp_path) -> str:
 
 
 def test_exec_before_start_raises(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     with pytest.raises(RuntimeError):
         device.exec_async("1")
 
 
 def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         device.start_async(timeout=0.3).result(timeout=5)
@@ -48,7 +54,7 @@ def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
 
 
 def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     with pytest.raises(TimeoutError):
         device.start_async(timeout=0.2).result(timeout=5)
     with pytest.raises(RuntimeError):
@@ -57,7 +63,7 @@ def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
 
 
 def test_context_manager_calls_start_then_stop(garbage_image, monkeypatch):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     calls = []
 
     async def _fake_astart(timeout=DEFAULT_TIMEOUT) -> None:
@@ -97,7 +103,7 @@ def _reply(device: MicroPythonDevice, *chunks: bytes) -> None:
 
 
 def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     _pretend_started(device)
 
     def _fake_device_replies() -> None:
@@ -116,7 +122,7 @@ def test_exec_blocks_until_the_device_responds_and_returns_its_output(garbage_im
 
 
 def test_exec_raises_timeout_error_if_the_device_never_responds(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     _pretend_started(device)
     with pytest.raises(TimeoutError):
         device.exec_async("1", timeout=0.3).result(timeout=5)
@@ -140,7 +146,7 @@ def _serve_queued_execs(device: MicroPythonDevice, replies: "list[bytes]") -> No
 
 
 def test_overlapping_exec_async_calls_queue_and_run_in_order(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     _pretend_started(device)
     replies = [b"1\r\n", b"2\r\n", b"3\r\n"]
 
@@ -154,7 +160,7 @@ def test_overlapping_exec_async_calls_queue_and_run_in_order(garbage_image):
 
 
 def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image):
-    device = MicroPythonDevice(garbage_image)
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
     _pretend_started(device)
 
     def _serve() -> None:

@@ -24,10 +24,13 @@ Ctrl-C/Ctrl-A, `pump()`'s FIFO-paced uploads) happen on the same thread that dri
 .. code-block:: python
 
     import asyncio
+    from rp2040py.boards import resolve_board_spec
     from rp2040py.device import MicroPythonDevice
+    from rp2040py.utils.firmware_retrieve import MICROPYTHON
 
     async def main():
-        async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+        board = resolve_board_spec("pico", MICROPYTHON, "1.21.0")
+        async with MicroPythonDevice(board=board) as device:
             stdout, stderr = await device.aexec("print(1 + 1)")
             assert stdout == b"2\\r\\n"
 
@@ -40,6 +43,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from os import PathLike
 from typing import TypeVar
 
+from rp2040py.boards import BoardSpec
 from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
 from rp2040py.device.load_flash import (
     dump_circuitpython_flash_image,
@@ -76,20 +80,21 @@ class MicroPythonDevice(BaseDevice):
 
     def __init__(
         self,
-        image: PathLike,
         *,
-        board: str = "pico",
+        board: BoardSpec,
         littlefs: "PathLike | None" = None,
         fat12: "PathLike | None" = None,
         circuitpython: bool = False,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
+        super().__init__(board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
-            load_micropython_flash_image(littlefs, self.mcu, board)
+            assert board.layout is not None, "board.layout must be set to load a littlefs image"
+            load_micropython_flash_image(littlefs, self.mcu, board.layout)
         if fat12 is not None:
-            load_circuitpython_flash_image(fat12, self.mcu, board)
+            assert board.layout is not None, "board.layout must be set to load a fat12 image"
+            load_circuitpython_flash_image(fat12, self.mcu, board.layout)
         self.circuitpython = circuitpython
         # Serializes start_async()/exec_async() coroutines running on the engine room (see
         # simulator.submit() below) the same way ThreadPoolExecutor(max_workers=1) used to -
@@ -245,7 +250,8 @@ class MicroPythonDevice(BaseDevice):
     def dump_flash_image(self, filename: PathLike) -> None:
         """Dump the device's flash filesystem image (LittleFS for MicroPython, FAT12 for CircuitPython)
         to a local file."""
+        assert self.board.layout is not None, "board.layout must be set to dump a flash image"
         if self.circuitpython:
-            dump_circuitpython_flash_image(filename, self.mcu, self.board)
+            dump_circuitpython_flash_image(filename, self.mcu, self.board.layout)
         else:
-            dump_micropython_flash_image(filename, self.mcu, self.board)
+            dump_micropython_flash_image(filename, self.mcu, self.board.layout)

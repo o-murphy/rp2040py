@@ -111,17 +111,17 @@ jobs:
         run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --fetch-fw-only
 
       - name: Test MicroPython ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs.img --expect-text "Hello, MicroPython!"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
       - name: Test MicroPython SPI ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py --image ${{ matrix.micropython_version.tag }} "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/micropython_spi_run.py --image ${{ matrix.micropython_version.tag }} "hello world" "h" "0123456789abcdef0123456789abcdef0123456789abcdef"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
       - name: Test MicroPython flash read/write ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
-        run: timeout 10m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
@@ -135,7 +135,45 @@ jobs:
       - name: Test MicroPython pico-w WLAN ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
         if: ${{ matrix.micropython_version.pico_w }}
         run: |
-          timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --board pico_w tests/micropython/main-cyw43.py || \
+          timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --board pico_w tests/micropython/main-cyw43.py || \
             echo "::warning title=pico-w WLAN test failed::${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script now also opens a real TCP connection to 1.1.1.1:80 through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+  test-board-spec:
+    # Not part of the version/runtime matrix above on purpose - this job proves the --board-spec
+    # *mechanism* itself (docs/records/0049-external-device-authoring-docs.md's "Accepted design"
+    # section) boots a real device end-to-end via a user-supplied BoardSpec file
+    # (tests/pico_spec.py) instead of the built-in --board registry; one pinned MicroPython
+    # version is enough for that, the matrix job above already covers version compatibility.
+    needs: build-littlefs
+    name: Board-spec smoke test (tests/pico_spec.py)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.10"
+          github-token: ${{ github.token }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Download littlefs images
+        uses: actions/download-artifact@v8
+        with:
+          name: littlefs-images
+
+      - name: Test --board-spec boots a real MicroPython image via tests/pico_spec.py
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --board-spec tests/pico_spec.py:BOARD --littlefs littlefs.img --expect-text "Hello, MicroPython!"
+        env:
+          RP2040PY_MICROPYTHON_TAG: "1.28.0"
+
+      - name: Test RP2040PY_BOARD_SPEC env var resolves the same way as --board-spec
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --littlefs littlefs.img --expect-text "Hello, MicroPython!"
+        env:
+          RP2040PY_BOARD_SPEC: tests/pico_spec.py:BOARD
+          RP2040PY_MICROPYTHON_TAG: "1.28.0"

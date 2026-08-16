@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Writing your own external device or board**: a new how-to,
+  [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md),
+  covering both a custom `ExternalDevice` attached to an existing board and a fully custom
+  `BoardSpec` (own device mix, own firmware, own flash layout), linked from `README.md`'s
+  "External devices & custom boards" section (previously a pointer to the design record only, no
+  actual how-to). `external/device.py`/`external/led_mock.py`'s docstrings also had their dead
+  `docs/CYW43_WIFI_BACKLOG.md` references (removed by the 2026-08-12 docs restructure) re-pointed
+  to the real records that carry those sections (0027/0028/0029).
+- `boards/micropython/WEACTSTUDIO/` - a real, live-verified `--board-spec` example (against real
+  MicroPython `v1.28.0` firmware, all four of the board's flash-size variants) for
+  docs/reference/external-devices-and-boards.md: one `BoardSpec` per flash size
+  (`FLASH_2M`/`FLASH_4M`/`FLASH_8M`, and 16 MiB by default, matching MicroPython's own
+  `WEACTSTUDIO` board port), reusing built-in `LEDMock`/`BootselButton`/`KeyMock` throughout - no
+  board-specific device class needed, just parameterizing existing generic ones. Lives outside
+  `src/rp2040py` on purpose - a `--board-spec` target (`--board-spec
+  boards/micropython/WEACTSTUDIO/__init__.py:BOARD`, or `PYTHONPATH=. ... --board-spec
+  boards.micropython.WEACTSTUDIO:BOARD` as a dotted module - the same way a board organized as its
+  own multi-file package with relative imports would need to be loaded, `--board-spec`'s
+  file-path form intentionally stays single-file-only), not part of the installed package.
+
+### Fixed
+- `external.key_mock.KeyMock.release()` used to actively drive the pin to its "not pressed" level
+  (`set_input_value()`) instead of letting go of it (`GPIOPin.release_input()`, 0006's
+  pull-resistor-resolution model) — correct-looking whenever firmware configures the matching
+  internal pull-up/pull-down, but silently masking it if firmware forgot to, the same class of bug
+  `external/bootsel_button.py`'s own `release()` was already written to avoid. Fixed to mirror it:
+  `press()` still actively drives (a real short), `release()` now hands the pin back to its pull
+  resistor instead of asserting a value on its own.
+
+### Changed
+- **Breaking:** `MicroPythonDevice`/`KalumaDevice`'s constructors no longer take `image`/`board:
+  str` — both now take a single keyword-only `board: BoardSpec` (a `boards.BOARDS[...]` entry
+  resolved via the new `resolve_board_spec(board, firmware_spec, tag=None)`, or a hand-built
+  `BoardSpec` for a custom board), which already carries the resolved firmware `image` and flash
+  `layout`. No deprecation shim — no doc has ever promised the old `board`/`image` shape as stable
+  SDK API (see [record 0049](docs/records/0049-external-device-authoring-docs.md)'s "Accepted
+  design" section). The CLI (`micropython`/`kaluma`/`mklittlefs`/`run` subcommands) gained
+  `--board-spec target:attr` (a file path or dotted module path, naming a module-level `BoardSpec`
+  instance) and the `RP2040PY_BOARD_SPEC` env var as an alternative to `--board`'s fixed registry —
+  mutually exclusive with `--board` and (on `micropython`/`kaluma`) `--image`/`--fetch-fw-only`, or
+  (on `mklittlefs`) `--target` (a `BoardSpec` carries one already-resolved layout, not one slice
+  per firmware family the way `--target` selects between); `mklittlefs` sizes the image from
+  `board.layout.fs_blocksize`/`.fs_blockcount` directly, still overridable by explicit
+  `--block-size`/`--block-count`. `run`'s own `--image` (a raw local program, never
+  board-family-versioned firmware) is fully independent of `--board`/`--board-spec` either way —
+  its suffix validation also tightened to `.hex`/`.uf2` (matching what it actually loads) while
+  making this change. `bench` alone is unaffected (still resolves a board name directly, no
+  `BoardSpec` involved). Live-verified against real MicroPython `1.28.0` firmware, including a new
+  CI job (`.github/workflows/ci-micropython.yml`'s `test-board-spec`, using `tests/pico_spec.py`
+  as a worked example of a custom board-spec file).
+
+### Internal
+- `firmware_specs.json`'s `flash_layout`/`default_tag` reshaped from sibling top-level dicts
+  (keyed by board-name string purely by convention) into a per-board `BoardFirmwareSpec`
+  (`default_tag`, `fw: {tag: url}`, `layout: {...}`) nested inside `boards` for MICROPYTHON/
+  CIRCUITPYTHON/KALUMA — everything genuinely board-specific now lives together (see
+  [record 0049](docs/records/0049-external-device-authoring-docs.md)'s "Design update" section).
+  Also moved: `device/load_flash.py`'s three hardcoded `*_FS_BLOCKSIZE` littlefs-block-size
+  constants (all `4096`) are gone — `fs_blocksize` is now a real per-board `flash_layout()` key
+  alongside `fs_start`/`fs_blockcount`/`prog_start`, sourced from `scripts/fetch_firmware.py`'s
+  hand-curated layout dicts like the others always were. No behavior change for CLI/API users —
+  `pico`/`pico_w` keep the exact same values everywhere, this just gives a future board with a
+  genuinely different littlefs block size somewhere to declare it.
+- `boards.BoardSpec` gained `layout: FlashLayout | None` and `image: str | Path | None`
+  fields (both default `None`, existing `BOARDS` entries unchanged), plus a new
+  `resolve_board_spec(board, firmware_spec, tag=None)` helper that resolves a known board's
+  firmware image/flash layout into one ready-to-use `BoardSpec`, and `build_rp2040_from_spec()`
+  (the mcu-construction half of `build_rp2040()`, factored out so `BaseDevice` can use it directly
+  with an already-resolved `BoardSpec` — `build_rp2040()` itself is now a thin board-name-lookup
+  wrapper around it, unchanged behavior for `run`/`bench`) — phases 1-4 of the custom-board design
+  in [record 0049](docs/records/0049-external-device-authoring-docs.md)'s "Accepted design"
+  section (see the "Changed" entry above for the phase 3/4 breaking `BaseDevice`/CLI pieces; all 5
+  phases are now done). `load_flash.py`'s six load/dump functions now take an already-resolved
+  `FlashLayout` instead of a board-name string and re-deriving it themselves — no behavior change
+  for CLI/API users, every caller resolves the same layout it always used, just once instead of
+  per-call. New test coverage: `tests/test_boards.py` gained tests for
+  `resolve_board_spec()`/`build_rp2040_from_spec()`, and a new `tests/test_cli_board_spec.py`
+  covers `--board-spec`'s `target:attr` resolution and every subcommand's mutual-exclusion logic
+  directly (no real network, no full CLI/simulator boot needed).
+
 ## [0.2.2] - 2026-08-16
 
 ### Added

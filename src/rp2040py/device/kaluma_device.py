@@ -8,6 +8,7 @@ see that module's own docstring for why).
 
 from os import PathLike
 
+from rp2040py.boards import BoardSpec
 from rp2040py.device.base_device import BaseDevice
 from rp2040py.device.load_flash import dump_kaluma_flash_image, load_kaluma_flash_image, load_kaluma_program
 from rp2040py.utils.logging import LogLevel
@@ -27,21 +28,23 @@ class KalumaDevice(BaseDevice):
 
     def __init__(
         self,
-        image: PathLike,
         *,
-        board: str = "pico",
+        board: BoardSpec,
         littlefs: "PathLike | None" = None,
         program: "PathLike | None" = None,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
-        super().__init__(image, board=board, bootrom_words=bootrom_words, log_level=log_level)
+        super().__init__(board=board, bootrom_words=bootrom_words, log_level=log_level)
         if littlefs is not None:
-            load_kaluma_flash_image(littlefs, self.mcu, board)
+            assert board.layout is not None, "board.layout must be set to load a littlefs image"
+            load_kaluma_flash_image(littlefs, self.mcu, board.layout)
         if program is not None:
-            load_kaluma_program(program, self.mcu, board)
+            assert board.layout is not None, "board.layout must be set to load a program"
+            load_kaluma_program(program, self.mcu, board.layout)
 
     def dump_flash_image(self, filename: PathLike) -> None:
         """Dump the device's flash filesystem image (LittleFS for Kaluma)
         to a local file."""
-        dump_kaluma_flash_image(filename, self.mcu, self.board)
+        assert self.board.layout is not None, "board.layout must be set to dump a flash image"
+        dump_kaluma_flash_image(filename, self.mcu, self.board.layout)

@@ -135,7 +135,8 @@ def test_returns_existing_local_path_without_touching_the_network(spec, monkeypa
 
 @pytest.mark.parametrize("spec", [MICROPYTHON, CIRCUITPYTHON, KALUMA])
 def test_no_image_argument_defaults_to_the_spec_default_tag(spec):
-    url = spec.boards["pico"][spec.default_tag]
+    board_spec = spec.boards["pico"]
+    url = board_spec.fw[board_spec.default_tag]
     cached = _cache_path(_url_filename(url))
     with open(cached, "wb") as f:
         f.write(b"fake")
@@ -313,7 +314,7 @@ def test_returns_none_on_http_error_instead_of_raising(spec, monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
-    assert retrieve(spec, spec.default_tag) is None
+    assert retrieve(spec) is None
 
 
 def test_removes_partial_file_and_returns_none_on_timeout(monkeypatch):

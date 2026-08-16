@@ -30,6 +30,7 @@ See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) f
     - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
     - [Bootrom revisions](#bootrom-revisions)
     - [Library API](#library-api)
+      - [External devices & custom boards](#external-devices--custom-boards)
   - [Performance](#performance)
   - [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
   - [Used by](#used-by)
@@ -619,6 +620,10 @@ device.exec_async("print(1 + 1)").add_done_callback(on_done)
 ```
 
 Both share one `asyncio.Lock` per device: since the device only has a single REPL channel and can't run two `exec()`s at once, calling `exec_async()`/`aexec()` again before a previous call finishes doesn't raise, it just queues behind it and runs once its turn comes. This is exactly what powers the CLI's own `micropython -c/-m/<filename>` batch mode - it's a caller of this same API, not a separate implementation. `start_async()`/`astart()`/`stop()` are available directly if you want more control over the lifecycle than the context manager gives you - `stop()` itself stays a plain synchronous call.
+
+### External devices & custom boards
+
+Beyond the built-in `--board {pico,pico_w}` presets, the emulator has a real `ExternalDevice` extension point (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets wired up via `attach_external_devices()`. Four devices already ship in-tree this way (the onboard LED, the BOOTSEL button, the CYW43439 WiFi chip behind `pico_w`, and a Waveshare 2.9″ e-Paper display). Boards are just as open: `boards.BoardSpec` (what `--board` itself resolves to internally) is a public dataclass you can build your own instance of - your own device mix on an existing firmware family, or a fully custom board with its own firmware image and flash layout - and hand to any `Device` class (`board=...`) or the CLI (`--board-spec target:attr` / `RP2040PY_BOARD_SPEC`, on `run`/`micropython`/`kaluma`/`mklittlefs`). See [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) for the how-to (worked examples for both), and [docs/records/0049](docs/records/0049-external-device-authoring-docs.md) for the design history behind it.
 
 ## Performance
 

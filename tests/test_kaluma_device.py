@@ -1,15 +1,23 @@
 import asyncio
+import dataclasses
 import struct
 import time
 
 import pytest
 
+from rp2040py.boards import BOARDS, BoardSpec, FlashLayout
 from rp2040py.device.kaluma_device import KalumaDevice
 from rp2040py.device.load_flash import KALUMA_PROG_MAX_SIZE, load_kaluma_program
 from rp2040py.utils.firmware_retrieve import KALUMA
 from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
-KALUMA_PROG_FLASH_START = _flash_layout(KALUMA, "pico")["prog_start"]
+PICO_KALUMA_LAYOUT = FlashLayout(**_flash_layout(KALUMA, "pico"))
+KALUMA_PROG_FLASH_START = PICO_KALUMA_LAYOUT.prog_start
+
+
+def _pico_board(image) -> BoardSpec:
+    return dataclasses.replace(BOARDS["pico"], image=image, layout=PICO_KALUMA_LAYOUT)
+
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -35,7 +43,7 @@ def garbage_image(tmp_path) -> str:
 
 
 def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
-    device = KalumaDevice(garbage_image)
+    device = KalumaDevice(board=_pico_board(garbage_image))
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         device.start_async(timeout=0.3).result(timeout=5)
@@ -45,7 +53,7 @@ def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
 
 
 def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
-    device = KalumaDevice(garbage_image)
+    device = KalumaDevice(board=_pico_board(garbage_image))
     with pytest.raises(TimeoutError):
         device.start_async(timeout=0.2).result(timeout=5)
     with pytest.raises(RuntimeError):
@@ -54,7 +62,7 @@ def test_second_start_call_raises_even_after_the_first_timed_out(garbage_image):
 
 
 def test_context_manager_calls_start_then_stop(garbage_image, monkeypatch):
-    device = KalumaDevice(garbage_image)
+    device = KalumaDevice(board=_pico_board(garbage_image))
     calls = []
 
     async def _fake_astart(timeout=30.0) -> None:
@@ -75,22 +83,22 @@ def test_littlefs_image_loaded_via_load_kaluma_flash_image(garbage_image, monkey
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_flash_image",
-        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
+        lambda filename, rp2040, layout: calls.append((filename, rp2040, layout)),
     )
 
-    device = KalumaDevice(garbage_image, littlefs="kaluma_littlefs.img")
+    device = KalumaDevice(board=_pico_board(garbage_image), littlefs="kaluma_littlefs.img")
 
-    assert calls == [("kaluma_littlefs.img", device.mcu, "pico")]
+    assert calls == [("kaluma_littlefs.img", device.mcu, PICO_KALUMA_LAYOUT)]
 
 
 def test_no_littlefs_image_by_default(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_flash_image",
-        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
+        lambda filename, rp2040, layout: calls.append((filename, rp2040, layout)),
     )
 
-    KalumaDevice(garbage_image)
+    KalumaDevice(board=_pico_board(garbage_image))
 
     assert calls == []
 
@@ -99,22 +107,22 @@ def test_program_loaded_via_load_kaluma_program(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_program",
-        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
+        lambda filename, rp2040, layout: calls.append((filename, rp2040, layout)),
     )
 
-    device = KalumaDevice(garbage_image, program="index.js")
+    device = KalumaDevice(board=_pico_board(garbage_image), program="index.js")
 
-    assert calls == [("index.js", device.mcu, "pico")]
+    assert calls == [("index.js", device.mcu, PICO_KALUMA_LAYOUT)]
 
 
 def test_no_program_by_default(garbage_image, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "rp2040py.device.kaluma_device.load_kaluma_program",
-        lambda filename, rp2040, board: calls.append((filename, rp2040, board)),
+        lambda filename, rp2040, layout: calls.append((filename, rp2040, layout)),
     )
 
-    KalumaDevice(garbage_image)
+    KalumaDevice(board=_pico_board(garbage_image))
 
     assert calls == []
 
@@ -124,7 +132,7 @@ def test_load_kaluma_program_writes_source_plus_nul_terminator_at_the_prog_regio
     script.write_text('console.log("hi");')
     rp2040 = rp2040_factory()
 
-    load_kaluma_program(str(script), rp2040, "pico")
+    load_kaluma_program(str(script), rp2040, PICO_KALUMA_LAYOUT)
 
     written = rp2040.flash[KALUMA_PROG_FLASH_START : KALUMA_PROG_FLASH_START + len(b'console.log("hi");') + 1]
     assert written == b'console.log("hi");\x00'
@@ -136,4 +144,4 @@ def test_load_kaluma_program_rejects_a_source_too_large_for_the_prog_region(tmp_
     rp2040 = rp2040_factory()
 
     with pytest.raises(ValueError, match="exceeds Kaluma's"):
-        load_kaluma_program(str(script), rp2040, "pico")
+        load_kaluma_program(str(script), rp2040, PICO_KALUMA_LAYOUT)

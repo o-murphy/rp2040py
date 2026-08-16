@@ -28,6 +28,7 @@ bytes into a picture is this demo's job, via `_decode_frame` below.
 """
 
 import argparse
+import dataclasses
 import os
 import queue
 import sys
@@ -36,6 +37,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from rp2040py.boards import BOARDS
 from rp2040py.device import MicroPythonDevice
 from rp2040py.external.device import attach_external_devices
 from rp2040py.external.epd2in9g import EPD_HEIGHT, EPD_WIDTH, PALETTE, Epd2in9G
@@ -155,7 +157,8 @@ def main() -> None:
         print(f"Could not find MicroPython image: {args.image}")
         os._exit(1)
 
-    device = MicroPythonDevice(image_path, log_level=LogLevel.ERROR)
+    board = dataclasses.replace(BOARDS["pico"], image=image_path)
+    device = MicroPythonDevice(board=board, log_level=LogLevel.ERROR)
 
     # attach_external_devices() (external/device.py) is only safe before Simulator.start_execution()
     # - so this runs before start_async() below, not after.

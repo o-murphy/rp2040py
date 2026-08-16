@@ -1,9 +1,10 @@
 """A minimal `ExternalDevice`: watches one GPIO pin and tracks whether firmware is currently
 driving it high, plus how many times it's toggled. Not board-specific/CYW43-related - built
 specifically as a validation vehicle for the `attach()`/`attach_external_devices()` machinery
-itself (docs/CYW43_WIFI_BACKLOG.md's "Implementation order" step 1: "prove the `ExternalDevice`
-pattern on something already understood" before building `Cyw43439`'s much more involved gSPI
-protocol on the same plumbing).
+itself (docs/records/0027-cyw43-wifi.md's "Implementation order" section, step 1: "prove the
+`ExternalDevice` pattern on something already understood" before building `Cyw43439`'s much more
+involved gSPI protocol on the same plumbing). A worked-example write-up of writing your own
+`ExternalDevice` lives in docs/reference/external-devices-and-boards.md.
 
 **Not a claim about real Pico/Pico W LED wiring.** On a plain Pico, the onboard LED genuinely is
 wired straight to GPIO25 (`machine.Pin(25, ...)`/`machine.Pin("LED", ...)` - both resolve the same

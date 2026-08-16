@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path
 
-from rp2040py.device.load_flash import MICROPYTHON_FS_BLOCKSIZE
 from rp2040py.utils.firmware_retrieve import MICROPYTHON
 from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
@@ -28,13 +27,15 @@ LITTLEFS_DEFAULT_DISK_VERSION = "2.0"
 # "pico" is the implicit default board for callers not going through the CLI's own --target/
 # --board handling (cli/__init__.py's _cmd_mklittlefs) - matches every other default-board
 # fallback in this project (firmware_retrieve._DEFAULT_BOARD, boards.build_rp2040()).
-_MICROPYTHON_PICO_FS_BLOCKCOUNT = _flash_layout(MICROPYTHON, "pico")["fs_blockcount"]
+_MICROPYTHON_PICO_FLASH_LAYOUT = _flash_layout(MICROPYTHON, "pico")
+_MICROPYTHON_PICO_FS_BLOCKSIZE = _MICROPYTHON_PICO_FLASH_LAYOUT["fs_blocksize"]
+_MICROPYTHON_PICO_FS_BLOCKCOUNT = _MICROPYTHON_PICO_FLASH_LAYOUT["fs_blockcount"]
 
 
 def build_littlefs_image(
     output: PathLike,
     files: "Sequence[PathLike]",
-    block_size: int = MICROPYTHON_FS_BLOCKSIZE,
+    block_size: int = _MICROPYTHON_PICO_FS_BLOCKSIZE,
     block_count: int = _MICROPYTHON_PICO_FS_BLOCKCOUNT,
     disk_version: str = LITTLEFS_DEFAULT_DISK_VERSION,
     main: "str | None" = None,
