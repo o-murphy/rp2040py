@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+- `firmware_specs.json`'s `flash_layout`/`default_tag` reshaped from sibling top-level dicts
+  (keyed by board-name string purely by convention) into a per-board `BoardFirmwareSpec`
+  (`default_tag`, `fw: {tag: url}`, `layout: {...}`) nested inside `boards` for MICROPYTHON/
+  CIRCUITPYTHON/KALUMA — everything genuinely board-specific now lives together (see
+  [record 0049](docs/records/0049-external-device-authoring-docs.md)'s "Design update" section).
+  Also moved: `device/load_flash.py`'s three hardcoded `*_FS_BLOCKSIZE` littlefs-block-size
+  constants (all `4096`) are gone — `fs_blocksize` is now a real per-board `flash_layout()` key
+  alongside `fs_start`/`fs_blockcount`/`prog_start`, sourced from `scripts/fetch_firmware.py`'s
+  hand-curated layout dicts like the others always were. No behavior change for CLI/API users —
+  `pico`/`pico_w` keep the exact same values everywhere, this just gives a future board with a
+  genuinely different littlefs block size somewhere to declare it.
+
 ## [0.2.2] - 2026-08-16
 
 ### Added

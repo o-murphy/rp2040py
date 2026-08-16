@@ -153,7 +153,21 @@ regenerated spec every run, so the JSON's copy can't silently drift from its cit
 `device/load_flash.py`'s six load/dump functions for MicroPython/Kaluma/CircuitPython all take a
 new required `board: str` parameter, resolving their real offsets via that helper instead of
 module-level constants (which are now deleted, not deprecated in place - `MICROPYTHON_FS_BLOCKSIZE`
-etc. stay, since block *size* never varies, only start/count).
+etc. stay, since block *size* never varies, only start/count). ~~`MICROPYTHON_FS_BLOCKSIZE` etc.
+stay~~ — **revisited 2026-08-16** (0049's "Design update" section): "block size never varies" was
+true of every value observed *in this codebase*, not a real hardware/firmware guarantee - real
+upstream MicroPython board configs don't universally agree either (confirmed against
+`ports/rp2/boards/*/mpconfigboard.h`; `4096` is the RP2040's flash sector-erase size, which every
+board tracked so far happens to share, not a value any of them actually declare). The three
+`FS_BLOCKSIZE` constants were deleted and `fs_blocksize` added as a `layout` key alongside
+`fs_start`/`fs_blockcount`/`prog_start`, so a board/firmware combination that genuinely needs a
+different value has somewhere to declare it. That same pass also reshaped where `flash_layout`/
+`default_tag` live: the single frozen `FirmwareSpec.flash_layout` field this paragraph originally
+described is gone - both moved off `FirmwareSpec` entirely and into a new per-board
+`BoardFirmwareSpec` nested inside `boards` (`firmware_specs.json`/`scripts/fetch_firmware.py`),
+since they were sibling top-level dicts keyed by the same board-name string as `boards` purely by
+convention, not by construction. `flash_layout(spec, board)` (the helper function, not the old
+field) keeps its own name and signature - only what it resolves against changed.
 
 `device/base_device.py`'s `BaseDevice.__init__` now stores `self.board`, so
 `MicroPythonDevice`/`KalumaDevice` (both already accepted a `board` constructor arg) can resolve

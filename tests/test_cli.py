@@ -621,7 +621,6 @@ def test_mklittlefs_allows_no_files(tmp_path):
 
 def test_mklittlefs_target_presets_block_size_and_count(tmp_path):
     pytest.importorskip("littlefs", reason="mklittlefs needs the optional 'fs' extra")
-    from rp2040py.device.load_flash import KALUMA_FS_BLOCKSIZE
     from rp2040py.utils.firmware_retrieve import KALUMA
     from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
@@ -629,8 +628,8 @@ def test_mklittlefs_target_presets_block_size_and_count(tmp_path):
 
     cli.main(["mklittlefs", "-o", str(image), "--target", "kaluma"])
 
-    block_count = _flash_layout(KALUMA, "pico")["fs_blockcount"]
-    assert image.stat().st_size == KALUMA_FS_BLOCKSIZE * block_count
+    layout = _flash_layout(KALUMA, "pico")
+    assert image.stat().st_size == layout["fs_blocksize"] * layout["fs_blockcount"]
 
 
 def test_mklittlefs_target_rejects_explicit_block_size_or_count(caplog, tmp_path):

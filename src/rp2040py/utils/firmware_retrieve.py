@@ -5,17 +5,27 @@ MICROPYTHON/CIRCUITPYTHON/KALUMA, an ELF for BOOTROM), downloading it if necessa
 
 **Board-aware tag resolution (2026-08-12), per docs/CYW43_WIFI_BACKLOG.md's "Candidate redesign"
 section.** `known_versions: dict[tag, filename-version]` plus `filename_template`/`url_template`
-string substitution is gone - `FirmwareSpec.boards: dict[board, dict[tag, url]]` maps a tag
-straight to a full download URL instead, nested per board for firmware that genuinely differs by
-board (MicroPython/CircuitPython/Kaluma - the ones that actually ship separate Pico-W-specific
-builds with the network stack compiled in). `FirmwareSpec.known_versions: dict[tag, url]` (flat,
-no board nesting) is BOOTROM's own shape instead - a mask ROM baked into the RP2040 die itself,
-identical across every board, versioned only by silicon stepping (B0/B1/B2) - never board-specific,
-so board-nesting it would be actively misleading. Exactly one of `boards`/`known_versions` is set
-per spec; `retrieve()`'s own `board` argument is used (and required to be a real, known board) only
-when resolving a tag against a `boards`-shaped spec - ignored entirely for a local path or a raw
-URL (those are used exactly as given, no board-based resolution at all), and ignored for a
-`known_versions`-shaped spec (BOOTROM) since there's nothing to select between.
+string substitution is gone - `FirmwareSpec.boards: dict[board, BoardFirmwareSpec]` maps a tag
+straight to a full download URL instead (`BoardFirmwareSpec.fw`), nested per board for firmware
+that genuinely differs by board (MicroPython/CircuitPython/Kaluma - the ones that actually ship
+separate Pico-W-specific builds with the network stack compiled in). `FirmwareSpec.known_versions:
+dict[tag, url]` (flat, no board nesting) is BOOTROM's own shape instead - a mask ROM baked into the
+RP2040 die itself, identical across every board, versioned only by silicon stepping (B0/B1/B2) -
+never board-specific, so board-nesting it would be actively misleading. Exactly one of
+`boards`/`known_versions` is set per spec; `retrieve()`'s own `board` argument is used (and
+required to be a real, known board) only when resolving a tag against a `boards`-shaped spec -
+ignored entirely for a local path or a raw URL (those are used exactly as given, no board-based
+resolution at all), and ignored for a `known_versions`-shaped spec (BOOTROM) since there's nothing
+to select between.
+
+**Per-board `default_tag`/flash layout (2026-08-16), per docs/records/0049's "Design update"
+section.** Everything genuinely board-specific for a `boards`-shaped spec - which tag to default
+to, the tag->url map, and where that board's real firmware places its flash filesystem region -
+lives together in one `BoardFirmwareSpec` per board, instead of being scattered across sibling
+top-level dicts (a former `default_tag` shared by every board in the family; a `flash_layout` dict
+keyed by the same board-name string as `boards` but structurally unrelated to it) that all
+happened to use the same key by convention rather than by construction. BOOTROM keeps its own
+top-level `default_tag` (board-agnostic, no `boards` at all).
 
 `firmware_specs.json` isn't generated at request time by this module - it's fetched at development
 time by `scripts/fetch_firmware.py` (scrapes MicroPython's/CircuitPython's/Kaluma's/the
@@ -35,7 +45,16 @@ from urllib.parse import urlparse
 
 import semver
 
-__all__ = ("BOOTROM", "CIRCUITPYTHON", "KALUMA", "MICROPYTHON", "FirmwareSpec", "flash_layout", "retrieve")
+__all__ = (
+    "BOOTROM",
+    "CIRCUITPYTHON",
+    "KALUMA",
+    "MICROPYTHON",
+    "BoardFirmwareSpec",
+    "FirmwareSpec",
+    "flash_layout",
+    "retrieve",
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -49,31 +68,52 @@ _DEFAULT_BOARD = "pico"
 
 
 @dataclass(frozen=True)
-class FirmwareSpec:
+class BoardFirmwareSpec:
+    """One board's own slice of a `boards`-shaped `FirmwareSpec` (MICROPYTHON/CIRCUITPYTHON/
+    KALUMA) - everything genuinely board-specific lives together here, not scattered across
+    sibling top-level dicts keyed by the same board-name string (2026-08-16 reshape - see
+    docs/records/0049's "Design update" section)."""
+
     default_tag: str
-    # board -> {tag: url} - set for firmware that genuinely differs per board (MicroPython/
-    # CircuitPython/Kaluma). `None` for board-agnostic firmware (BOOTROM) - see module docstring.
-    boards: "dict[str, dict[str, str]] | None" = None
-    # tag -> url, board-agnostic. Only ever set when `boards` is `None` (BOOTROM); unused
-    # otherwise.
-    known_versions: "dict[str, str] | None" = None
-    # board -> {"fs_start": "0x...", "fs_blockcount": N, ...} - where a firmware's own compiled
-    # filesystem (and, for Kaluma, "user program") flash region actually lives, real values sourced
+    fw: "dict[str, str]"  # tag -> url
+    # "fs_start"/"fs_blockcount"/"fs_blocksize", plus "prog_start" for Kaluma - where this board's
+    # real firmware places its flash filesystem (and, for Kaluma, "user program") region, sourced
     # from that firmware's own upstream board config, not guessed (see docs/records/0035 for the
     # MicroPython derivation - a board with a bigger compiled binary, like pico_w's CYW43 driver +
-    # lwIP stack, needs a correspondingly relocated filesystem region, or writing a filesystem image
-    # silently overwrites the tail of the firmware itself). Set for MICROPYTHON/KALUMA; `None` for
-    # CIRCUITPYTHON (not yet audited the same way - see 0035's "Open questions") and BOOTROM (no
-    # filesystem concept at all). Kaluma's values happen to be identical across every board key
-    # (confirmed against kaluma-project/kaluma's own board.js/board.h) - still stored per-board here
-    # rather than as a separate board-invariant shape, so every firmware family's flash layout lives
-    # in this one place uniformly.
-    flash_layout: "dict[str, dict[str, str | int]] | None" = None
+    # lwIP stack, needs a correspondingly relocated filesystem region, or writing a filesystem
+    # image silently overwrites the tail of the firmware itself). `fs_blocksize` is littlefs's
+    # block size (the flash sector-erase granularity - 4096 for every board/family tracked so far,
+    # but genuinely per-board/firmware data, not a hardware universal - see docs/records/0049's
+    # "Design update" section for why this isn't a `load_flash.py` module constant). `None` only
+    # for a firmware family with no filesystem concept at all - none of MICROPYTHON/CIRCUITPYTHON/
+    # KALUMA qualify today, kept optional for whatever's added next.
+    layout: "dict[str, str | int] | None" = None
+
+
+@dataclass(frozen=True)
+class FirmwareSpec:
+    # board -> BoardFirmwareSpec - set for firmware that genuinely differs per board (MicroPython/
+    # CircuitPython/Kaluma). `None` for board-agnostic firmware (BOOTROM) - see module docstring.
+    boards: "dict[str, BoardFirmwareSpec] | None" = None
+    # BOOTROM only: board-agnostic default tag/version map. Board-aware families keep their own
+    # `default_tag`/`fw` per board instead (`BoardFirmwareSpec`) - a single tag can be the right
+    # default for `pico` but wrong for `pico_w` in principle, even though every family tracked so
+    # far happens to agree.
+    default_tag: "str | None" = None
+    known_versions: "dict[str, str] | None" = None
 
 
 def _load_specs() -> "dict[str, FirmwareSpec]":
     raw = json.loads(files(__package__).joinpath("firmware_specs.json").read_text())
-    return {name: FirmwareSpec(**spec) for name, spec in raw.items()}
+    specs = {}
+    for name, spec in raw.items():
+        boards = spec.get("boards")
+        if boards is not None:
+            boards = {board: BoardFirmwareSpec(**board_spec) for board, board_spec in boards.items()}
+        specs[name] = FirmwareSpec(
+            boards=boards, default_tag=spec.get("default_tag"), known_versions=spec.get("known_versions")
+        )
+    return specs
 
 
 _SPECS = _load_specs()
@@ -179,33 +219,44 @@ def _download(url: str, filename: str) -> "Path | None":
 
 
 def flash_layout(spec: FirmwareSpec, board: str) -> "dict[str, int]":
-    """Resolves `spec.flash_layout[board]` (MICROPYTHON/KALUMA only - see `FirmwareSpec.flash_layout`'s
-    own docstring) into an all-`int` dict, parsing each `"0x..."` string value - `firmware_specs.json`
-    stores them as hex strings for human readability, plain JSON has no hex-literal syntax. Raises
-    `KeyError` for a spec with no `flash_layout` at all, or a `board` not present in it - both
-    considered a caller bug (every board this project actually supports for a `flash_layout`-bearing
-    spec must have an entry), not a runtime condition to degrade gracefully from.
+    """Resolves `spec.boards[board].layout` into an all-`int` dict, parsing each `"0x..."` string
+    value - `firmware_specs.json` stores them as hex strings for human readability, plain JSON has
+    no hex-literal syntax. Raises `KeyError` for a spec with no `boards` at all (BOOTROM), a
+    `board` not present in it, or a board with no `layout` - all considered a caller bug (every
+    board this project actually supports for a layout-bearing spec must have an entry), not a
+    runtime condition to degrade gracefully from.
     """
-    if spec.flash_layout is None:
-        raise KeyError(f"{spec!r} has no flash_layout")
-    entry = spec.flash_layout[board]
-    return {key: (int(value, 16) if isinstance(value, str) else value) for key, value in entry.items()}
+    if spec.boards is None:
+        raise KeyError(f"{spec!r} has no boards")
+    layout = spec.boards[board].layout
+    if layout is None:
+        raise KeyError(f"{spec!r}'s {board!r} board has no layout")
+    return {key: (int(value, 16) if isinstance(value, str) else value) for key, value in layout.items()}
 
 
 def retrieve(spec: FirmwareSpec, image: "str | None" = None, board: str = _DEFAULT_BOARD) -> "Path | None":
     """
     Args:
         spec: which firmware to resolve (MICROPYTHON/CIRCUITPYTHON/KALUMA/BOOTROM).
-        image: a version tag (defaults to `spec.default_tag`), a local file path, or a direct
-            `http(s)://` URL (downloaded, cached, and reused from cache on subsequent runs the
-            same way a resolved tag already is).
+        image: a version tag (defaults to the resolved board's own `default_tag` for a
+            `spec.boards`-shaped spec, or `spec.default_tag` for BOOTROM), a local file path, or a
+            direct `http(s)://` URL (downloaded, cached, and reused from cache on subsequent runs
+            the same way a resolved tag already is).
         board: which board's firmware variant to resolve a *tag* to (default: `"pico"`) - consulted
             only for `spec.boards`-shaped specs (MICROPYTHON/CIRCUITPYTHON/KALUMA) resolving a
-            version tag; ignored entirely when `image` is a local path or URL, and ignored for a
-            `known_versions`-shaped spec (BOOTROM - board-agnostic, see module docstring).
+            version tag (including the default one, when `image` is omitted); ignored entirely
+            when `image` is a local path or URL, and ignored for a `known_versions`-shaped spec
+            (BOOTROM - board-agnostic, see module docstring).
     """
     if image is None:
-        image = spec.default_tag
+        if spec.boards is not None:
+            if board not in spec.boards:
+                _logger.error("Unknown board %r - choices are %s", board, sorted(spec.boards))
+                return None
+            image = spec.boards[board].default_tag
+        else:
+            assert spec.default_tag is not None, f"{spec!r} has neither boards nor a default_tag"
+            image = spec.default_tag
 
     local_image = Path(image)
     if local_image.exists():
@@ -219,7 +270,7 @@ def retrieve(spec: FirmwareSpec, image: "str | None" = None, board: str = _DEFAU
         if board not in spec.boards:
             _logger.error("Unknown board %r - choices are %s", board, sorted(spec.boards))
             return None
-        version_map = spec.boards[board]
+        version_map = spec.boards[board].fw
     else:
         version_map = spec.known_versions or {}
 

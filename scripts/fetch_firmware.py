@@ -8,15 +8,27 @@ pass, one script, matching docs/CYW43_WIFI_BACKLOG.md's "Candidate redesign" sec
 becomes a flat `tag -> url` map fetched at development time and committed straight into
 `firmware_specs.json`, not generated at request time by `retrieve()`.
 
-**`micropython`/`circuitpython`/`kaluma` are board-aware** (`boards: {board: {tag: url}}`) -
-per-board firmware actually differs for these (cyw43-driver/network stack compiled in or not).
-**`bootrom` is deliberately NOT board-aware** (`known_versions: {tag: url}`, flat) - it's a mask
-ROM baked into the RP2040 die itself at manufacturing time, identical across every board that chip
-ends up on, versioned only by silicon stepping (B0/B1/B2) - see docs/CYW43_WIFI_BACKLOG.md's
-"Historical/closed" section for why this one firmware family is explicitly out of scope for
-board-variant resolution. Keeping both shapes in one script (rather than one script per family)
-means that distinction lives in exactly one place instead of needing to stay in sync across
-several.
+**`micropython`/`circuitpython`/`kaluma` are board-aware**
+(`boards: {board: {default_tag, fw: {tag: url}, layout: {...}}}`) - per-board firmware actually
+differs for these (cyw43-driver/network stack compiled in or not), and so does where each board's
+real firmware places its flash filesystem region - everything board-specific lives together under
+its own board key (2026-08-16 reshape, see docs/records/0049's "Design update" section) rather
+than being scattered across sibling top-level dicts that all happened to use the same board-name
+key by convention. **`bootrom` is deliberately NOT board-aware** (`known_versions: {tag: url}`,
+flat, plus its own top-level `default_tag`) - it's a mask ROM baked into the RP2040 die itself at
+manufacturing time, identical across every board that chip ends up on, versioned only by silicon
+stepping (B0/B1/B2) - see docs/CYW43_WIFI_BACKLOG.md's "Historical/closed" section for why this one
+firmware family is explicitly out of scope for board-variant resolution. Keeping both shapes in
+one script (rather than one script per family) means that distinction lives in exactly one place
+instead of needing to stay in sync across several.
+
+`default_tag` (per board) and `layout` are **not** re-fetched here - there's no API for either
+(one's an editorial pin to a known-good version, the other's a hand-curated hardware-config
+constant, not release metadata). `main()` only ever seeds a *missing* board's `default_tag`
+(`_apply_board_layout()`'s `setdefault`, for a board this script has never seen before) and always
+overwrites `layout` outright (still hand-curated below, just re-asserted every run so the
+committed JSON can't silently drift from its cited source) - an existing board's `default_tag`
+is left exactly as whatever's already committed.
 
 Sources, one function each below:
 - MicroPython: `https://micropython.org/download/{RPI_PICO,RPI_PICO_W}/`, scraped HTML.
@@ -64,10 +76,15 @@ _S3_XML_NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 # - RPI_PICO_W: 848*1024 (smaller - leaves more flash for the CYW43 driver/lwIP stack) ->
 #   0x200000-0xd4000 = 0x12c000, 212 blocks (0xd4000/4096).
 # Not yet verified stable across every tracked MicroPython version tag (checked against v1.28.0
-# only) - see 0035's "Open questions".
+# only) - see 0035's "Open questions". `fs_blocksize` is littlefs's block size, i.e. the flash
+# sector-erase granularity - 4096 for the RP2040's external SPI-NOR flash regardless of board
+# (docs/records/0049's "Design update" section: this used to be a `load_flash.py` module constant,
+# shared across every board by construction rather than actually sourced per board/firmware family
+# like `fs_start`/`fs_blockcount` already were - moved here so a board/firmware combination that
+# genuinely needs a different value has somewhere to put it).
 _MICROPYTHON_FLASH_LAYOUT = {
-    "pico": {"fs_start": "0xa0000", "fs_blockcount": 352},
-    "pico_w": {"fs_start": "0x12c000", "fs_blockcount": 212},
+    "pico": {"fs_start": "0xa0000", "fs_blockcount": 352, "fs_blocksize": 4096},
+    "pico_w": {"fs_start": "0x12c000", "fs_blockcount": 212, "fs_blocksize": 4096},
 }
 
 # Kaluma (kaluma-project/kaluma, targets/rp2/boards/{pico,pico-w}/board.h + board.js): identical
@@ -76,8 +93,8 @@ _MICROPYTHON_FLASH_LAYOUT = {
 # code budget regardless of board, unlike MicroPython. Still stored per-board (both keys pointing
 # at the same values) so every firmware family's flash layout lives in this one uniform shape.
 _KALUMA_FLASH_LAYOUT = {
-    "pico": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128},
-    "pico_w": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128},
+    "pico": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128, "fs_blocksize": 4096},
+    "pico_w": {"prog_start": "0x100000", "fs_start": "0x180000", "fs_blockcount": 128, "fs_blocksize": 4096},
 }
 
 # CircuitPython (adafruit/circuitpython, ports/raspberrypi/{mpconfigport.h,link-rp2040.ld,
@@ -98,8 +115,8 @@ _KALUMA_FLASH_LAYOUT = {
 # collide with anything either board actually uses; only the *start* address matters for
 # correctness (matching where real firmware's own compiled code actually ends).
 _CIRCUITPYTHON_FLASH_LAYOUT = {
-    "pico": {"fs_start": "0x100000", "fs_blockcount": 512},
-    "pico_w": {"fs_start": "0x180000", "fs_blockcount": 512},
+    "pico": {"fs_start": "0x100000", "fs_blockcount": 512, "fs_blocksize": 4096},
+    "pico_w": {"fs_start": "0x180000", "fs_blockcount": 512, "fs_blocksize": 4096},
 }
 
 
@@ -180,12 +197,28 @@ def _fetch_bootrom() -> "dict[str, str]":
     return versions
 
 
-def _merge_boards(existing: "dict[str, dict[str, str]]", fetched: "dict[str, dict[str, str]]", family: str) -> None:
+# Editorial pins, not fetched from anywhere - the version each family defaults to when no
+# explicit tag/board override picks a newer one. Only ever used as a fallback for a board
+# `_merge_boards()` sees for the first time (`_apply_board_layout()`'s `setdefault`); an existing
+# board's committed `default_tag` is never overwritten by a later run.
+_MICROPYTHON_DEFAULT_TAG = "1.21.0"
+_CIRCUITPYTHON_DEFAULT_TAG = "8.0.2"
+_KALUMA_DEFAULT_TAG = "1.2.1"
+
+
+def _merge_boards(existing: "dict[str, dict]", fetched: "dict[str, dict[str, str]]", family: str) -> None:
     for board, versions in fetched.items():
-        board_map = existing.setdefault(board, {})
-        added = sorted(set(versions) - set(board_map))
-        board_map.update(versions)
+        board_entry = existing.setdefault(board, {})
+        fw_map = board_entry.setdefault("fw", {})
+        added = sorted(set(versions) - set(fw_map))
+        fw_map.update(versions)
         print(f"{family}/{board}: {len(versions)} versions found, {len(added)} new: {added}")
+
+
+def _apply_board_layout(boards: "dict[str, dict]", layout: "dict[str, dict]", default_tag: str) -> None:
+    for board, board_entry in boards.items():
+        board_entry["layout"] = layout[board]
+        board_entry.setdefault("default_tag", default_tag)
 
 
 def main() -> None:
@@ -195,9 +228,9 @@ def main() -> None:
     _merge_boards(specs["circuitpython"].setdefault("boards", {}), _fetch_circuitpython(), "circuitpython")
     _merge_boards(specs["kaluma"].setdefault("boards", {}), _fetch_kaluma(), "kaluma")
 
-    specs["micropython"]["flash_layout"] = _MICROPYTHON_FLASH_LAYOUT
-    specs["kaluma"]["flash_layout"] = _KALUMA_FLASH_LAYOUT
-    specs["circuitpython"]["flash_layout"] = _CIRCUITPYTHON_FLASH_LAYOUT
+    _apply_board_layout(specs["micropython"]["boards"], _MICROPYTHON_FLASH_LAYOUT, _MICROPYTHON_DEFAULT_TAG)
+    _apply_board_layout(specs["kaluma"]["boards"], _KALUMA_FLASH_LAYOUT, _KALUMA_DEFAULT_TAG)
+    _apply_board_layout(specs["circuitpython"]["boards"], _CIRCUITPYTHON_FLASH_LAYOUT, _CIRCUITPYTHON_DEFAULT_TAG)
 
     bootrom_versions = _fetch_bootrom()
     bootrom_map = specs["bootrom"].setdefault("known_versions", {})

@@ -70,13 +70,7 @@ from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.cli.stdio_repl import buf_write as _buf_write
 from rp2040py.device.base_device import BaseDevice
 from rp2040py.device.kaluma_device import KalumaDevice
-from rp2040py.device.load_flash import (
-    CIRCUITPYTHON_FS_BLOCKSIZE,
-    KALUMA_FS_BLOCKSIZE,
-    MICROPYTHON_FS_BLOCKSIZE,
-    load_micropython_flash_image,
-    load_uf2,
-)
+from rp2040py.device.load_flash import load_micropython_flash_image, load_uf2
 from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.device.raw_repl import RawReplError
 from rp2040py.device.repl_runner import BaseReplRunner
@@ -854,12 +848,15 @@ def _target_fs_layout(target: str, board: str) -> "tuple[int, int]":
     docs/records/0035-board-aware-fs-flash-offset.md for why this can't be a plain per-target
     constant (a board's real firmware footprint changes where/how big its filesystem region is;
     building a littlefs image sized for the wrong board silently corrupts the firmware it's loaded
-    alongside)."""
+    alongside). Both values come from the same `flash_layout()` dict - `fs_blocksize` is
+    per-board/firmware data too (docs/records/0049's "Design update"), not a shared constant."""
     if target == "micropython":
-        return MICROPYTHON_FS_BLOCKSIZE, flash_layout(MICROPYTHON, board)["fs_blockcount"]
-    if target == "kaluma":
-        return KALUMA_FS_BLOCKSIZE, flash_layout(KALUMA, board)["fs_blockcount"]
-    return CIRCUITPYTHON_FS_BLOCKSIZE, flash_layout(CIRCUITPYTHON, board)["fs_blockcount"]
+        layout = flash_layout(MICROPYTHON, board)
+    elif target == "kaluma":
+        layout = flash_layout(KALUMA, board)
+    else:
+        layout = flash_layout(CIRCUITPYTHON, board)
+    return layout["fs_blocksize"], layout["fs_blockcount"]
 
 
 def _cmd_mklittlefs(args: argparse.Namespace) -> None:
@@ -870,10 +867,9 @@ def _cmd_mklittlefs(args: argparse.Namespace) -> None:
     if args.target is not None:
         block_size, block_count = _target_fs_layout(args.target, args.board)
     else:
-        block_size = args.block_size if args.block_size is not None else MICROPYTHON_FS_BLOCKSIZE
-        block_count = (
-            args.block_count if args.block_count is not None else _target_fs_layout("micropython", args.board)[1]
-        )
+        default_block_size, default_block_count = _target_fs_layout("micropython", args.board)
+        block_size = args.block_size if args.block_size is not None else default_block_size
+        block_count = args.block_count if args.block_count is not None else default_block_count
 
     try:
         build_littlefs_image(
