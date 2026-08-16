@@ -166,7 +166,8 @@ request for the gateway → ARP reply → (now) TCP SYN.
   round trip through the emulator. 4 new/changed hermetic tests added (real-RST-via-`SO_LINGER`,
   connect-timeout-via-injectable-`connect_fn`, general-UDP-relay-to-a-real-destination, DHCP-
   still-wins-over-the-generalized-relay) - full suite (17 tests in `test_cyw43_nat.py`) stable
-  across repeated local runs, `pre-commit run --all-files` clean. Still not pushed.
+  across repeated local runs, `pre-commit run --all-files` clean. ~~Still not pushed.~~
+  (superseded - pushed and merged, see the final entry below.)
 - 2026-08-16: A second push (PR #37) hit a second real CI flake on `windows-latest`, this time in
   the RST-propagation test just added above: `test_tcp_reflector_propagates_a_real_reset_as_rst_
   not_a_clean_fin` observed `flags=17` (`TCP_ACK|TCP_FIN`) instead of `TCP_RST` - the `SO_LINGER`
@@ -181,7 +182,20 @@ request for the gateway → ARP reply → (now) TCP SYN.
   `connect_fn` injection seam the connect-timeout test already established) that raises
   `ConnectionResetError` directly - no real socket, no OS dependency, faster (no real I/O) and
   strictly more precisely targeted at the code this test exists to cover. Verified stable across 5
-  repeated local runs; `pre-commit run --all-files` clean. Still not pushed.
+  repeated local runs; `pre-commit run --all-files` clean. ~~Still not pushed.~~ (superseded -
+  pushed and merged, see the entry directly below.)
+- 2026-08-16: **Pushed and merged.** [PR #37](https://github.com/o-murphy/rp2040py/pull/37)
+  (`feat/cyw43-tcp-reflector` → `main`, 7 commits, head `56bc2ec`) merged as `9f5348f`, 2026-08-16
+  00:19 UTC. This closes the "not yet re-pushed to confirm on CI" caveat both entries above left
+  open: **all 62 checks green on the merged head**, including all three `pre-commit run
+  --all-files` OS jobs (`ubuntu-latest`, `macos-latest`, and - the one that mattered here -
+  `windows-latest`), the full MicroPython `1.16`-through-`1.29.0-preview` × cpython-3.10/3.14/
+  pypy-3.10 matrix, the Pico SDK `1.2.0`-`2.3.0` matrix, Kaluma, and both codecov gates. Both
+  `windows-latest` flakes documented in the two entries above (the fixed-`asyncio.sleep()` race and
+  the `SO_LINGER` real-kernel-RST portability bug) are therefore confirmed fixed on real CI, not
+  just locally. Nothing in this record's "Known gaps" section changed as part of the merge - that
+  inventory is still the accurate open-work list, and is now also surfaced in the tracker's own
+  "In progress / Proposed" section rather than living only inside this record.
 
 ## Deferred, not designed here
 

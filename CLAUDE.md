@@ -8,7 +8,11 @@ indexed by [docs/0000-TRACKER.md](docs/0000-TRACKER.md) (the scheme itself is
 isn't root-caused (or otherwise ready to become a record) yet live under
 [docs/tasks/](docs/tasks/) instead - the tracker's own "In progress / Proposed" section says which
 ones are still open; a task file gets folded into a proper record once it's actually resolved (see
-e.g. 0041/0044, both created from a `docs/tasks/*.md` note).
+e.g. 0041/0044, both created from a `docs/tasks/*.md` note). "Folded in" is literal: the note is
+appended verbatim to that record as an `## Appendix: folded-in working note ...` section and the
+`docs/tasks/` file is then **deleted**, so `docs/tasks/` only ever holds still-open notes. Older
+records still cite the pre-fold-in `docs/tasks/<name>.md` paths - the tracker's "Conventions"
+section maps each one to the record that now carries it.
 
 Two records track the active work - check both before assuming what's done:
 
