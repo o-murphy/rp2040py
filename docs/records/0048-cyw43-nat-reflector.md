@@ -263,7 +263,12 @@ request for the gateway → ARP reply → (now) TCP SYN.
     unimplemented peripheral blocks the boot touches immediately before it goes quiet and the
     core1-FIFO hypothesis that was checked and *ruled out*, is in
     `docs/tasks/circuitpython-10x-boot-stall.md`. That is also why the verification above uses
-    9.2.9.
+    9.2.9. **Since root-caused and fixed** the same day, in
+    [0050](0050-qspi-pad-reset-values.md): `PADS_QSPI`'s reset values were bank0's, so
+    `GPIO_QSPI_SS` came up with a pull-*down* and read low forever - a permanently-held BOOTSEL
+    button, which 10.x polls from RAM during boot. 10.2.1 now boots, and is in
+    `ci-circuitpython.yml`'s matrix as the regression test. The CircuitPython WiFi verification
+    above was not re-run against 10.x - it remains a 9.2.9 result.
   - Landed alongside: `.github/workflows/ci-circuitpython.yml` - the first CircuitPython CI this
     project has ever had (a boot check plus a soft-failing `pico_w` WLAN step, mirroring
     `ci-micropython.yml`). Its absence is why the 10.x stall could go unnoticed while `README.md`

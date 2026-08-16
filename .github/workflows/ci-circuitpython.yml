@@ -2,10 +2,9 @@ name: Test CircuitPython Releases
 
 # There was no CircuitPython CI at all before this workflow (see
 # docs/records/0048-cyw43-nat-reflector.md), even though README.md documents `--circuitpython` as
-# a supported mode - which is how CircuitPython 10.x's boot stall went unnoticed
-# (docs/tasks/circuitpython-10x-boot-stall.md). The version matrix below deliberately lists only
-# releases confirmed to reach the REPL under this emulator; adding 10.x here is the natural
-# regression test for whoever fixes that.
+# a supported mode - which is how CircuitPython 10.x's boot stall went unnoticed until
+# docs/records/0050-qspi-pad-reset-values.md root-caused it. 10.2.1 is in the matrix below as the
+# regression test for exactly that fix.
 
 on:
   push:
@@ -22,7 +21,8 @@ jobs:
       matrix:
         circuitpython_version:
           - tag: "8.0.2" # this project's own default (README)
-          - tag: "9.2.9" # newest release in firmware_specs.json
+          - tag: "9.2.9"
+          - tag: "10.2.1" # the version that used to hang - see records/0050
             pico_w: true
         python_runtime:
           - pypy-3.10

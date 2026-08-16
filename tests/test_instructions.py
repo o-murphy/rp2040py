@@ -63,6 +63,7 @@ from rp2040py.utils.assembler import (
     opcode_ror,
     opcode_rsbs,
     opcode_sbcs,
+    opcode_sev,
     opcode_stmia,
     opcode_str,
     opcode_str_reg,
@@ -83,6 +84,7 @@ from rp2040py.utils.assembler import (
     opcode_udf2,
     opcode_uxtb,
     opcode_uxth,
+    opcode_wfe,
     opcode_wfi,
     opcode_yield,
 )
@@ -1512,6 +1514,36 @@ def test_should_execute_an_uxth_r3_r1_instruction(cpu):
     cpu.single_step()
     registers = cpu.read_registers()
     assert registers.r3 == 0x5678
+
+
+def test_should_execute_a_wfe_instruction_and_wait_when_no_event_is_pending(cpu):
+    cpu.set_pc(0x20000000)
+    cpu.write_uint16(0x20000000, opcode_wfe())
+    cpu.single_step()
+    registers = cpu.read_registers()
+    assert registers.pc == 0x20000002
+    assert cpu.rp2040.core.waiting is True
+
+
+def test_sev_sets_the_event_register_so_a_following_wfe_does_not_wait(cpu):
+    """ARMv6-M B1.5.18: SEV sets the Event Register of every PE *including the one executing it*,
+    and WFE consumes a set Event Register instead of waiting. `__sev(); __wfe();` is the standard
+    idiom for guaranteeing the next WFE falls straight through - CircuitPython 10.x's RP2040 boot
+    depends on it, and hung forever when SEV was a no-op (docs/records/0050-sev-event-register.md).
+    """
+    cpu.set_pc(0x20000000)
+    cpu.write_uint16(0x20000000, opcode_sev())
+    cpu.write_uint16(0x20000002, opcode_wfe())
+
+    cpu.single_step()
+    assert cpu.rp2040.core.event_registered is True
+
+    cpu.single_step()
+    registers = cpu.read_registers()
+    assert registers.pc == 0x20000004
+    # Consumed by the WFE, and the core kept running rather than parking in `waiting`.
+    assert cpu.rp2040.core.event_registered is False
+    assert cpu.rp2040.core.waiting is False
 
 
 def test_should_execute_a_wfi_instruction(cpu):

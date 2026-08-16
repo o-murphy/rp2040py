@@ -426,15 +426,9 @@ rp2040py micropython --circuitpython
 
 and start the CircuitPython REPL! As with MicroPython, the firmware (**8.0.2** by default) is
 downloaded automatically on first use; a different version or a local file can be given via
-`--image` (e.g. `--image 9.2.9` or a path to an already-downloaded UF2). The rest of the experience
+`--image` (e.g. `--image 10.2.1` or a path to an already-downloaded UF2). The rest of the experience
 is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc).
 
-> [!WARNING]
-> **CircuitPython 10.x does not currently boot under the emulator** - it produces no output at all
-> and never reaches the REPL, on `--board pico` as well as `pico_w`. 8.0.2 (the default) and 9.2.9
-> (the newest version this project knows about) both work. Not root-caused yet; the investigation
-> so far is in
-> [docs/tasks/circuitpython-10x-boot-stall.md](docs/tasks/circuitpython-10x-boot-stall.md).
 
 WiFi works here too: `--board pico_w` gives CircuitPython's `wifi`/`socketpool` the same emulated
 CYW43439 and NAT bridge described under [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above -

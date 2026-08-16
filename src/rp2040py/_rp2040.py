@@ -36,8 +36,10 @@ from rp2040py.peripherals.tbman import RPTBMAN
 from rp2040py.peripherals.timer import RPTimer
 from rp2040py.peripherals.uart import RPUART, IUARTDMAChannels
 from rp2040py.peripherals.usb import RPUSBController
+from rp2040py.peripherals.vreg_and_chip_reset import RPVREGAndChipReset
 from rp2040py.peripherals.watchdog import RPWatchdog
 from rp2040py.peripherals.xosc import RPXOSC
+from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.sio import RPSIO
 from rp2040py.utils.bit import (
     read_uint16_le,
@@ -131,6 +133,15 @@ class RP2040:
             GPIOPin(self, 4, "SD2", always_output_enabled=True),
             GPIOPin(self, 5, "SD3", always_output_enabled=True),
         ]
+        # GPIOPin's own constructor default is PADS_BANK0's reset value, which is wrong for this
+        # bank: PADS_QSPI resets each pad differently (RP2040 datasheet 2.19.6.3), and the
+        # difference is load-bearing. GPIO_QSPI_SS is the only pad with a pull-up, which is what
+        # holds the flash deselected and what makes the BOOTSEL button readable (the button pulls
+        # SS down). Left at the bank0 default, an undriven SS reads low forever, so firmware that
+        # polls it - CircuitPython 10.x does, from RAM, during boot - never sees it go high.
+        # See docs/records/0050-qspi-pad-reset-values.md.
+        for _qspi_pin, _pad_reset in zip(self.qspi, QSPI_PAD_RESET_VALUES):
+            _qspi_pin.pad_value = _pad_reset
 
         self.dma = RPDMA(self, "DMA")
         self.pio = [
@@ -173,7 +184,7 @@ class RP2040:
             0x40058: self.watchdog,
             0x4005C: RP2040RTC(self, "RTC_BASE"),
             0x40060: UnimplementedPeripheral(self, "ROSC_BASE"),
-            0x40064: UnimplementedPeripheral(self, "VREG_AND_CHIP_RESET_BASE"),
+            0x40064: RPVREGAndChipReset(self, "VREG_AND_CHIP_RESET_BASE"),
             0x4006C: RPTBMAN(self, "TBMAN_BASE"),
             0x50000: self.dma,
             0x50110: self.usb_ctrl,
