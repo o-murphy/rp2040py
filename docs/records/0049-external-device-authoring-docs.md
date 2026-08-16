@@ -1,9 +1,9 @@
 # 0049. Document external devices, and how a user writes their own
 
-- Status: **Proposed — not implemented.** This record is the note about what should eventually
-  happen; nothing in `README.md`, `docs/reference/` or `src/` is changed by it. Scope was widened
-  2026-08-16 from "document devices" to "document devices *and boards*" - see the design update
-  below.
+- Status: **Proposed — docs-only pieces landed (README pointer section, the `fs_blocksize`
+  prerequisite), the `BoardSetup` board-authoring design is accepted but its 5-phase implementation
+  plan hasn't started.** Scope was widened 2026-08-16 from "document devices" to "document devices
+  *and boards*" - see "Accepted design" below.
 - Conceived: 2026-08-16
 - Related: 0030 (`ExternalDevice` concurrency model - the attach-timing rule any such doc has to
   state), 0028/0029 (module layout / board composition - why `external/` is a sibling top-level
@@ -136,7 +136,9 @@ take a board-*name* string, not a pre-built `BoardSpec`/`RP2040`:
 
 Accepting a `BoardSpec` object as an alternative to a board-name string in `BaseDevice.__init__`
 (and separately, in `_run_async`) is real, small, not-yet-written code - not something the docs can
-describe as already possible today outside the `run` path.
+describe as already possible today outside the `run` path. Superseded by the accepted `BoardSetup`
+design below - scenario 2 doesn't get its own separate mechanism; it becomes the trivial case of
+`resolve_board_setup()` followed by overriding `extras`.
 
 ### Scenario 3 - fully custom board: own firmware + own flash layout
 
@@ -171,22 +173,136 @@ functions each independently need:
 class CustomFlashLayout:
     fs_start: int
     fs_blockcount: int
+    fs_blocksize: int  # real `flash_layout()` key since 2026-08-16, see below - not a
+                        # `load_flash.py` module constant, so a custom layout must supply it too
     prog_start: int | None = None  # Kaluma's separate YMODEM "user program" region only -
     # MicroPython/CircuitPython keep user code inside the FS itself
-
-
-@dataclass(frozen=True)
-class CustomBoardSetup:
-    board: BoardSpec  # mcu + extras, same as scenario 2
-    firmware: str | Path  # a specific UF2/bin, not a firmware_specs.json version registry
-    layout: CustomFlashLayout
 ```
 
 This is **not implemented** - `load_micropython_flash_image`/`load_circuitpython_flash_image`/
 `load_kaluma_flash_image`/`load_kaluma_program` (`device/load_flash.py:106-133`) and their
 `dump_*` counterparts (`:153-165`) each call `_flash_layout(SPEC, board)` themselves, independently
 - there is no shared chokepoint the way scenario 2 has one for MCU construction. Threading a
-pre-supplied `CustomFlashLayout` through instead of a board-name lookup touches all of them.
+pre-supplied `CustomFlashLayout` through instead of a board-name lookup touches all of them - which
+is exactly the gap the accepted design below closes, by giving every consumer one already-resolved
+object instead of a board-name string to re-look-up.
+
+## Accepted design (2026-08-16): `BoardSetup`
+
+**Decided, not just floated.** Both scenario 2's "custom `extras`, existing firmware" and
+scenario 3's "fully custom board" collapse into one mechanism: `BoardSpec` (mcu + extras) is
+renamed and extended into `BoardSetup`, which becomes the *only* thing `BaseDevice` and its
+subclasses ever accept for "which board" - never a board-name string internally again. A board
+name string is now purely a *CLI/SDK-convenience lookup key* that resolves to a `BoardSetup`,
+never something a `Device` class or `load_flash.py` needs to know about or re-resolve itself.
+
+```python
+# boards.py
+@dataclass(frozen=True)
+class BoardSetup:
+    mcu: type[RP2040] = RP2040
+    extras: tuple[ExternalDeviceFactory, ...] = ()
+    layout: CustomFlashLayout | None = None  # None where no filesystem concept applies (raw `run`)
+    image: str | Path | None = None  # an already-resolved local file path ONLY - never a version
+    # tag, never a URL. `retrieve()`'s tag/URL/cache resolution stays entirely a CLI/SDK-side
+    # concern that happens *before* a `BoardSetup` is built, not something a `Device` class or a
+    # custom board author's file ever has to replicate.
+
+BOARDS: dict[str, BoardSetup] = {  # was BoardSpec; `layout`/`image` stay None here - filled in
+    "pico": BoardSetup(extras=(lambda: LEDMock(gpio=25), BootselButton)),        # by resolve_board_setup()
+    "pico_w": BoardSetup(extras=(lambda: LEDMock(gpio=25), BootselButton, Cyw43439)),
+}
+
+
+def resolve_board_setup(board: str, firmware_spec: FirmwareSpec, tag: "str | None" = None) -> BoardSetup:
+    """The one shared shortcut both `--board` (CLI) and an SDK caller use for a *known* board -
+    BOARDS[board]'s mcu/extras plus that firmware family's resolved image/layout, combined into
+    one ready-to-run BoardSetup. `tag=None` defers to the board's own `default_tag`, same as
+    `retrieve()` already does."""
+    image = retrieve(firmware_spec, tag, board)
+    layout = flash_layout(firmware_spec, board) if firmware_spec.boards is not None else None
+    return dataclasses.replace(BOARDS[board], layout=CustomFlashLayout(**layout) if layout else None, image=image)
+```
+
+**Devices take `BoardSetup`, never a board-name string or a separate `image` kwarg.**
+`BaseDevice.__init__`/`MicroPythonDevice`/`KalumaDevice` (and `_run_async`'s raw `run` path, for
+`mcu`/`extras` only - its `layout`/`image` stay unused, `run`'s own `--image` is a raw program, not
+board-family-versioned firmware, so it plausibly stays a separate argument; **not settled**, the
+one open sub-question in this design) accept `board: BoardSetup` as their single board-related
+parameter. `device/load_flash.py`'s six load/dump functions take the resolved `CustomFlashLayout`
+directly instead of `(rp2040, board: str)` - `flash_layout()`/`_flash_layout` calls disappear from
+every one of them, since resolution already happened once, in `resolve_board_setup()` or in
+whatever hand-built the custom `BoardSetup`. This is what actually closes the "no shared
+chokepoint" gap noted above: there was never a single place `load_flash.py`'s functions could all
+defer to for layout - now there is, and it's the same place MCU construction already had one.
+
+**CLI: `--board-spec target:attr`, mutually exclusive with `--board`** (not layered on top of it -
+an earlier draft of this design had them combine, letting `--board-spec` override just `extras`
+while silently inheriting `--board`'s image/layout; reversed, because that's just scenario 2 again
+and blurs which one a reader is looking at - `--board-spec` means "I bring everything", full stop).
+`target` is a file path (`my_board.py`, loaded via `importlib.util.spec_from_file_location` - no
+package required) or a dotted module path (`importlib.import_module`, for an installed package);
+`attr` names a module-level `BoardSetup` instance. Validated by hand, not `argparse`'s
+`choices=`/mutual-exclusion machinery - same pattern as `--littlefs`/`--fat12` (0036). An
+`RP2040PY_BOARD_SPEC` env var (Flask's `FLASK_APP`/Django's `DJANGO_SETTINGS_MODULE` pattern)
+resolved through the exact same `target:attr` code, for a persistent local setup that doesn't want
+the flag typed every invocation - not a separate mechanism. Deliberately **not** `conftest.py`-style
+silent auto-discovery of a conventionally-named file in `cwd` - fine for a test framework's
+expected magic, wrong for this project's "explicit opt-in, no hidden import-on-every-run surface"
+posture (the same reasoning 0029/this record's own resolved CLI-hook question already leaned on).
+
+**Flag compatibility with `--board-spec`** - worked out flag by flag, not assumed:
+
+| Flag | With `--board-spec` | Why |
+|---|---|---|
+| `--image` | incompatible | `BoardSetup.image` is already the concrete file - nothing left to resolve a tag/URL against |
+| `--target` (`mklittlefs`) | incompatible | `_target_fs_layout()` resolves `flash_layout()` by board *name*, which doesn't exist here |
+| `--fetch-fw-only` | incompatible | exists to pre-resolve+cache a *tag*; `BoardSetup.image` is never a tag or URL, nothing to fetch |
+| `--circuitpython` | **compatible** | not just a `FirmwareSpec` selector - also picks the loader/dump function (`load_circuitpython_flash_image` vs `load_micropython_flash_image`, `mp_device.py:92,248-249`) *and* post-boot console behavior (send `\r\n` vs Ctrl-C, `cli/__init__.py:538-543`), both independent of how the board was resolved |
+| `--bootrom` | compatible | silicon revision (B0/B2), orthogonal to board/firmware entirely |
+| `--gdb`/`--gdb-port`/`--expect-text`/`--expect-regex`/`--tcp-port`/`--pty` | compatible | how you talk to an already-running device, unrelated to board resolution |
+| `--littlefs`/`--dump-fs`/`--fat12` | compatible | consume `board_setup.layout` directly; a custom board that left `layout=None` just fails at use, not a CLI-level conflict |
+| `--block-size`/`--block-count` (`mklittlefs`) | compatible | always manual overrides, regardless of resolution source |
+
+Same validate-by-hand pattern as the `--littlefs`/`--fat12` precedent (0036) for the incompatible
+row - not `argparse` mutual-exclusion groups.
+
+### Phased implementation plan (not started)
+
+1. **`boards.py`**: rename `BoardSpec` → `BoardSetup`, add `layout`/`image` fields (default `None`
+   on both - existing `BOARDS` entries need no other change). Add `CustomFlashLayout` (move out of
+   this doc into real code) and `resolve_board_setup()`.
+2. **`device/load_flash.py`**: six load/dump functions stop taking `board: str` and calling
+   `_flash_layout()` themselves - take a resolved `CustomFlashLayout` (or the equivalent plain
+   dict) instead. Delete the now-dead `_flash_layout`/`MICROPYTHON`/`CIRCUITPYTHON`/`KALUMA`
+   imports from this module.
+3. **`device/base_device.py`/`mp_device.py`/`kaluma_device.py`**: `board: str` constructor param
+   becomes `board: BoardSetup`; drop the separate `image` kwarg in favor of `board.image` (decide
+   the still-open `run`-path question from above as part of this phase, since `_run_async` is the
+   one place this doesn't cleanly fold in); update every internal call into `load_flash.py` to pass
+   `board.layout` instead of `self.board`/a name string.
+4. **CLI (`cli/__init__.py`)**: wire `--board <name>` through `resolve_board_setup()` instead of
+   `build_rp2040()` directly; add `--board-spec target:attr` (+ `RP2040PY_BOARD_SPEC` env var) with
+   the file-or-module `target:attr` resolver; add the by-hand incompatible-flag validation from the
+   table above, mirroring `_validate_littlefs_fat12()`'s existing shape (0036).
+5. **Tests + docs**: update every test that constructs a `Device` with `board: str` (same set
+   `tests/test_firmware_retrieve.py`/`test_cli.py`/`test_cli_mklittlefs.py` the 2026-08-16
+   `fs_blocksize` reshape already touched, plus `tests/test_boards.py`/device-level tests); write
+   the actual "write your own board" how-to this whole record was originally about, now that the
+   API it documents is real.
+
+Each phase is independently mergeable and independently revertable - 1-2 land first with zero
+external behavior change (pure refactor, `BOARDS`'s existing entries keep working through
+`resolve_board_setup()` exactly as `build_rp2040()` did), 3-4 are the actual breaking constructor
+change, 5 closes the loop. Phases 3-4 change `MicroPythonDevice`/`KalumaDevice`'s public
+`__init__(image, *, board: str = ...)` signature outright, no deprecation shim - acceptable
+specifically *because* this record's own "The gap" section already established there is no
+documented SDK usage contract for `board`/`image` to break yet (README's "Library API" section
+shows `MicroPythonDevice("...")`/`board="pico_w"` as a keyword string, but nothing has ever
+promised that stays a string). Shipping the breaking change now, before any doc teaches the old
+shape as stable API, is cheaper than shipping it after and needing a migration note. Per this
+repo's document-vs-implement convention, writing this plan down does not authorize starting phase
+1 - that needs its own, separate go-ahead, same as every other "not started" row on the tracker.
 
 **Concrete near-term prerequisite - done 2026-08-16, and grew into a small reshape along the way.**
 `device/load_flash.py` used to hardcode the littlefs block size per firmware family as plain Python
@@ -214,28 +330,30 @@ inline there rather than left to contradict this record silently.
 
 ### Contributing upstream instead
 
-For anyone who wants their board to get real `--board`/CLI support (not just API-level scenario
-2/3 above): that means a PR to *this* repo adding an entry to both `boards.py`'s `BOARDS` dict
-*and* a new `BoardFirmwareSpec` under `firmware_specs.json`'s `boards` (per firmware family it
-should support) - the two registries `--board {run,micropython,kaluma,bench,mklittlefs}`
+For anyone who wants their board to get real `--board`/CLI support (not just API/`--board-spec`-
+level custom setup above): that means a PR to *this* repo adding an entry to both `boards.py`'s
+`BOARDS` dict *and* a new `BoardFirmwareSpec` under `firmware_specs.json`'s `boards` (per firmware
+family it should support) - the two registries `--board {run,micropython,kaluma,bench,mklittlefs}`
 (`cli/__init__.py:966`, all five subcommands that accept `--board`, feeding the same
 `choices=tuple(BOARDS)`) actually reads from.
 This is the existing, already-working path - nothing new needed, just worth stating explicitly so
-users don't reach for scenario 3 when what they actually want is upstream board support.
+users don't reach for a hand-built `BoardSetup` when what they actually want is upstream board
+support.
 
 ### What this design update does and doesn't authorize
 
-Scenario 1 is real today and can be documented as such. Scenarios 2 and 3 are still **design, not
-code** - `BaseDevice`/`MicroPythonDevice`/`KalumaDevice`/`_run_async`/`load_flash.py` all still
-need actual new parameters (accepting a pre-built `BoardSpec`/`CustomFlashLayout` as an alternative
-to a board-name string) before either scenario is true. The one piece of this section that *was*
-implemented outright - moving `fs_blocksize` into `firmware_specs.json` (see above) - was narrow,
-additive, board-count-preserving (no behavior change for `pico`/`pico_w`), and explicitly
-called out as a prerequisite rather than the scenario 2/3 API surface itself; it doesn't change
-that the `CustomBoardSetup`/`CustomFlashLayout` classes themselves, and the plumbing to accept them,
-remain undesigned-into-code. Per this repo's document-vs-implement convention, this section
-documents the resolved shape of that remaining future work; it does not authorize writing any of
-it - that needs its own, separate go-ahead.
+Scenario 1 is real today and can be documented as such. The `BoardSetup` design above is
+**accepted** - not merely floated, per the discussion that produced it - but every phase in its
+implementation plan is still **design, not code**: `boards.py`/`load_flash.py`/`BaseDevice`/
+`MicroPythonDevice`/`KalumaDevice`/`_run_async`/`cli/__init__.py` all still need the actual changes
+phases 1-4 describe. The one piece of this whole record that *was* implemented outright - moving
+`fs_blocksize` into `firmware_specs.json` (see above) - was narrow, additive, board-count-preserving
+(no behavior change for `pico`/`pico_w`), and explicitly called out as a prerequisite rather than
+part of the `BoardSetup` API surface itself; it doesn't change that `BoardSetup`/
+`resolve_board_setup()`/`--board-spec` remain undesigned-into-code. Per this repo's
+document-vs-implement convention, this record documents an accepted design and a concrete phased
+plan for it; it does not authorize starting any phase - that needs its own, separate go-ahead, same
+as every other "not started" row on the tracker.
 
 ## Cleanup this work would naturally pick up
 
