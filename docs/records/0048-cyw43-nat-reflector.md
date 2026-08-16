@@ -274,6 +274,26 @@ request for the gateway → ARP reply → (now) TCP SYN.
     `ci-micropython.yml`). Its absence is why the 10.x stall could go unnoticed while `README.md`
     advertised `--circuitpython` and used `--image 10.2.1` as its example.
 
+- 2026-08-16: **Kaluma verified too - a third, independent network stack.** Asked whether Kaluma's
+  Pico W WiFi works here at all (nothing in this repo had ever exercised it: no `pico_w` Kaluma
+  test, no WiFi step in `ci-kaluma.yml`), and it does, end to end, against real Kaluma `1.2.1`:
+  `require('wifi')` resolves, `scan()` returns the fixed fake AP
+  (`{"ssid":"RP2040PY-GUEST","bssid":"42:13:37:55:AA:01","security":"OPEN","rssi":-87,"channel":6}`),
+  `connect()` succeeds, and a real `net.Socket` to `1.1.1.1:80` returns a live
+  `HTTP/1.1 426 Upgrade Required` with a current date. Landed as `tests/kaluma/main-cyw43.js` plus
+  a soft-failing `pico_w` WLAN step in `ci-kaluma.yml`, pinned to one runtime (the step buys stack
+  coverage, not interpreter coverage, and it touches the real internet - running it across the
+  whole matrix would be cost without signal).
+  - **What this confirms architecturally**: three network stacks - MicroPython's lwIP,
+    CircuitPython's, and now Kaluma's - drive the identical emulated bus with **no changes to
+    `bus.py` or `nat.py` for any of them**. That is the payoff of terminating at gSPI/SDPCM rather
+    than at any firmware's own API, and it is now evidence rather than reasoning.
+  - Kaluma renders the fake AP as `security: "OPEN"`, which makes one of this record's own "Known
+    gaps" plainer than the other stacks do: there is no auth at all to get wrong, so the
+    "a *wrong* password currently succeeds too" gap reads here as simply an open network.
+  - Not covered by this check: DNS, TLS/HTTPS, and Kaluma's own `http` module. Only raw TCP to a
+    fixed IP was exercised.
+
 ## Deferred, not designed here
 
 No config surface (`Cyw43439(guest_ip=..., ...)` or similar) was added this pass - guest/gateway IP

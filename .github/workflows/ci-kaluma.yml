@@ -114,6 +114,19 @@ jobs:
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
+      # WiFi through the emulated CYW43439 + NAT bridge, from Kaluma's own `wifi`/`net` modules -
+      # a third, independent network stack over the same bus as MicroPython's lwIP and
+      # CircuitPython's (docs/records/0048-cyw43-nat-reflector.md). Pinned to one runtime rather
+      # than the whole matrix: this buys *firmware/stack* coverage, and the step opens a real TCP
+      # connection to the internet, so running it three times per push is cost without signal.
+      # Soft-failing for the same reason ci-micropython.yml's pico-w step is - a CI-runner network
+      # hiccup is not an emulator regression.
+      - name: Test Kaluma pico-w WLAN ${{ matrix.kaluma_version }}
+        if: ${{ matrix.python_runtime == 'cpython-3.10' }}
+        run: |
+          timeout 15m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --board pico_w tests/kaluma/main-cyw43.js --expect-text "KALUMA CYW43 OK" || \
+            echo "::warning title=Kaluma pico-w WLAN test failed::${{ matrix.kaluma_version }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script opens a real TCP connection to 1.1.1.1:80 through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
+
       # Exercises the SSI flash-write path (see docs/BACKLOG.md) from Kaluma's side: mounts a
       # littlefs image sized to Kaluma's own board.js layout (--target kaluma - a different
       # block-size/count than MicroPython's), stages tests/kaluma/index-flash-rw.js as the
