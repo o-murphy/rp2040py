@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Writing your own external device or board**: a new how-to,
+  [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md),
+  covering both a custom `ExternalDevice` attached to an existing board and a fully custom
+  `BoardSpec` (own device mix, own firmware, own flash layout), linked from `README.md`'s
+  "External devices & custom boards" section (previously a pointer to the design record only, no
+  actual how-to). `external/device.py`/`external/led_mock.py`'s docstrings also had their dead
+  `docs/CYW43_WIFI_BACKLOG.md` references (removed by the 2026-08-12 docs restructure) re-pointed
+  to the real records that carry those sections (0027/0028/0029).
+
 ### Changed
 - **Breaking:** `MicroPythonDevice`/`KalumaDevice`'s constructors no longer take `image`/`board:
   str` — both now take a single keyword-only `board: BoardSpec` (a `boards.BOARDS[...]` entry
@@ -49,11 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an already-resolved `BoardSpec` — `build_rp2040()` itself is now a thin board-name-lookup
   wrapper around it, unchanged behavior for `run`/`bench`) — phases 1-4 of the custom-board design
   in [record 0049](docs/records/0049-external-device-authoring-docs.md)'s "Accepted design"
-  section (see the "Changed" entry above for the phase 3/4 breaking `BaseDevice`/CLI pieces; only
-  phase 5, tests/docs, remains). `load_flash.py`'s six load/dump functions now take an
-  already-resolved `FlashLayout` instead of a board-name string and re-deriving it themselves —
-  no behavior change for CLI/API users, every caller resolves the same layout it always used,
-  just once instead of per-call.
+  section (see the "Changed" entry above for the phase 3/4 breaking `BaseDevice`/CLI pieces; all 5
+  phases are now done). `load_flash.py`'s six load/dump functions now take an already-resolved
+  `FlashLayout` instead of a board-name string and re-deriving it themselves — no behavior change
+  for CLI/API users, every caller resolves the same layout it always used, just once instead of
+  per-call. New test coverage: `tests/test_boards.py` gained tests for
+  `resolve_board_spec()`/`build_rp2040_from_spec()`, and a new `tests/test_cli_board_spec.py`
+  covers `--board-spec`'s `target:attr` resolution and every subcommand's mutual-exclusion logic
+  directly (no real network, no full CLI/simulator boot needed).
 
 ## [0.2.2] - 2026-08-16
 

@@ -1,17 +1,19 @@
 # 0049. Document external devices, and how a user writes their own
 
-- Status: **Proposed — docs-only pieces landed (README pointer section, the `fs_blocksize`
-  prerequisite); the `BoardSpec` board-authoring design is accepted and phases 1-4 of its 5-phase
-  implementation plan landed 2026-08-16/17: `boards.py`'s `layout`/`image`/`FlashLayout`/
-  `resolve_board_spec()`/`build_rp2040_from_spec()`; `load_flash.py`'s six functions taking a
-  resolved layout; `BaseDevice`/`MicroPythonDevice`/`KalumaDevice`'s breaking constructor change
-  (`board: BoardSpec`, no more separate `image` arg or board-name string); and the CLI's
-  `--board-spec target:attr`/`RP2040PY_BOARD_SPEC` (scoped to `micropython`/`kaluma`/`mklittlefs`/
-  `run`, `bench` excluded - see "CLI scope, resolved" below), live-verified against real
-  MicroPython 1.28.0 firmware both locally and via a new CI job (`tests/pico_spec.py` +
-  `ci-micropython.yml`'s `test-board-spec` job). Phase 5 (updating remaining tests/docs for the
-  new shape, writing the actual how-to) is
-  what's left.** Scope was widened 2026-08-16 from "document devices" to "document devices *and
+- Status: **Implemented (2026-08-17) - all 5 phases of the `BoardSpec` board-authoring design
+  landed**: `boards.py`'s `layout`/`image`/`FlashLayout`/`resolve_board_spec()`/
+  `build_rp2040_from_spec()`; `load_flash.py`'s six functions taking a resolved layout;
+  `BaseDevice`/`MicroPythonDevice`/`KalumaDevice`'s breaking constructor change (`board:
+  BoardSpec`, no more separate `image` arg or board-name string); the CLI's `--board-spec
+  target:attr`/`RP2040PY_BOARD_SPEC` on `micropython`/`kaluma`/`mklittlefs`/`run` (`bench`
+  excluded, nobody's asked for it yet); dedicated test coverage (`tests/test_boards.py`,
+  `tests/test_cli_board_spec.py`); and the actual how-to doc,
+  [docs/reference/external-devices-and-boards.md](../reference/external-devices-and-boards.md),
+  linked from `README.md` and the tracker. Live-verified against real MicroPython `1.28.0`
+  firmware both locally and via CI (`tests/pico_spec.py` + `ci-micropython.yml`'s
+  `test-board-spec` job). Two narrow design questions remain genuinely open (not blocking
+  anything already shipped) - see "Explicitly not decided here"'s superseding note near the
+  bottom. Scope was widened 2026-08-16 from "document devices" to "document devices *and
   boards*" - see "Accepted design" below.
 - Conceived: 2026-08-16
 - Related: 0030 (`ExternalDevice` concurrency model - the attach-timing rule any such doc has to
@@ -376,14 +378,26 @@ unaffected.
    verified by hand, and so was `run`'s (`--board`+`--board-spec` rejected, an unsupported
    `--image` suffix rejected at parse time, `--board-spec`+`--image` together resolving both
    independently as expected).
-5. **Not started.** Tests + docs: update every test that constructs a `Device` with `board: str`
-   (same set `tests/test_firmware_retrieve.py`/`test_cli_mklittlefs.py` the 2026-08-16
-   `fs_blocksize` reshape already touched, plus `tests/test_boards.py`; `test_cli.py`/
-   `test_device.py`/`test_kaluma_device.py`/`test_watchdog_reset.py`/`micropython_spi_run.py`/
-   `demo/eink_run.py` were already updated as part of phases 2-4 landing, to keep the suite green);
-   write the actual "write your own board" how-to this whole record was originally about, now that
-   the API it documents is real (`tests/pico_spec.py`, added as part of phase 4's CI verification,
-   is a worked example this how-to can point to or adapt).
+5. **Done (2026-08-17).** Tests: every test that constructed a `Device` with `board: str` was
+   already updated as part of phases 2-4 landing (`test_cli.py`/`test_device.py`/
+   `test_kaluma_device.py`/`test_watchdog_reset.py`/`micropython_spi_run.py`/`demo/eink_run.py`);
+   `test_firmware_retrieve.py`/`test_cli_mklittlefs.py` needed no further changes beyond the
+   2026-08-16 `fs_blocksize` reshape that already touched them. New, dedicated coverage added for
+   the phase 1-4 additions themselves: `tests/test_boards.py` gained tests for
+   `resolve_board_spec()`/`build_rp2040_from_spec()` (including one asserting `resolve_board_spec()`'s
+   `layout` matches real `flash_layout()` output, catching shape drift between the two, not just
+   `resolve_board_spec()`'s own wiring); a new `tests/test_cli_board_spec.py` covers
+   `_load_board_spec_target()` (file path, dotted module path, malformed target, missing
+   file/attr, wrong-type attr, an exception raised while executing the board file) and each
+   subcommand's `_resolve_board()`/`_resolve_run_mcu()`/`_resolve_mklittlefs_layout()`
+   mutual-exclusion logic directly, same philosophy as the existing `test_cli_bootrom.py` (hand-built
+   `argparse.Namespace`s, no real network, no full `cli.main()`/simulator boot). Docs: the actual
+   "write your own device or board" how-to this whole record was originally about is now real -
+   [docs/reference/external-devices-and-boards.md](../reference/external-devices-and-boards.md),
+   linked from `README.md`'s "External devices & custom boards" section (updated to describe the
+   shipped API instead of "a dedicated how-to doc doesn't exist yet") and from the tracker's own
+   "Reference" list. `tests/pico_spec.py` (added as part of phase 4's CI verification) is cited
+   there as a real, CI-verified worked example.
 
 Each phase is independently mergeable and independently revertable - 1-2 landed first with zero
 external behavior change (pure refactor, `BOARDS`'s existing entries keep working through
@@ -453,14 +467,24 @@ implementation step, not a continuation of that same go-ahead.
 
 ## Cleanup this work would naturally pick up
 
-`external/device.py` and `external/led_mock.py` both cite `docs/CYW43_WIFI_BACKLOG.md` in their
-docstrings (twice and three times respectively, e.g. for the "Module layout decision" / "Board
-composition decision" / "Implementation order" sections). That file no longer exists - the 0032
-restructure replaced it with `docs/records/` (0028 and 0029 carry those two decisions). Anyone
-writing the user-facing docs will read exactly these docstrings first and hit the dead references,
-so re-pointing them belongs to this task. Not a reason to do the task on its own.
+**Done 2026-08-17.** `external/device.py` and `external/led_mock.py` both cited
+`docs/CYW43_WIFI_BACKLOG.md` in their docstrings (twice and three times respectively, for the
+"Module layout decision" / "Board composition decision" / "Implementation order" sections) - that
+file no longer exists, the 0032 restructure replaced it with `docs/records/`. Re-pointed to their
+real homes (0028 for "Module layout decision", 0029 for "Board composition decision" *and*
+"attach()/attach_external_devices() timing" - both live in 0029, not split across 0029/0030 as
+this record's own header summary implied; 0027 for "Implementation order" step 1), and both
+docstrings now also point at the new how-to doc below.
 
-## Explicitly not decided here
+## Explicitly not decided here (as originally written) - now superseded, see below
+
+*(Historical - this section described the record's original, narrower scope. Superseded 2026-08-17:
+a `docs/reference/` how-to file now exists, see "Docs" in phase 5 above -
+[docs/reference/external-devices-and-boards.md](../reference/external-devices-and-boards.md) - and
+the `BoardSpec` API it documents is real, not just designed. What's still true: this record's own
+phase 5 "still open" items (whether `ExternalDevice`'s attach-only surface is public-API-ready,
+whether `demo/eink_run.py` gets promoted into its own dedicated example beyond being cited from the
+how-to) remain genuinely undecided.)*
 
 No API is added, no `reference/` how-to file is written (a short README pointer section to *this
 record* is the one exception - see the resolved "where does it live?" question above), and the
