@@ -227,7 +227,10 @@ file already on disk:
 > The `rp2040py.native` row is what most installs actually get with no extra effort - see
 > [Performance](#performance) below. It doesn't help PyPy (compilation is deliberately skipped
 > there - PyPy's own JIT already does better on its own than routing through `rp2040py.native`'s
-> CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner:
+> CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner - with
+> one measured exception: on a Pico W CYW43 boot, after the GPIO/PIO ports in
+> [0047](docs/records/0047-cyw43-pio-gpio-hotpath.md), PyPy's lead narrows to ~1.16x, i.e. the two
+> are close enough there that it stops being an obvious choice.
 > `uv run --python pypy3.10 --no-dev -- rp2040py micropython ...` (or `... -- python
 > demo/micropython_run.py ...` from a checkout). See
 > [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js) for the full breakdown
@@ -376,22 +379,42 @@ rp2040py micropython --board pico_w
 ```
 
 `network.WLAN` works against it: `nic.active(True)`, `nic.scan()`, and `nic.connect(ssid, key)`
-all complete, answered by a fixed fake `"RP2040PY-GUEST"` access point built into the emulation
-rather than anything real - there's no bridge to an actual network yet. Live-boot verified against
-real, unmodified MicroPython firmware on both 1.23.0 and 1.28.0:
+all complete, answered by a fixed fake `"RP2040PY-GUEST"` access point built into the emulation.
+The association is fake, but **the network behind it is real** - a NAT bridge gives the guest a
+DHCP lease, answers its ARP, and splices its TCP connections and UDP datagrams onto real sockets on
+your machine, so code running on the emulated Pico W reaches the actual internet. Live-boot
+verified against real, unmodified MicroPython firmware on both 1.23.0 and 1.28.0:
 
 ```python
-import network
+import network, socket, mip, ntptime
 
 nic = network.WLAN(network.WLAN.IF_STA)
 nic.active(True)
-print(nic.scan())
-print(nic.connect("RP2040PY-GUEST", "key"))
+print(nic.scan())  # [(b'RP2040PY-GUEST', ...)]
+nic.connect("RP2040PY-GUEST", "key")  # any password is accepted
+print(nic.isconnected(), nic.ipconfig("addr4"))  # True ('10.0.0.2', '255.255.255.0')
+
+s = socket.socket()  # real TCP, out through your host's network
+s.connect(("1.1.1.1", 80))
+s.send(b"GET / HTTP/1.0\r\n\r\n")
+print(s.recv(64))  # b'HTTP/1.1 301 Moved Permanently\r\n...'
+
+mip.install("os-path")  # real DNS + a real HTTPS download
+ntptime.settime()  # real NTP, sets the emulated RTC
 ```
 
-See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for the full picture,
-including exactly what's emulated at the gSPI/SDPCM protocol level and what's left (a real network
-bridge, `network.WLAN.IF_AP`).
+What is **not** emulated, so you don't discover it the hard way:
+
+- The AP is a fixture. `scan()` always returns the one fake `"RP2040PY-GUEST"` network, any
+  password "succeeds," and there's no hidden-SSID or auth-failure path to test against.
+- `disconnect()` is a no-op - the guest keeps believing it's connected.
+- No AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest only (the guest/gateway IP and MAC are
+  fixed constants, with no config surface yet).
+- CircuitPython has never been booted through this path - expected to work, not confirmed.
+
+See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for what's emulated at the
+gSPI/SDPCM protocol level and [docs/records/0048-cyw43-nat-reflector.md](docs/records/0048-cyw43-nat-reflector.md)
+for the network bridge (how the reflector works, and the full list of what's still open).
 
 ### CircuitPython code
 
@@ -584,6 +607,16 @@ throughput of the pure-Python implementation on both a synthetic benchmark and a
 boot (see [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
 for the full measured breakdown).
 
+That extension has since grown past the core itself: the PIO block and its state machines
+([0031](docs/records/0031-pio-cython-tick-batching.md),
+[0047](docs/records/0047-cyw43-pio-gpio-hotpath.md)), the per-batch execution loop
+([0034](docs/records/0034-execute-batch-native-port.md)), the simulation clock
+([0039](docs/records/0039-simulation-clock-native-port.md)) and GPIO pins
+([0047](docs/records/0047-cyw43-pio-gpio-hotpath.md)) are all native too. Those are wins on top of
+the 7x above, on the paths each one covers rather than across the board - the most recent, measured
+end to end, is **~2.6x** on a Pico W CYW43 boot through to `scan()` (0047), a PIO/GPIO-heavy
+workload the original core port barely touched.
+
 This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
 when a C compiler is available (prebuilt wheels are published for common platforms, so most
 installs don't even need one) and falls back to the identical pure-Python implementation otherwise
@@ -648,8 +681,10 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   [Pythonista](#environments-without-compiled-extension-support-ios)).
 - **Pico W / CYW43439 WiFi emulation** (`--board pico_w`) - real `network.WLAN` calls
   (`active()`/`scan()`/`connect()`) against a real, unmodified MicroPython firmware's CYW43439
-  driver are answered at the actual gSPI/SDPCM protocol level, not stubbed out - something
-  rp2040js has no equivalent of at all (no `--board` concept, no WiFi chip emulation). See
+  driver are answered at the actual gSPI/SDPCM protocol level, not stubbed out, and a NAT bridge
+  carries the guest's TCP/UDP traffic onto your host's real network (`socket`, `mip.install()` and
+  `ntptime` all reach the actual internet) - something rp2040js has no equivalent of at all (no
+  `--board` concept, no WiFi chip emulation). See
   [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above.
 
 See [docs/reference/porting-checklist.md#known-differences-from-rp2040js](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
