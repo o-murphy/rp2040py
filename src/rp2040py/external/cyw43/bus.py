@@ -188,6 +188,7 @@ __all__ = (
     "CYW43_BACKPLANE_READ_PAD_LEN_BYTES",
     "CYW43_EV_ASSOC",
     "CYW43_EV_AUTH",
+    "CYW43_EV_DISASSOC",
     "CYW43_EV_ESCAN_RESULT",
     "CYW43_EV_LINK",
     "CYW43_EV_PSK_SUP",
@@ -238,6 +239,7 @@ __all__ = (
     "TEST_PATTERN",
     "WLAN_ARMCM3_BASE_ADDRESS",
     "WLAN_FUNCTION",
+    "WLC_DISASSOC",
     "WLC_GET_VAR",
     "WLC_SET_SSID",
     "WLC_SET_VAR",
@@ -392,6 +394,9 @@ CDCF_IOC_ID_MASK = 0xFFFF0000
 # Async events + scripted scan/join (step 3g) - cyw43_ll.c's own #defines (WLC_* ioctl cmd
 # numbers, cyw43_ll.h's CYW43_EV_*/CYW43_STATUS_* event constants).
 WLC_SET_SSID = 26  # cyw43_ll_wifi_join()'s own final ioctl, past the generic-ack-only prefix.
+# cyw43_wifi_leave() -> cyw43_ioctl(CYW43_IOCTL_SET_DISASSOC = 0x69). cyw43_ll_ioctl() splits that
+# as `cmd & 1 ? SET : GET` / `cmd >> 1`, so 0x69 is a SET of WLC command 0x34 - this one.
+WLC_DISASSOC = 52
 WLC_SET_VAR = 263  # iovar dispatch (name-prefixed payload) - only "escan" gets scripted follow-up.
 WLC_GET_VAR = 262  # GET-side counterpart of WLC_SET_VAR - only "cur_etheraddr" (step 4a) is scripted.
 ASYNCEVENT_HEADER = 1  # sdpcm_header_t.channel_and_flags low nibble - chip-to-host only.
@@ -406,6 +411,7 @@ CYW43_EV_ASSOC = 7
 CYW43_EV_PSK_SUP = 46
 CYW43_EV_LINK = 16
 CYW43_EV_ESCAN_RESULT = 69
+CYW43_EV_DISASSOC = 11
 
 CYW43_STATUS_SUCCESS = 0
 CYW43_STATUS_PARTIAL = 8
@@ -891,6 +897,31 @@ class GSPIBus:
         ):
             self.queue_rx_packet(self._build_async_event(event_type, status, flags=flags))
 
+    def _queue_disassoc_events(self) -> None:
+        """`WLC_DISASSOC`'s teardown counterpart to `_queue_join_events()` - what `disconnect()`
+        gets back.
+
+        Both events are answered from the driver's own handlers (`cyw43_ctrl.c`'s
+        `cyw43_cb_process_async_event()`), and either alone would be enough:
+
+        - `CYW43_EV_DISASSOC` (11) calls `cyw43_cb_tcpip_set_link_down()` **and** clears
+          `wifi_join_state` outright. That second part is what actually flips the guest's view:
+          `cyw43_wifi_link_status()` reports `CYW43_LINK_DOWN` precisely when
+          `wifi_join_state & WIFI_JOIN_STATE_KIND_MASK` is 0, which is what `isconnected()` reads.
+        - `CYW43_EV_LINK` (16) with `status == 0` and bit 0 of `flags` *clear* takes the "Link is
+          down" branch, calling `cyw43_cb_tcpip_set_link_down()` too.
+
+        Both are sent anyway, mirroring the join sequence's own shape (which ends with `_LINK`,
+        flags=1) and because the handlers are idempotent - a second `set_link_down()` costs
+        nothing. `DISASSOC` goes first so the join state is already cleared by the time the link
+        event lands.
+        """
+        for event_type, status, flags in (
+            (CYW43_EV_DISASSOC, CYW43_STATUS_SUCCESS, 0),
+            (CYW43_EV_LINK, CYW43_STATUS_SUCCESS, 0),  # flags bit 0 clear = link down
+        ):
+            self.queue_rx_packet(self._build_async_event(event_type, status, flags=flags))
+
     def _build_flow_control_response(self) -> bytes:
         """A bare SDPCM header carrying no ioctl/payload - `sdpcm_process_rx_packet()`'s own named
         "flow control packet with no data" case (`cyw43_ll.c`: `if (header->size ==
@@ -972,6 +1003,12 @@ class GSPIBus:
             self._queue_scan_events()
         elif cmd == WLC_SET_SSID:
             self._queue_join_events()
+        elif cmd == WLC_DISASSOC:
+            if self.nat_bridge is not None:
+                # The association is over, so the flows it carried are too - see nat.py's
+                # TcpReflector.reset() for the stale-flow collision this avoids on reconnect.
+                self.nat_bridge.reset()
+            self._queue_disassoc_events()
 
     def read_register(self, function: int, addr: int, size: int) -> int:
         """Returns whatever a real chip would answer for a `size`-byte read of `addr` on

@@ -503,6 +503,64 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
     _run(_body())
 
 
+def test_reset_clears_flows_so_a_reused_port_can_connect_again():
+    """The stale-flow collision `TcpReflector.reset()` exists for (0054).
+
+    `maybe_handle()` routes any segment whose `(src_port, dst_ip, dst_port)` matches a live flow
+    into that flow - including a SYN. So a flow left behind by a previous association swallows the
+    guest's *new* SYN after it reconnects and reuses the triple, and no SYN-ACK ever comes back.
+    """
+
+    async def _body() -> None:
+        simulator = Simulator()
+        simulator.bind_loop()
+        rp2040 = simulator.rp2040
+        bus = GSPIBus()
+        bus.attach_gpio(rp2040)
+        bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
+        master = _FakeGSPIMaster(rp2040)
+
+        echo_server = await asyncio.start_server(_echo_server, "127.0.0.1", 0)
+        dest_port = echo_server.sockets[0].getsockname()[1]
+        dest_ip = bytes([127, 0, 0, 1])
+        guest_port = 54399  # deliberately reused below
+
+        def _syn(seq: int) -> bytes:
+            segment = net.pack_tcp(
+                GUEST_IP, dest_ip, guest_port, dest_port, seq=seq, ack=0, flags=net.TCP_SYN, window=8192, mss=1460
+            )
+            return net.pack_ethernet(
+                GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, net.pack_ipv4(GUEST_IP, dest_ip, net.IP_PROTO_TCP, segment)
+            )
+
+        _send_wlan_frame(master, _build_data_header_frame(_syn(1000)))
+        _read_f2_response(master)
+        await _wait_for_pending_packet(master)
+        _read_f2_response(master)  # first SYN-ACK
+        assert len(bus.nat_bridge._tcp._flows) == 1
+
+        # The association ends - exactly what bus.py does on WLC_DISASSOC.
+        bus.nat_bridge.reset()
+        assert bus.nat_bridge._tcp._flows == {}
+
+        # Reconnect and reuse the same triple. Without the reset this SYN would be swallowed by the
+        # stale flow and the guest would wait for a SYN-ACK that never comes.
+        _send_wlan_frame(master, _build_data_header_frame(_syn(7000)))
+        _read_f2_response(master)
+        await _wait_for_pending_packet(master)
+        reply = net.parse_tcp(
+            net.parse_ipv4(net.parse_ethernet(_parse_data_frame(_read_f2_response(master))).payload).payload
+        )
+        assert reply is not None
+        assert reply.flags & net.TCP_SYN and reply.flags & net.TCP_ACK
+        assert reply.ack == 7001  # acknowledges the *new* SYN, not the old flow's sequence space
+
+        echo_server.close()
+        await echo_server.wait_closed()
+
+    _run(_body())
+
+
 class _ImmediatelyResetReader:
     """Fake `asyncio.StreamReader` whose `read()` always raises `ConnectionResetError` - used to
     test `_pump_host_to_guest()`'s exception handling directly, decoupled from actually provoking

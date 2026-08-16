@@ -106,6 +106,18 @@ if connected:
     except Exception as exc:
         print("Real TLS failed:", type(exc).__name__, exc)
 
+    # Tearing the link back down - the counterpart of connect(), and the last piece of the
+    # lifecycle this script exercises. `disconnect()` sends WLC_DISASSOC, which the emulator now
+    # answers with a scripted CYW43_EV_DISASSOC/CYW43_EV_LINK(down) pair (docs/records/
+    # 0054-cyw43-disassoc.md); before that it was a no-op and isconnected() stayed True forever.
+    print("Disconnecting...")
+    nic.disconnect()
+    for _ in range(50):
+        if not nic.isconnected():
+            break
+        time.sleep(0.1)
+    print("after disconnect: isconnected=", nic.isconnected(), "status=", nic.status())
+
 # ap = network.WLAN(network.WLAN.IF_AP) # create access-point interface
 # ap.config(ssid='RP2-AP')              # set the SSID of the access point
 # ap.config(max_clients=10)             # set how many clients can connect to the network

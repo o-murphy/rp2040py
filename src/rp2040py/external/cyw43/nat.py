@@ -414,6 +414,26 @@ class TcpReflector:
 
         self._maybe_evict(flow)
 
+    def reset(self) -> None:
+        """Drop every flow - what an association ending means for this side of the bridge.
+
+        Called when the guest disassociates (`WLC_DISASSOC`, see
+        docs/records/0054-cyw43-disassoc.md). Without it the flow table outlives the association
+        that created it, and `maybe_handle()` routes a *fresh* SYN into the stale entry whenever
+        the guest reuses the same `(src_port, dst_ip, dst_port)` triple after reconnecting - so
+        the guest never gets its SYN-ACK and its `connect()` hangs until its own timeout.
+
+        Cancels each pump task before closing its writer, so a task blocked on
+        `window_opened.wait()` or on a socket read goes away instead of writing into a closed
+        transport.
+        """
+        for flow in list(self._flows.values()):
+            if flow.pump_task is not None:
+                flow.pump_task.cancel()
+            if flow.writer is not None:
+                flow.writer.close()
+        self._flows.clear()
+
     def _maybe_evict(self, flow: TcpFlow) -> None:
         if flow.guest_fin_seen and flow.host_fin_sent:
             if flow.writer is not None:
@@ -457,6 +477,12 @@ class NatBridge:
         self._udp = UdpRelay(rp2040, queue_ethernet_frame)
         self._tcp = TcpReflector(rp2040, queue_ethernet_frame)
         self._queue_ethernet_frame = queue_ethernet_frame
+
+    def reset(self) -> None:
+        """Tear down per-association state. Only the TCP reflector holds any: the UDP relay is
+        one-shot per datagram, and the DHCP lease is a fixed constant rather than an allocation
+        (0048's "Deferred" section), so the same address is handed back on the next join anyway."""
+        self._tcp.reset()
 
     def handle_outbound_ethernet_frame(self, frame: bytes) -> None:
         """Called synchronously from `GSPIBus._write_wlan()` - must never block. Tries
