@@ -22,8 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any other real UDP destination — e.g. `ntptime` — relayed directly). Verified against real,
   unmodified MicroPython `v1.23.0`/`v1.28.0` firmware: real `socket` connections, `mip.install()`,
   and `ntptime.settime()` all work end-to-end. Known limits: one fixed guest/gateway address (no
-  config surface), station mode only (no AP emulation), and `disconnect()` is currently a no-op —
-  full inventory in the record's own "Known gaps" section.
+  config surface) and station mode only (no AP emulation) — full inventory in the record's own
+  "Known gaps" section.
+- **`disconnect()` really disconnects** on the emulated Pico W (see
+  [record 0054](docs/records/0054-cyw43-disassoc.md)). Previously only the link-*up* side was
+  scripted, so a guest calling `disconnect()` kept believing it was associated — `isconnected()`
+  stayed `True` and `status()` stayed `3` forever. The disassociate ioctl (`WLC_DISASSOC`) now gets
+  a scripted `CYW43_EV_DISASSOC`/`CYW43_EV_LINK`(down) pair, and the NAT bridge drops its flow
+  table with it — a flow outliving its association used to swallow the guest's next `SYN` whenever
+  it reconnected and reused the same source port.
+- **CircuitPython WiFi**: `tests/circuitpython/main-cyw43.py` plus the project's first CircuitPython
+  CI workflow. CircuitPython's `wifi`/`socketpool` drives the same emulated CYW43439 as MicroPython
+  — scan, join, DHCP lease, real TCP and real DNS — with no CYW43-specific changes needed.
+- **Kaluma WiFi**: `tests/kaluma/main-cyw43.js` and a `pico_w` step in the Kaluma workflow.
+  `require('wifi')` scans, joins and opens real `net.Socket` connections through the bridge. Three
+  independent network stacks now run over the same emulated bus.
+- **BOOTSEL button** as an `ExternalDevice`, attached to both boards (see
+  [record 0051](docs/records/0051-bootsel-button.md)). Wired the way real hardware is — to
+  `GPIO_QSPI_SS`, not a GPIO — so it reads active-low, and `GPIOPin` gained `release_input()` to
+  model letting go of a pin rather than driving it high.
+- **`XIP_CTRL` registers** (see [record 0052](docs/records/0052-xip-ctrl-registers.md)). No cache is
+  modelled — there is nothing for one to change here — but the registers now read their datasheet
+  values instead of the all-ones an unimplemented block returns, which firmware polling them reads
+  as "every status bit set".
+
+### Fixed
+- **CircuitPython 10.x now boots** (see [record 0050](docs/records/0050-qspi-pad-reset-values.md)).
+  It produced no output at all and never reached the REPL, on `pico` as well as `pico_w`. Root
+  cause: the six QSPI pads were given `PADS_BANK0`'s reset value, but `GPIO_QSPI_SS` is the one pad
+  with a pull-*up* — it is what holds the flash deselected and what makes the BOOTSEL button
+  readable. With a pull-down instead, an undriven `SS` reads low forever, i.e. a permanently-held
+  BOOTSEL button; CircuitPython 10.x polls that bit from a RAM-resident loop during boot and hung
+  there. 8.x/9.x never polled it, so the defect sat latent.
+- **`SEV` now sets the event register** (ARMv6-M B1.5.18). `WFE` already consumed it correctly, but
+  `SEV` only logged, so the standard `__sev(); __wfe();` idiom — used to make the next `WFE` fall
+  straight through — parked the core in a wait forever.
+- **`VREG_AND_CHIP_RESET` is implemented** rather than answering every read with `0xFFFFFFFF`, which
+  made `CHIP_RESET`'s `PSM_RESTART_FLAG` look permanently set to any bootrom-path code that checked
+  it.
 
 ## [0.2.1] - 2026-08-15
 

@@ -141,8 +141,8 @@ same [src/rp2040py/cli](src/rp2040py/cli) code):
 | `rp2040py bench ...`       | `uv run python demo/benchmark.py ...`       |
 
 `--board {pico,pico_w}` (default `pico`) is available on all four and picks which board's fixed
-extras get attached alongside the RP2040 itself - currently just the onboard LED, except for
-`pico_w`, which also attaches an emulated CYW43439 WiFi/Bluetooth chip; see
+extras get attached alongside the RP2040 itself - the onboard LED and the BOOTSEL button on both,
+plus an emulated CYW43439 WiFi/Bluetooth chip on `pico_w`; see
 [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) below.
 
 ### Native code
@@ -401,16 +401,24 @@ print(s.recv(64))  # b'HTTP/1.1 301 Moved Permanently\r\n...'
 
 mip.install("os-path")  # real DNS + a real HTTPS download
 ntptime.settime()  # real NTP, sets the emulated RTC
+nic.disconnect()  # link really goes down: isconnected() -> False, status() -> 0
 ```
+
+TLS works through the same path (the reflector relays bytes without inspecting them), and so do
+WebSockets over both `ws://` and `wss://`. The same emulated chip also serves **CircuitPython**
+(`wifi`/`socketpool`) and **Kaluma** (`require('wifi')`/`net`) - three independent network stacks
+over one bus, none of them needing anything CYW43-specific from the emulator.
 
 What is **not** emulated, so you don't discover it the hard way:
 
 - The AP is a fixture. `scan()` always returns the one fake `"RP2040PY-GUEST"` network, any
   password "succeeds," and there's no hidden-SSID or auth-failure path to test against.
-- `disconnect()` is a no-op - the guest keeps believing it's connected.
 - No AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest only (the guest/gateway IP and MAC are
   fixed constants, with no config surface yet).
-- CircuitPython has never been booted through this path - expected to work, not confirmed.
+- No flow-control backpressure from the real destination onto the guest: the emulator always
+  advertises a fixed TCP receive window, so a guest that outran a slow destination would grow the
+  host process's socket buffer rather than being told to slow down. An emulated Cortex-M0 can't
+  realistically outrun a real socket, which is why this hasn't mattered in practice.
 
 See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for what's emulated at the
 gSPI/SDPCM protocol level and [docs/records/0048-cyw43-nat-reflector.md](docs/records/0048-cyw43-nat-reflector.md)
@@ -493,6 +501,11 @@ auto-executes on every boot:
 ```sh
 rp2040py kaluma your_script.js
 ```
+
+`--board pico_w` works here too, with the same emulated CYW43439 and NAT bridge the MicroPython
+section describes - Kaluma's own `require('wifi')` scans, joins, gets a DHCP lease, and opens real
+`net.Socket` connections to the internet through it. `tests/kaluma/main-cyw43.js` is a runnable
+example.
 
 Give it a few real seconds after connecting before expecting output - like MicroPython, booting
 real firmware through an interpreted emulator takes actual wall-clock time (JerryScript engine
