@@ -55,7 +55,11 @@ testpaths = ["tests"]
 line-length = 120
 # tests/micropython/*.py are MicroPython payload scripts that run *inside* the emulated device,
 # copied verbatim from upstream rp2040js's test fixtures - not our code style to enforce.
-extend-exclude = ["tests/micropython"]
+# tests/circuitpython/*.py are the same kind of thing for CircuitPython (authored here rather than
+# inherited): guest-side scripts written against the *device's* stdlib, where e.g. bare
+# `except Exception` is deliberate - a payload script's job is to print what went wrong and keep
+# going, not to model host-side exception hygiene.
+extend-exclude = ["tests/micropython", "tests/circuitpython"]
 
 [tool.ruff.lint]
 ignore = []

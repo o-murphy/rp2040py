@@ -240,6 +240,35 @@ request for the gateway → ARP reply → (now) TCP SYN.
     construction and already covered by the plain-TCP and TLS steps. Verified by hand, recorded
     here, not automated.
 
+- 2026-08-16: **CircuitPython live-boot verified** - closing the other half of the "Unverified"
+  gap. `tests/circuitpython/main-cyw43.py` added (the `wifi`/`socketpool` counterpart of the
+  MicroPython script) and run against real CircuitPython **9.2.9** with `--board pico_w`:
+  `wifi.radio.enabled` → `True`, `mac_address` → `00:10:18:00:00:02` (byte-for-byte `bus.py`'s own
+  `_GUEST_MAC`, so 4a works here too), `start_scanning_networks()` → the fixed fake
+  `RP2040PY-GUEST` AP, `connect()` → `connected == True`, DHCP → `ipv4_address 10.0.0.2` /
+  `ipv4_gateway 10.0.0.1`, a real TCP socket to `1.1.1.1:80` → 151 bytes of real HTTP back, and
+  `pool.getaddrinfo('micropython.org', 80)` → `176.58.119.26` through the UDP DNS relay. The
+  earlier reasoning ("expected to work - both vendor the same `cyw43-driver`") holds: a completely
+  different host network stack drives the identical emulated bus with no changes to `bus.py` or
+  `nat.py`.
+  - One test-only difference from the MicroPython script, worth knowing before writing any
+    CircuitPython WiFi test here: CircuitPython validates the passphrase length client-side (WPA2's
+    8-64 rule) and raises `ValueError` before anything reaches the chip, so the MicroPython
+    script's `'key'` is rejected outright. The emulator scripts the join unconditionally, so only
+    the length matters, never the value.
+  - **A separate, pre-existing blocker found on the way, unrelated to this record:**
+    CircuitPython **10.x does not boot under this emulator at all** - zero console output,
+    indefinitely, on plain `--board pico` as well, so not a CYW43 issue. 9.2.9 and 8.0.2 both
+    reach the REPL in seconds. Not root-caused; full investigation trail, including the three
+    unimplemented peripheral blocks the boot touches immediately before it goes quiet and the
+    core1-FIFO hypothesis that was checked and *ruled out*, is in
+    `docs/tasks/circuitpython-10x-boot-stall.md`. That is also why the verification above uses
+    9.2.9.
+  - Landed alongside: `.github/workflows/ci-circuitpython.yml` - the first CircuitPython CI this
+    project has ever had (a boot check plus a soft-failing `pico_w` WLAN step, mirroring
+    `ci-micropython.yml`). Its absence is why the 10.x stall could go unnoticed while `README.md`
+    advertised `--circuitpython` and used `--image 10.2.1` as its example.
+
 ## Deferred, not designed here
 
 No config surface (`Cyw43439(guest_ip=..., ...)` or similar) was added this pass - guest/gateway IP
@@ -305,9 +334,14 @@ cases):
 
 **Unverified, not necessarily broken:**
 
-- **CircuitPython** has never been live-booted through this bus/NAT path at all - only MicroPython
-  `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this record's own
-  earlier reasoning), but not confirmed.
+- ~~**CircuitPython** has never been live-booted through this bus/NAT path at all - only
+  MicroPython `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this
+  record's own earlier reasoning), but not confirmed.~~ **Verified 2026-08-16** against
+  CircuitPython `9.2.9` - scan/join/DHCP/TCP/DNS all work through `wifi`/`socketpool`, with
+  `tests/circuitpython/main-cyw43.py` and a new `ci-circuitpython.yml` to keep it that way. See the
+  dedicated Progress log entry above - including the separate, unrelated finding that CircuitPython
+  **10.x** does not boot under this emulator at all
+  (`docs/tasks/circuitpython-10x-boot-stall.md`), which is why 9.2.9 is the version used.
 - ~~**Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice
   is payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
   fetch inside `mip.install()` has been (that succeeded, which is at least indirect evidence for
