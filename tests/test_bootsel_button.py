@@ -4,7 +4,7 @@ Wired to `GPIO_QSPI_SS`, not to any ordinary GPIO, and active-low: pressed short
 ground, released hands it back to that pad's pull-up (0050).
 """
 
-from rp2040py.boards import build_rp2040
+from rp2040py.boards import BOARDS, build_rp2040
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.sio import GPIO_HI_IN
 
@@ -64,8 +64,20 @@ def test_using_the_button_before_attach_is_an_error():
         raise AssertionError("expected RuntimeError")
 
 
-def test_both_boards_attach_one():
-    """Identical wiring on every RP2040 board that boots from QSPI flash, so both get it."""
+def test_both_boards_include_one_in_their_spec():
+    """Identical wiring on every RP2040 board that boots from QSPI flash, so both get it.
+
+    Asserted against `BOARDS` rather than by reading the pad afterwards: an undriven SS reads high
+    from its own pull-up whether or not a button is attached, so a pad-level assertion here would
+    pass even with `BootselButton` removed from both boards - it would guard nothing.
+    """
+    for board in ("pico", "pico_w"):
+        assert any(extra is BootselButton for extra in BOARDS[board].extras), board
+
+
+def test_a_board_built_from_the_spec_still_reads_ss_high(rp2040_factory):
+    """Companion to the above: attaching the button at board-build time must not itself drive the
+    line (see `attach()`), so a freshly built board still sees BOOTSEL as released."""
     for board in ("pico", "pico_w"):
         mcu = build_rp2040(board)
         assert bool(mcu.sio.read_uint32(GPIO_HI_IN) & SS_BIT), board

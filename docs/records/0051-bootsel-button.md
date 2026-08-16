@@ -44,6 +44,18 @@ implement it is not exercised by this emulator's cold boot (which jumps straight
 BOOTSEL - CircuitPython does, from RAM, during boot - sees a real answer, and
 `machine.bootloader()`-style paths have something to react to.
 
+## A test that guarded nothing
+
+Worth recording, because it is the same mistake this record argues against one section up. The
+first version of the "both boards get one" test built each board and asserted that `GPIO_HI_IN`
+read SS high - which is true from the pad's own pull-up whether or not a button is attached. It
+would have passed with `BootselButton` deleted from both board specs. Replaced with an assertion
+against `BOARDS[board].extras` directly, and checked by mutation: removing the device from
+`boards.py` now fails the test.
+
+The general shape to watch for here: when a device's *released/idle* state is indistinguishable
+from "device absent", any assertion about the idle state proves nothing about the device.
+
 ## Verified
 
 `tests/test_bootsel_button.py`: press pulls SS low, release lets the pull-up win, release leaves
