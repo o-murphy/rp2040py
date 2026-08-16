@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rp2040py.clock.clock import IClock
+from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.cyw43 import Cyw43439
 from rp2040py.external.device import ExternalDevice, attach_external_devices
 from rp2040py.external.led_mock import LEDMock
@@ -49,9 +50,12 @@ class UnknownBoardError(ValueError):
 # attach_external_devices() plumbing identically regardless of --board (step 1 of that doc's
 # "Implementation order") until Cyw43439 (external/cyw43/chip.py, step 3) grows its own LED
 # handling and supersedes this entry for "pico_w" specifically.
+# BootselButton is on both boards for the opposite reason to LEDMock's caveat above: it is wired
+# identically on every RP2040 board that boots from QSPI flash (to GPIO_QSPI_SS, not to any
+# ordinary GPIO), so there is nothing board-specific to get wrong. See 0050.
 BOARDS: dict[str, BoardSpec] = {
-    "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25),)),
-    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25), Cyw43439)),
+    "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton)),
+    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton, Cyw43439)),
 }
 
 

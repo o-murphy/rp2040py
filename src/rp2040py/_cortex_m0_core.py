@@ -1199,6 +1199,12 @@ class CortexM0Core:
     def _op_sev(self, opcode: int, opcode2: int, opcode_pc: int) -> int:
         # SEV
         delta_cycles = 1
+        # ARMv6-M (B1.5.18): SEV "sets the Event Register of every PE, *including the PE executing
+        # the SEV instruction*". Without this, `__sev(); __wfe();` - the standard idiom for making
+        # the next WFE fall straight through - parked the core in `waiting` forever, since nothing
+        # else sets `event_registered` outside exception entry/return. See
+        # docs/records/0050-sev-event-register.md.
+        self.event_registered = True
         self.logger.info(LOG_NAME, "SEV")
         return delta_cycles
 

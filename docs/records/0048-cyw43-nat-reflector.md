@@ -1,6 +1,9 @@
 # 0048. CYW43 step 4 NAT bridge: a custom, minimal hand-rolled TCP reflector
 
-- Status: Implemented — verified (2026-08-16)
+- Status: Implemented — verified (2026-08-16), merged in [PR #37](https://github.com/o-murphy/rp2040py/pull/37).
+  **Still open in the tracker** (`[ ]` under "In progress / Proposed") until the "Known gaps"
+  section at the bottom of this record is closed — the happy path works end to end, this is not yet
+  a complete WiFi emulation.
 - Conceived: 2026-08-16
 - Related: 0027 (epic, step 4), 0045 (this record supersedes 0045's *engine choice* only - 0045
   itself is kept verbatim, not rewritten, per this repo's append-only convention), 0028 (module
@@ -166,7 +169,8 @@ request for the gateway → ARP reply → (now) TCP SYN.
   round trip through the emulator. 4 new/changed hermetic tests added (real-RST-via-`SO_LINGER`,
   connect-timeout-via-injectable-`connect_fn`, general-UDP-relay-to-a-real-destination, DHCP-
   still-wins-over-the-generalized-relay) - full suite (17 tests in `test_cyw43_nat.py`) stable
-  across repeated local runs, `pre-commit run --all-files` clean. Still not pushed.
+  across repeated local runs, `pre-commit run --all-files` clean. ~~Still not pushed.~~
+  (superseded - pushed and merged, see the final entry below.)
 - 2026-08-16: A second push (PR #37) hit a second real CI flake on `windows-latest`, this time in
   the RST-propagation test just added above: `test_tcp_reflector_propagates_a_real_reset_as_rst_
   not_a_clean_fin` observed `flags=17` (`TCP_ACK|TCP_FIN`) instead of `TCP_RST` - the `SO_LINGER`
@@ -181,7 +185,114 @@ request for the gateway → ARP reply → (now) TCP SYN.
   `connect_fn` injection seam the connect-timeout test already established) that raises
   `ConnectionResetError` directly - no real socket, no OS dependency, faster (no real I/O) and
   strictly more precisely targeted at the code this test exists to cover. Verified stable across 5
-  repeated local runs; `pre-commit run --all-files` clean. Still not pushed.
+  repeated local runs; `pre-commit run --all-files` clean. ~~Still not pushed.~~ (superseded -
+  pushed and merged, see the entry directly below.)
+- 2026-08-16: **Pushed and merged.** [PR #37](https://github.com/o-murphy/rp2040py/pull/37)
+  (`feat/cyw43-tcp-reflector` → `main`, 7 commits, head `56bc2ec`) merged as `9f5348f`, 2026-08-16
+  00:19 UTC. This closes the "not yet re-pushed to confirm on CI" caveat both entries above left
+  open: **all 62 checks green on the merged head**, including all three `pre-commit run
+  --all-files` OS jobs (`ubuntu-latest`, `macos-latest`, and - the one that mattered here -
+  `windows-latest`), the full MicroPython `1.16`-through-`1.29.0-preview` × cpython-3.10/3.14/
+  pypy-3.10 matrix, the Pico SDK `1.2.0`-`2.3.0` matrix, Kaluma, and both codecov gates. Both
+  `windows-latest` flakes documented in the two entries above (the fixed-`asyncio.sleep()` race and
+  the `SO_LINGER` real-kernel-RST portability bug) are therefore confirmed fixed on real CI, not
+  just locally. Nothing in this record's "Known gaps" section changed as part of the merge - that
+  inventory is still the accurate open-work list, and is now also surfaced in the tracker's own
+  "In progress / Proposed" section rather than living only inside this record.
+
+- 2026-08-16: **TLS/HTTPS and WebSocket verified live on `v1.28.0`** - closing the first half of
+  the "Unverified, not necessarily broken" gap below. Run against a real, unmodified `v1.28.0`
+  RPI_PICO_W UF2 supplied for this check, with `--board pico_w`:
+  - **Real TLS to a real public host.** `socket.getaddrinfo('micropython.org', 443)` (through the
+    UDP DNS relay) → TCP connect through the reflector → `ssl.wrap_socket(..., server_hostname=...)`
+    → handshake completes → `HEAD / HTTP/1.0` → `b'HTTP/1.1 426 Upgrade Required'` comes back
+    decrypted. A real certificate chain, not a local fixture.
+  - **WebSocket (RFC 6455) and WebSocket-over-TLS.** Against a purpose-built hand-rolled echo
+    server (handshake + one echoed text frame) bound to the container's own **non-loopback** IP -
+    loopback would never cross this bus at all, same reason 4d's own test targets `1.1.1.1`.
+    Guest side: `HTTP/1.1 101 Switching Protocols`, then a masked client frame `hello`, then
+    `echo:hello` back - identical result over plain TCP (port 8765) and over TLS (port 8766,
+    self-signed). Server side independently logged `frame in: b'hello'` for both legs. TLS
+    handshake cost ~640 *simulated* ms; the whole probe ran in ~1.5 simulated seconds.
+  - **A false alarm worth recording, because it looks exactly like an emulator hang.** The first
+    two attempts appeared to freeze for 15-30 real minutes with zero output. Neither was an
+    emulator bug: (a) the CLI's script/exec mode drives the raw REPL, which buffers *all* guest
+    stdout until the script ends, so a slow run is indistinguishable from a hung one by watching
+    the log - `ps` showing 99.9% CPU and CPU-time tracking wall-time 1:1 is what actually
+    distinguishes them; (b) the probe used `sock.read(160)` on the WebSocket upgrade response,
+    and MicroPython's `read(n)` blocks until *exactly* n bytes arrive - the `101` response is
+    shorter, so the guest sat waiting for bytes that would never come. `recv()` is the correct
+    call; `tests/micropython/main-cyw43.py`'s new TLS step carries a comment saying so.
+  - **`v1.23.0` parity, same day, same probes.** WS: `101` + `echo:hello`. Real TLS to
+    `micropython.org:443`: handshake done, `b'HTTP/1.1 426 Upgrade Required'` back. WSS: the TLS
+    handshake completed over the splice, then the *probe* failed with `AttributeError: 'SSLSocket'
+    object has no attribute 'send'` - a real firmware API difference (v1.23.0's `SSLSocket` has
+    `write`/`read` but not `send`/`recv`; v1.28.0 has both), not an emulator fault. Re-run with a
+    `send`-or-`write` shim (and a 1-byte-at-a-time reader, since `read(n)` has the blocking
+    behavior described above): `101 Switching Protocols` + `echo:hello`, so **WSS passes on
+    v1.23.0 too**. Recorded because it is the second of two API-shape traps in this area:
+    anything probing TLS across both tracked firmwares has to write to the older, narrower
+    surface.
+  - Landed: the TLS step is now part of `tests/micropython/main-cyw43.py` (so CI exercises it via
+    the existing soft-failing `pico_w` job). The WebSocket check deliberately is **not** landed in
+    CI - it needs a fixture server bound to the runner's own routable IP, injected into a script
+    the guest reads statically, which is real machinery for a path that is payload-agnostic by
+    construction and already covered by the plain-TCP and TLS steps. Verified by hand, recorded
+    here, not automated.
+
+- 2026-08-16: **CircuitPython live-boot verified** - closing the other half of the "Unverified"
+  gap. `tests/circuitpython/main-cyw43.py` added (the `wifi`/`socketpool` counterpart of the
+  MicroPython script) and run against real CircuitPython **9.2.9** with `--board pico_w`:
+  `wifi.radio.enabled` → `True`, `mac_address` → `00:10:18:00:00:02` (byte-for-byte `bus.py`'s own
+  `_GUEST_MAC`, so 4a works here too), `start_scanning_networks()` → the fixed fake
+  `RP2040PY-GUEST` AP, `connect()` → `connected == True`, DHCP → `ipv4_address 10.0.0.2` /
+  `ipv4_gateway 10.0.0.1`, a real TCP socket to `1.1.1.1:80` → 151 bytes of real HTTP back, and
+  `pool.getaddrinfo('micropython.org', 80)` → `176.58.119.26` through the UDP DNS relay. The
+  earlier reasoning ("expected to work - both vendor the same `cyw43-driver`") holds: a completely
+  different host network stack drives the identical emulated bus with no changes to `bus.py` or
+  `nat.py`.
+  - One test-only difference from the MicroPython script, worth knowing before writing any
+    CircuitPython WiFi test here: CircuitPython validates the passphrase length client-side (WPA2's
+    8-64 rule) and raises `ValueError` before anything reaches the chip, so the MicroPython
+    script's `'key'` is rejected outright. The emulator scripts the join unconditionally, so only
+    the length matters, never the value.
+  - **A separate, pre-existing blocker found on the way, unrelated to this record:**
+    CircuitPython **10.x does not boot under this emulator at all** - zero console output,
+    indefinitely, on plain `--board pico` as well, so not a CYW43 issue. 9.2.9 and 8.0.2 both
+    reach the REPL in seconds. Not root-caused; full investigation trail, including the three
+    unimplemented peripheral blocks the boot touches immediately before it goes quiet and the
+    core1-FIFO hypothesis that was checked and *ruled out*, is in
+    `docs/tasks/circuitpython-10x-boot-stall.md`. That is also why the verification above uses
+    9.2.9. **Since root-caused and fixed** the same day, in
+    [0050](0050-qspi-pad-reset-values.md): `PADS_QSPI`'s reset values were bank0's, so
+    `GPIO_QSPI_SS` came up with a pull-*down* and read low forever - a permanently-held BOOTSEL
+    button, which 10.x polls from RAM during boot. 10.2.1 now boots, and is in
+    `ci-circuitpython.yml`'s matrix as the regression test. The CircuitPython WiFi verification
+    above was not re-run against 10.x - it remains a 9.2.9 result.
+  - Landed alongside: `.github/workflows/ci-circuitpython.yml` - the first CircuitPython CI this
+    project has ever had (a boot check plus a soft-failing `pico_w` WLAN step, mirroring
+    `ci-micropython.yml`). Its absence is why the 10.x stall could go unnoticed while `README.md`
+    advertised `--circuitpython` and used `--image 10.2.1` as its example.
+
+- 2026-08-16: **Kaluma verified too - a third, independent network stack.** Asked whether Kaluma's
+  Pico W WiFi works here at all (nothing in this repo had ever exercised it: no `pico_w` Kaluma
+  test, no WiFi step in `ci-kaluma.yml`), and it does, end to end, against real Kaluma `1.2.1`:
+  `require('wifi')` resolves, `scan()` returns the fixed fake AP
+  (`{"ssid":"RP2040PY-GUEST","bssid":"42:13:37:55:AA:01","security":"OPEN","rssi":-87,"channel":6}`),
+  `connect()` succeeds, and a real `net.Socket` to `1.1.1.1:80` returns a live
+  `HTTP/1.1 426 Upgrade Required` with a current date. Landed as `tests/kaluma/main-cyw43.js` plus
+  a soft-failing `pico_w` WLAN step in `ci-kaluma.yml`, pinned to one runtime (the step buys stack
+  coverage, not interpreter coverage, and it touches the real internet - running it across the
+  whole matrix would be cost without signal).
+  - **What this confirms architecturally**: three network stacks - MicroPython's lwIP,
+    CircuitPython's, and now Kaluma's - drive the identical emulated bus with **no changes to
+    `bus.py` or `nat.py` for any of them**. That is the payoff of terminating at gSPI/SDPCM rather
+    than at any firmware's own API, and it is now evidence rather than reasoning.
+  - Kaluma renders the fake AP as `security: "OPEN"`, which makes one of this record's own "Known
+    gaps" plainer than the other stacks do: there is no auth at all to get wrong, so the
+    "a *wrong* password currently succeeds too" gap reads here as simply an open network.
+  - Not covered by this check: DNS, TLS/HTTPS, and Kaluma's own `http` module. Only raw TCP to a
+    fixed IP was exercised.
 
 ## Deferred, not designed here
 
@@ -248,10 +359,20 @@ cases):
 
 **Unverified, not necessarily broken:**
 
-- **CircuitPython** has never been live-booted through this bus/NAT path at all - only MicroPython
-  `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this record's own
-  earlier reasoning), but not confirmed.
-- **Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice is
-  payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
+- ~~**CircuitPython** has never been live-booted through this bus/NAT path at all - only
+  MicroPython `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this
+  record's own earlier reasoning), but not confirmed.~~ **Verified 2026-08-16** against
+  CircuitPython `9.2.9` - scan/join/DHCP/TCP/DNS all work through `wifi`/`socketpool`, with
+  `tests/circuitpython/main-cyw43.py` and a new `ci-circuitpython.yml` to keep it that way. See the
+  dedicated Progress log entry above - including the separate, unrelated finding that CircuitPython
+  **10.x** does not boot under this emulator at all
+  (`docs/tasks/circuitpython-10x-boot-stall.md`), which is why 9.2.9 is the version used.
+- ~~**Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice
+  is payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
   fetch inside `mip.install()` has been (that succeeded, which is at least indirect evidence for
-  this).
+  this).~~ **Verified 2026-08-16** on `v1.28.0` and `v1.23.0` - real TLS against a real public host
+  (real certificate chain), plus RFC 6455 WebSocket and WebSocket-over-TLS against a purpose-built
+  echo server on a non-loopback address. See the dedicated Progress log entry above for the
+  evidence, the two MicroPython API traps hit on the way (`read(n)` blocking for exactly n;
+  v1.23.0's `SSLSocket` having no `send()`), and why the WebSocket half is verified by hand rather
+  than wired into CI.

@@ -232,6 +232,10 @@ def opcode_sbcs(rn: int, rm: int) -> int:
     return (0b0100000110 << 6) | ((rm & 0x7) << 3) | (rn & 0x7)
 
 
+def opcode_sev() -> int:
+    return 0b1011111101000000
+
+
 def opcode_stmia(rn: int, registers: int) -> int:
     return (0b11000 << 11) | ((rn & 0x7) << 8) | (registers & 0xFF)
 
@@ -312,6 +316,10 @@ def opcode_udf2(imm16: int) -> int:
 
 def opcode_uxth(rd: int, rm: int) -> int:
     return (0b1011001010 << 6) | ((rm & 7) << 3) | (rd & 7)
+
+
+def opcode_wfe() -> int:
+    return 0b1011111100100000
 
 
 def opcode_wfi() -> int:

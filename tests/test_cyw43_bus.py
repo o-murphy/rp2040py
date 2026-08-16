@@ -24,6 +24,7 @@ from rp2040py.external.cyw43.bus import (
     CYW43_BACKPLANE_READ_PAD_LEN_BYTES,
     CYW43_EV_ASSOC,
     CYW43_EV_AUTH,
+    CYW43_EV_DISASSOC,
     CYW43_EV_ESCAN_RESULT,
     CYW43_EV_LINK,
     CYW43_EV_PSK_SUP,
@@ -58,6 +59,7 @@ from rp2040py.external.cyw43.bus import (
     STATUS_F2_PKT_LEN_SHIFT,
     TEST_PATTERN,
     WLAN_FUNCTION,
+    WLC_DISASSOC,
     WLC_GET_VAR,
     WLC_SET_SSID,
     WLC_SET_VAR,
@@ -876,6 +878,83 @@ def _build_escan_request(request_id: int) -> bytes:
 def _build_set_ssid_request(request_id: int, ssid: bytes = b"testnet") -> bytes:
     payload = (len(ssid)).to_bytes(4, "little") + ssid.ljust(32, b"\x00")
     return _build_ioctl_request(request_id, cmd=WLC_SET_SSID, payload=payload)
+
+
+def _build_disassoc_request(request_id: int) -> bytes:
+    return _build_ioctl_request(request_id, cmd=WLC_DISASSOC, payload=b"")
+
+
+def test_wlc_disassoc_queues_link_down_events_behind_its_own_ack():
+    """`disconnect()` -> cyw43_wifi_leave() -> cyw43_ioctl(CYW43_IOCTL_SET_DISASSOC = 0x69), which
+    cyw43_ll_ioctl() splits into a SET of WLC command 0x34 (52). Without a scripted answer the
+    guest kept believing it was still connected (0048's "Known gaps"); see 0054."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_disassoc_request(request_id=9))
+
+    ack = _read_f2_response(master)
+    assert ack[5] & 0x0F == CONTROL_HEADER
+    flags = int.from_bytes(ack[SDPCM_HEADER_LEN + 8 : SDPCM_HEADER_LEN + 12], "little")
+    assert (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT == 9
+
+    events = [_parse_async_event(_read_f2_response(master)) for _ in range(2)]
+    assert [event[0] for event in events] == [CYW43_EV_DISASSOC, CYW43_EV_LINK]
+    assert all(event[1] == CYW43_STATUS_SUCCESS for event in events)
+    # cyw43_ctrl.c takes the "Link is down" branch only when bit 0 of flags is *clear*.
+    assert not events[1][2] & 1
+    assert all(event[3] == 0 for event in events)  # CYW43_ITF_STA
+
+
+def test_disassoc_after_a_join_reverses_it():
+    """The pair in sequence, which is what a real connect/disconnect looks like on the wire."""
+    _rp2040, master = _wire_up()
+    _send_wlan_frame(master, _build_set_ssid_request(request_id=1))
+    _read_f2_response(master)  # join ack
+    join_events = [_parse_async_event(_read_f2_response(master)) for _ in range(5)]
+    assert join_events[-1][0] == CYW43_EV_LINK
+    assert join_events[-1][2] & 1  # link up
+
+    _send_wlan_frame(master, _build_disassoc_request(request_id=2))
+    _read_f2_response(master)  # disassoc ack
+    down_events = [_parse_async_event(_read_f2_response(master)) for _ in range(2)]
+    assert [event[0] for event in down_events] == [CYW43_EV_DISASSOC, CYW43_EV_LINK]
+    assert not down_events[-1][2] & 1  # link down
+
+
+class _RecordingNatBridge:
+    """Minimal stand-in - `GSPIBus` only ever calls these two on it."""
+
+    def __init__(self) -> None:
+        self.resets = 0
+        self.frames: list[bytes] = []
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def handle_outbound_ethernet_frame(self, frame: bytes) -> None:
+        self.frames.append(frame)
+
+
+def test_wlc_disassoc_resets_the_nat_bridge():
+    """An association ending has to take its flows with it, or a reused (src_port, dst_ip,
+    dst_port) triple after reconnecting lands in a stale flow - see 0054 and
+    `TcpReflector.reset()`."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    bridge = _RecordingNatBridge()
+    bus.nat_bridge = bridge
+
+    _send_wlan_frame(master, _build_set_ssid_request(request_id=1))
+    assert bridge.resets == 0, "joining must not reset anything"
+
+    _send_wlan_frame(master, _build_disassoc_request(request_id=2))
+    assert bridge.resets == 1
+
+
+def test_disassoc_without_a_nat_bridge_attached_is_harmless():
+    """`nat_bridge` is optional (plain step-3 use has none)."""
+    _rp2040, bus, master = _wire_up_with_bus()
+    assert bus.nat_bridge is None
+    _send_wlan_frame(master, _build_disassoc_request(request_id=3))
+    _read_f2_response(master)  # ack still comes back
 
 
 def test_escan_ack_is_a_plain_ioctl_response_not_an_async_event():

@@ -266,6 +266,14 @@ class GPIOPin:
         self._driven = True
         self._apply_input_value(value)
 
+    def release_input(self) -> None:
+        """Stop driving the pad from outside, handing it back to whichever pull resistor is
+        enabled (0006's model) - the electrical opposite of `set_input_value()`, not a way to set
+        it high. A released button is high-Z, and on a pad like `GPIO_QSPI_SS` it is the pull-up,
+        not the button, that then decides the level (see 0050 / `external/bootsel_button.py`)."""
+        self._driven = False
+        self._apply_input_value(self._effective_raw_input_value)
+
     def _apply_input_value(self, value: bool) -> None:
         # Shared by set_input_value() (an actual external drive) and refresh_input() (just
         # re-evaluating IRQ/PWM/PIO wait state after e.g. input_enable toggled) - only the former

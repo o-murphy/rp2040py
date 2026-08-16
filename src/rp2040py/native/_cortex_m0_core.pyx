@@ -1314,6 +1314,9 @@ cdef int op_sbcs_encoding_t1(CortexM0Core core, unsigned int opcode, unsigned in
 
 cdef int op_sev(CortexM0Core core, unsigned int opcode, unsigned int opcode2, unsigned int opcode_pc) except -1:
     # SEV
+    # ARMv6-M (B1.5.18): SEV sets the Event Register of every PE, including the one executing it -
+    # mirrors _cortex_m0_core.py's own `_op_sev`, see docs/records/0050-sev-event-register.md.
+    core.event_registered = True
     core.rp2040.logger.info(LOG_NAME, "SEV")
     return 1
 

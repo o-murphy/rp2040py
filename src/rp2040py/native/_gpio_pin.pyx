@@ -289,6 +289,11 @@ cdef class GPIOPin:
         self._driven = True
         self._apply_input_value(value)
 
+    def release_input(self):
+        """Mirrors _gpio_pin.py's own release_input() - hand the pad back to its pull resistor."""
+        self._driven = False
+        self._apply_input_value(self._eff_raw_input())
+
     def _apply_input_value(self, value):
         self._raw_input_value = bool(value)
         prev_irq_value = self.irq_value

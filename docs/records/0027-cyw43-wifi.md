@@ -1266,3 +1266,186 @@ the two releases, not this emulator's doing. Full derivation, the fix, the new r
 before/after live-boot verification (both `v1.23.0` and `v1.28.0`, `v1.28.0` unchanged) are in
 [0043](0043-pio-dma-first-batch-race.md) - not duplicated here for the same reason 0038/0042
 weren't: a fix to shared PIO/DMA scheduling, not cyw43-implementation-order-specific.
+
+## Appendix: folded-in working notes (2026-08-16)
+
+Two `docs/tasks/*.md` working notes that belonged to this record's step 3g were resolved and are
+reproduced verbatim below, then deleted from `docs/tasks/` - per this repo's convention that a task
+file gets folded into a proper record once it's actually resolved, and per this record's own
+append-only rule (nothing rewritten to match what later turned out to be true). Earlier sections of
+this record still reference them by their old `docs/tasks/` paths; those references resolve here.
+
+### A1. `docs/tasks/3g-scripted-scan-join.md` - CYW43 step 3g: async events + scripted scan/join
+
+**Done (2026-08-13): implemented, unit-tested, live-boot-verified as far as currently possible.**
+Not a `docs/records/` entry — this is a working checklist, not an immutable decision record; the
+durable writeup (full derivation, real corrections found while implementing, byte-offset
+citations) lives in `docs/records/0027-cyw43-wifi.md`'s own step-3 "3g" bullet, not duplicated
+here. Landed in `external/cyw43/bus.py` (`_build_async_event()`/`_build_scan_result_bytes()`/
+`_queue_scan_events()`/`_queue_join_events()`, plus `queue_rx_packet()` becoming a real FIFO, plus
+a separate, necessary `_build_flow_control_response()` fix for a real `DATA_HEADER` credit-desync
+deadlock found along the way), same as every prior sub-step - see "Where it lives" below for why.
+8 new tests in `tests/test_cyw43_bus.py` (43 total, all passing), full `pre-commit run
+--all-files` clean.
+
+**Live-boot verification (native CPython+Cython and PyPy+pure-Python, both against a real
+`v1.28.0` UF2) ran as this task's own required last step and found the `DATA_HEADER` bug above -
+but did not reach full script completion**: fixing that bug lets real firmware's execution
+progress further than any prior verification of this bus (genuinely exercises the credit path the
+fix targets), but then hits a *separate*, pre-existing, already-partially-flagged simulator-level
+freeze (0% CPU, not a hang in this step's own code, and not reached until well after 3g's own
+`escan`/`WLC_SET_SSID` code would even run) - full writeup, repro, and what's needed next in the
+new `docs/tasks/cyw43-post-data-header-freeze.md` (now folded into
+[0041](0041-cyw43-post-data-header-freeze-fix.md)'s own appendix). This task is being called done
+on the strength of unit-verified correctness plus a live boot that demonstrably gets further than
+ever before, not a full end-to-end script completion - that remains blocked on the separate freeze,
+not on anything in this task's own scope.
+
+#### Where things stood before this landed (2026-08-13)
+
+`nic.active(True)` now completes (0038, ~450s native / ~212s PyPy on `v1.28.0`). The rest of
+`tests/micropython/main-cyw43.py` - `scan()`, `connect('ssid', 'key')`, `config('mac')`,
+`ipconfig('addr4')` - currently "completes" only because `GSPIBus` acks every ioctl generically
+(0027 step 3f's `_build_ioctl_success_response()`), so each of those calls hits and exhausts the
+real driver's own bounded `STALL` retry timeout (`cyw43_sdpcm_send_common()`, `cyw43_ll.c:648-691`,
+~1 simulated second each - see 0038) rather than getting a real answer. That's slow *and* wrong:
+`scan()` returns nothing, `connect()` never actually associates, `isconnected()` stays `False`.
+This task is what makes those calls behave like a real chip instead of quietly timing out.
+
+#### What's needed
+
+1. **`cyw43_async_event_t` framing** - exact field layout (byte offsets matter, real firmware
+   struct padding, not a natural dataclass shape). Delivered as a fake-Ethernet-framed (`0x886c` +
+   Broadcom OUI) SDPCM async packet via the existing `queue_rx_packet()` (0027 step 3e).
+2. **`scan()`** - a fixed fake AP (0027's plan: mirror `Wokwi-GUEST`'s shape) answers the single
+   `escan` iovar with one `CYW43_EV_ESCAN_RESULT`/`CYW43_STATUS_PARTIAL` event.
+3. **`join()`** - `WLC_SET_SSID`'s own scripted `WLC_E_*` sequence (`_AUTH`/`_ASSOC`/`_PSK_SUP`/
+   `_LINK`/...). This is the one piece 0027 flagged as **not yet read from source** - read the rest
+   of `cyw43_ll_wifi_join()` (`cyw43-driver/src/cyw43_ll.c`, starts at line 2051 as of the
+   `v1.1.1` checkout used this session) and `cyw43_ll_parse_async_event()`'s callers before
+   implementing, don't guess the event sequence.
+
+#### Where it lives
+
+`external/cyw43/chip.py` (`Cyw43439`) is where 3d onward was meant to live per 0027's original
+plan, but in practice every sub-step through 3f landed in `bus.py` instead (`Cyw43439` stayed a
+thin wrapper) - follow that precedent unless there's a real reason to finally move logic into
+`chip.py`. Either way, needs `tests/test_cyw43_bus.py` coverage the same way every prior sub-step
+got it (synthetic `_FakeGSPIMaster`-driven unit tests), *and* a live-boot check against
+`tests/micropython/main-cyw43.py` before calling it done - 0027/0038 both found real bugs that only
+showed up against a real boot, not unit tests alone.
+
+#### Don't re-derive
+
+- The `_write_wlan()`/`_build_ioctl_success_response()` generic-ack mechanism (0027 step 3f,
+  corrected in 0038) is correctness-verified now - reuse it for anything that doesn't need scripted
+  content, don't rebuild it.
+- The bounded `STALL` retry cost (0038) is expected/inherent for any real chip round-trip in this
+  emulator - not something this task needs to fix. If a *real* `WLC_E_*` event response, once
+  built, still measures unreasonably slow, that's the separate raw-throughput-ceiling task (see
+  `docs/tasks/simulation-clock-cython-port.md`, now folded into
+  [0039](0039-simulation-clock-native-port.md)'s own appendix), not a 3g bug.
+
+### A2. `docs/tasks/cyw43-3g-live-boot-verification.md` - does 3g's scripted scan/join actually complete on a live boot?
+
+Working note - what's left to check now that
+[0041](0041-cyw43-post-data-header-freeze-fix.md) fixed the freeze that used to block
+`tests/micropython/main-cyw43.py` from ever finishing. **Done (2026-08-13) - see "Findings" below;
+folded back into [0027](0027-cyw43-wifi.md)'s own "3g" entry.**
+
+#### Findings (2026-08-13)
+
+Ran the harness sketched below (`MicroPythonDevice`, real `v1.28.0` firmware, `board="pico_w"`),
+unmodified except for the missing `retrieve(...)` call to resolve `image` from the version tag -
+scratch script, not landed (same pattern as 0038's own verification harness).
+
+Result:
+
+- `scan()` returns the real fake AP:
+  `[(b'RP2040PY-GUEST', b'B\x137U\xaa\x01', 6, -87, 0, 1)]` - confirms 3g's scripted `escan`
+  sequence produces a genuine result, not an empty/fast-fail list.
+- `connect()` reaches `status() == 2` (`CYW43_LINK_NOIP`) and stays there for the full 10s poll
+  window (50 polls × 0.2s). `isconnected()` never becomes `True`; `config('mac')` stays all-zero;
+  `ipconfig('addr4')` stays `('0.0.0.0', '255.255.255.0')`.
+- This is the **expected** outcome, not a 3g gap: `bus.py`'s `_queue_join_events()` scripts the
+  link-layer event sequence (`WLC_E_SET_SSID`/`_AUTH`/`_ASSOC`/`_PSK_SUP`/`_LINK`) through to
+  `LINK_NOIP` (joined, no IP) - full `isconnected() == True` additionally needs a real DHCP lease,
+  which requires answering `cyw43_cb_tcpip_init()`'s outbound DHCP/ARP frames with real content.
+  That's step 4 (NAT bridge), not built yet - `_build_flow_control_response()`'s own docstring
+  already flags outbound Ethernet frames as silently dropped by design at this step. *(Step 4 has
+  since landed - see [0048](0048-cyw43-nat-reflector.md).)*
+- One unexplained but non-blocking log line, seen once near the start of the run:
+  `[CYW43] Bus error condition detected 0xb9`. Did not stop scan/join from completing. Not
+  investigated further - reads like firmware's own log output, not something this bus emits (no
+  matching string anywhere in `external/cyw43/`). *(Since root-caused and fixed - see
+  [0042](0042-cyw43-interrupt-register-w1c-fix.md).)*
+
+Conclusion: 3g's live-boot behavior is now formally confirmed at the layer it actually owns - scan
+returns a real result, connect drives the full link-layer join sequence to completion, and it stops
+exactly where step 4 begins. No further action needed on 3g itself; step 4 is the next real step
+for `isconnected() == True` to ever be reachable on a live boot.
+
+#### What's confirmed so far
+
+Post-0041, `uv run rp2040py --log-level error micropython --board pico_w --image v1.28.0
+tests/micropython/main-cyw43.py` completes end to end: exit code 0, no traceback, ~50s real time,
+under both native CPython+Cython and PyPy 3.10.16. That's a real result - the freeze is gone, and
+the process no longer hangs.
+
+#### What that does *not* yet confirm
+
+The script itself (`tests/micropython/main-cyw43.py`) only prints `nic.isconnected()` *before*
+calling `nic.connect(...)` (so "Connected False" is expected/correct regardless of whether connect
+later succeeds) and never prints `nic.scan()`'s own return value or polls `isconnected()` again
+afterward - its final three calls (`connect()`, `config('mac')`, `ipconfig('addr4')`) have no
+`print()` around them at all. So "exits 0, no traceback" only proves nothing *crashed* - it does
+not prove 3g's scripted `escan`/`WLC_SET_SSID`/`WLC_E_*` event sequence actually ran and produced
+a real result (scan returning the fake `RP2040PY-GUEST` AP, connect() actually transitioning
+through the scripted join events to `isconnected() == True`), as opposed to e.g. scan() returning
+an empty list fast and connect() silently no-op'ing/failing fast without raising.
+
+**One suspicious data point, not yet explained**: re-running the same script with `--log-level
+debug` (the most verbose level this CLI has) produces *zero* log lines of any kind between the
+`"Scan for networks"` print and the `"Connected False"` print - not a STALL timeout, not an escan
+response, nothing. Confirmed via `grep` that `external/cyw43/bus.py` itself has zero `logger.*()`
+calls anywhere (so silence there proves nothing on its own - that layer is silent by design at
+every level), but this still means the CLI's own logs currently give *no visibility at all* into
+what scan()/connect() actually did.
+
+#### Where to pick this up
+
+A throwaway harness was started (not landed, lived only in a scratch directory - same pattern as
+0038's own verification harness) using `MicroPythonDevice` directly instead of the CLI, to capture
+`nic.scan()`'s actual return value and poll `nic.isconnected()`/`nic.status()` in a loop after
+`connect()` with a longer timeout, so the real outcome (does the scripted join sequence actually
+land, and how long does it really take) is visible instead of inferred from a script that never
+prints it. Sketch (untested past one `LogLevel` vs. raw `logging.ERROR` constructor mismatch,
+fixed but not re-run):
+
+```python
+async with MicroPythonDevice(image, board="pico_w", log_level=LogLevel.ERROR) as device:
+    stdout, stderr = await device.aexec(
+        """
+import network, time
+nic = network.WLAN(network.WLAN.IF_STA)
+nic.active(True)
+print("scan results:", nic.scan())
+nic.connect('RP2040PY-GUEST', 'key')
+for i in range(50):
+    connected = nic.isconnected()
+    print("poll", i, "status:", nic.status(), "isconnected:", connected)
+    if connected:
+        break
+    time.sleep(0.2)
+""",
+        timeout=120,
+    )
+```
+
+If `scan()` doesn't return the fake AP, or `connect()` never reaches `isconnected() == True`, that's
+a real gap in 3g's own live-boot behavior worth its own investigation (separate from 0041's fix,
+and separate from 3g's already-passing 42/42 unit tests - a live boot exercises the real firmware's
+own driver state machine end to end, which unit tests exercising `GSPIBus` in isolation don't).
+If it *does* complete, that's the formal live-boot confirmation
+[0027](0027-cyw43-wifi.md)'s own "3g" entry still calls out as "not yet separately
+re-run/re-recorded" - worth folding back into that record once done.
