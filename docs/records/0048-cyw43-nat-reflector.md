@@ -1,6 +1,9 @@
 # 0048. CYW43 step 4 NAT bridge: a custom, minimal hand-rolled TCP reflector
 
-- Status: Implemented — verified (2026-08-16)
+- Status: Implemented — verified (2026-08-16), merged in [PR #37](https://github.com/o-murphy/rp2040py/pull/37).
+  **Still open in the tracker** (`[ ]` under "In progress / Proposed") until the "Known gaps"
+  section at the bottom of this record is closed — the happy path works end to end, this is not yet
+  a complete WiFi emulation.
 - Conceived: 2026-08-16
 - Related: 0027 (epic, step 4), 0045 (this record supersedes 0045's *engine choice* only - 0045
   itself is kept verbatim, not rewritten, per this repo's append-only convention), 0028 (module
