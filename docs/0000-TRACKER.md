@@ -90,7 +90,8 @@ and `reference/` for those). The structure itself is decided in
   - [ ] **`disconnect()` is a no-op** — real correctness gap: only link-*up* is ever scripted, `bus.py` has no `WLC_DISASSOC`/deauth handling, so a guest that calls `disconnect()` keeps believing it's connected. Needs the same kind of real `cyw43-driver` protocol research 4a-4c needed - not attempted
   - [ ] **no window backpressure from the real destination socket** — accepted v1 simplification, not an oversight: shrink the advertised guest-facing window by `transport.get_write_buffer_size()` if a slow real destination + fast guest sender ever proves it matters
   - [ ] **unbuilt: AP mode, multi-AP/hidden-SSID/negative-auth scan results, IPv6, multi-guest** — none partially-done; join is scripted unconditionally, so a *wrong* password currently "succeeds" too. Guest/gateway IP+MAC are fixed module constants in `nat.py` with no config surface
-  - [ ] **unverified, not necessarily broken: CircuitPython live boot, real TLS/HTTPS + WebSocket end-to-end** — CircuitPython has never been booted through this bus/NAT path at all (expected to work - same vendored `cyw43-driver`); TLS/WebSocket reasoned through as transparent (payload-agnostic splice) with `mip.install()`'s own HTTPS fetch as indirect evidence, but never directly exercised
+  - [x] ~~unverified: real TLS/HTTPS + WebSocket end-to-end~~ — **verified 2026-08-16** on both `v1.23.0` and `v1.28.0`: real TLS to `micropython.org:443` (real cert chain), RFC 6455 WebSocket and WebSocket-over-TLS against an echo server on a non-loopback address. TLS step landed in `tests/micropython/main-cyw43.py`; WebSocket verified by hand, deliberately not wired into CI (see the record)
+  - [ ] **unverified: CircuitPython live boot** — has never been booted through this bus/NAT path at all (expected to work - same vendored `cyw43-driver`)
 
 ### Rejected / Superseded
 

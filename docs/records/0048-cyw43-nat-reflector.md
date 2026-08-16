@@ -200,6 +200,46 @@ request for the gateway → ARP reply → (now) TCP SYN.
   inventory is still the accurate open-work list, and is now also surfaced in the tracker's own
   "In progress / Proposed" section rather than living only inside this record.
 
+- 2026-08-16: **TLS/HTTPS and WebSocket verified live on `v1.28.0`** - closing the first half of
+  the "Unverified, not necessarily broken" gap below. Run against a real, unmodified `v1.28.0`
+  RPI_PICO_W UF2 supplied for this check, with `--board pico_w`:
+  - **Real TLS to a real public host.** `socket.getaddrinfo('micropython.org', 443)` (through the
+    UDP DNS relay) → TCP connect through the reflector → `ssl.wrap_socket(..., server_hostname=...)`
+    → handshake completes → `HEAD / HTTP/1.0` → `b'HTTP/1.1 426 Upgrade Required'` comes back
+    decrypted. A real certificate chain, not a local fixture.
+  - **WebSocket (RFC 6455) and WebSocket-over-TLS.** Against a purpose-built hand-rolled echo
+    server (handshake + one echoed text frame) bound to the container's own **non-loopback** IP -
+    loopback would never cross this bus at all, same reason 4d's own test targets `1.1.1.1`.
+    Guest side: `HTTP/1.1 101 Switching Protocols`, then a masked client frame `hello`, then
+    `echo:hello` back - identical result over plain TCP (port 8765) and over TLS (port 8766,
+    self-signed). Server side independently logged `frame in: b'hello'` for both legs. TLS
+    handshake cost ~640 *simulated* ms; the whole probe ran in ~1.5 simulated seconds.
+  - **A false alarm worth recording, because it looks exactly like an emulator hang.** The first
+    two attempts appeared to freeze for 15-30 real minutes with zero output. Neither was an
+    emulator bug: (a) the CLI's script/exec mode drives the raw REPL, which buffers *all* guest
+    stdout until the script ends, so a slow run is indistinguishable from a hung one by watching
+    the log - `ps` showing 99.9% CPU and CPU-time tracking wall-time 1:1 is what actually
+    distinguishes them; (b) the probe used `sock.read(160)` on the WebSocket upgrade response,
+    and MicroPython's `read(n)` blocks until *exactly* n bytes arrive - the `101` response is
+    shorter, so the guest sat waiting for bytes that would never come. `recv()` is the correct
+    call; `tests/micropython/main-cyw43.py`'s new TLS step carries a comment saying so.
+  - **`v1.23.0` parity, same day, same probes.** WS: `101` + `echo:hello`. Real TLS to
+    `micropython.org:443`: handshake done, `b'HTTP/1.1 426 Upgrade Required'` back. WSS: the TLS
+    handshake completed over the splice, then the *probe* failed with `AttributeError: 'SSLSocket'
+    object has no attribute 'send'` - a real firmware API difference (v1.23.0's `SSLSocket` has
+    `write`/`read` but not `send`/`recv`; v1.28.0 has both), not an emulator fault. Re-run with a
+    `send`-or-`write` shim (and a 1-byte-at-a-time reader, since `read(n)` has the blocking
+    behavior described above): `101 Switching Protocols` + `echo:hello`, so **WSS passes on
+    v1.23.0 too**. Recorded because it is the second of two API-shape traps in this area:
+    anything probing TLS across both tracked firmwares has to write to the older, narrower
+    surface.
+  - Landed: the TLS step is now part of `tests/micropython/main-cyw43.py` (so CI exercises it via
+    the existing soft-failing `pico_w` job). The WebSocket check deliberately is **not** landed in
+    CI - it needs a fixture server bound to the runner's own routable IP, injected into a script
+    the guest reads statically, which is real machinery for a path that is payload-agnostic by
+    construction and already covered by the plain-TCP and TLS steps. Verified by hand, recorded
+    here, not automated.
+
 ## Deferred, not designed here
 
 No config surface (`Cyw43439(guest_ip=..., ...)` or similar) was added this pass - guest/gateway IP
@@ -268,7 +308,12 @@ cases):
 - **CircuitPython** has never been live-booted through this bus/NAT path at all - only MicroPython
   `v1.23.0`/`v1.28.0`. Expected to work (both vendor the same `cyw43-driver`, per this record's own
   earlier reasoning), but not confirmed.
-- **Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice is
-  payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
+- ~~**Real TLS/HTTPS (`ussl`) and WebSocket** were reasoned through as transparent (the TCP splice
+  is payload-agnostic) but never actually live-boot exercised end-to-end - only `mip`'s own HTTPS
   fetch inside `mip.install()` has been (that succeeded, which is at least indirect evidence for
-  this).
+  this).~~ **Verified 2026-08-16** on `v1.28.0` and `v1.23.0` - real TLS against a real public host
+  (real certificate chain), plus RFC 6455 WebSocket and WebSocket-over-TLS against a purpose-built
+  echo server on a non-loopback address. See the dedicated Progress log entry above for the
+  evidence, the two MicroPython API traps hit on the way (`read(n)` blocking for exactly n;
+  v1.23.0's `SSLSocket` having no `send()`), and why the WebSocket half is verified by hand rather
+  than wired into CI.

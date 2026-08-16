@@ -81,6 +81,31 @@ if connected:
     except Exception as exc:
         print("ntptime.settime() failed:", type(exc).__name__, exc)
 
+    # Real TLS through the same splice. The reflector is payload-agnostic by design (it relays
+    # bytes, never inspecting them), so this was *reasoned* to work long before it was ever run -
+    # this step is what turned that reasoning into a verified fact (docs/records/
+    # 0048-cyw43-nat-reflector.md's "Known gaps" listed TLS as unverified until then). A full
+    # handshake against a real public host also exercises a real certificate chain, not just the
+    # byte relay.
+    print("Attempting real TLS to micropython.org:443...")
+    try:
+        import ssl  # type: ignore[import-not-found]
+        addr = socket.getaddrinfo('micropython.org', 443)[0][-1]
+        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw.settimeout(60)
+        raw.connect(addr)
+        try:
+            tls = ssl.wrap_socket(raw, server_hostname='micropython.org')
+        except TypeError:  # older ssl without server_hostname
+            tls = ssl.wrap_socket(raw)
+        tls.write(b'HEAD / HTTP/1.0\r\nHost: micropython.org\r\nConnection: close\r\n\r\n')
+        # recv(), not read(n): read(n) blocks until exactly n bytes arrive, which hangs on a short
+        # HTTP response - found the hard way while first verifying this step.
+        print("TLS response:", tls.recv(64).split(b'\r\n')[0])
+        tls.close()
+    except Exception as exc:
+        print("Real TLS failed:", type(exc).__name__, exc)
+
 # ap = network.WLAN(network.WLAN.IF_AP) # create access-point interface
 # ap.config(ssid='RP2-AP')              # set the SSID of the access point
 # ap.config(max_clients=10)             # set how many clients can connect to the network
