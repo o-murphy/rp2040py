@@ -37,7 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`0xC8` with transposed offsets and displayio `rotation=90`) than MicroPython's `0xA8`, and both
   render upright.
 
+- `rp2040py.external` now re-exports `ExternalDevice` and `attach_external_devices`, so the
+  extension point is `from rp2040py.external import ExternalDevice` rather than the deeper
+  `rp2040py.external.device` path - one identifier away from the unrelated, host-side
+  `rp2040py.device` (`MicroPythonDevice` and friends), which was the actual source of confusion.
+  The submodule keeps its name and still works.
+
 ### Documentation
+- [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - design-only record
+  (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
+  `--board-spec` share one path, board files stop downloading at import time, `--image` works with
+  a custom board, and one file can serve several firmware families.
 - [docs/records/0057](docs/records/0057-run-pin-reset-hook.md) - design-only record (nothing
   implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target
   the way BOOTSEL can, a `set_reset_hook()` on `RP2040` versus moving `BaseDevice`'s reset

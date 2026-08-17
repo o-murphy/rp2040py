@@ -39,7 +39,7 @@ from PIL import Image
 
 from rp2040py.boards import BOARDS
 from rp2040py.device import MicroPythonDevice
-from rp2040py.external.device import attach_external_devices
+from rp2040py.external import attach_external_devices
 from rp2040py.external.epd2in9g import EPD_HEIGHT, EPD_WIDTH, PALETTE, Epd2in9G
 from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.utils.logging import LogLevel
