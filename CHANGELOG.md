@@ -84,6 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (see Added/Changed above): the record carries the design plus an implementation note covering the
   one deliberate departure from it (`mklittlefs --target` became `--board-spec`'s firmware-family
   selector instead of staying incompatible with it) and the live-boot verification.
+- [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - design-only record
+  (nothing implemented) for adding the VCC-GND Studio YD-RP2040 board and the `Ws2812`
+  `ExternalDevice` it needs: every number derived from the upstream `vcc_gnd_yd_rp2040`
+  CircuitPython port, why emulating a WS2812 is not the case record 0060 ruled out (that ceiling is
+  about driving *real* hardware in wall-clock time), and the question a board with no upstream
+  MicroPython build raises - whether a `firmware` key may name someone else's image, with the
+  proposed rule that it means "built *for* this board", not "runs here".
 - [docs/records/0061](docs/records/0061-cli-family-flag.md) - deferred design record, dependent on
   0059, for folding `micropython` (plus its `--circuitpython` boolean) and `kaluma` into one
   command with `--family`: what actually differs between them (the device protocol, not the
