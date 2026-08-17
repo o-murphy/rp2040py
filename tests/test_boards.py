@@ -1,7 +1,11 @@
 """Unit tests for `rp2040py.boards` - the `--board` registry from CYW43_WIFI_BACKLOG.md's step 0
 (Board-loading API): maps a board name to an MCU class plus fixed `ExternalDevice` extras. Also
 covers `resolve_board_spec()`/`build_rp2040_from_spec()` - the custom-board-authoring API from
-docs/records/0049's "Accepted design" section."""
+docs/records/0049's "Accepted design" section - and `resolve_firmware()`/`resolve_layout()`, the
+single firmware-resolution path docs/records/0059 moved into `BoardSpec` itself.
+
+`_retrieve` is monkeypatched throughout rather than left to run: resolution's *decisions* are what
+these test, and a real `retrieve()` would download firmware."""
 
 import pytest
 
@@ -11,12 +15,15 @@ from rp2040py.boards import (
     BoardSpec,
     FlashLayout,
     UnknownBoardError,
+    UnknownFirmwareFamilyError,
     build_rp2040,
     build_rp2040_from_spec,
     resolve_board_spec,
+    resolve_firmware,
+    resolve_layout,
 )
 from rp2040py.rp2040 import RP2040
-from rp2040py.utils.firmware_retrieve import MICROPYTHON, FirmwareSpec
+from rp2040py.utils.firmware_retrieve import MICROPYTHON, BoardFirmwareSpec, FirmwareSpec
 from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
 
@@ -105,20 +112,30 @@ def test_build_rp2040_delegates_to_build_rp2040_from_spec(monkeypatch):
     assert isinstance(mcu, RP2040)
 
 
-def test_resolve_board_spec_combines_board_mcu_extras_with_resolved_image_and_layout(monkeypatch):
-    monkeypatch.setattr(boards_module, "_retrieve", lambda spec, tag, board: "resolved.uf2")
-    monkeypatch.setattr(
-        boards_module,
-        "_flash_layout",
-        lambda spec, board: {"fs_start": 0x180000, "fs_blockcount": 352, "fs_blocksize": 4096},
-    )
+@pytest.fixture
+def fake_retrieve(monkeypatch):
+    """Replaces `retrieve()` with a recorder returning a fixed path, and hands back the list of
+    `(version_map, image, board)` triples it was called with - the tag/URL/cache resolution itself
+    is `firmware_retrieve.py`'s own tested job, not this module's."""
+    calls: list[tuple[dict[str, str] | None, str | None, str | None]] = []
 
+    def _retrieve(spec, image=None, board=None):
+        version_map = spec.boards[board].fw if spec.boards and board in spec.boards else None
+        calls.append((version_map, image, board))
+        return "resolved.uf2"
+
+    monkeypatch.setattr(boards_module, "_retrieve", _retrieve)
+    return calls
+
+
+def test_resolve_board_spec_combines_board_mcu_extras_with_resolved_image_and_layout(fake_retrieve):
     resolved = resolve_board_spec("pico", MICROPYTHON, "1.21.0")
 
     assert resolved.mcu is BOARDS["pico"].mcu
     assert resolved.extras is BOARDS["pico"].extras
     assert resolved.image == "resolved.uf2"
-    assert resolved.layout == FlashLayout(fs_start=0x180000, fs_blockcount=352, fs_blocksize=4096)
+    assert resolved.layout == FlashLayout(**_flash_layout(MICROPYTHON, "pico"))
+    assert fake_retrieve == [(MICROPYTHON.boards["pico"].fw, "1.21.0", "micropython")]
 
 
 def test_resolve_board_spec_unknown_board_raises():
@@ -126,24 +143,123 @@ def test_resolve_board_spec_unknown_board_raises():
         resolve_board_spec("not_a_real_board", MICROPYTHON)
 
 
-def test_resolve_board_spec_board_agnostic_firmware_spec_leaves_layout_none(monkeypatch):
-    # Mirrors BOOTROM's shape (known_versions, no boards) - flash_layout() has nothing to resolve
-    # against a spec like this, so resolve_board_spec() must not call it at all.
-    monkeypatch.setattr(boards_module, "_retrieve", lambda spec, tag, board: "resolved.elf")
+def test_resolve_board_spec_board_agnostic_firmware_spec_leaves_layout_none(fake_retrieve):
+    # Mirrors BOOTROM's shape (known_versions, no boards): no per-board data to pick from, so it
+    # adapts into one board-agnostic declaration with no layout at all.
     agnostic_spec = FirmwareSpec(boards=None, default_tag="b1", known_versions={"b1": "https://example.invalid/b1"})
 
     resolved = resolve_board_spec("pico", agnostic_spec)
 
-    assert resolved.image == "resolved.elf"
+    assert resolved.image == "resolved.uf2"
     assert resolved.layout is None
+    assert fake_retrieve == [({"b1": "https://example.invalid/b1"}, None, "firmware")]
 
 
-def test_resolve_board_spec_layout_matches_flash_layout_for_a_real_firmware_spec(monkeypatch):
-    """Only image resolution is mocked (no network) - flash_layout() itself runs for real against
-    the committed firmware_specs.json, so this also catches a `resolve_board_spec()`/
-    `flash_layout()` shape drift, not just resolve_board_spec()'s own wiring."""
-    monkeypatch.setattr(boards_module, "_retrieve", lambda spec, tag, board: "resolved.uf2")
+def test_resolve_board_spec_caller_supplied_firmware_spec_overrides_only_that_family(fake_retrieve):
+    """A `FirmwareSpec` this project doesn't ship still resolves through the same path, and only
+    displaces the family it stands in for - the board's other declarations survive."""
+    custom = FirmwareSpec(boards={"pico": BoardFirmwareSpec(default_tag="9.9.9", fw={"9.9.9": "https://x.invalid/f"})})
 
-    resolved = resolve_board_spec("pico", MICROPYTHON, "1.21.0")
+    resolved = resolve_board_spec("pico", custom, None)
 
-    assert resolved.layout == FlashLayout(**_flash_layout(MICROPYTHON, "pico"))
+    assert fake_retrieve == [({"9.9.9": "https://x.invalid/f"}, None, "firmware")]
+    assert resolved.firmware is not None
+    assert set(resolved.firmware) == {"micropython", "circuitpython", "kaluma", "firmware"}
+
+
+def test_builtin_boards_declare_every_family_firmware_specs_json_lists_them_under():
+    for board in ("pico", "pico_w"):
+        assert BOARDS[board].firmware is not None
+        assert set(BOARDS[board].firmware) == {"micropython", "circuitpython", "kaluma"}
+        assert BOARDS[board].firmware["micropython"] is MICROPYTHON.boards[board]
+
+
+class TestResolveLayout:
+    """`resolve_layout()` - the image-free half of resolution (docs/records/0059), which is what
+    lets `mklittlefs --board-spec` size an image with no network at all."""
+
+    def test_explicit_layout_wins_over_the_declaration(self):
+        override = FlashLayout(fs_start=0x180000, fs_blockcount=1, fs_blocksize=4096)
+        spec = BoardSpec(layout=override, firmware=BOARDS["pico"].firmware)
+
+        assert resolve_layout(spec, "micropython") is override
+
+    def test_comes_from_the_selected_family(self):
+        assert resolve_layout(BOARDS["pico_w"], "micropython") == FlashLayout(**_flash_layout(MICROPYTHON, "pico_w"))
+
+    def test_a_family_the_spec_does_not_declare_raises_naming_what_it_does(self):
+        spec = BoardSpec(firmware={"micropython": MICROPYTHON.boards["pico"]})
+
+        with pytest.raises(UnknownFirmwareFamilyError, match=r"circuitpython.*\['micropython'\]"):
+            resolve_layout(spec, "circuitpython")
+
+    def test_a_spec_with_neither_resolves_to_none(self):
+        assert resolve_layout(BoardSpec(), "micropython") is None
+
+
+class TestResolveFirmware:
+    """`resolve_firmware()` - the one resolution path both `--board` and `--board-spec` come
+    through (docs/records/0059)."""
+
+    def test_declared_family_resolves_image_and_layout_at_its_own_default_tag(self, fake_retrieve):
+        resolved = resolve_firmware(BOARDS["pico_w"], "micropython")
+
+        assert fake_retrieve == [(MICROPYTHON.boards["pico_w"].fw, None, "micropython")]
+        assert resolved.image == "resolved.uf2"
+        assert resolved.layout == FlashLayout(**_flash_layout(MICROPYTHON, "pico_w"))
+
+    def test_an_explicit_tag_is_resolved_against_the_selected_family(self, fake_retrieve):
+        resolve_firmware(BOARDS["pico"], "circuitpython", "8.0.2")
+
+        assert fake_retrieve == [(BOARDS["pico"].firmware["circuitpython"].fw, "8.0.2", "circuitpython")]
+
+    def test_an_already_resolved_image_wins_and_is_not_re_resolved(self, fake_retrieve):
+        spec = BoardSpec(image="already.uf2", firmware=BOARDS["pico"].firmware)
+
+        resolved = resolve_firmware(spec, "micropython")
+
+        assert resolved.image == "already.uf2"
+        assert fake_retrieve == []
+        # ... and the layout still comes off the declaration, which is the half that wasn't set.
+        assert resolved.layout == FlashLayout(**_flash_layout(MICROPYTHON, "pico"))
+
+    def test_an_explicit_image_argument_overrides_an_already_resolved_one(self, fake_retrieve, tmp_path):
+        local = tmp_path / "mine.uf2"
+        local.write_bytes(b"")
+        spec = BoardSpec(image="already.uf2", firmware=BOARDS["pico"].firmware)
+
+        resolve_firmware(spec, "micropython", str(local))
+
+        assert fake_retrieve == [(None, str(local), None)]
+
+    def test_a_local_path_needs_no_declaration_at_all(self, fake_retrieve, tmp_path):
+        local = tmp_path / "mine.uf2"
+        local.write_bytes(b"")
+
+        resolved = resolve_firmware(BoardSpec(), "micropython", str(local))
+
+        assert resolved.image == "resolved.uf2"
+        assert fake_retrieve == [(None, str(local), None)]
+
+    def test_a_url_needs_no_declaration_at_all(self, fake_retrieve):
+        resolve_firmware(BoardSpec(), "micropython", "https://example.invalid/fw.uf2")
+
+        assert fake_retrieve == [(None, "https://example.invalid/fw.uf2", None)]
+
+    def test_a_family_the_spec_does_not_declare_raises_naming_what_it_does(self, fake_retrieve):
+        spec = BoardSpec(firmware={"micropython": MICROPYTHON.boards["pico"]})
+
+        with pytest.raises(UnknownFirmwareFamilyError, match=r"circuitpython.*\['micropython'\]"):
+            resolve_firmware(spec, "circuitpython")
+
+    def test_a_tag_against_a_spec_declaring_no_firmware_raises_saying_so(self, fake_retrieve):
+        with pytest.raises(UnknownFirmwareFamilyError, match="no `firmware` at all"):
+            resolve_firmware(BoardSpec(), "micropython", "1.28.0")
+
+    def test_a_spec_with_nothing_to_resolve_is_returned_unchanged(self, fake_retrieve):
+        """Rule 5: no image, no `firmware` - the spec stays unresolved and the caller's own "no
+        image" failure (`BaseDevice`'s assert, the CLI's own error) is what reports it."""
+        spec = BoardSpec()
+
+        assert resolve_firmware(spec, "micropython") is spec
+        assert fake_retrieve == []
