@@ -226,6 +226,10 @@ uv run --with pillow python demo/lcd_run.py --circuitpython --tkinter   # ST7735
 uv run --with pillow python demo/eink_run.py --screenshot out       # Waveshare 2.9" e-paper
 ```
 
+[demo/README.md](../../demo/README.md) shows what each of those commands produces, with the
+frames checked in under [`demo/screenshots/`](../../demo/screenshots/) at the panels' real pixel
+sizes.
+
 The shape is the same in both, and is what to copy for your own device:
 
 1. Build the board with a callback closed over - `board_with(on_frame)` in the two

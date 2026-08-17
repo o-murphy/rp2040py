@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rp2040py.device` (`MicroPythonDevice` and friends), which was the actual source of confusion.
   The submodule keeps its name and still works.
 
+- [demo/README.md](demo/README.md) - an index of the demo scripts plus a gallery of what the two
+  emulated display panels actually draw, with the frames checked in under `demo/screenshots/`
+  (real device output: each PNG is a decoded `on_frame` buffer, at the panel's own pixel size).
+
 ### Documentation
 - [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - design-only record
   (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
