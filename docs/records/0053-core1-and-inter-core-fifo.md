@@ -68,3 +68,61 @@ a clear one-time warning naming `_thread`/`multicore` and this record, instead o
 "invalid SIO address" line. That is a five-line change and turns a mystery into a message. It is
 not implemented here either - noting it so the option is on the table without being mistaken for
 the real thing.
+
+## Addendum, 2026-08-17: how core1 should be *executed* - and why not on its own thread
+
+Raised while discussing [0063](0063-pio-clkdiv-and-delay-cycles.md): if a second core is added,
+should each core run in its own OS thread? Written down here because it is the first question
+anyone building this will ask, and the answer decides the shape of everything else.
+
+**No - and the reason that matters is not the GIL.** The GIL is the obvious objection (two threads
+interpreting Python do not run in parallel; they timeshare one core and add switch overhead and
+contention), and a free-threaded build removes it - this project already tests `cp314t`. But the
+second reason survives that removal:
+
+**Everything in this emulator is coupled through one clock.** Every instruction ticks
+`SimulationClock`; DMA, PIO, alarms, GPIO listeners and every peripheral hang off it. Two threads
+stepping two cores would have to agree on emulated time at essentially every shared access, and a
+lock per instruction costs more than the instruction it protects. This is the standard result from
+parallel discrete-event simulation: parallelism pays only when components are loosely coupled
+enough for lookahead (conservative) or rollback (Time Warp), and a tightly-coupled SoC model in a
+Python interpreter loop is the opposite of that.
+
+Two further costs, both real here rather than theoretical:
+
+- **Determinism.** Single-threaded stepping is reproducible; two threads are not. This project
+  tests that a flash dump is byte-identical across runs, and debugging a firmware hang depends on
+  the run being repeatable.
+- **The `ExternalDevice` contract.** Device callbacks fire on the engine room's own thread by
+  construction ([0030](0030-external-device-concurrency.md)); two CPU threads would mean device
+  state touched from two, which is exactly the concurrency model that record exists to avoid.
+
+The project's own trajectory says the same: [0025](0025-full-asyncio-migration.md)/
+[0026](0026-main-thread-asyncio.md) moved *away* from running execution on a background thread, and
+`CLAUDE.md` still warns that a leaked engine-room thread busy-loops a whole core. Threads here earn
+their keep on **I/O** - the asyncio loop, sockets, the NAT bridge - not on interpretation. CPU speed
+comes from Cython and PyPy ([0013], [0031], [0034], [0039], [0047]), and always has.
+
+**The model to build instead: interleaved stepping in the same loop**, sharing one clock - exactly
+how `RPPIO` is already stepped since [0037](0037-pio-clock-coupled-stepping.md). Step core0, step
+core1, tick, repeat. Then:
+
+- the inter-core FIFO this record is about needs **no locking at all** - there is one thread, so it
+  is a plain data structure, and `FIFO_ST`/`FIFO_WR`/`FIFO_RD` become ordinary register reads;
+- determinism is preserved, and so is every existing assumption about who touches what;
+- the cost is roughly 2x the work per second of emulated time, which is honest - you are emulating
+  two cores - with no synchronization overhead added on top.
+
+The one genuinely open knob is the **quantum**: alternating per instruction is the most faithful
+and the slowest; interleaving in blocks of N is faster but lets one core run ahead of the other,
+which is observable through precisely the FIFO and spinlocks this record is about. That is a
+semantics decision to make deliberately, not a threading one.
+
+Prior art agrees on the shape: QEMU's default TCG is a single-threaded round-robin over vCPUs, and
+its multi-threaded MTTCG mode works because it emits native code with real atomics and memory
+barriers - neither available to a Python interpreter loop. `rp2040js`, this project's ancestor, is
+single-threaded by construction.
+
+None of this changes what this record already concluded: the hazard is semantic, not architectural.
+A FIFO that looks faithful but is not turns today's honest "core1 is not emulated" warning into a
+silent infinite hang, and that stays true whichever way the cores are scheduled.
