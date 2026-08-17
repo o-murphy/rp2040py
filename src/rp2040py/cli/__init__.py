@@ -1328,7 +1328,7 @@ def main(argv: "list[str] | None" = None) -> None:
         mklittlefs_parser.add_argument(
             "files",
             nargs="*",
-            type=_mk_file_suffixes_validator(".py", ".js"),
+            type=_mk_file_suffixes_validator(".py", ".mpy", ".js"),
             help="source files to add, keeping their own basename",
         )
         mklittlefs_parser.add_argument(

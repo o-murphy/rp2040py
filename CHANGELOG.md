@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-17
+
+### Fixed
+- `mklittlefs`'s `files` argument rejected `.mpy` (precompiled MicroPython bytecode) with "File
+  must have one of the following extensions" - the CLI's own suffix validator only allowed `.py`/
+  `.js`, even though `build_littlefs_image()` itself writes raw bytes with no extension
+  restriction (per `test_binary_content_is_preserved_byte_for_byte`). `.mpy` is now accepted
+  alongside `.py`/`.js`.
+
 ## [0.2.4] - 2026-08-17
 
 ### Added
