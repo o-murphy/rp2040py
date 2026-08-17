@@ -91,3 +91,45 @@ anything larger is attempted.
   is cheap, but a fractional-divider accumulator per state machine per step is not obviously so.
 - **0062's trace is the acceptance test.** Replaying the same guest write should produce high times
   clustered around a 4:9 ratio with no overlap, and its `Ws2812` should then decode `ff 00 aa`.
+
+## Addendum, same day: the divider is not hypothetical, and the recommendation changes
+
+The options above were written without knowing whether any real firmware sets `SM_CLKDIV` at all.
+Measured now, by reading the register block after MicroPython `1.23.0` brings the Pico W's WLAN up
+(the native `StateMachine` is a `cdef class`, so this is read through the memory map rather than
+monkeypatched):
+
+    PIO0 SM0-3: enabled=False  CLKDIV int=1 frac=0
+    PIO1 SM0  : enabled=True   CLKDIV int=2 frac=0   <- CYW43's gSPI
+    PIO1 SM1-3: enabled=False  CLKDIV int=1 frac=0
+
+So CYW43 asks for **sysclk/2** and this emulator runs it at **sysclk** - its bit-banged SPI clock
+is twice the rate the driver configured, relative to CPU time. That reframes the third option:
+"do nothing and document the ceiling" is no longer a choice between coarse and fine, it is leaving
+a measured wrong number in place in the project's most exercised PIO path.
+
+**Recommendation, updated: implement both halves (`[delay]` *and* `CLKDIV`), as a due-time skip
+rather than a per-machine tick.** Keep one integer per PIO block - the cycle its earliest machine
+is next due at - and have the caller compare that against the cycle counter, touching machines only
+when one is actually due. Then:
+
+- it is **cheaper than today**, not more expensive. The current cost is four `step()` calls per CPU
+  instruction, each executing a full instruction; after this it is one integer comparison, and with
+  CYW43's `CLKDIV=2` half of the state-machine work simply disappears.
+- the fractional part is a fixed-point integer accumulator (CLKDIV is 16.8), never a float, so in
+  the `cdef` twin the added work is a C-level add and compare.
+- nothing decouples from the instruction loop: 0037 coupled them deliberately to kill a livelock,
+  and this stays inside that coupling, preserving determinism.
+
+A fourth option considered and rejected: *do not simulate idle cycles at all* - have the machine
+compute its pin-change schedule ahead of time and let observers read it. Cheapest of all, and
+sound only for straight-line delay runs; it breaks as soon as a program branches on input
+(`wait pin`, `jmp !x`), which is what real PIO programs do. Worth keeping as a special case inside
+the due-time model if it ever pays, not as the model.
+
+Land it in two steps, because the second is where the risk is:
+
+1. the mechanism, verified against 0062's captured trace - high times must cluster at a 4:9 ratio
+   with no overlap, and `Ws2812` must decode `ff 00 aa`;
+2. CYW43 live on `1.23.0` and `1.28.0`, because its effective SPI clock halves and 0043 exists
+   precisely because that interaction is brittle. `bench` before/after alongside.
