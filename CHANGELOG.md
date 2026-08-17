@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `rp2040py.external.ws2812.Ws2812` - a new `ExternalDevice` decoding the WS2812/WS2812B
+  ("NeoPixel") single-wire protocol off one GPIO: each bit classified by its duty cycle against the
+  frame's own measured bit period (so any driver's clock choice decodes - CircuitPython's 12.8 MHz
+  PIO program, MicroPython's, pico-examples' `ws2812.pio`), frames separated by the protocol's
+  latch gap, and `on_pixels` handing over raw `(r, g, b)` tuples - never a picture, the same
+  boundary `Epd2in9G`/`St7735s` draw. Colour order (`GRB`, `GRBW`, ...) is a constructor argument.
+  Timings derived from CircuitPython's own driver rather than datasheet folklore; see
+  [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md). **Known limitation:** a
+  PIO-driven driver does not decode correctly on this emulator yet - see the Known issues note
+  below.
+- `boards/vcc_gnd_yd_rp2040/` - the VCC-GND Studio **YD-RP2040** as a `--board-spec` target: the
+  WS2812 RGB LED (GPIO23), the USRKEY button (GPIO24), BOOTSEL and the user LED (GPIO25). Flash
+  layout derived from the upstream `vcc_gnd_yd_rp2040` CircuitPython port (no
+  `CIRCUITPY_FIRMWARE_SIZE` override and no `link.ld`, so `fs_start=0x100000`), and the two button
+  nets from the vendor's own `YD-2040 2022 V1.1` schematic - USRKEY has a 10k in *series* and no
+  external pull-up, so `KeyMock(gpio=24, active_high=False)` relies on firmware's own internal
+  pull, which is exactly the case `release()` is written for. Declares **CircuitPython only**,
+  deliberately: MicroPython ships no port for this board, and a `firmware` key means "built *for*
+  this board", not "runs here" - the generic `RPI_PICO` image is one explicit `--image` away. Live
+  verified: boots CircuitPython `10.2.1`, `board.board_id == "vcc_gnd_yd_rp2040"`, CIRCUITPY mounts
+  at the derived offset. RESET stays unmodelled ([0057](docs/records/0057-run-pin-reset-hook.md)).
 - `BoardSpec.firmware` - a board now *declares* its firmware instead of arriving with one already
   resolved: a `dict` keyed by firmware family (`micropython`/`circuitpython`/`kaluma`, the names
   `firmware_specs.json` already uses), each value the existing `BoardFirmwareSpec` (`default_tag`,
@@ -79,7 +100,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will not work - with the reason it is deliberate rather than pending, since adding the FIFO
   registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
 
+### Known issues
+- **PIO-generated pulse-width protocols do not decode correctly.** `RPPIO` stores `SM_CLKDIV` and
+  accumulates `[delay]` cycles but paces itself by neither - every state machine advances one
+  instruction per CPU instruction - so a waveform whose meaning is in pulse *widths* (WS2812,
+  DHT11/22, servo PWM, IR codes, one-wire) arrives with its symbols collapsed into each other.
+  Measured against real firmware writing `ff 00 aa` to a NeoPixel: the all-zeros byte and the
+  all-ones byte both contain 16 ns highs, so no threshold can separate them. Edge-*order* protocols
+  (CYW43's clocked gSPI, and everything SPI/I2C-shaped) are unaffected, which is why this went
+  unnoticed until now. Diagnosis, options and an acceptance test in
+  [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md); nothing is fixed yet.
+
 ### Documentation
+- [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - the YD-RP2040 board and
+  the `Ws2812` device it needs: now implemented (above), including why emulating a WS2812 is not
+  the case record 0060 ruled out, the rule that a `firmware` key means "built *for* this board",
+  and the two button nets read off the vendor schematic.
+- [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md) - the PIO timing defect
+  that work uncovered, with the captured trace as its acceptance test and three options ranked by
+  faithfulness; nothing implemented.
 - [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - now **implemented**
   (see Added/Changed above): the record carries the design plus an implementation note covering the
   one deliberate departure from it (`mklittlefs --target` became `--board-spec`'s firmware-family

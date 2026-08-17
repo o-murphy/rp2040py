@@ -192,6 +192,9 @@ jobs:
           timeout 5m uv run --no-dev -- rp2040py micropython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --image 1.28.0 -c "import sys; print(sys.implementation.version)"
           timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD -c "import board; print(board.DISPLAY.width, board.DISPLAY.height)"
 
+      - name: Test the YD-RP2040 board file boots its declared CircuitPython firmware
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --board-spec boards/vcc_gnd_yd_rp2040/__init__.py:BOARD -c "import board, os; print(board.board_id, os.statvfs('/')[:2])"
+
       - name: Test mklittlefs sizes a board file per --target family, without a network fetch
         run: |
           uv run rp2040py mklittlefs --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --target micropython -o mp.img -f
