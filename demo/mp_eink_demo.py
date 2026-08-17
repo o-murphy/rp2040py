@@ -15,13 +15,19 @@ EPD_WIDTH = 128
 EPD_HEIGHT = 296
 
 # The emulator actually runs firmware's busy-wait loop for every millisecond of utime.sleep_ms()
-# rather than fast-forwarding simulated time (measured: roughly 30x real time per simulated ms),
-# so these are demo-tuned (short, but still nonzero) rather than the real datasheet values - real
-# hardware uses RESET_MS=200/RESET_PULSE_MS=2/POWER_ON_SETTLE_MS=500/POWER_OFF_SETTLE_MS=100.
-RESET_MS = 5
+# rather than fast-forwarding simulated time (measured: ~20x real time per simulated ms), so these
+# are demo-tuned (short, but still nonzero) rather than the real datasheet values - real hardware
+# uses RESET_MS=200/RESET_PULSE_MS=2/POWER_ON_SETTLE_MS=500/POWER_OFF_SETTLE_MS=100.
+#
+# BUSY_POLL_MS is the one that must NOT be cut further: eink_run.py's busy_nanos_refresh (4ms) is
+# deliberately two of these poll intervals, so firmware genuinely observes BUSY low and spins its
+# wait loop at least once - shortening either past that turns the BUSY handshake this demo exists
+# to exercise into a no-op. See docs/records/0046's timing addendum for the measured breakdown
+# (per-frame cost is dominated by frame generation + the 9,472-byte SPI write, not by these).
+RESET_MS = 2
 RESET_PULSE_MS = 1
-POWER_ON_SETTLE_MS = 10
-POWER_OFF_SETTLE_MS = 5
+POWER_ON_SETTLE_MS = 3
+POWER_OFF_SETTLE_MS = 2
 BUSY_POLL_MS = 2
 
 BLACK = 0b00
@@ -242,7 +248,11 @@ def make_sunrise_frame(t, row_bytes):
     return buf
 
 
-spi = machine.SPI(1, baudrate=4_000_000, polarity=0, phase=0, sck=machine.Pin(10), mosi=machine.Pin(11))
+# 10 MHz, not the vendor driver's 4 MHz: the panel emulation paces SPI completion by the *real*
+# byte time of whatever clock firmware configured (rp2040py.external.epd2in9g), so the bus rate is
+# a direct multiplier on how long each 9,472-byte frame takes in simulated time - measured 1.45s ->
+# 1.19s of wall time per frame just from this. Still inside what real e-paper controllers accept.
+spi = machine.SPI(1, baudrate=10_000_000, polarity=0, phase=0, sck=machine.Pin(10), mosi=machine.Pin(11))
 cs = machine.Pin(9, machine.Pin.OUT, value=1)
 dc = machine.Pin(8, machine.Pin.OUT)
 rst = machine.Pin(12, machine.Pin.OUT)

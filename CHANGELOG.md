@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rp2040py.external.st7735s.St7735s` - a new `ExternalDevice` emulating the ST7735S TFT
+  controller behind Waveshare's 0.96inch 160x80 IPS panel: CASET/RASET address windows, RAMWR
+  pixel streaming, MADCTL/COLMOD/DISPON/INVON state and the RST pin, all decoded off the vendor's
+  own MicroPython driver's wire traffic. `on_frame` hands over the raw RGB565 framebuffer, never a
+  decoded picture, so nothing in `src/` gains an image-library dependency (same boundary
+  `Epd2in9G` draws).
+- `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` - a `--board-spec` target for the Waveshare
+  RP2040-LCD-0.96, with its onboard panel, BOOTSEL and LCD backlight attached as fixed extras.
+  Flash layout derived from upstream (`MICROPY_HW_FLASH_STORAGE_BYTES = 1441792` + pico-sdk's
+  `PICO_FLASH_SIZE_BYTES = 2 MiB` -> `fs_start=0xa0000`, `fs_blockcount=352`) and live-verified
+  against the real `WAVESHARE_RP2040_LCD_0_96` v1.28.0 firmware: `mklittlefs --board-spec` round
+  trip, `os.statvfs('/')` reporting 352 4-KiB blocks, and real frames decoded from a
+  vendor-shaped guest driver. See [docs/records/0056](docs/records/0056-st7735s-waveshare-lcd-board.md).
+
+### Changed
+- `demo/mp_eink_demo.py` runs the panel's SPI bus at 10 MHz instead of 4 MHz and trims the
+  settle delays that gate nothing (`RESET_MS` 5->2, `POWER_ON_SETTLE_MS` 10->3,
+  `POWER_OFF_SETTLE_MS` 5->2), cutting the demo's wall time roughly in half with byte-identical
+  output. The BUSY handshake's own timings (`BUSY_POLL_MS`, `eink_run.py`'s `busy_nanos_refresh`)
+  were measured at ~3% of a frame and deliberately left alone - see
+  [docs/records/0046](docs/records/0046-epd2in9g-external-device.md)'s timing addendum for the
+  full breakdown.
+
+### Fixed
+- `README.md`'s table of contents nested every section under a self-referencing `rp2040py` root
+  entry (so indentation was one level deeper than the headings it described) and listed
+  "External devices & custom boards" as a child of "Library API" while the headings said
+  otherwise. The ToC now mirrors the heading levels, and "Library API" is a top-level section
+  rather than a step of "Run the demo project".
+
 ## [0.2.5] - 2026-08-17
 
 ### Fixed
