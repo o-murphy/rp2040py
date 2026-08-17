@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emulated display panels actually draw, with the frames checked in under `demo/screenshots/`
   (real device output: each PNG is a decoded `on_frame` buffer, at the panel's own pixel size).
 
+- `README.md` and [reference/os-compatibility.md](docs/reference/os-compatibility.md) now state
+  the single-core limitation up front: there is no `core1`, SIO's inter-core FIFO is
+  unimplemented, and firmware that calls `multicore_launch_core1()` (or MicroPython's `_thread`)
+  will not work - with the reason it is deliberate rather than pending, since adding the FIFO
+  registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
+
 ### Documentation
 - [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - design-only record
   (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
