@@ -1,8 +1,10 @@
 # 0062. YD-RP2040 (VCC-GND Studio), and the WS2812 device it needs
 
-- Status: **Proposed — documented, nothing implemented (2026-08-17).** No board file, no device, no
-  tests. This record says what adding the board would take and what it would be worth; building it
-  is a separate go-ahead.
+- Status: **Implemented (2026-08-17), except live PIO-driven decoding, which is blocked on
+  [0063](0063-pio-clkdiv-and-delay-cycles.md)** - a defect this work uncovered and measured. See
+  "Implemented" at the end. (Original status, kept: *Proposed — documented, nothing implemented
+  (2026-08-17). No board file, no device, no tests. This record says what adding the board would
+  take and what it would be worth; building it is a separate go-ahead.*)
 - Conceived: 2026-08-17
 - Related: [0059](0059-boardspec-firmware-resolution.md) (`BoardSpec.firmware` - what makes a board
   file for hardware with only *one* upstream firmware family expressible at all), 0049 (board
@@ -268,3 +270,47 @@ schematic in hand:
    firmware bugs, RUN's released level is a board-level pull-up that is simply always there. So a
    future `ResetButton` has no pull semantics to get right - all of its difficulty is on the "what
    does a reset actually do" side, which is precisely what 0057 is about.
+
+## Implemented, 2026-08-17 — with one part blocked on a defect this work uncovered
+
+Built on the go-ahead this record was written for:
+
+- **`rp2040py.external.ws2812.Ws2812`** - decodes the single-wire NRZ waveform off one GPIO and
+  emits `on_pixels` per latched frame, with `color_order` (GRB/GRBW/...) a constructor argument and
+  raw pixel values rather than a picture (0046's boundary). 16 unit tests
+  (`tests/test_ws2812.py`), written in CircuitPython's own timings *and* in pico-examples'
+  `ws2812.pio` timings, covering latch separation, mid-frame stalls, partial bytes and pixels, and
+  colour-order handling.
+- **`boards/vcc_gnd_yd_rp2040/`** - the board, CircuitPython-only as argued above, with
+  `Ws2812(23)` / `KeyMock(24, active_high=False)` / `BootselButton` / `LEDMock(25)` and a
+  `board_with(on_pixels)` helper.
+
+One design change against the sketch: bits are classified by **duty cycle** (>=40% of the bit's own
+period, measured against the shortest period in the frame) rather than against an absolute ~500 ns
+threshold. It costs nothing, and it decodes any driver's clock choice - CircuitPython's 12.8 MHz,
+MicroPython's, a 400 kHz slow-mode part - instead of only the one this record measured. The latch
+stays absolute, because the inter-frame gap is produced by a CPU spin loop, and CPU-timed intervals
+are faithful here even where PIO-timed ones are not.
+
+**The live-boot verification this record promised does not pass, and the reason is not the device.**
+Decoding the real status-LED stream produced consistent garbage; the trace explains why:
+
+    guest wrote:  ff 00 aa
+    expected:     11111111 00000000 10101010
+    high times:   16,32,16,16,24,16,32,16 | 8,16,8,16,16,16,16,16 | 32,8,32,8,40,16,24,16  (ns)
+
+`RPPIO` stores `SM_CLKDIV` and accumulates `[delay]` cycles but paces itself by neither, so 4 and 9
+PIO cycles collapse into 1 and 2 CPU instructions and the two symbols *overlap* - the all-zeros
+byte contains 16 ns highs, and so does the all-ones byte. No threshold can separate overlapping
+populations; the information is gone before any device sees it. That is now
+[0063](0063-pio-clkdiv-and-delay-cycles.md), with the trace above as its acceptance test.
+
+So this record's own claim - "it would immediately have something real to decode from the first
+second of boot" - was half right: the *edges* are there (606 of them, as measured), but their
+widths are not. The device is correct against the waveform real hardware produces, which is what
+its tests hold it to; the emulator producing that waveform is 0063's job. Until then, `Ws2812`
+decodes a CPU-driven or bit-banged driver here, and any PIO-driven one only once 0063 lands.
+
+Unchanged from the plan: the board still earns its place (its other three devices work, and it is a
+live-verified `--board-spec` example for a real third-party board), and RESET stays unmodelled
+(0057).

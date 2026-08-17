@@ -260,6 +260,7 @@ firmware:
 | board | what it shows |
 |---|---|
 | [`boards/weactstudio/`](../../boards/weactstudio/__init__.py) | one `BoardSpec` per flash-size variant, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
+| [`boards/vcc_gnd_yd_rp2040/`](../../boards/vcc_gnd_yd_rp2040/__init__.py) | a board declaring **one** firmware family, because upstream only builds one for it - and the how-to for the case where another firmware merely *runs* on your board without being built for it (pass `--image` explicitly rather than declaring a `firmware` key that claims otherwise). Carries the WS2812 RGB LED, the USRKEY button and the LED; its RESET button is a documented non-goal ([record 0057](../records/0057-run-pin-reset-hook.md)) |
 | [`boards/waveshare_rp2040_lcd_0_96/`](../../boards/waveshare_rp2040_lcd_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below). Also a **two-family** file: one declaration each for MicroPython and CircuitPython, with their different images and flash layouts, selected by `--circuitpython` at run time - under which the panel paints itself at boot, with no guest code at all |
 
 One directory per *board*, not per firmware family, named after the firmware's own board id,
@@ -328,6 +329,13 @@ Two practical notes both runners now encode, learned the hard way:
   back to the caller. From the SDK, build the board with the callback already closed over - the
   `board_with(on_frame)` helper in `boards/waveshare_rp2040_lcd_0_96/` is the pattern.
   From the CLI there is no answer today; see [record 0056](../records/0056-st7735s-waveshare-lcd-board.md).
+- **A PIO-driven pulse-width protocol does not decode correctly yet.** `RPPIO` stores `SM_CLKDIV`
+  and accumulates `[delay]` cycles but paces itself by neither, so waveforms whose *meaning* is in
+  pulse widths - WS2812, DHT11/22, servo PWM, IR codes, one-wire - arrive with their symbols
+  collapsed into each other. Edge-*order* protocols (CYW43's clocked gSPI, SPI/I2C-shaped things)
+  are unaffected, which is why this went unnoticed for so long. `Ws2812` is written for the real
+  waveform and unit-tested against it; live decoding waits on
+  [record 0063](../records/0063-pio-clkdiv-and-delay-cycles.md).
 - **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See
