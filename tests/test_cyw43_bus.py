@@ -182,35 +182,35 @@ class _FakeGSPIMaster:
             self._word_length_32 = True
 
 
-def _wire_up() -> tuple[RP2040, _FakeGSPIMaster]:
-    rp2040, _bus, master = _wire_up_with_bus()
+def _wire_up(rp2040_factory) -> tuple[RP2040, _FakeGSPIMaster]:
+    rp2040, _bus, master = _wire_up_with_bus(rp2040_factory)
     return rp2040, master
 
 
-def _wire_up_with_bus() -> tuple[RP2040, GSPIBus, _FakeGSPIMaster]:
+def _wire_up_with_bus(rp2040_factory) -> tuple[RP2040, GSPIBus, _FakeGSPIMaster]:
     """Like `_wire_up()`, but also returns the `GSPIBus` itself - needed by tests that drive
     `queue_rx_packet()` directly (step 3e), which has no wire-level equivalent to trigger it
     (real firmware/step 3f/3g would call it from inside SDPCM handling, not built yet)."""
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
     bus = GSPIBus()
     bus.attach_gpio(rp2040)
     return rp2040, bus, _FakeGSPIMaster(rp2040)
 
 
-def test_read_test_register_returns_the_fixed_pattern():
+def test_read_test_register_returns_the_fixed_pattern(rp2040_factory):
     """The one value real firmware's init handshake actually gates on - cyw43_ll_bus_init()
     polls SPI_READ_TEST_REGISTER up to 10 times expecting exactly this."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     value = master.read_register(BUS_FUNCTION, SPI_READ_TEST_REGISTER, 4)
 
     assert value == TEST_PATTERN == 0xFEEDBEAD
 
 
-def test_bus_control_write_then_read_round_trips():
+def test_bus_control_write_then_read_round_trips(rp2040_factory):
     """Mirrors cyw43_ll_bus_init()'s own write_reg_u32_swap(SPI_BUS_CONTROL, val) followed by a
     plain readback."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     written = 0x00_0004_11  # low byte = bus-control flags, next byte = response delay, matching
     # cyw43_ll_bus_init()'s own packed-byte-registers layout (see bus.py's module docstring).
 
@@ -220,8 +220,8 @@ def test_bus_control_write_then_read_round_trips():
     assert read_back == written
 
 
-def test_single_byte_write_only_touches_its_own_byte():
-    _rp2040, master = _wire_up()
+def test_single_byte_write_only_touches_its_own_byte(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     master.write_register(BUS_FUNCTION, SPI_BUS_CONTROL, 4, 0xAABBCCDD)
 
     master.write_register(BUS_FUNCTION, SPI_BUS_CONTROL + 1, 1, 0xFF)
@@ -229,10 +229,10 @@ def test_single_byte_write_only_touches_its_own_byte():
     assert master.read_register(BUS_FUNCTION, SPI_BUS_CONTROL, 4) == 0xAABBFFDD
 
 
-def test_deselecting_mid_word_discards_the_partial_transaction():
+def test_deselecting_mid_word_discards_the_partial_transaction(rp2040_factory):
     """A transaction aborted (CS deasserted) before a full 32-bit word arrives must not leave
     stale bits around to corrupt the *next* transaction."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     master.select()
     master.send_word(_make_cmd(write=False, inc=True, fn=BUS_FUNCTION, addr=SPI_READ_TEST_REGISTER, size=4))
     # Deselect mid-response instead of finishing the read - the bus never gets a clean recv_word().
@@ -244,19 +244,19 @@ def test_deselecting_mid_word_discards_the_partial_transaction():
     assert value == TEST_PATTERN
 
 
-def test_unimplemented_function_reads_zero_instead_of_raising():
+def test_unimplemented_function_reads_zero_instead_of_raising(rp2040_factory):
     """WLAN_FUNCTION (step 4, not built yet) - must not crash an early/unexpected access."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     value = master.read_register(2, 0x1000A, 1)
 
     assert value == 0
 
 
-def test_alp_and_ht_avail_req_bits_are_readable_back_immediately():
+def test_alp_and_ht_avail_req_bits_are_readable_back_immediately(rp2040_factory):
     """The one poll cyw43_ll_bus_init() actually gates on beyond F0 - real silicon takes a moment
     to bring its clock up, this model skips that latency (see bus.py's module docstring)."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ)
 
@@ -265,8 +265,8 @@ def test_alp_and_ht_avail_req_bits_are_readable_back_immediately():
     assert value & SBSDIO_HT_AVAIL
 
 
-def test_alp_avail_req_alone_does_not_set_ht_avail():
-    _rp2040, master = _wire_up()
+def test_alp_avail_req_alone_does_not_set_ht_avail(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
 
@@ -275,9 +275,9 @@ def test_alp_avail_req_alone_does_not_set_ht_avail():
     assert not value & SBSDIO_HT_AVAIL
 
 
-def test_keep_sdio_on_makes_device_on_readable_too():
+def test_keep_sdio_on_makes_device_on_readable_too(rp2040_factory):
     """cyw43_kso_set() polls SDIO_SLEEP_CSR up to 64x1ms expecting both bits set together."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, SBSDIO_SLPCSR_KEEP_SDIO_ON)
 
@@ -285,8 +285,8 @@ def test_keep_sdio_on_makes_device_on_readable_too():
     assert value & SBSDIO_SLPCSR_DEVICE_ON
 
 
-def test_clearing_keep_sdio_on_clears_device_on():
-    _rp2040, master = _wire_up()
+def test_clearing_keep_sdio_on_clears_device_on(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, SBSDIO_SLPCSR_KEEP_SDIO_ON)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_SLEEP_CSR, 1, 0)
@@ -295,10 +295,10 @@ def test_clearing_keep_sdio_on_clears_device_on():
     assert not value & SBSDIO_SLPCSR_DEVICE_ON
 
 
-def test_backplane_window_redirects_writes_into_the_combined_address():
+def test_backplane_window_redirects_writes_into_the_combined_address(rp2040_factory):
     """cyw43_write_backplane()'s own scheme: window bytes set via LOW/MID/HIGH, then a
     SBSDIO_SB_ACCESS_2_4B_FLAG-tagged address lands at (window << 15) | (addr & 0x7fff)."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     window = 0x18003
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
@@ -310,10 +310,10 @@ def test_backplane_window_redirects_writes_into_the_combined_address():
     assert master.read_register(BACKPLANE_FUNCTION, addr, 4) == 0xDEADBEEF
 
 
-def test_backplane_window_low_byte_is_the_low_order_bits_of_the_window():
+def test_backplane_window_low_byte_is_the_low_order_bits_of_the_window(rp2040_factory):
     """SDIO_BACKPLANE_ADDRESS_LOW/MID/HIGH build a 32-bit window value shifted left 8/16/24 -
     writing only LOW must not disturb whatever MID/HIGH already hold."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, 0x03)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, 0x00)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, 0x00)
@@ -328,10 +328,10 @@ def test_backplane_window_low_byte_is_the_low_order_bits_of_the_window():
     assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == 0
 
 
-def test_wlan_arm_and_socram_cores_default_to_held_in_reset():
+def test_wlan_arm_and_socram_cores_default_to_held_in_reset(rp2040_factory):
     """Real silicon holds both cores in reset at power-on; disable_device_core() (cyw43_ll.c)
     CHECKS this is already true rather than setting it - the emulated default must match."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     for core in (CORE_WLAN_ARM, CORE_SOCRAM):
         window = core & ~BACKPLANE_ADDR_MASK
         master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
@@ -344,11 +344,11 @@ def test_wlan_arm_and_socram_cores_default_to_held_in_reset():
         assert value & AIRC_RESET
 
 
-def test_f0_block_write_spans_multiple_registers():
+def test_f0_block_write_spans_multiple_registers(rp2040_factory):
     """Step 3a: a block transfer wider than one 32-bit word (firmware/CLM download chunks, SDPCM
     frames, ... - step 3e onward all need this) must round-trip correctly, not just the
     single-word register pokes every earlier test here exercises."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     payload = int.from_bytes(bytes(range(8)), "little")
 
     master.write_register(BUS_FUNCTION, 0x0000, 8, payload)
@@ -362,10 +362,10 @@ def _select_backplane_window(master: _FakeGSPIMaster, window: int) -> None:
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_HIGH, 1, (window >> 24) & 0xFF)
 
 
-def test_backplane_block_write_then_read_round_trips_across_multiple_words():
+def test_backplane_block_write_then_read_round_trips_across_multiple_words(rp2040_factory):
     """Same as the F0 case above but through the windowed backplane path - real firmware/CLM
     download chunks and SDPCM frames both ride this route, not F0."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _select_backplane_window(master, 0x18000)
     addr = SBSDIO_SB_ACCESS_2_4B_FLAG | 0x0100
     payload = int.from_bytes(bytes(range(12)), "little")  # 12 bytes = 3 wire words
@@ -375,11 +375,11 @@ def test_backplane_block_write_then_read_round_trips_across_multiple_words():
     assert master.read_register(BACKPLANE_FUNCTION, addr, 12) == payload
 
 
-def test_block_transfer_size_not_a_multiple_of_four_still_round_trips():
+def test_block_transfer_size_not_a_multiple_of_four_still_round_trips(rp2040_factory):
     """A 6-byte block (not word-aligned) still rides two full 32-bit wire words, the second
     zero-padded - `_word_count()`'s ceiling division must cover this, not just exact multiples of
     4 (real block transfers always are word-aligned, but this proves the general case)."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _select_backplane_window(master, 0x18000)
     addr = SBSDIO_SB_ACCESS_2_4B_FLAG | 0x0200
     payload = int.from_bytes(bytes([1, 2, 3, 4, 5, 6]), "little")
@@ -389,11 +389,11 @@ def test_block_transfer_size_not_a_multiple_of_four_still_round_trips():
     assert master.read_register(BACKPLANE_FUNCTION, addr, 6) == payload
 
 
-def test_core_ioctrl_register_round_trips_through_the_backplane_window():
+def test_core_ioctrl_register_round_trips_through_the_backplane_window(rp2040_factory):
     """AI_IOCTRL_OFFSET (SICF_FGC/SICF_CLOCK_EN) is the register reset_device_core() writes to
     bring a core out of reset - just needs to hold whatever was last written, like any other
     backplane-memory address."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     window = CORE_WLAN_ARM & ~BACKPLANE_ADDR_MASK
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
@@ -405,7 +405,7 @@ def test_core_ioctrl_register_round_trips_through_the_backplane_window():
     assert master.read_register(BACKPLANE_FUNCTION, addr, 1) == SICF_FGC | SICF_CLOCK_EN
 
 
-def test_firmware_download_shaped_block_writes_round_trip():
+def test_firmware_download_shaped_block_writes_round_trip(rp2040_factory):
     """Step 3e's 'accept the cyw43_write_bytes() block writes real firmware/CLM download does'
     turns out to already 'just work' via step 3a/3c's generic backplane block-write path - no
     bus.py change was needed for this half of 3e. Mirrors cyw43_download_resource()'s own
@@ -413,7 +413,7 @@ def test_firmware_download_shaped_block_writes_round_trip():
     BACKPLANE_FUNCTION block write at a window-relative, SBSDIO_SB_ACCESS_2_4B_FLAG-tagged
     address, re-selecting the window per chunk exactly like the real driver does - proves multiple
     sequential chunks don't clobber each other, not just a single block transfer in isolation."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     block_size = 64
     base = CORE_SOCRAM  # real firmware download's actual target range
     payload = bytes((i * 7 + 3) % 256 for i in range(block_size * 4))
@@ -433,11 +433,11 @@ def test_firmware_download_shaped_block_writes_round_trip():
         assert value == int.from_bytes(payload[offset : offset + block_size], "little")
 
 
-def test_queued_rx_packet_is_delivered_via_f2_read():
+def test_queued_rx_packet_is_delivered_via_f2_read(rp2040_factory):
     """Step 3e's other half: queue_rx_packet() stages the generic inbound-delivery mechanism step
     3f/3g's SDPCM ioctl responses and async events will use - proven here directly against a
     plain F2 (WLAN_FUNCTION) read, without any SDPCM framing involved yet."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     payload = b"\x01\x02\x03\x04\x05\x06"
     bus.queue_rx_packet(payload)
 
@@ -446,11 +446,11 @@ def test_queued_rx_packet_is_delivered_via_f2_read():
     assert value == int.from_bytes(payload, "little")
 
 
-def test_status_register_reports_pending_packet_availability_and_length():
+def test_status_register_reports_pending_packet_availability_and_length(rp2040_factory):
     """The actual field real firmware's cyw43_ll_sdpcm_poll_device() (SPI variant) trusts for
     "is a packet ready, and how big" - STATUS_F2_PKT_AVAILABLE + the length packed into bits
     19:9, not the interrupt register (that's only the earlier "worth even checking" gate)."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     payload = b"\xaa\xbb\xcc"
     bus.queue_rx_packet(payload)
 
@@ -460,8 +460,8 @@ def test_status_register_reports_pending_packet_availability_and_length():
     assert (status & STATUS_F2_PKT_LEN_MASK) >> STATUS_F2_PKT_LEN_SHIFT == len(payload)
 
 
-def test_f2_read_consumes_the_packet_and_clears_pending_status():
-    _rp2040, bus, master = _wire_up_with_bus()
+def test_f2_read_consumes_the_packet_and_clears_pending_status(rp2040_factory):
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     payload = b"\xde\xad\xbe\xef"
     bus.queue_rx_packet(payload)
 
@@ -473,7 +473,7 @@ def test_f2_read_consumes_the_packet_and_clears_pending_status():
     assert not interrupt & F2_PACKET_AVAILABLE
 
 
-def test_interrupt_register_host_write_clears_the_written_bits_not_sets_them():
+def test_interrupt_register_host_write_clears_the_written_bits_not_sets_them(rp2040_factory):
     """SPI_INTERRUPT_REGISTER is real hardware's own write-1-to-clear (W1C) status register
     (cyw43_spi.h's own comments on DATA_UNAVAILABLE/COMMAND_ERROR/DATA_ERROR - "Clear by writing a
     1"/"Cleared by writing 1" - and cyw43_ll_sdpcm_poll_device()'s own ack-by-echo pattern both
@@ -481,7 +481,7 @@ def test_interrupt_register_host_write_clears_the_written_bits_not_sets_them():
     host write of some bits must clear exactly those bits, not store them verbatim, or a
     `queue_rx_packet()`-set `F2_PACKET_AVAILABLE` bit sitting alongside them survives the write
     unexpectedly (and vice versa - see the next test for the actual bug this reproduces)."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     bus.queue_rx_packet(b"\xaa\xbb")  # sets F2_PACKET_AVAILABLE (0x0020) via _activate_rx_packet().
     assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == F2_PACKET_AVAILABLE
 
@@ -490,7 +490,7 @@ def test_interrupt_register_host_write_clears_the_written_bits_not_sets_them():
     assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == 0
 
 
-def test_interrupt_register_host_write_of_error_bits_does_not_set_them():
+def test_interrupt_register_host_write_of_error_bits_does_not_set_them(rp2040_factory):
     """Direct regression test for the spurious "[CYW43] Bus error condition detected 0xb9" real
     firmware prints right after "Initializing..." during a live boot (found + fixed 2026-08-13,
     see docs/records/0027-cyw43-wifi.md's dated entry). `cyw43_ll_bus_init()` writes
@@ -502,20 +502,20 @@ def test_interrupt_register_host_write_of_error_bits_does_not_set_them():
     OR-ing in `F2_PACKET_AVAILABLE` on top produced `0xb9`, which then tripped real firmware's own
     `spi_int & BUS_OVERFLOW_UNDERFLOW` bus-error check for a condition that never actually
     occurred."""
-    _rp2040, _bus, master = _wire_up_with_bus()
+    _rp2040, _bus, master = _wire_up_with_bus(rp2040_factory)
 
     master.write_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 1, 0x99)
 
     assert master.read_register(BUS_FUNCTION, SPI_INTERRUPT_REGISTER, 2) == 0
 
 
-def test_queuing_a_packet_while_idle_raises_the_shared_irq_pin():
+def test_queuing_a_packet_while_idle_raises_the_shared_irq_pin(rp2040_factory):
     """Real firmware's cyw43_cb_read_host_interrupt_pin() (cyw43_ctrl.c) polls WL_D's own level
     directly, independent of any SPI transaction - the mechanism that lets a real driver's GPIO
     interrupt handler notice a pending event without the host having to keep clocking the bus at
     all. Must fire the instant queue_rx_packet() is called while CS is already deasserted, not
     only the next time a transaction happens to start."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     assert not master.data_pin.input_value  # idle, deselected, nothing pending yet
 
     bus.queue_rx_packet(b"\x01")
@@ -523,8 +523,8 @@ def test_queuing_a_packet_while_idle_raises_the_shared_irq_pin():
     assert master.data_pin.input_value
 
 
-def test_irq_pin_drops_once_the_packet_is_fully_consumed():
-    _rp2040, bus, master = _wire_up_with_bus()
+def test_irq_pin_drops_once_the_packet_is_fully_consumed(rp2040_factory):
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     bus.queue_rx_packet(b"\x01\x02")
 
     master.read_register(WLAN_FUNCTION, 0, 2)
@@ -564,8 +564,8 @@ def _read_f2_response(master: _FakeGSPIMaster) -> bytes:
     return master.read_register(WLAN_FUNCTION, 0, length).to_bytes(length, "little")
 
 
-def test_ioctl_request_produces_a_matching_id_zero_length_response():
-    _rp2040, master = _wire_up()
+def test_ioctl_request_produces_a_matching_id_zero_length_response(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_ioctl_request(request_id=7))
 
     response = _read_f2_response(master)
@@ -578,8 +578,8 @@ def test_ioctl_request_produces_a_matching_id_zero_length_response():
     assert status == 0
 
 
-def test_ioctl_response_size_and_checksum_are_self_consistent():
-    _rp2040, master = _wire_up()
+def test_ioctl_response_size_and_checksum_are_self_consistent(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
 
     response = _read_f2_response(master)
@@ -590,7 +590,7 @@ def test_ioctl_response_size_and_checksum_are_self_consistent():
     assert size == (~size_com & 0xFFFF)
 
 
-def test_ioctl_response_zero_fills_a_payload_matching_the_request_length():
+def test_ioctl_response_zero_fills_a_payload_matching_the_request_length(rp2040_factory):
     """Regression test for the real `nic.active(True)` bug found 2026-08-13 (see
     docs/records/0027-cyw43-wifi.md and _build_ioctl_success_response()'s own docstring): a
     zero-length response left a SDPCM_GET caller's own pre-filled request buffer unmodified, so
@@ -602,7 +602,7 @@ def test_ioctl_response_zero_fills_a_payload_matching_the_request_length():
     first-attempt fix that reproduced the same bug via a different path - real responses overwrite
     the request buffer's name prefix too, see the docstring) and not silently dropped to zero
     length either."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     payload = b"mcast_list" + bytes(2) + bytes(4 + 10 * 6)  # matches real mcast_list's own shape
     _send_wlan_frame(master, _build_ioctl_request(request_id=3, payload=payload))
 
@@ -614,11 +614,11 @@ def test_ioctl_response_zero_fills_a_payload_matching_the_request_length():
     assert response[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :] == bytes(len(payload))
 
 
-def test_ioctl_response_keeps_wireless_flow_control_zero():
+def test_ioctl_response_keeps_wireless_flow_control_zero(rp2040_factory):
     """A nonzero wireless_flow_control stalls every later host send
     (cyw43_sdpcm_send_common(), cyw43_ll.c) - must always be 0 for a chip model that never
     actually wants to throttle the driver."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
 
     response = _read_f2_response(master)
@@ -626,11 +626,11 @@ def test_ioctl_response_keeps_wireless_flow_control_zero():
     assert response[8] == 0  # wireless_flow_control byte
 
 
-def test_cur_etheraddr_get_returns_a_real_mac_not_all_zero():
+def test_cur_etheraddr_get_returns_a_real_mac_not_all_zero(rp2040_factory):
     """Step 4a (docs/records/0048-cyw43-nat-reflector.md): `cyw43_ll_wifi_get_mac()`'s `cur_etheraddr`
     WLC_GET_VAR only reads the response payload's first 6 bytes (`memcpy(addr, buf, 6)`) - must not
     be the generic all-zero fill, or `config('mac')`/`netif->hwaddr` stay all-zero on a live boot."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     payload = b"cur_etheraddr\x00" + bytes(6)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1, cmd=WLC_GET_VAR, payload=payload))
 
@@ -642,10 +642,10 @@ def test_cur_etheraddr_get_returns_a_real_mac_not_all_zero():
     assert response_payload[6:] == bytes(len(payload) - 6)
 
 
-def test_other_get_var_requests_still_get_the_generic_zero_fill():
+def test_other_get_var_requests_still_get_the_generic_zero_fill(rp2040_factory):
     """Only `cur_etheraddr` is special-cased - any other WLC_GET_VAR iovar must still get the
     existing generic all-zero response, not the MAC prefix."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     payload = b"some_other_var\x00" + bytes(4)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1, cmd=WLC_GET_VAR, payload=payload))
 
@@ -654,8 +654,8 @@ def test_other_get_var_requests_still_get_the_generic_zero_fill():
     assert response[SDPCM_HEADER_LEN + IOCTL_HEADER_LEN :] == bytes(len(payload))
 
 
-def test_malformed_size_checksum_request_is_ignored():
-    _rp2040, master = _wire_up()
+def test_malformed_size_checksum_request_is_ignored(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     request = bytearray(_build_ioctl_request(request_id=1))
     request[2] ^= 0xFF  # corrupt size_com's low byte
 
@@ -665,7 +665,7 @@ def test_malformed_size_checksum_request_is_ignored():
     assert not status & STATUS_F2_PKT_AVAILABLE
 
 
-def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer():
+def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer(rp2040_factory):
     """A bare `GSPIBus()` (no `nat_bridge` attached, as here) must still answer a DATA_HEADER
     write with *some* response (a bare, ioctl-header-less flow-control frame - real firmware's own
     named case for this, see _build_flow_control_response()'s docstring for why silence here
@@ -673,7 +673,7 @@ def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer
     live-booting real firmware: an unanswered data send deadlocks every later ioctl too, well
     before scan()/connect() ever run) - independent of whether a NAT bridge (step 4, docs/records/
     0048-cyw43-nat-reflector.md) is attached to interpret the frame's actual Ethernet content."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     request = bytearray(_build_ioctl_request(request_id=1))
     request[5] = DATA_HEADER  # override channel_and_flags's low nibble
 
@@ -687,10 +687,10 @@ def test_data_header_frame_gets_a_bare_flow_control_response_not_an_ioctl_answer
     assert size == SDPCM_HEADER_LEN == (~size_com & 0xFFFF)
 
 
-def test_bus_data_credit_increments_across_successive_ioctl_responses():
+def test_bus_data_credit_increments_across_successive_ioctl_responses(rp2040_factory):
     """Must strictly exceed the driver's own send count or cyw43_sdpcm_send_common()'s STALL
     check on the *next* send blocks forever (cyw43_ll.c) - see _build_ioctl_success_response()."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
     first_credit = _read_f2_response(master)[9]
 
@@ -700,12 +700,12 @@ def test_bus_data_credit_increments_across_successive_ioctl_responses():
     assert second_credit == (first_credit + 1) & 0xFF
 
 
-def test_bus_data_credit_still_increments_across_an_intervening_data_header_send():
+def test_bus_data_credit_still_increments_across_an_intervening_data_header_send(rp2040_factory):
     """Regression test for the real deadlock found live-booting firmware (2026-08-13, see
     _build_flow_control_response()'s docstring): an outbound DATA_HEADER send between two ioctls
     must still bump bus_data_credit like any other send, or cyw43_sdpcm_send_common()'s shared
     credit/transmit-sequence channel permanently desyncs and every ioctl after it stalls."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
     first_credit = _read_f2_response(master)[9]
 
@@ -720,12 +720,12 @@ def test_bus_data_credit_still_increments_across_an_intervening_data_header_send
     assert third_credit == (data_credit + 1) & 0xFF
 
 
-def test_ioctl_request_raises_the_shared_irq_pin_while_idle():
+def test_ioctl_request_raises_the_shared_irq_pin_while_idle(rp2040_factory):
     """The response is queued synchronously from inside the F2 write itself, while CS is still
     asserted - proves the pin still ends up high once the transaction completes and CS deselects,
     via _on_cs_change()'s own pending-packet check, not just when queue_rx_packet() is called
     directly while already idle (already covered by the step 3e IRQ tests above)."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     _send_wlan_frame(master, _build_ioctl_request(request_id=1))
 
@@ -741,13 +741,13 @@ def test_ioctl_request_raises_the_shared_irq_pin_while_idle():
 # source alone - see docs/CYW43_WIFI_BACKLOG.md's step 3 progress log for the full narrative.
 
 
-def test_backplane_read_clocks_pad_words_before_the_real_answer():
+def test_backplane_read_clocks_pad_words_before_the_real_answer(rp2040_factory):
     """cyw43_bus_pio_spi.c's _cyw43_read_reg(): every BACKPLANE_FUNCTION read (not just windowed
     SB_ACCESS ones) clocks CYW43_BACKPLANE_READ_PAD_LEN_BYTES/4 dummy words before the real
     answer - the driver reads the *last* word as the value, discarding the rest. Drives the wire
     directly (bypassing _FakeGSPIMaster.read_register()'s own padding-skip, which assumes this
     already works) to prove the padding is actually there, not just assumed by the test helper."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
 
     master.select()
@@ -762,11 +762,11 @@ def test_backplane_read_clocks_pad_words_before_the_real_answer():
     assert answer_word & SBSDIO_ALP_AVAIL
 
 
-def test_bus_and_wlan_function_reads_get_no_padding():
+def test_bus_and_wlan_function_reads_get_no_padding(rp2040_factory):
     """Only BACKPLANE_FUNCTION reads get the extra padding - BUS_FUNCTION/WLAN_FUNCTION reads
     (e.g. SPI_READ_TEST_REGISTER itself) must still be answered in exactly one word, or the very
     first thing real firmware does (the test-register poll) would break."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     master.select()
     master.send_word(
@@ -778,12 +778,12 @@ def test_bus_and_wlan_function_reads_get_no_padding():
     assert answer_word == TEST_PATTERN
 
 
-def test_alp_available_survives_a_later_clear_to_zero_write():
+def test_alp_available_survives_a_later_clear_to_zero_write(rp2040_factory):
     """cyw43_ll_bus_init() clears SDIO_CHIP_CLOCK_CSR to 0 immediately after achieving ALP (real
     source's own `alp_set:` label) - a non-sticky model would silently un-set SBSDIO_ALP_AVAIL on
     that very write, even though real hardware's availability reflects actual clock-lock state,
     not the last-written request byte."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, SBSDIO_ALP_AVAIL_REQ)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_CHIP_CLOCK_CSR, 1, 0)
@@ -792,7 +792,7 @@ def test_alp_available_survives_a_later_clear_to_zero_write():
     assert value & SBSDIO_ALP_AVAIL
 
 
-def test_ht_available_becomes_readable_once_the_wlan_arm_core_is_up_with_no_ht_request_sent():
+def test_ht_available_becomes_readable_once_the_wlan_arm_core_is_up_with_no_ht_request_sent(rp2040_factory):
     """cyw43_ll_bus_init() (cyw43_ll.c:~1655-1667) calls reset_device_core(CORE_WLAN_ARM, false)
     then polls SDIO_CHIP_CLOCK_CSR for SBSDIO_HT_AVAIL - with no SDIO_CHIP_CLOCK_CSR HT-request
     write anywhere in between (unlike the earlier ALP handshake, which does request first). Real
@@ -800,7 +800,7 @@ def test_ht_available_becomes_readable_once_the_wlan_arm_core_is_up_with_no_ht_r
     since this project doesn't emulate a second CPU core, the core reaching device_core_is_up()'s
     own "up" condition is the trigger instead - reproduces reset_device_core()'s exact write
     sequence, not just the end state, since _maybe_mark_ht_available() checks after every write."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     window = CORE_WLAN_ARM & ~BACKPLANE_ADDR_MASK
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
@@ -820,10 +820,10 @@ def test_ht_available_becomes_readable_once_the_wlan_arm_core_is_up_with_no_ht_r
     assert value & SBSDIO_HT_AVAIL
 
 
-def test_socram_core_reaching_up_state_does_not_trigger_ht_available():
+def test_socram_core_reaching_up_state_does_not_trigger_ht_available(rp2040_factory):
     """Scoped to CORE_WLAN_ARM specifically - only a running core would plausibly request its own
     clock; CORE_SOCRAM is just memory, bringing it "up" must not be mistaken for the ARM core."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     window = CORE_SOCRAM & ~BACKPLANE_ADDR_MASK
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_LOW, 1, (window >> 8) & 0xFF)
     master.write_register(BACKPLANE_FUNCTION, SDIO_BACKPLANE_ADDRESS_MID, 1, (window >> 16) & 0xFF)
@@ -839,12 +839,12 @@ def test_socram_core_reaching_up_state_does_not_trigger_ht_available():
     assert not value & SBSDIO_HT_AVAIL
 
 
-def test_sdio_function2_watermark_register_round_trips():
+def test_sdio_function2_watermark_register_round_trips(rp2040_factory):
     """A Bluetooth-gated check in cyw43_ll_bus_init() writes then reads back this exact register,
     failing the whole bring-up on a mismatch - it sits 2 bytes below SDIO_BACKPLANE_ADDRESS_LOW,
     the F1 register bank's previous (too-narrow) lower bound, so real firmware silently aborted
     right after the ALP handshake, before ever reaching firmware download."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
 
     master.write_register(BACKPLANE_FUNCTION, SDIO_FUNCTION2_WATERMARK, 1, 0x10)
 
@@ -884,11 +884,11 @@ def _build_disassoc_request(request_id: int) -> bytes:
     return _build_ioctl_request(request_id, cmd=WLC_DISASSOC, payload=b"")
 
 
-def test_wlc_disassoc_queues_link_down_events_behind_its_own_ack():
+def test_wlc_disassoc_queues_link_down_events_behind_its_own_ack(rp2040_factory):
     """`disconnect()` -> cyw43_wifi_leave() -> cyw43_ioctl(CYW43_IOCTL_SET_DISASSOC = 0x69), which
     cyw43_ll_ioctl() splits into a SET of WLC command 0x34 (52). Without a scripted answer the
     guest kept believing it was still connected (0048's "Known gaps"); see 0054."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_disassoc_request(request_id=9))
 
     ack = _read_f2_response(master)
@@ -904,9 +904,9 @@ def test_wlc_disassoc_queues_link_down_events_behind_its_own_ack():
     assert all(event[3] == 0 for event in events)  # CYW43_ITF_STA
 
 
-def test_disassoc_after_a_join_reverses_it():
+def test_disassoc_after_a_join_reverses_it(rp2040_factory):
     """The pair in sequence, which is what a real connect/disconnect looks like on the wire."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_set_ssid_request(request_id=1))
     _read_f2_response(master)  # join ack
     join_events = [_parse_async_event(_read_f2_response(master)) for _ in range(5)]
@@ -934,11 +934,11 @@ class _RecordingNatBridge:
         self.frames.append(frame)
 
 
-def test_wlc_disassoc_resets_the_nat_bridge():
+def test_wlc_disassoc_resets_the_nat_bridge(rp2040_factory):
     """An association ending has to take its flows with it, or a reused (src_port, dst_ip,
     dst_port) triple after reconnecting lands in a stale flow - see 0054 and
     `TcpReflector.reset()`."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     bridge = _RecordingNatBridge()
     bus.nat_bridge = bridge
 
@@ -949,16 +949,16 @@ def test_wlc_disassoc_resets_the_nat_bridge():
     assert bridge.resets == 1
 
 
-def test_disassoc_without_a_nat_bridge_attached_is_harmless():
+def test_disassoc_without_a_nat_bridge_attached_is_harmless(rp2040_factory):
     """`nat_bridge` is optional (plain step-3 use has none)."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     assert bus.nat_bridge is None
     _send_wlan_frame(master, _build_disassoc_request(request_id=3))
     _read_f2_response(master)  # ack still comes back
 
 
-def test_escan_ack_is_a_plain_ioctl_response_not_an_async_event():
-    _rp2040, master = _wire_up()
+def test_escan_ack_is_a_plain_ioctl_response_not_an_async_event(rp2040_factory):
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_escan_request(request_id=3))
 
     response = _read_f2_response(master)
@@ -968,12 +968,12 @@ def test_escan_ack_is_a_plain_ioctl_response_not_an_async_event():
     assert (flags & CDCF_IOC_ID_MASK) >> CDCF_IOC_ID_SHIFT == 3
 
 
-def test_escan_queues_a_partial_result_then_a_completion_event_behind_its_own_ack():
+def test_escan_queues_a_partial_result_then_a_completion_event_behind_its_own_ack(rp2040_factory):
     """CYW43_EV_ESCAN_RESULT/CYW43_STATUS_PARTIAL carries the fake AP; the completion event
     (status=CYW43_STATUS_SUCCESS) is what actually ends network_cyw43_scan()'s own wait loop -
     see bus.py's module docstring for why both are needed, not just the one the original plan
     estimated."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_escan_request(request_id=1))
     _read_f2_response(master)  # the generic ioctl ack itself, not under test here
 
@@ -986,7 +986,7 @@ def test_escan_queues_a_partial_result_then_a_completion_event_behind_its_own_ac
     assert completion[1] == CYW43_STATUS_SUCCESS
 
 
-def test_escan_partial_result_matches_the_fixed_fake_ap_shape():
+def test_escan_partial_result_matches_the_fixed_fake_ap_shape(rp2040_factory):
     """docs/records/0024-cyw43-protocol.md's confirmed real Wokwi capture:
     `[(b'Wokwi-GUEST', b'B\\x137U\\xaa\\x01', 6, -87, 0, 1)]` - bssid/channel/rssi/auth_mode (the
     6th tuple field is synthesized entirely on the MicroPython side, not part of the wire event).
@@ -994,7 +994,7 @@ def test_escan_partial_result_matches_the_fixed_fake_ap_shape():
     `_FAKE_AP_SSID`), everything else mirrors that real capture. auth_mode=0 (open) comes from
     cyw43_ll_wifi_parse_scan_result()'s own IE scan finding no RSN/WPA element and no privacy bit -
     not set directly by this bus."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_escan_request(request_id=1))
     _read_f2_response(master)
 
@@ -1012,11 +1012,11 @@ def test_escan_partial_result_matches_the_fixed_fake_ap_shape():
     assert rssi == -87
 
 
-def test_wlc_set_ssid_queues_the_scripted_join_event_sequence_behind_its_own_ack():
+def test_wlc_set_ssid_queues_the_scripted_join_event_sequence_behind_its_own_ack(rp2040_factory):
     """cyw43_wifi_join() (cyw43_ctrl.c) does `wifi_join_state = WIFI_JOIN_STATE_ACTIVE` - a plain
     assignment, not an OR - the instant the SSID ack itself arrives, so every join event must come
     *after* that ack or its bits get wiped out moments later (see bus.py's module docstring)."""
-    _rp2040, master = _wire_up()
+    _rp2040, master = _wire_up(rp2040_factory)
     _send_wlan_frame(master, _build_set_ssid_request(request_id=5))
 
     ack = _read_f2_response(master)
@@ -1035,11 +1035,11 @@ def test_wlc_set_ssid_queues_the_scripted_join_event_sequence_behind_its_own_ack
     assert link[3] == 0  # CYW43_ITF_STA
 
 
-def test_queued_rx_packets_are_delivered_as_separate_reads_not_concatenated():
+def test_queued_rx_packets_are_delivered_as_separate_reads_not_concatenated(rp2040_factory):
     """Regression coverage for the step 3g queue_rx_packet() change from a single slot to a real
     FIFO (_rx_queue) - queuing a second packet before the first is drained must not clobber it or
     merge the two into one oversized read."""
-    _rp2040, bus, master = _wire_up_with_bus()
+    _rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     first, second = b"\x01\x02\x03", b"\xaa\xbb"
     bus.queue_rx_packet(first)
     bus.queue_rx_packet(second)

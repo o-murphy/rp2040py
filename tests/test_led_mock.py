@@ -21,16 +21,16 @@ def _drive_gpio_high(rp2040: RP2040, gpio: int, high: bool) -> None:
     pin.check_for_updates()
 
 
-def test_attach_does_not_report_on_before_any_write():
-    rp2040 = RP2040()
+def test_attach_does_not_report_on_before_any_write(rp2040_factory):
+    rp2040 = rp2040_factory()
     led = LEDMock(gpio=25)
     led.attach(rp2040)
     assert led.on is False
     assert led.toggle_count == 0
 
 
-def test_driving_the_pin_high_sets_on_and_counts_a_toggle():
-    rp2040 = RP2040()
+def test_driving_the_pin_high_sets_on_and_counts_a_toggle(rp2040_factory):
+    rp2040 = rp2040_factory()
     led = LEDMock(gpio=25)
     led.attach(rp2040)
 
@@ -40,8 +40,8 @@ def test_driving_the_pin_high_sets_on_and_counts_a_toggle():
     assert led.toggle_count == 1
 
 
-def test_toggling_on_then_off_counts_two_toggles():
-    rp2040 = RP2040()
+def test_toggling_on_then_off_counts_two_toggles(rp2040_factory):
+    rp2040 = rp2040_factory()
     led = LEDMock(gpio=25)
     led.attach(rp2040)
 
@@ -52,8 +52,8 @@ def test_toggling_on_then_off_counts_two_toggles():
     assert led.toggle_count == 2
 
 
-def test_driving_the_same_value_twice_does_not_double_count():
-    rp2040 = RP2040()
+def test_driving_the_same_value_twice_does_not_double_count(rp2040_factory):
+    rp2040 = rp2040_factory()
     led = LEDMock(gpio=25)
     led.attach(rp2040)
 
@@ -64,8 +64,8 @@ def test_driving_the_same_value_twice_does_not_double_count():
     assert led.toggle_count == 1
 
 
-def test_only_watches_its_own_gpio():
-    rp2040 = RP2040()
+def test_only_watches_its_own_gpio(rp2040_factory):
+    rp2040 = rp2040_factory()
     led = LEDMock(gpio=25)
     led.attach(rp2040)
 

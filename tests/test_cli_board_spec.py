@@ -179,9 +179,9 @@ class TestResolveRunMcu:
         assert cli._resolve_run_mcu(args) is None
         assert "--board" in caplog.text
 
-    def test_no_board_spec_uses_build_rp2040_with_the_board_name(self, monkeypatch):
+    def test_no_board_spec_uses_build_rp2040_with_the_board_name(self, monkeypatch, rp2040_factory):
         calls = []
-        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or RP2040())
+        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or rp2040_factory())
         args = argparse.Namespace(board="pico_w", board_spec=None)
 
         mcu = cli._resolve_run_mcu(args)
@@ -189,9 +189,9 @@ class TestResolveRunMcu:
         assert calls == ["pico_w"]
         assert isinstance(mcu, RP2040)
 
-    def test_omitted_board_defaults_to_pico(self, monkeypatch):
+    def test_omitted_board_defaults_to_pico(self, monkeypatch, rp2040_factory):
         calls = []
-        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or RP2040())
+        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or rp2040_factory())
         args = argparse.Namespace(board=None, board_spec=None)
 
         cli._resolve_run_mcu(args)

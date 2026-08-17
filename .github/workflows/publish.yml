@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       testpypi:
@@ -17,10 +23,19 @@ on:
         type: string
         default: ""
 
+# pull_request here is deliberately build-only (see the deploy job's own environment/if:
+# conditions below - none of them match a pull_request event, so no publish permissions are ever
+# granted or used) - it exists to catch cibuildwheel-matrix-specific breakage (e.g. a cp313+-only
+# bug, see docs/records/0055) before it ships, instead of only ever surfacing at actual release
+# time like v0.2.2/v0.2.3's own publish runs did.
 run-name: >
   Build & Publish → ${{ github.event_name == 'push' && 'PyPI' ||
       github.event_name == 'workflow_dispatch' && inputs.testpypi && 'TestPyPI' ||
       'Build Only' }}
+
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -188,7 +203,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref_name }}
+          # github.ref_name is the bare tag name on a push (correct), but on pull_request it's
+          # the short "<PR>/merge" form (not a fetchable ref on its own - actions/checkout would
+          # try refs/heads/<PR>/merge, which doesn't exist) - github.head_ref is the PR's actual
+          # source branch name instead, and is empty for every other event this workflow handles.
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Download all artifacts dynamically
         uses: actions/download-artifact@v8

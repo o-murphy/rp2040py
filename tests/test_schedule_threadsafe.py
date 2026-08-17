@@ -9,7 +9,6 @@ import threading
 
 import pytest
 
-from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 
 
@@ -33,28 +32,28 @@ def _stop_and_join(simulator: Simulator) -> None:
         simulator._loop_thread.join(timeout=2.0)
 
 
-def test_simulator_uses_a_given_rp2040_instead_of_constructing_one():
-    mcu = RP2040()
+def test_simulator_uses_a_given_rp2040_instead_of_constructing_one(rp2040_factory):
+    mcu = rp2040_factory()
     simulator = Simulator(rp2040=mcu)
     assert simulator.rp2040 is mcu
 
 
-def test_simulator_sets_the_rp2040_back_reference():
-    simulator = Simulator()
+def test_simulator_sets_the_rp2040_back_reference(rp2040_factory):
+    simulator = Simulator(rp2040=rp2040_factory())
     assert simulator.rp2040.simulator is simulator
 
 
-def test_a_bare_rp2040_has_no_simulator():
-    assert RP2040().simulator is None
+def test_a_bare_rp2040_has_no_simulator(rp2040_factory):
+    assert rp2040_factory().simulator is None
 
 
-def test_bare_rp2040_schedule_threadsafe_raises_without_an_owning_simulator():
+def test_bare_rp2040_schedule_threadsafe_raises_without_an_owning_simulator(rp2040_factory):
     with pytest.raises(RuntimeError):
-        RP2040().schedule_threadsafe(lambda: None)
+        rp2040_factory().schedule_threadsafe(lambda: None)
 
 
-def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_caller():
-    simulator = Simulator()
+def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_caller(rp2040_factory):
+    simulator = Simulator(rp2040=rp2040_factory())
     # No bootrom/firmware loaded - core.waiting=True keeps the engine room in _execute_batch()'s
     # cheap idle-jump branch (see test_simulator.py) instead of actually executing garbage
     # instructions from PC 0, which would otherwise spam "not implemented"/"invalid memory
@@ -82,8 +81,8 @@ def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_c
         _stop_and_join(simulator)
 
 
-def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread():
-    simulator = Simulator()
+def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread(rp2040_factory):
+    simulator = Simulator(rp2040=rp2040_factory())
     simulator.rp2040.core.waiting = True  # see the sibling test above for why
     simulator.start_execution()
     try:
@@ -102,8 +101,8 @@ def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread():
         _stop_and_join(simulator)  # see the sibling test above for why this must be unconditional
 
 
-def test_bind_loop_registers_the_given_loop_explicitly():
-    simulator = Simulator()
+def test_bind_loop_registers_the_given_loop_explicitly(rp2040_factory):
+    simulator = Simulator(rp2040=rp2040_factory())
     fake_loop = object()
     simulator.bind_loop(fake_loop)  # type: ignore[arg-type]
     assert simulator._loop is fake_loop
