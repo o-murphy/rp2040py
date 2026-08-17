@@ -116,6 +116,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `Ws2812` device it needs: now implemented (above), including why emulating a WS2812 is not
   the case record 0060 ruled out, the rule that a `firmware` key means "built *for* this board",
   and the two button nets read off the vendor schematic.
+- [docs/records/0064](docs/records/0064-state-server-and-web-visualizer.md) - deferred design
+  record for an optional read-only state server (WebSocket, or Socket.IO behind an extra) exposing
+  GPIO/peripheral/device state, and the browser viewer it would enable (`@wokwi/elements` is
+  MIT-licensed and maps almost one-to-one onto the devices already shipped). Splits the *watching*
+  half out of 0060, since none of that record's wall-clock ceiling applies to a viewer; names the
+  real blocker - `ExternalDevice` cannot describe itself - and rules an editor out of scope.
 - [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md) - the PIO timing defect
   that work uncovered, with the captured trace as its acceptance test and three options ranked by
   faithfulness; nothing implemented.

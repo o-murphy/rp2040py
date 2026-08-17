@@ -104,6 +104,7 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0063] `RPPIO` ignores `SM_CLKDIV` and `[delay]` cycles | **Found and measured, nothing implemented.** Blocks pulse-width protocols (WS2812, DHT, servo, IR); edge-order ones are unaffected. Blocks [0062]'s live decoding
 - [ ] [0062] YD-RP2040 board + the `Ws2812` device | **device and board landed and live-verified**; open only for live decoding of a *PIO-driven* driver, which waits on [0063]
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
+- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
 - [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
 - [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation now stated user-facing
@@ -200,3 +201,4 @@ record is added.
 [0061]: records/0061-cli-family-flag.md
 [0062]: records/0062-yd-rp2040-board-and-ws2812.md
 [0063]: records/0063-pio-clkdiv-and-delay-cycles.md
+[0064]: records/0064-state-server-and-web-visualizer.md
