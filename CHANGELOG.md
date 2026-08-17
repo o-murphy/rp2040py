@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
   `--board-spec` share one path, board files stop downloading at import time, `--image` works with
   a custom board, and one file can serve several firmware families.
+- [docs/records/0061](docs/records/0061-cli-family-flag.md) - deferred design record, dependent on
+  0059, for folding `micropython` (plus its `--circuitpython` boolean) and `kaluma` into one
+  command with `--family`: what actually differs between them (the device protocol, not the
+  firmware family), the per-family flag matrix such a merge needs, and the positional-argument
+  trap it has to avoid.
 - [docs/records/0060](docs/records/0060-external-io-bridges.md) - deferred (not rejected) design
   record for external I/O bridges: a browser viewer built on `@wokwi/elements`, and mapping
   emulated GPIO onto a real host's pins. Decides the parts both share - coalesced outbound
