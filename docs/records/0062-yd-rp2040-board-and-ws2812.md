@@ -208,3 +208,36 @@ things follow for the decoder, none of them guesses any more:
 This also settles what the first unit test should be: feed the decoder the exact edge sequence this
 program produces for a known byte, and assert the byte comes back - a test written against
 upstream's own numbers, not against our own decoder's behaviour.
+
+## Addendum, same day: USRKEY's wiring, from the vendor schematic
+
+The open question above ("USRKEY's polarity and pull are not established") is now answered from the
+vendor's own schematic - **YD-2040 2022 V1.1 SCH**, the `USR-SW` net:
+
+    GPIO24 ──[ R13 10k ]──┬── USR (ST-1185S) pin 2 ──/ ── pin 1 ── GND
+                          └── C18 100n ── GND
+
+So: **active-low, and there is no external pull-up.** R13 is a 10k resistor *in series* between the
+pin and the switch node, not a pull-up to 3V3 - the only things on the switch node are the button
+(to GND) and C18 (100 nF, to GND, i.e. a hardware debounce of ~1 ms against R13). That makes the
+released level come **entirely from the RP2040's internal pull**:
+
+- firmware configures `PULL_UP` -> released reads HIGH, pressed pulls the node to GND and the pin
+  sees roughly 3.3 V × 10k/(10k + ~60k internal) ≈ 0.5 V, i.e. LOW. This is what MicroPython's and
+  CircuitPython's own examples do, and what `KeyMock(gpio=24, active_high=False)` models;
+- firmware configures **no** pull -> the line genuinely floats, and the reading is undefined on
+  real hardware. This emulator already models that honestly ([0006](0006-gpio-pull-floating.md)),
+  and it is precisely why `KeyMock.release()` must hand the pad back to whichever pull firmware
+  configured (`GPIOPin.release_input()`) rather than driving it high - the bug 0049's addendum
+  found and fixed, for the same reason 0051 gives for `BootselButton`: forcing the "released" level
+  reads identically but *masks* a firmware that forgot its pull-up.
+
+This board is a sharper test of that rule than `boards/weactstudio/` is, because here the schematic
+proves there is nothing external to fall back on. Nothing new is needed to model it -
+`KeyMock(gpio=24, active_high=False)` is exactly right - but the reason it is right is now cited
+rather than assumed, which was the whole point of leaving it open.
+
+For completeness, the same schematic confirms the other two nets this record cares about: the RGB
+LED is an **XL-5050RGBC-WS2812B** on `RGB_CTRL` from **GPIO23** (a real WS2812B, not a lookalike),
+and the RST button pulls `RUN` (with R12 10k to 3V3) - the [0057](0057-run-pin-reset-hook.md) case,
+still unmodelled.
