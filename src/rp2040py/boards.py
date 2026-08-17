@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rp2040py.clock.clock import IClock
+from rp2040py.external import ExternalDevice, attach_external_devices
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.cyw43 import Cyw43439
-from rp2040py.external.device import ExternalDevice, attach_external_devices
 from rp2040py.external.led_mock import LEDMock
 from rp2040py.rp2040 import RP2040
 from rp2040py.utils.firmware_retrieve import FirmwareSpec

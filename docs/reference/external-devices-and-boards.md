@@ -11,9 +11,17 @@ Two separate things, not one - pick the one you actually need:
 2. **A custom board** - your own combination of devices, and optionally your own firmware image
    and flash layout - via `boards.BoardSpec`. See "Writing a `BoardSpec`" below.
 
-Both build on the same extension point: `rp2040py.external.device.ExternalDevice`, a `Protocol`
-with a single method, `attach(rp2040) -> None`. `attach_external_devices(rp2040, *devices)` calls
-`attach()` on each device in turn.
+Both build on the same extension point: `ExternalDevice`, a `Protocol` with a single method,
+`attach(rp2040) -> None`, and `attach_external_devices(rp2040, *devices)`, which calls `attach()`
+on each device in turn. Import both from `rp2040py.external`:
+
+```python
+from rp2040py.external import ExternalDevice, attach_external_devices
+```
+
+(`rp2040py.external.device` still works and is where they are defined - the package-level names
+exist so the extension point does not read like `rp2040py.device`, which is the unrelated
+*host-side* API: `MicroPythonDevice` and friends.)
 
 ## Table of Contents
 
