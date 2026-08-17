@@ -163,3 +163,48 @@ real firmware* rather than against a hand-written stimulus.
 - **Does `on_pixels` want the frame or the diff?** A status LED re-sends all 24 bits per update, so
   a frame is natural; a long strip re-sends everything too. Probably the frame - but the answer
   should come from the measurement above, not from taste.
+
+## Addendum, same day: derive the timings from CircuitPython's own driver
+
+The sketch above quoted the *datasheet-ish* generic timings (T0H ~0.4 µs, T1H ~0.8 µs, latch
+>50 µs). Those are the wrong thing to build against, and the right source is the driver that will
+actually be talking to the emulated device:
+`ports/raspberrypi/common-hal/neopixel_write/__init__.c`. Applying 0027's 3g rule to a *device*
+rather than to a board, its PIO program and clock are:
+
+```c
+const uint16_t neopixel_program[] = {
+    0x6621,  // out x 1 side 0 [6]; Drive low
+    0x1323,  // jmp !x do_zero side 1 [3]; Branch, drive high
+    0x1400,  // jmp bitloop side 1 [4]; Continue high for one
+    0xa442   // nop side 0 [4]; Drive low for zero
+};
+```
+
+at **12.8 MHz**, i.e. one PIO cycle = 78.125 ns, autopull every 8 bits, *shift left to output MSB
+first*. Walking the program gives, exactly:
+
+| bit | high | low | period |
+|---|---|---|---|
+| `1` | 4 + 5 = 9 cycles = **703 ns** | 7 cycles = **547 ns** | 16 cycles = 1.25 µs |
+| `0` | 4 cycles = **312 ns** | 5 + 7 = 12 cycles = **938 ns** | 16 cycles = 1.25 µs |
+
+which matches the source's own comments (`<312ns hi, 936 lo>`, `<700 ns hi, 556 ns lo>`). Three
+things follow for the decoder, none of them guesses any more:
+
+1. **Classify on high-time with a threshold near 500 ns** (midway between 312 and 703), not on
+   "~0.4 vs ~0.8 µs". The margin either side is ~190 ns, comfortably wider than the ±1 PIO cycle
+   (78 ns) a differently-clocked driver would shift things by - so the same threshold also decodes
+   MicroPython's and the pico-examples `ws2812.pio` variants, which use the same 1.25 µs period
+   with slightly different splits.
+2. **Latch detection is easy here**: CircuitPython does not merely respect the datasheet's ~50 µs,
+   it enforces **≥300 µs** between transmissions (`next_start_raw_ticks = port_get_raw_ticks(NULL)
+   + 2`). A latch threshold anywhere in 50-300 µs separates frames unambiguously for this driver;
+   pick the datasheet's ~50 µs so a tighter third-party driver still works.
+3. **Bit order is MSB-first within each byte, one byte at a time** - so the device decodes bytes,
+   and *colour* order (GRB for WS2812/WS2812B, GRBW for SK6812) is a layer above the wire format,
+   which is the constructor argument the sketch already proposed rather than something to infer.
+
+This also settles what the first unit test should be: feed the decoder the exact edge sequence this
+program produces for a known byte, and assert the byte comes back - a test written against
+upstream's own numbers, not against our own decoder's behaviour.
