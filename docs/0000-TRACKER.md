@@ -99,6 +99,9 @@ and `reference/` for those). The structure itself is decided in
   - [x] ~~unverified: real TLS/HTTPS + WebSocket end-to-end~~ — **verified 2026-08-16** on both `v1.23.0` and `v1.28.0`: real TLS to `micropython.org:443` (real cert chain), RFC 6455 WebSocket and WebSocket-over-TLS against an echo server on a non-loopback address. TLS step landed in `tests/micropython/main-cyw43.py`; WebSocket verified by hand, deliberately not wired into CI (see the record)
   - [x] ~~unverified: CircuitPython live boot~~ — **verified 2026-08-16** against CircuitPython `9.2.9` on `--board pico_w`: scan/join/DHCP/TCP/DNS all work through `wifi`/`socketpool`. Landed `tests/circuitpython/main-cyw43.py` + `.github/workflows/ci-circuitpython.yml` (the project's first CircuitPython CI). Found a separate, unrelated blocker on the way — see the CircuitPython 10.x row below
 
+- [ ] [0055] `v0.2.2`/`v0.2.3` publish-workflow hang: unthrottled `RP2040()` construction in new CYW43 test coverage | **Root-caused + fixed, not yet CI-verified.** New CYW43 NAT-bridge/disassoc test coverage ([0048]/[0054]) constructed `RP2040()`/`Simulator()` directly in ~60 call sites, bypassing `conftest.py`'s memory-throttling `rp2040_factory` semaphore - pushed the `cibuildwheel` wheel-test containers (some testing 32-bit `i686`/`armv7l`) past what they can sustain, indistinguishable in logs from a genuine hang. Fixed by threading `rp2040_factory` through the affected files; `v0.2.2`/`v0.2.3` abandoned as dead tags (nothing published under either)
+  - [ ] watch a real `workflow_dispatch`/tag-triggered `publish.yml` run complete cleanly through `deploy`, then flip this row to Implemented
+
 ### Rejected / Superseded
 
 - [ ] [0014] threading model | **Superseded → [0025]**
@@ -180,3 +183,4 @@ record is added.
 [0052]: records/0052-xip-ctrl-registers.md
 [0053]: records/0053-core1-and-inter-core-fifo.md
 [0054]: records/0054-cyw43-disassoc.md
+[0055]: records/0055-rp2040-factory-throttle-test-hang-fix.md
