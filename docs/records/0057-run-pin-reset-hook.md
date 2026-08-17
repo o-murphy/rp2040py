@@ -139,3 +139,27 @@ with `native/_rp2040.pyi` as its stub), selected at import time by `rp2040.py`'s
   the same live-boot bar 0056's board work was held to.
 - Parity: the pure-Python and native `RP2040` twins must behave identically, so the test belongs in
   the suite that already runs under both `RP2040PY_SKIP_CYTHON=1` and `=0`.
+
+## Addendum, 2026-08-17: a real RESET net, from a vendor schematic
+
+Written without a schematic in hand. One has since turned up, in
+[0062](0062-yd-rp2040-board-and-ws2812.md)'s work on the YD-RP2040 (VCC-GND Studio's own
+`YD-2040 2022 V1.1 SCH`), and it firms up two of the assumptions above rather than changing them:
+
+    3V3 ──[ R12 10k ]──┬── RUN
+                       └── RST (ST-1185S) ──/── GND
+
+- **A press is a level, not a pulse.** The switch grounds RUN *directly* - no series resistor - for
+  as long as it is held. That is a point in favour of option 3 (model RUN as a really-held-low pin,
+  with a new execution state) being the faithful choice: a hook that fires a one-shot reset models
+  a tap, and the difference is visible to anyone who holds the button.
+- **There is nothing electrical left to get wrong.** RUN is not a GPIO, so no internal pull is
+  configurable and the board supplies an external 10k pull-up; the released level is therefore
+  unconditional. Unlike `BootselButton` (0051), whose correctness depends on the QSPI pad's own
+  reset-value pull-up (0050), a `ResetButton` has no pull semantics to model at all. Every bit of
+  the difficulty is on the "what does a reset actually do" side - i.e. exactly what this record is
+  about, and none of it is cheaper than it looked.
+
+Same board, for contrast: its USRKEY on GPIO24 has *no* external pull-up (a 10k sits in series with
+the pin instead), so that button's released level comes entirely from whichever internal pull
+firmware configures - the case 0006 models and 0049's addendum had to fix in `key_mock.py`.

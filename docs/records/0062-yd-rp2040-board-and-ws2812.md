@@ -239,5 +239,32 @@ rather than assumed, which was the whole point of leaving it open.
 
 For completeness, the same schematic confirms the other two nets this record cares about: the RGB
 LED is an **XL-5050RGBC-WS2812B** on `RGB_CTRL` from **GPIO23** (a real WS2812B, not a lookalike),
-and the RST button pulls `RUN` (with R12 10k to 3V3) - the [0057](0057-run-pin-reset-hook.md) case,
-still unmodelled.
+and the RST button pulls `RUN` - see below.
+
+### The RST net, and what it settles for 0057
+
+    3V3 ──[ R12 10k ]──┬── RUN
+                       └── RST (ST-1185S) ──/── GND
+
+The contrast with `USR-SW` above is the useful part, and it is not incidental:
+
+| | released level comes from | series resistance when pressed |
+|---|---|---|
+| `USR-SW` (GPIO24) | the **RP2040's internal pull** - nothing external | R13, 10k |
+| `RUN` | an **external** 10k pull-up to 3V3 (R12) | none - the switch grounds RUN directly |
+
+RUN is not a GPIO, so there is no internal pull for firmware to configure and the board *must*
+provide one - which it does. Two things follow for
+[0057](0057-run-pin-reset-hook.md), which was written from this board's sibling without a
+schematic in hand:
+
+1. **A press is a level, not a pulse.** The switch grounds RUN directly, with no series resistor,
+   for exactly as long as a finger is on it. That is evidence for 0057's third option (model RUN as
+   a real held-low pin, which needs a new execution state in `_execute_batch.py`) being the
+   *faithful* one, whatever it costs - a hook that fires a one-shot reset models a tap, not a hold,
+   and the two differ visibly if firmware is held in reset.
+2. **The electrical side needs no modelling at all.** Unlike BOOTSEL (0051), where the released
+   level depends on the QSPI pad's own pull-up defaults (0050) and getting that wrong masks real
+   firmware bugs, RUN's released level is a board-level pull-up that is simply always there. So a
+   future `ResetButton` has no pull semantics to get right - all of its difficulty is on the "what
+   does a reset actually do" side, which is precisely what 0057 is about.
