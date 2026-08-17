@@ -114,6 +114,68 @@ legitimately exists unresolved (that is the whole point), and `dataclasses.repla
 becomes resolved - `resolve_board_spec()` and `demo/eink_run.py` both rely on that today. The
 requirement is "an image by the time you boot", and it already lives where it belongs.
 
+### The concrete payoff: 0056's board becomes *one* spec
+
+Today the Waveshare RP2040-LCD-0.96 is two board files with identical `extras` (the same
+`St7735s`, `BootselButton` and backlight `LEDMock` - the same soldered hardware), differing only in
+which image and which flash layout they carry. With `firmware` keyed by family, that is one
+declaration:
+
+```python
+BOARD = BoardSpec(
+    extras=(St7735s, BootselButton, lambda: LEDMock(gpio=25)),
+    firmware={
+        "micropython": BoardFirmwareSpec(
+            default_tag="1.28.0",
+            fw={"1.28.0": "https://micropython.org/resources/firmware/WAVESHARE_RP2040_LCD_0_96-20260406-v1.28.0.uf2"},
+            layout={"fs_start": "0xa0000", "fs_blockcount": 352, "fs_blocksize": 4096},
+        ),
+        "circuitpython": BoardFirmwareSpec(
+            default_tag="10.2.1",
+            fw={
+                "10.2.1": "https://downloads.circuitpython.org/bin/waveshare_rp2040_lcd_0_96/en_US/"
+                "adafruit-circuitpython-waveshare_rp2040_lcd_0_96-en_US-10.2.1.uf2"
+            },
+            layout={"fs_start": "0x100000", "fs_blockcount": 512, "fs_blocksize": 4096},
+        ),
+    },
+)
+```
+
+`--circuitpython` then picks the family, exactly as it already picks the loader and console
+behavior, and the devices - the part that actually describes the board - are written once. This is
+the change's most visible win, and the clearest sign the current split is a workaround for a
+missing field rather than a real distinction: nothing about *the board* differs between those two
+files.
+
+### `boards/` reorganises: one directory per *board*, not per firmware family
+
+Decided together with the above, since it is the same realisation applied to the filesystem: the
+per-family split (`boards/micropython/…`, `boards/circuitpython/…`) exists **only** because a spec
+could carry one image. Once one spec covers every family, the family level has nothing left to
+separate - the devices, the pin map, the flash geometry and the vendor documentation are all
+properties of the board, not of whichever firmware happens to be flashed.
+
+    boards/
+      waveshare_rp2040_lcd_0_96/__init__.py   # one board: micropython + circuitpython inside
+      weactstudio/__init__.py                 # one board: micropython today, room for more
+      my_board.py                             # a single file is still fine
+
+Naming rule to carry over: keep the firmware's own upstream board id, case-normalized. It survives
+this reorganisation intact for 0056's board, where both firmwares happen to use the same string in
+different cases (`WAVESHARE_RP2040_LCD_0_96` / `waveshare_rp2040_lcd_0_96`); where two firmwares
+genuinely disagree on the id, pick one for the directory and cite both in the docstring, next to
+the upstream files each number came from. What must not be lost is *that* citation - it is what
+makes a board file checkable rather than folklore (0027's "3g rule").
+
+Migration when this lands: fold `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` and
+`boards/circuitpython/waveshare_rp2040_lcd_0_96/` into one directory, move `WEACTSTUDIO` up a
+level, delete the now-empty `boards/micropython/__init__.py` / `boards/circuitpython/__init__.py`,
+and update the `--board-spec` paths in `README.md`,
+`docs/reference/external-devices-and-boards.md`, `demo/lcd_run.py` and each board's own docstring.
+The dotted-module form (`PYTHONPATH=. --board-spec boards.waveshare_rp2040_lcd_0_96:BOARD`) gets
+shorter, which is a small extra win.
+
 ### Two levels of unification, one difference: who maintains the data
 
 This unifies more than `BoardSpec`. It also unifies the *firmware* spec: built-in and custom
@@ -185,7 +247,6 @@ would need its own answer to every question above, with no obvious owner.
   registry *of* board files (entry points, or a directory scan). Attractive, but it reopens the
   "explicit opt-in, no hidden import-on-every-run surface" posture 0049 deliberately took; not
   part of this record.
-- **Multi-family boards in `boards/`.** After this lands, `boards/micropython/
-  WAVESHARE_RP2040_LCD_0_96/` and its CircuitPython twin *can* merge into one file with two
-  `firmware` entries. Whether they should - one file per board, or one per firmware id, which is
-  also what the directory naming convention encodes - is a follow-up decision, not a given.
+- **Nothing here needs `--board`'s registry to change.** A merged board file is still a
+  `--board-spec` target; whether `BOARDS` should eventually be built from such files is the
+  separate question above.
