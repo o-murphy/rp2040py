@@ -1,0 +1,165 @@
+# 0062. YD-RP2040 (VCC-GND Studio), and the WS2812 device it needs
+
+- Status: **Proposed — documented, nothing implemented (2026-08-17).** No board file, no device, no
+  tests. This record says what adding the board would take and what it would be worth; building it
+  is a separate go-ahead.
+- Conceived: 2026-08-17
+- Related: [0059](0059-boardspec-firmware-resolution.md) (`BoardSpec.firmware` - what makes a board
+  file for hardware with only *one* upstream firmware family expressible at all), 0049 (board
+  authoring how-to, and its addendum that first identified this board as *not* WEACTSTUDIO),
+  [0056](0056-st7735s-waveshare-lcd-board.md) (the precedent: a board whose point is its device),
+  [0060](0060-external-io-bridges.md) (which ruled WS2812 out for a *host-hardware bridge* - a
+  different question from emulating one, see below), [0057](0057-run-pin-reset-hook.md) (this board
+  has a RESET button too), 0050/0051 (BOOTSEL), 0035 (flash offsets), 0027 (the "3g rule")
+
+## The board
+
+YD-RP2040 by VCC-GND Studio ([product page](https://circuitpython.org/board/vcc_gnd_yd_rp2040/),
+[upstream port](https://github.com/adafruit/circuitpython/tree/main/ports/raspberrypi/boards/vcc_gnd_yd_rp2040)) -
+a Pico-class RP2040 board that the vendor describes as a Pico plus five things:
+
+| addition | RP2040-visible? |
+|---|---|
+| PWR power LED | no - wired to the rail, nothing to model |
+| USB-C instead of micro-USB | no - indistinguishable at this level |
+| RESET (NRST) button | yes, but it pulls **RUN**, which is not a GPIO - see [0057](0057-run-pin-reset-hook.md) |
+| USRKEY user button on **GPIO24** | yes - a plain GPIO button |
+| WS2812 RGB LED on **GPIO23** | yes - **and nothing in this project can model it** |
+
+plus a bigger flash part: W25Q32/W25Q64/W25Q128 (4/8/16 MiB) where the Pico has a W25Q16 (2 MiB).
+The user LED stays on GPIO25, same as a Pico.
+
+**This is not WEACTSTUDIO.** [0049](0049-external-device-authoring-docs.md)'s addendum already had
+to say so once, when `boards/weactstudio/` was written: different vendor, USR button on GPIO24
+rather than GPIO23, and an RGB LED WeAct's board does not have. With both potentially in-tree the
+distinction matters more, not less - two boards, adjacent pins, one of which is exactly the other's
+missing device.
+
+## What upstream actually says
+
+Every number below comes from that port's own files, not from the vendor's marketing copy (0027's
+"3g rule"):
+
+- `mpconfigboard.mk`: USB VID `0x2E8A` / PID `0x102E`, `"YD-RP2040"` / `"VCC-GND Studio"`,
+  `CHIP_VARIANT = RP2040`, `EXTERNAL_FLASH_DEVICES = "W25Q16JVxQ,W25Q32JVxQ,W25Q128JVxQ"`,
+  `CIRCUITPY__EVE = 1`. **No `CIRCUITPY_FIRMWARE_SIZE`**, and the board ships no `link.ld` of its
+  own (confirmed 404 upstream), so `ports/raspberrypi/link-rp2040.ld`'s default
+  `firmware_size = 1020K` applies. With `CIRCUITPY_INTERNAL_NVM_SIZE = 4 * 1024`:
+
+      fs_start = 1020 KiB + 4 KiB = 0x100000
+
+  the same offset as plain `pico` and as `boards/weactstudio/`. `fs_blockcount = 512` would follow
+  this project's existing CircuitPython convention (0035: only the *start* has to be right).
+- `mpconfigboard.h`: `MICROPY_HW_BOARD_NAME "VCC-GND Studio YD RP2040"`, and
+  `MICROPY_HW_NEOPIXEL = GPIO23` - i.e. CircuitPython treats that LED as its **status** indicator,
+  which is why it lights up during boot with no user code involved.
+- `pins.c`: `RGB` and `NEOPIXEL` -> GPIO23, `BUTTON` -> GPIO24, `LED` -> GPIO25. Matches the
+  vendor's own pinout diagram exactly.
+- Firmware: `adafruit-circuitpython-vcc_gnd_yd_rp2040-en_US-10.2.1.uf2`, from
+  `downloads.circuitpython.org/bin/vcc_gnd_yd_rp2040/en_US/`.
+
+## No MicroPython build exists for it - and that is a design question, not a gap to paper over
+
+MicroPython ships **no** `ports/rp2/boards/` port for this board, so there is no equivalent of
+`WEACTSTUDIO`'s four images. The generic `RPI_PICO` build does run on it (electrically it is a
+Pico), but with the Pico's own flash geometry - `fs_start = 0xa0000`, `fs_blockcount = 352` - so
+the filesystem sits where a 2 MiB board puts it and the extra 2/6/14 MiB is simply unused.
+
+[0059](0059-boardspec-firmware-resolution.md) makes both spellings possible, which is exactly why
+the choice has to be made deliberately:
+
+| option | what it means |
+|---|---|
+| **(a) declare `circuitpython` only** (recommended) | the board file asserts only what upstream actually built for this board. Someone running MicroPython passes `--image <RPI_PICO url or path>` themselves, which 0059 made work with `--board-spec` |
+| (b) also declare `micropython`, pointing at the `RPI_PICO` URL | convenient, but the file would claim a firmware nobody built for this board, and would silently freeze its filesystem at 2 MiB geometry on a 16 MiB chip |
+
+**Proposed general rule, worth adding to 0049's how-to whichever way this goes:** a `firmware` key
+means *"this firmware is built for this board"*, not *"this firmware runs here"*. Option (b) blurs
+that, and the blur is invisible at the point of use - the CLI would happily boot it and report a
+352-block filesystem on a 16 MiB board with no hint why. Option (a) keeps the honest version one
+documented `--image` away.
+
+## The substance: this board needs a WS2812 `ExternalDevice`, which does not exist
+
+LED(GP25) is `LEDMock`; BOOTSEL is `BootselButton` (0050/0051); USRKEY(GP24) is `KeyMock(gpio=24,
+...)` - the same generic devices `boards/weactstudio/` already reuses. RESET is unmodelled by
+design (0057). **WS2812 on GPIO23 is the only genuinely new thing**, and it is what would make this
+board worth shipping as an example at all - the same reason 0056's board earned its place: a board
+whose point *is* its device.
+
+### Emulating a WS2812 is not what 0060 ruled out
+
+[0060](0060-external-io-bridges.md) names WS2812 as beyond a *host-hardware* GPIO bridge's ceiling,
+because the emulator runs ~20-30x slower than real time and in bursts, so a real LED strip on a
+real host's pins cannot be driven from it. That ceiling is about **wall-clock** I/O and does not
+apply here. An emulated device decodes edges in **emulated** time, where `RPPIO` is cycle-coupled
+to the CPU's own instruction loop ([0037](0037-pio-clock-coupled-stepping.md)) - so the 800 kHz
+waveform's T0H/T1H ratio is exactly what the firmware intended, however slowly wall-clock time is
+passing. Decoding is fine; driving real hardware is what is not.
+
+### It would have something real to decode from the first second of boot
+
+Measured today, with no board file and no new code - the stock CircuitPython image booted in the
+emulator through `--board pico --image <the .uf2>`:
+
+- it boots: `board.board_id == "vcc_gnd_yd_rp2040"`, and CIRCUITPY mounts, which independently
+  confirms the `0x100000` derivation above (a wrong offset gives an unmountable drive);
+- `board.NEOPIXEL` / `board.BUTTON` / `board.LED` all exist;
+- **GPIO23 saw 606 edges within ~8.5 s of boot, with zero guest code** - the status NeoPixel
+  `MICROPY_HW_NEOPIXEL` declares.
+
+That is the same property that made 0056's CircuitPython twin valuable: the firmware exercises the
+device by itself, so the device gets an honest test without a hand-written driver script.
+
+### Sketch, not a design commitment
+
+- `src/rp2040py/external/ws2812.py`: an `ExternalDevice` on one GPIO. Listen via
+  `GPIOPin.add_listener()`, timestamp each edge off the simulation clock, decode the NRZ encoding
+  (T0H ~0.4 µs vs. T1H ~0.8 µs; a >50 µs low latches the frame), and emit `on_pixels` with a list
+  of raw `(r, g, b)` tuples per latch. GRB wire order for WS2812/WS2812B, with the colour order and
+  bits-per-pixel parameterized rather than hardcoded, so SK6812/RGBW is a constructor argument.
+- Boundary, unchanged from [0046](0046-epd2in9g-external-device.md)/0056: hand over raw pixel
+  values, never a picture, so nothing in `src/` grows an image dependency.
+- **Cost to measure, not assume.** A pin listener on a line toggling at 800 kHz is precisely the
+  hot-path shape [0047](0047-cyw43-pio-gpio-hotpath.md) had to optimize for CYW43. One 24-bit pixel
+  is ~48 edges - a status LED blinking at a few Hz is nothing, but a 60-LED strip at 60 fps is
+  ~86k edges/s of emulated time. Coalescing at the `on_pixels` level (one callback per latch, not
+  per edge) is the same "coalesced snapshot" rule 0060 already landed on.
+- Deliberately **not** proposed: decoding by inspecting PIO state-machine programs instead of pin
+  edges. Cheaper, but it would only work for drivers that use the PIO the way CircuitPython's does;
+  pin edges also decode a bit-banged driver, which is why they are the right primitive.
+
+## Where it would live
+
+`boards/vcc_gnd_yd_rp2040/` - CircuitPython's own board id, case-normalized, per 0059's naming
+rule. An example under `boards/`, **not** `boards.BOARDS`: it clears neither item 2 (an entry in
+`firmware_specs.json`) nor item 5 (a named maintainer) of 0059's promotion checklist, and cannot
+clear item 2 for MicroPython at all while no MicroPython build exists.
+
+## Order of work, if this is taken up
+
+1. `external/ws2812.py` + unit tests (a synthesized bit stream, and the real boot's own stream).
+2. `boards/vcc_gnd_yd_rp2040/`, declaring `circuitpython` only, attaching
+   `Ws2812`/`LEDMock`/`BootselButton`/`KeyMock`.
+3. Live-boot verification: pixels decoded from the status LED with no guest code, plus a guest
+   `neopixel` script for the general case.
+4. A CI step alongside the ones 0059 added to `ci-micropython.yml`'s `test-board-spec` job.
+
+Steps 1 and 2 are separable: the device is useful on `pico`/`pico_w` on its own (WS2812 strips are
+the single most common RP2040 add-on), and the board is the thing that makes it *testable against
+real firmware* rather than against a hand-written stimulus.
+
+## Open questions
+
+- **USRKEY's polarity and pull are not established.** WeAct's USR button is `Pin.PULL_UP`/
+  active-low, and this board's is probably wired the same way, but "probably" is not the 3g rule -
+  it needs its own upstream source (CircuitPython's `pins.c` only names the pin) before a
+  `KeyMock(gpio=24, active_high=...)` is written down.
+- **Which flash variant?** Unlike WEACTSTUDIO, upstream ships one CircuitPython image covering all
+  three chips (`EXTERNAL_FLASH_DEVICES` lists them together), so there is nothing to pick - but the
+  CIRCUITPY drive's real *size* does differ per chip, and this project sizes it by convention
+  (512 blocks) rather than deriving it. Worth revisiting `fs_blockcount`'s convention generally,
+  not just here.
+- **Does `on_pixels` want the frame or the diff?** A status LED re-sends all 24 bits per update, so
+  a frame is natural; a long strip re-sends everything too. Probably the frame - but the answer
+  should come from the measurement above, not from taste.
