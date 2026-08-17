@@ -12,6 +12,17 @@ Raspberry Pi Pico (RP2040) Emulator in Python — started as a port of [rp2040js
 
 See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) for the file-by-file port status against upstream rp2040js.
 
+> [!IMPORTANT]
+> **Single-core only.** rp2040py emulates `core0`; there is no `core1`, and SIO's inter-core FIFO
+> registers (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) are unimplemented — reads log a warning and return
+> all-ones, writes are dropped, and `CPUID` always reads `0`. Firmware that starts the second core
+> (`multicore_launch_core1()`, MicroPython's `_thread`) will not work. This is deliberate rather
+> than pending: adding the FIFO registers *without* a second core to answer them would turn today's
+> loud failure into a silent infinite hang inside `multicore_fifo_pop_blocking()`, which is strictly
+> worse — see [docs/records/0053](docs/records/0053-core1-and-inter-core-fifo.md) for what building
+> it properly involves. Single-core firmware — the default for MicroPython, CircuitPython, Kaluma
+> and the pico-examples — is unaffected.
+
 ## Table of Contents
 
 - [Installation](#installation)
