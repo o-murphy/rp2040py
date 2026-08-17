@@ -3,7 +3,6 @@
 `RP2040` without that hardware being a memory-mapped peripheral."""
 
 from rp2040py.external.device import attach_external_devices
-from rp2040py.rp2040 import RP2040
 
 
 class _RecordingDevice:
@@ -14,8 +13,8 @@ class _RecordingDevice:
         self.attached_to.append(rp2040)
 
 
-def test_attach_external_devices_calls_attach_on_each_device_with_the_mcu():
-    mcu = RP2040()
+def test_attach_external_devices_calls_attach_on_each_device_with_the_mcu(rp2040_factory):
+    mcu = rp2040_factory()
     a, b = _RecordingDevice(), _RecordingDevice()
 
     attach_external_devices(mcu, a, b)
@@ -24,13 +23,13 @@ def test_attach_external_devices_calls_attach_on_each_device_with_the_mcu():
     assert b.attached_to == [mcu]
 
 
-def test_attach_external_devices_with_no_devices_is_a_no_op():
-    mcu = RP2040()
+def test_attach_external_devices_with_no_devices_is_a_no_op(rp2040_factory):
+    mcu = rp2040_factory()
     attach_external_devices(mcu)  # must not raise
 
 
-def test_attach_external_devices_preserves_call_order():
-    mcu = RP2040()
+def test_attach_external_devices_preserves_call_order(rp2040_factory):
+    mcu = rp2040_factory()
     order = []
 
     class _Ordered:

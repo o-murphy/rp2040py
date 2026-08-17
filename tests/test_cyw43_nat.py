@@ -195,14 +195,14 @@ def test_dhcp_server_ignores_a_non_dhcp_udp_packet():
 # -- Full-stack integration: ARP/DHCP through a real GSPIBus + NatBridge ----------------------------
 
 
-def _wire_up_with_nat_bridge() -> "tuple[RP2040, GSPIBus, _FakeGSPIMaster]":
-    rp2040, bus, master = _wire_up_with_bus()
+def _wire_up_with_nat_bridge(rp2040_factory) -> "tuple[RP2040, GSPIBus, _FakeGSPIMaster]":
+    rp2040, bus, master = _wire_up_with_bus(rp2040_factory)
     bus.nat_bridge = NatBridge(rp2040, bus.queue_rx_ethernet_frame)
     return rp2040, bus, master
 
 
-def test_arp_request_over_the_wire_gets_a_flow_control_ack_then_a_real_reply():
-    _rp2040, _bus, master = _wire_up_with_nat_bridge()
+def test_arp_request_over_the_wire_gets_a_flow_control_ack_then_a_real_reply(rp2040_factory):
+    _rp2040, _bus, master = _wire_up_with_nat_bridge(rp2040_factory)
     request = net.pack_arp(net.ARP_OP_REQUEST, _GUEST_MAC, GUEST_IP, bytes(6), GATEWAY_IP)
     frame = net.pack_ethernet(bytes([0xFF] * 6), _GUEST_MAC, net.ETHERTYPE_ARP, request)
 
@@ -219,8 +219,8 @@ def test_arp_request_over_the_wire_gets_a_flow_control_ack_then_a_real_reply():
     assert reply_arp.sender_ip == GATEWAY_IP
 
 
-def test_dhcp_discover_over_the_wire_gets_a_flow_control_ack_then_a_real_offer():
-    _rp2040, _bus, master = _wire_up_with_nat_bridge()
+def test_dhcp_discover_over_the_wire_gets_a_flow_control_ack_then_a_real_offer(rp2040_factory):
+    _rp2040, _bus, master = _wire_up_with_nat_bridge(rp2040_factory)
     dhcp = net.pack_dhcp(net.DHCP_OP_REQUEST, 0xDEADBEEF, _GUEST_MAC, bytes(4), {53: bytes([net.DHCP_MSG_DISCOVER])})
     udp = net.pack_udp(bytes(4), bytes([255, 255, 255, 255]), 68, 67, dhcp)
     ip_packet = net.pack_ipv4(bytes(4), bytes([255, 255, 255, 255]), net.IP_PROTO_UDP, udp)
@@ -242,10 +242,10 @@ def test_dhcp_discover_over_the_wire_gets_a_flow_control_ack_then_a_real_offer()
     assert reply_dhcp.options[53] == bytes([net.DHCP_MSG_OFFER])
 
 
-def test_data_header_dispatch_still_works_with_no_nat_bridge_attached():
+def test_data_header_dispatch_still_works_with_no_nat_bridge_attached(rp2040_factory):
     """A bare `GSPIBus()` (nat_bridge=None) must not error on a real Ethernet-carrying DATA_HEADER
     frame - the guard in `_write_wlan()` must short-circuit cleanly."""
-    rp2040 = RP2040()
+    rp2040 = rp2040_factory()
     bus = GSPIBus()
     bus.attach_gpio(rp2040)
     master = _FakeGSPIMaster(rp2040)
@@ -294,9 +294,9 @@ async def _echo_server(reader: "asyncio.StreamReader", writer: "asyncio.StreamWr
         writer.close()
 
 
-def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server():
+def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -413,9 +413,9 @@ def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server():
     _run(_body())
 
 
-def test_tcp_reflector_sends_rst_on_a_refused_connection():
+def test_tcp_reflector_sends_rst_on_a_refused_connection(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -452,9 +452,9 @@ def test_tcp_reflector_sends_rst_on_a_refused_connection():
     _run(_body())
 
 
-def test_tcp_reflector_evicts_the_flow_on_guest_rst():
+def test_tcp_reflector_evicts_the_flow_on_guest_rst(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -503,7 +503,7 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst():
     _run(_body())
 
 
-def test_reset_clears_flows_so_a_reused_port_can_connect_again():
+def test_reset_clears_flows_so_a_reused_port_can_connect_again(rp2040_factory):
     """The stale-flow collision `TcpReflector.reset()` exists for (0054).
 
     `maybe_handle()` routes any segment whose `(src_port, dst_ip, dst_port)` matches a live flow
@@ -512,7 +512,7 @@ def test_reset_clears_flows_so_a_reused_port_can_connect_again():
     """
 
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -596,9 +596,9 @@ async def _connect_with_immediate_reset(host: str, port: int) -> "tuple[_Immedia
     return _ImmediatelyResetReader(), _NoOpWriter()
 
 
-def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin():
+def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -648,9 +648,9 @@ async def _never_connects(host: str, port: int) -> "tuple[asyncio.StreamReader, 
     raise AssertionError("unreachable")
 
 
-def test_tcp_reflector_times_out_a_connect_that_never_resolves():
+def test_tcp_reflector_times_out_a_connect_that_never_resolves(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -718,9 +718,9 @@ def _reserve_a_free_udp_port() -> int:
     return port
 
 
-def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back():
+def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -767,14 +767,14 @@ def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back():
     _run(_body())
 
 
-def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination():
+def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination(rp2040_factory):
     """4e's own generalization: a UDP packet NOT addressed to the gateway's DNS port (e.g. NTP,
     port 123, the way `ntptime` uses it) is relayed straight to whatever real destination the
     guest itself addressed - not to the fixed DNS upstream - and the reply appears to come from
     that same real destination, not from the gateway."""
 
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -818,9 +818,9 @@ def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination():
     _run(_body())
 
 
-def test_udp_relay_stays_silent_on_no_response():
+def test_udp_relay_stays_silent_on_no_response(rp2040_factory):
     async def _body() -> None:
-        simulator = Simulator()
+        simulator = Simulator(rp2040=rp2040_factory())
         simulator.bind_loop()
         rp2040 = simulator.rp2040
         bus = GSPIBus()
@@ -847,13 +847,13 @@ def test_udp_relay_stays_silent_on_no_response():
     _run(_body())
 
 
-def test_dhcp_still_takes_priority_over_the_general_udp_relay():
+def test_dhcp_still_takes_priority_over_the_general_udp_relay(rp2040_factory):
     """DHCP (port 67) must be handled by `DhcpServer`, not fall through to `UdpRelay` - a DHCP
     packet is broadcast to 255.255.255.255, which isn't the gateway's own IP, so without this
     ordering it would incorrectly match `UdpRelay`'s general (non-DNS) addressing path instead -
     a real DHCPDISCOVER (not just a malformed payload DhcpServer would reject anyway) is used here
     so the assertion actually proves DhcpServer won, not merely that nothing crashed."""
-    _rp2040, bus, master = _wire_up_with_nat_bridge()
+    _rp2040, bus, master = _wire_up_with_nat_bridge(rp2040_factory)
     dhcp = net.pack_dhcp(net.DHCP_OP_REQUEST, 0x1234, _GUEST_MAC, bytes(4), {53: bytes([net.DHCP_MSG_DISCOVER])})
     udp = net.pack_udp(bytes(4), bytes([255, 255, 255, 255]), 68, 67, dhcp)
     ip_packet = net.pack_ipv4(bytes(4), bytes([255, 255, 255, 255]), net.IP_PROTO_UDP, udp)
