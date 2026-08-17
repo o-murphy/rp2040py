@@ -555,6 +555,15 @@ def test_reset_clears_flows_so_a_reused_port_can_connect_again(rp2040_factory):
         assert reply.flags & net.TCP_SYN and reply.flags & net.TCP_ACK
         assert reply.ack == 7001  # acknowledges the *new* SYN, not the old flow's sequence space
 
+        # The second flow itself is still open at this point (this test is about the reset/reuse
+        # transition, not this flow's own close sequence) - tear it down the same way, or its
+        # still-connected real socket keeps `echo_server.wait_closed()` below waiting forever.
+        # Harmless on cp310/cp311 (`Server.wait_closed()` was still the pre-3.12.1-fixed,
+        # active-connections-ignoring version there - see its own docstring's "Historical note"),
+        # but a real, silent hang on any interpreter where that fix has landed (cp313+, free-threaded
+        # or not - see docs/records/0055).
+        bus.nat_bridge.reset()
+
         echo_server.close()
         await echo_server.wait_closed()
 
