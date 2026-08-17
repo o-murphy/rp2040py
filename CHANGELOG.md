@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trip, `os.statvfs('/')` reporting 352 4-KiB blocks, and real frames decoded from a
   vendor-shaped guest driver. See [docs/records/0056](docs/records/0056-st7735s-waveshare-lcd-board.md).
 
+- `boards/circuitpython/waveshare_rp2040_lcd_0_96/` - the same Waveshare RP2040-LCD-0.96 under
+  CircuitPython, needing no new device code: its own flash layout (`fs_start=0x100000`, derived
+  from `CIRCUITPY_FIRMWARE_SIZE` + the 4 KiB NVM region, with no board-level override) and the
+  same panel/BOOTSEL/backlight extras. CircuitPython initialises the display in `board_init()`, so
+  booting this spec paints the emulated panel with no guest code at all - live-verified against
+  `10.2.1`: 58 decoded frames, `board.DISPLAY` 160x80 at rotation 90, and a formatted CIRCUITPY
+  drive through the CLI's `--circuitpython --board-spec` path. It also independently checks the
+  MADCTL work above, since CircuitPython drives the panel through a different orientation
+  (`0xC8` with transposed offsets and displayio `rotation=90`) than MicroPython's `0xA8`, and both
+  render upright.
+
 ### Documentation
 - [docs/records/0057](docs/records/0057-run-pin-reset-hook.md) - design-only record (nothing
   implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target

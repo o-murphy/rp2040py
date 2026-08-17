@@ -24,6 +24,7 @@ with a single method, `attach(rp2040) -> None`. `attach_external_devices(rp2040,
   - [Scenario B: a fully custom board (your own firmware)](#scenario-b-a-fully-custom-board-your-own-firmware)
   - [Using a `BoardSpec`](#using-a-boardspec)
   - [Ready-made examples in this repo](#ready-made-examples-in-this-repo)
+  - [Seeing what a display device drew](#seeing-what-a-display-device-drew)
 - [Caveats worth knowing](#caveats-worth-knowing)
 
 ## The attach-timing rule
@@ -188,13 +189,54 @@ MicroPython `v1.28.0` images:
 |---|---|
 | [`boards/micropython/WEACTSTUDIO/`](../../boards/micropython/WEACTSTUDIO/__init__.py) | one `BoardSpec` per flash-size variant off a single `FirmwareSpec`, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
 | [`boards/micropython/WAVESHARE_RP2040_LCD_0_96/`](../../boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below) |
+| [`boards/circuitpython/waveshare_rp2040_lcd_0_96/`](../../boards/circuitpython/waveshare_rp2040_lcd_0_96/__init__.py) | the same physical board under a different firmware family: its own flash layout and image, the identical device set, and no guest code needed - CircuitPython initialises the panel itself at boot. Needs `--circuitpython` alongside `--board-spec` (that flag also picks the FAT12 loader and console behavior) |
 
-Both are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
+Directory names are the *firmware's own* board id - MicroPython's uppercase
+`ports/rp2/boards/<BOARD>` names under `boards/micropython/`, CircuitPython's lowercase
+`ports/raspberrypi/boards/<board>` names under `boards/circuitpython/` - which is what keeps every
+number in a board file checkable against a real upstream source.
+
+All are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
 
 ```sh
 rp2040py micropython --board-spec boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py:BOARD
 PYTHONPATH=. rp2040py micropython --board-spec boards.micropython.WEACTSTUDIO:BOARD_FLASH_4M
 ```
+
+### Seeing what a display device drew
+
+A display device hands you raw pixels, never a picture: `Epd2in9G.on_frame` fires with a packed
+2bpp e-paper buffer, `St7735s.on_frame` with a raw RGB565 one. Nothing in `src/rp2040py` decodes
+them - that is the caller's job, and deliberately so, since it keeps an image library out of the
+package's dependencies ([record 0046](../records/0046-epd2in9g-external-device.md)). Two runnable
+viewers in [`demo/`](../../demo/) do that decoding, and are how the screenshots in
+[record 0056](../records/0056-st7735s-waveshare-lcd-board.md) were produced:
+
+```sh
+uv run --with pillow python demo/lcd_run.py --screenshot out        # ST7735S, MicroPython + demo/mp_lcd_demo.py
+uv run --with pillow python demo/lcd_run.py --circuitpython --tkinter   # ST7735S, CircuitPython paints by itself
+uv run --with pillow python demo/eink_run.py --screenshot out       # Waveshare 2.9" e-paper
+```
+
+The shape is the same in both, and is what to copy for your own device:
+
+1. Build the board with a callback closed over - `board_with(on_frame)` in the two
+   `WAVESHARE_RP2040_LCD_0_96` board files, or `attach_external_devices(mcu, Epd2in9G(on_frame=...))`
+   for a device you wire up yourself.
+2. Hand frames to the drawing thread through a `queue.Queue`. `on_frame` fires on the device's own
+   engine-room thread, and a GUI toolkit's widgets may only be touched from the thread that made
+   them.
+3. Decode in the consumer: unpack each pixel into RGB and write a PNG (Pillow), or blit it into a
+   window. `--tkinter` shows frames live; `--screenshot PREFIX` writes `PREFIX_000.png`, ....
+
+Two practical notes both runners now encode, learned the hard way:
+
+- **Bound the run.** A guest script can stall, and CircuitPython's display *never* stops - it
+  auto-refreshes at 60 fps from `board_init()`, so "run until it finishes" has no meaning there.
+  `demo/lcd_run.py` defaults to 5 frames when dumping PNGs, and both runners take `--timeout`.
+- **Offline images.** Board files resolve firmware through `retrieve()`, which checks
+  `~/.cache/rp2040py` before downloading anything. Dropping a `.uf2` there under the exact filename
+  its download URL ends with makes every path - CLI, SDK, these runners - work with no network.
 
 ## Caveats worth knowing
 

@@ -213,3 +213,75 @@ design-only record (nothing implemented) covering the RUN pin, a `set_reset_hook
 versus moving `BaseDevice._on_watchdog_trigger()` into the MCU wholesale, the cost of `RP2040`
 existing twice (pure-Python + `cdef class`), and the semantics still to settle (`WATCHDOG.REASON`
 after a RUN reset, BOOTSEL-held-during-reset, what an attached `ExternalDevice` should be told).
+
+## Addendum (2026-08-17): the CircuitPython twin, and what it proves
+
+`boards/circuitpython/waveshare_rp2040_lcd_0_96/` - the *same physical board* under CircuitPython
+`10.2.1`. Asked for right after the MicroPython one landed ("на базі створеної дошки можна
+створити альтернативу в boards/circuitpython... думаю тепер це просто"), and it was: **no new
+device code at all**, one new board file plus a `boards/circuitpython/__init__.py` package.
+
+Naming follows the same rule from the top of this record, applied to the other firmware's
+namespace: CircuitPython's own board id is lowercase (`ports/raspberrypi/boards/
+waveshare_rp2040_lcd_0_96/`, and the `downloads.circuitpython.org` path), so the directory is too.
+One board, two firmware families, two directories, each spelled the way its firmware spells it.
+
+Flash layout, derived the same way 0035 audited CircuitPython's:
+`CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR = CIRCUITPY_FIRMWARE_SIZE + CIRCUITPY_INTERNAL_NVM_SIZE`
+(`ports/raspberrypi/mpconfigport.h`), with `firmware_size` defaulting to `1020K`
+(`link-rp2040.ld`) and this board shipping **no** override - confirmed by its `mpconfigboard.mk`
+carrying only USB ids/`CHIP_VARIANT`/`EXTERNAL_FLASH_DEVICES`/`CIRCUITPY__EVE`, and by
+`boards/waveshare_rp2040_lcd_0_96/link.ld` being a 404 upstream. So `fs_start = 1020 KiB + 4 KiB =
+0x100000`, the same as plain `pico` under CircuitPython (and unlike `pico_w`, which overrides to
+1532K). `fs_blockcount` stays this project's generous `512` for the reason 0035 already gives.
+
+### The part worth having built: it checks the MADCTL model independently
+
+CircuitPython does not need a driver script - `board_init()` calls `display_init()`
+(`board.c`), which constructs a `busdisplay` with `auto_refresh=true` at 60 fps. Booting the
+`BoardSpec` therefore drives the emulated panel with **zero guest code**. And it drives it through
+a *different orientation than the MicroPython vendor driver does*:
+
+| | MicroPython (vendor driver) | CircuitPython (`board.c`) |
+|---|---|---|
+| `MADCTL` | `0xA8` (MY \| MV \| BGR) | `0xC8` (MY \| MX \| BGR) - no MV |
+| offsets | `+1` column, `+26` row | `colstart=26`, `rowstart=1` - transposed |
+| rotation | none (writes landscape directly) | displayio `rotation=90` |
+| SPI | 10 MHz (this repo's demo) / 4 MHz (vendor) | 40 MHz |
+
+Two firmwares, two memory->panel mappings, one piece of glass. The addendum above claimed that
+anchoring the model on the module's physical orientation (rather than on the controller's native
+axes) makes any `MADCTL` render the way the glass would show it; this is the case that could have
+falsified it, since nothing about CircuitPython's choice was known when that code was written.
+**It renders upright**: the CircuitPython boot console - "Board ID:waveshare_rp2040_lcd_0_96",
+the UID line, the REPL prompt - comes out legible and correctly oriented, drawn progressively
+through partial-window writes (which the CS-rise flush already handled).
+
+### Verification
+
+Against the real `adafruit-circuitpython-waveshare_rp2040_lcd_0_96-en_US-10.2.1.uf2`:
+
+- 58 frames decoded from a plain boot, no guest script involved.
+- Through the CLI's `--circuitpython --board-spec` path (the combination 0049's flag table lists
+  as compatible, now actually exercised): `sys.implementation` reports
+  `circuitpython (10, 2, 1)` / `_machine='Waveshare RP2040-LCD-0.96 with rp2040'` /
+  `_build='waveshare_rp2040_lcd_0_96'`, `board.board_id` matches, `board.DISPLAY` is 160x80 at
+  rotation 90, and `os.statvfs('/')` returns `(512, 512, 2008, 2002, 2002, ...)` with a real
+  CIRCUITPY drive (`boot_out.txt`, `code.py`, `lib`, `settings.toml`) - i.e. the derived
+  `fs_start` is right, since a wrong one leaves CircuitPython unable to mount or format it.
+
+Both firmwares' screenshots above were taken with `demo/lcd_run.py` (added with this addendum,
+the LCD counterpart of `demo/eink_run.py`): it builds the board through the board file's own
+`board_with(on_frame)`, queues frames off the engine-room thread, and decodes RGB565 into PNGs or a
+Tk window - with `demo/mp_lcd_demo.py`, a vendor-shaped guest driver, for the MicroPython side and
+nothing at all for CircuitPython's. Writing it surfaced a bound-less-loop bug worth noting since
+`demo/eink_run.py` had the same shape: "run until the firmware is done" is not a termination
+condition for a display that auto-refreshes forever, and `exec_file_async(timeout=None)` is not one
+either when a guest script stalls - both runners now take `--timeout`, and `lcd_run.py` defaults to
+5 frames when dumping PNGs. The how-to lives in
+[reference/external-devices-and-boards.md](../reference/external-devices-and-boards.md)'s "Seeing
+what a display device drew".
+
+The backlight caveat gets sharper here and is worth repeating: CircuitPython drives GPIO25 as a
+real PWM (`board.c` passes a 50 kHz backlight frequency and `brightness = 1.0f`), so the
+`LEDMock` attached to it reports edges, not brightness - see this record's first addendum.
