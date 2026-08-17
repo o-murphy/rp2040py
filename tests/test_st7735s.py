@@ -4,7 +4,14 @@ Waveshare's RP2040-LCD-0.96 panel. Drives the same wire the emulated firmware do
 
 import pytest
 
-from rp2040py.external.st7735s import LCD_COL_OFFSET, LCD_HEIGHT, LCD_ROW_OFFSET, LCD_WIDTH, St7735s
+from rp2040py.external.st7735s import (
+    LCD_COL_OFFSET,
+    LCD_HEIGHT,
+    LCD_ROW_OFFSET,
+    LCD_WIDTH,
+    REFERENCE_MADCTL,
+    St7735s,
+)
 from rp2040py.gpio_pin import FUNCTION_SIO
 from rp2040py.rp2040 import RP2040
 
@@ -35,6 +42,9 @@ class Panel:
         self.device.attach(rp2040)
         for gpio in (_CS, _DC, _RST):
             _drive_gpio_high(rp2040, gpio, True)
+        # Real firmware picks an orientation before drawing anything; the vendor driver's own
+        # choice is the module's reference one, in which writes land unrotated.
+        self.cmd(0x36, REFERENCE_MADCTL)
 
     def _transmit(self, byte: int) -> None:
         self.rp2040.spi[_SPI].on_transmit(byte)
@@ -157,19 +167,80 @@ def test_display_and_inversion_flags_track_their_commands(panel):
 
 
 def test_madctl_and_colmod_are_recorded(panel):
-    panel.cmd(0x36, 0xA8)  # the orientation the vendor driver picks
+    panel.cmd(0x36, REFERENCE_MADCTL)  # the orientation the vendor driver picks
     panel.cmd(0x3A, 0x05)  # 16 bits/pixel
 
-    assert (panel.device.madctl, panel.device.colmod) == (0xA8, 0x05)
+    assert (panel.device.madctl, panel.device.colmod) == (REFERENCE_MADCTL, 0x05)
 
 
-def test_non_rgb565_pixel_formats_are_not_decoded(panel):
-    panel.cmd(0x3A, 0x06)  # RGB666 - real ST7735S option, out of scope for this model
+def test_rgb666_pixels_are_normalized_into_the_rgb565_buffer(panel):
+    panel.cmd(0x3A, 0x06)  # 18 bits/pixel, 6 significant bits per byte
+    panel.set_window(0, 0, 1, 0)
+    panel.pixels(bytes([0xFF, 0xFF, 0xFF, 0xFC, 0x00, 0x00]))
+
+    assert panel.pixel(0, 0) == 0xFFFF  # full white
+    assert panel.pixel(1, 0) == 0xF800  # full red, green/blue zero
+
+
+def test_rgb444_packs_two_pixels_into_three_bytes(panel):
+    panel.cmd(0x3A, 0x03)  # 12 bits/pixel
+    panel.set_window(0, 0, 1, 0)
+    # [R1 G1][B1 R2][G2 B2] - pixel 1 full red, pixel 2 full blue.
+    panel.pixels(bytes([0xF0, 0x00, 0x0F]))
+
+    # 4-bit channels widen by bit replication, so full scale stays full scale.
+    assert panel.pixel(0, 0) == 0xF800
+    assert panel.pixel(1, 0) == 0x001F
+    assert len(panel.frames) == 1
+
+
+def test_an_incomplete_rgb444_group_is_discarded_when_cs_goes_high(panel):
+    panel.cmd(0x3A, 0x03)
+    panel.set_window(0, 0, 1, 0)
+    panel.pixels(bytes([0xF0, 0x00]))  # two of the three bytes a pixel pair needs
+
+    assert panel.pixel(0, 0) == 0x0000
+    assert panel.frames == []
+
+
+def test_an_unimplemented_pixel_format_is_dropped_rather_than_misdecoded(panel):
+    panel.cmd(0x3A, 0x07)  # not a format this model decodes
     panel.set_window(0, 0, 0, 0)
     panel.pixels(b"\xff\xff\xff")
 
     assert panel.frames == []
     assert panel.pixel(0, 0) == 0x0000
+
+
+def test_madctl_mx_mirrors_the_image_vertically(panel):
+    panel.cmd(0x36, REFERENCE_MADCTL | 0x40)  # + MX (column address order)
+    panel.set_window(0, 0, 0, 0)
+    panel.pixels(b"\x12\x34")
+
+    assert panel.pixel(0, LCD_HEIGHT - 1) == 0x1234
+    assert panel.pixel(0, 0) == 0x0000
+
+
+def test_clearing_madctl_my_mirrors_the_image_horizontally(panel):
+    panel.cmd(0x36, REFERENCE_MADCTL & ~0x80)  # - MY (row address order)
+    panel.set_window(0, 0, 0, 0)
+    panel.pixels(b"\x12\x34")
+
+    assert panel.pixel(LCD_WIDTH - 1, 0) == 0x1234
+    assert panel.pixel(0, 0) == 0x0000
+
+
+def test_portrait_madctl_rotates_onto_the_landscape_glass(panel):
+    # MV cleared: firmware now addresses the controller's native axes directly, so the panel's
+    # own offsets swap (+26 on columns, +1 on rows) - and its origin lands in the glass's corner
+    # a quarter turn away, exactly as a real module shows a portrait-addressed write.
+    panel.cmd(0x36, 0x08)  # BGR only: no MV, no mirrors
+    panel.cmd(0x2A, 0x00, LCD_ROW_OFFSET, 0x00, LCD_ROW_OFFSET)
+    panel.cmd(0x2B, 0x00, LCD_COL_OFFSET, 0x00, LCD_COL_OFFSET)
+    panel.cmd(0x2C)
+    panel.pixels(b"\x12\x34")
+
+    assert panel.pixel(LCD_WIDTH - 1, 0) == 0x1234
 
 
 def test_reset_clears_the_framebuffer_and_the_address_window(panel):

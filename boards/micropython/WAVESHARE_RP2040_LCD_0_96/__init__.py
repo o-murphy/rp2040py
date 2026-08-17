@@ -72,9 +72,9 @@ emulator models it: the one live-reset path that exists is `BaseDevice._on_watch
 *device*-level sequence - `mcu.reset(preserve_flash=True)`, `core.pc = FLASH_START_ADDRESS`, **and**
 `cdc.reset()` - whose USB half an `ExternalDevice` cannot reach, since it only ever gets the
 `RP2040` and nothing hangs the `USBCDC` off it. A faithful `ResetButton` therefore needs a new
-reset hook on `RP2040` (the shape `RPWatchdog.on_watchdog_trigger` already uses), which is an API
-decision for a record of its own, not something to guess at inside a board file. Until then:
-`machine.reset()` from guest code is the working equivalent.
+reset hook on `RP2040` (the shape `RPWatchdog.on_watchdog_trigger` already uses) - designed, with
+its alternatives and open semantics, in docs/records/0057, and deliberately not implemented yet.
+Until then: `machine.reset()` from guest code is the working equivalent.
 """
 
 from collections.abc import Callable

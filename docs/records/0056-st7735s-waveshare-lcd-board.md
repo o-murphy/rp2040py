@@ -139,3 +139,77 @@ seeded into `~/.cache/rp2040py` under the exact filename `retrieve()` derives fr
 download URL in the board file is the official one from
 <https://micropython.org/download/WAVESHARE_RP2040_LCD_0_96/>, but the *download path itself* was
 never exercised here — the first real run on a networked machine is what proves it.
+
+## Addendum (2026-08-17): two of the three non-goals closed, on request
+
+Asked for the same day, right after this landed ("1. Робимо / 2. Треба зробити / 3. Ок тільки
+документуємо" against the three deliberate non-goals above). So: `MADCTL` geometry and the
+RGB444/RGB666 pixel formats are now implemented; backlight brightness stays documented-only.
+
+### `MADCTL` is now applied, not merely recorded
+
+The model no longer stores pixels in address space. Three steps, mirroring the controller:
+
+1. **Address -> native frame memory.** MV (0x20) exchanges the CASET/RASET axes, then MX (0x40)/
+   MY (0x80) mirror the resulting native column/row. The native window is 80x160 at offset
+   (26, 1) — the transpose of the visible 160x80 at (1, 26) this record's table derives, because
+   the module's reference orientation sets MV.
+2. **Native -> glass** through one *fixed* mapping, `(x, y) = (native_height - 1 - ny, nx)`, which
+   is the module's own physical orientation: its long axis is the native row axis, running
+   right-to-left.
+3. That fixed mapping is chosen so `MADCTL = 0xA8` — `REFERENCE_MADCTL`, what the vendor driver
+   writes once in `Init()`, and the only value real firmware for this module uses — reduces to the
+   identity. Substituting it: MV swaps, so `native_x = row - 26 = y` and `native_y = col - 1 = x`;
+   MY mirrors `native_y` to `159 - x`; the glass mapping gives back `(159 - (159 - x), y) = (x, y)`.
+
+Anchoring on the module's reference orientation rather than on the controller's native axes is the
+one judgment call here, and it is what makes the result *usable*: a viewer wants the picture the
+glass shows, and the glass is a landscape 160x80 panel whose "up" is a property of the module, not
+of the ST7735S. A firmware that addresses in portrait (MV clear) now comes out rotated a quarter
+turn on the output — which is what a real module does with such a write, and what the old
+address-space model silently hid.
+
+The **BGR bit (0x08) is still recorded and not applied**, deliberately, and this is not the same
+kind of gap as the geometry was: whether that bit swaps red and blue *as a human sees them*
+depends on how the glass's subpixels are wired, which the controller datasheet cannot say. On this
+module the vendor driver sets BGR **and** its own color constants come out correct with no swap
+here — verified against real firmware (the frames in "Verification" above are decoded with green
+text green and red text red). Applying the bit would break that.
+
+### RGB444 and RGB666 are decoded
+
+`COLMOD 0x03` (12 bpp, two pixels packed into three bytes as `[R1 G1][B1 R2][G2 B2]`) and `0x06`
+(18 bpp, six significant bits left-aligned in each of three bytes) are decoded and *normalized
+into the same RGB565 framebuffer*, so `on_frame`'s contract stays one format no matter what
+firmware clocks over the wire. 4-bit channels widen by bit replication (`0xf -> 0x1f`, not
+`0x1e`), so full scale stays full scale. A pixel group left incomplete when CS rises is discarded,
+the same rule the RGB565 half-pixel already followed. A `COLMOD` value this model does not know is
+still dropped rather than misdecoded — the original reasoning stands for anything unimplemented.
+
+### Verification of the addendum
+
+`tests/test_st7735s.py` grew from 14 to 20 tests: MX mirroring the image vertically, clearing MY
+mirroring it horizontally, a portrait `MADCTL` landing a quarter turn away on the glass, RGB666
+normalization, RGB444 packing, an incomplete RGB444 group, and an unknown `COLMOD` still being
+dropped. And the live check that matters most: re-running the real `WAVESHARE_RP2040_LCD_0_96`
+v1.28.0 firmware with the vendor-shaped guest driver produces frames **byte-identical** to the
+pre-change PNGs — the reference orientation really is the identity, on real firmware, not just in
+the algebra above.
+
+### Not done: backlight brightness
+
+Left as documented-only, by the same request. Confirmed while writing this that the naive fix
+would be actively misleading: `RPPWM.gpio_set()` calls `GPIOPin.check_for_updates()`, so a
+`PWM(Pin(25))` backlight really does toggle the pin in the emulator, and `LEDMock` would faithfully
+count PWM edges — a `toggle_count` climbing at the carrier frequency and an `on` flag flapping,
+neither of which is brightness. A real model reads the PWM slice's own CC/TOP duty
+(`rp2040.pwm`), which is a different device class, plus a decision about what a consumer of
+`on_frame` should do with that number. Neither is in scope here.
+
+## Follow-up: the RESET button gets its own record
+
+The "deliberately not modelled" bullet above is now [0057](0057-run-pin-reset-hook.md) — a
+design-only record (nothing implemented) covering the RUN pin, a `set_reset_hook()` on `RP2040`
+versus moving `BaseDevice._on_watchdog_trigger()` into the MCU wholesale, the cost of `RP2040`
+existing twice (pure-Python + `cdef class`), and the semantics still to settle (`WATCHDOG.REASON`
+after a RUN reset, BOOTSEL-held-during-reset, what an attached `ExternalDevice` should be told).

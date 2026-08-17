@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pixel streaming, MADCTL/COLMOD/DISPON/INVON state and the RST pin, all decoded off the vendor's
   own MicroPython driver's wire traffic. `on_frame` hands over the raw RGB565 framebuffer, never a
   decoded picture, so nothing in `src/` gains an image-library dependency (same boundary
-  `Epd2in9G` draws).
+  `Epd2in9G` draws). `MADCTL`'s MV/MX/MY are applied as a real memory-to-panel remap - a portrait
+  or mirrored orientation is shown rotated/mirrored the way the glass would show it - anchored so
+  the module's own reference orientation (`0xA8`, what the vendor driver sets) stays the identity.
+  RGB444 and RGB666 are decoded too, normalized into the same RGB565 framebuffer so the callback
+  speaks one format regardless of `COLMOD`.
 - `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` - a `--board-spec` target for the Waveshare
   RP2040-LCD-0.96, with its onboard panel, BOOTSEL and LCD backlight attached as fixed extras.
   Flash layout derived from upstream (`MICROPY_HW_FLASH_STORAGE_BYTES = 1441792` + pico-sdk's
@@ -21,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the real `WAVESHARE_RP2040_LCD_0_96` v1.28.0 firmware: `mklittlefs --board-spec` round
   trip, `os.statvfs('/')` reporting 352 4-KiB blocks, and real frames decoded from a
   vendor-shaped guest driver. See [docs/records/0056](docs/records/0056-st7735s-waveshare-lcd-board.md).
+
+### Documentation
+- [docs/records/0057](docs/records/0057-run-pin-reset-hook.md) - design-only record (nothing
+  implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target
+  the way BOOTSEL can, a `set_reset_hook()` on `RP2040` versus moving `BaseDevice`'s reset
+  sequence into the MCU, and the semantics still to settle before any of it is built.
 
 ### Changed
 - `demo/mp_eink_demo.py` runs the panel's SPI bus at 10 MHz instead of 4 MHz and trims the
