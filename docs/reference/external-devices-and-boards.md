@@ -23,6 +23,7 @@ with a single method, `attach(rp2040) -> None`. `attach_external_devices(rp2040,
   - [Scenario A: your own device mix, existing firmware](#scenario-a-your-own-device-mix-existing-firmware)
   - [Scenario B: a fully custom board (your own firmware)](#scenario-b-a-fully-custom-board-your-own-firmware)
   - [Using a `BoardSpec`](#using-a-boardspec)
+  - [Ready-made examples in this repo](#ready-made-examples-in-this-repo)
 - [Caveats worth knowing](#caveats-worth-knowing)
 
 ## The attach-timing rule
@@ -176,12 +177,37 @@ async with MicroPythonDevice(board=my_board) as device:
     stdout, stderr = await device.aexec("print(1 + 1)")
 ```
 
+### Ready-made examples in this repo
+
+Two complete board files live under [`boards/`](../../boards/), outside `src/rp2040py` (they are
+`--board-spec` targets, not part of the installed package). Both derive every number from the
+firmware's own upstream board config rather than guessing, and both are live-verified against real
+MicroPython `v1.28.0` images:
+
+| board | what it shows |
+|---|---|
+| [`boards/micropython/WEACTSTUDIO/`](../../boards/micropython/WEACTSTUDIO/__init__.py) | one `BoardSpec` per flash-size variant off a single `FirmwareSpec`, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
+| [`boards/micropython/WAVESHARE_RP2040_LCD_0_96/`](../../boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below) |
+
+Both are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
+
+```sh
+rp2040py micropython --board-spec boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py:BOARD
+PYTHONPATH=. rp2040py micropython --board-spec boards.micropython.WEACTSTUDIO:BOARD_FLASH_4M
+```
+
 ## Caveats worth knowing
 
 - **`LEDMock` on `pico_w` is a placeholder, not hardware-accurate.** On a real Pico W the onboard
   LED is wired to the CYW43439 chip itself, not any RP2040 GPIO - `pico_w`'s `LEDMock(gpio=25)`
   entry exists purely to exercise the `ExternalDevice`/`attach_external_devices()` plumbing
   identically regardless of board, not to model real wiring.
+- **A `BoardSpec` cannot hand you the devices it attached.** `extras` is a tuple of zero-arg
+  factories, and `attach_external_devices()` returns nothing, so a device with a callback (a
+  display's `on_frame`, say) can be *booted* through `--board-spec` but cannot deliver anything
+  back to the caller. From the SDK, build the board with the callback already closed over - the
+  `board_with(on_frame)` helper in `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` is the pattern.
+  From the CLI there is no answer today; see [record 0056](../records/0056-st7735s-waveshare-lcd-board.md).
 - **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See

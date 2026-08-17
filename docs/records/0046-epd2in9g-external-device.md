@@ -118,3 +118,45 @@ tests, 1 skipped). Ran `demo/eink_run.py --image v1.28.0 --screenshot ...` again
 MicroPython v1.28.0 image (`uv run --with pillow ...`, since Pillow is still not a project
 dependency — install it yourself per the script's own docstring): booted, drove the panel over
 SPI1, all 4 wipe-animation frames decoded and written correctly.
+
+## Addendum (2026-08-17): where the demo's wall time actually goes, measured
+
+Prompted by "таймінги еінк дисплею у демо дуже великі, симуляція й так повільна" - i.e. the
+assumption that the demo's `busy_nanos_*`/`sleep_ms()` values are what make it slow. Measured
+instead of argued, with an instrumented harness (boot, then per-`on_frame` wall + simulated-clock
+deltas) against real MicroPython `v1.21.0`:
+
+| config | per steady-state frame, wall | per frame, simulated |
+|---|---|---|
+| as shipped before this addendum (SPI 4 MHz, `busy_power=2ms`, `busy_refresh=4ms`) | 1.45 s | 76 ms |
+| `busy_power=0.5ms`, `busy_refresh=2ms` (4 MHz) | 1.48 s | 75 ms |
+| SPI 10 MHz (busy values unchanged) | 1.19 s | 66 ms |
+| SPI 20 MHz (busy values unchanged) | 1.07 s | 62 ms |
+
+So the overridable BUSY delays are **~3% of a frame**, and halving them is inside the noise: of the
+~76 ms of simulated time a frame costs, roughly 19 ms is the 9,472-byte framebuffer write paced at
+the real 4 MHz byte time (`_on_transmit()`'s alarm), 4 ms is `busy_nanos_refresh`, and the rest is
+the guest generating and pushing the frame in MicroPython. The wall/simulated ratio measured ~19x,
+close to the ~30x this record's demo comments already estimated.
+
+Two further results worth recording, both contradicting an initially plausible reading of the
+data:
+
+- **Whole-run wall times are a bad metric here.** Frame 0 (script upload + `init()`) and the tail
+  after the last frame (`sleep()` + output retrieval over the emulated CDC) swing between ~1 s and
+  ~15 s run to run for *identical* configurations - host/device interaction, not panel timings. An
+  earlier pass that compared only total runtimes concluded a faster SPI clock made the demo
+  *slower*; the per-frame instrumentation shows the opposite, and the steady-state frames are
+  deterministic to ~0.05 s.
+- **Real datasheet timings really are out of reach**, which is what justifies this demo's tuned
+  values existing at all: a run with `busy_refresh=15s`/`RESET_MS=200`/`POWER_ON_SETTLE_MS=500` was
+  killed after 15+ minutes without finishing 6 frames.
+
+What changed as a result (`demo/mp_eink_demo.py` only, no `src/` change): guest-side settle delays
+trimmed where they gate nothing (`RESET_MS` 5→2, `POWER_ON_SETTLE_MS` 10→3, `POWER_OFF_SETTLE_MS`
+5→2), and the demo's SPI clock raised 4 MHz → 10 MHz, which is where the measured win actually is.
+`BUSY_POLL_MS` (2 ms) and `eink_run.py`'s `busy_nanos_refresh` (4 ms) were deliberately **left
+alone**: 4 ms is exactly two poll intervals, so firmware still observes BUSY low and spins its wait
+loop at least once. Cutting either further would buy ~1 ms of simulated time per frame and turn the
+BUSY handshake this demo exists to exercise into a no-op. Verified after the change: all six
+rendered frames are byte-identical to the pre-change PNGs, and the whole demo now runs in ~12 s.
