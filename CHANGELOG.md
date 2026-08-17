@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
   `--board-spec` share one path, board files stop downloading at import time, `--image` works with
   a custom board, and one file can serve several firmware families.
+- [docs/records/0060](docs/records/0060-external-io-bridges.md) - deferred (not rejected) design
+  record for external I/O bridges: a browser viewer built on `@wokwi/elements`, and mapping
+  emulated GPIO onto a real host's pins. Decides the parts both share - coalesced outbound
+  snapshots, inbound events through `schedule_threadsafe()`, optional dependency extras - and
+  states the timing ceiling a pin-level bridge cannot escape.
 - [docs/records/0057](docs/records/0057-run-pin-reset-hook.md) - design-only record (nothing
   implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target
   the way BOOTSEL can, a `set_reset_hook()` on `RP2040` versus moving `BaseDevice`'s reset
