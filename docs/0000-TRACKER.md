@@ -27,7 +27,8 @@ and `reference/` for those). The structure itself is decided in
   measurements, the caveats, the open gaps — belongs in the record file, which is the only place it
   can be maintained. Rows that grow with each update stop being scannable, which is the one job
   this list has.
-- **Newest first.** Every section is ordered by *recency*, newest at the top, the same way
+- **Newest first, and open work before finished work.** "In progress / Proposed" comes before
+  "Implemented", and every section is ordered by *recency* with the newest at the top, the same way
   `CHANGELOG.md` reads — so what is being worked on now is what you see first, and the numbering
   order (which is arrival order, not implementation order) stays a property of the record files.
 - **`tasks/NNN.md`** — working notes for investigations that aren't root-caused yet. Not
@@ -48,6 +49,18 @@ and `reference/` for those). The structure itself is decided in
 - **`reference/`** — living how-to / checklists. Not numbered.
 
 ## Ideas
+
+### In progress / Proposed
+
+- [ ] [0063] `RPPIO` ignores `SM_CLKDIV` and `[delay]` cycles | **Found and measured, nothing implemented.** Blocks pulse-width protocols (WS2812, DHT, servo, IR); edge-order ones are unaffected. Blocks [0062]'s live decoding
+- [ ] [0062] YD-RP2040 board + the `Ws2812` device | **device and board landed and live-verified**; open only for live decoding of a *PIO-driven* driver, which waits on [0063]
+- [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
+- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
+- [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
+- [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
+- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation now stated user-facing
+- [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
+- [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md)
 
 ### Implemented
 
@@ -98,18 +111,6 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0004] buffer overflow / race conditions | `#7`
 - [x] [0002] mklittlefs image handling | `#6`
 - [x] [0001] CLI tool + public device API | `#3,#5,#10`
-
-### In progress / Proposed
-
-- [ ] [0063] `RPPIO` ignores `SM_CLKDIV` and `[delay]` cycles | **Found and measured, nothing implemented.** Blocks pulse-width protocols (WS2812, DHT, servo, IR); edge-order ones are unaffected. Blocks [0062]'s live decoding
-- [ ] [0062] YD-RP2040 board + the `Ws2812` device | **device and board landed and live-verified**; open only for live decoding of a *PIO-driven* driver, which waits on [0063]
-- [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
-- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
-- [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
-- [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
-- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation now stated user-facing
-- [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
-- [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md)
 
 ### Rejected / Superseded
 
