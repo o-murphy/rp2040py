@@ -41,8 +41,21 @@ If `uv` isn't on `PATH` in the shell, prefix with `export PATH="$HOME/.local/bin
 ### Keep `uv` current - an old one silently breaks CI
 
 **In any session with network access, check `uv --version` against the latest release and upgrade
-before running `pre-commit`** (`python3 -m pip install --upgrade uv`, or `uv self update`). The
-`uv-lock` hook runs `uv lock --upgrade`, so whatever `uv` you have *writes* `uv.lock` - and CI
+before running `pre-commit`.** Which upgrade path works depends on how `uv` got there and what the
+environment can reach - try them in this order:
+
+1. `uv self update` - correct for a `uv` installed by Astral's standalone installer, and a no-op
+   worth trying first. It refuses outright ("self-update is only available for uv binaries
+   installed via the standalone installer") when `uv` came from `pip`/a package manager, so a
+   failure here is information, not a problem.
+2. Astral's own install script from [the uv docs](https://docs.astral.sh/uv/getting-started/installation/)
+   (`curl -LsSf https://astral.sh/uv/install.sh | sh`) - the documented way to get a standalone
+   build, and what makes step 1 work next time.
+3. `pip install --upgrade uv` - **fallback only, when neither of the above is available**, e.g. a
+   sandbox whose egress policy blocks `astral.sh`/GitHub releases but allows PyPI. It installs
+   globally (`/usr/local/bin`), which is exactly the case the shadowing note below is about.
+
+The `uv-lock` hook runs `uv lock --upgrade`, so whatever `uv` you have *writes* `uv.lock` - and CI
 installs the newest `uv` via `setup-uv`, then runs the same hook. If the two versions disagree
 about the lockfile's contents, CI rewrites `uv.lock`, the `Pre-commit` workflow fails with
 "pre-commit modified files, but auto-commit only runs on pull_request events", and the local run
