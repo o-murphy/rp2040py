@@ -58,7 +58,7 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
 - [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
-- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation now stated user-facing
+- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation stated user-facing. Addendum settles the execution model: interleaved in one loop, not a thread per core
 - [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
 - [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md)
 
