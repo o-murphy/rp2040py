@@ -203,7 +203,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref_name }}
+          # github.ref_name is the bare tag name on a push (correct), but on pull_request it's
+          # the short "<PR>/merge" form (not a fetchable ref on its own - actions/checkout would
+          # try refs/heads/<PR>/merge, which doesn't exist) - github.head_ref is the PR's actual
+          # source branch name instead, and is empty for every other event this workflow handles.
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Download all artifacts dynamically
         uses: actions/download-artifact@v8
