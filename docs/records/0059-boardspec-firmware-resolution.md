@@ -1,8 +1,11 @@
 # 0059. Firmware resolution inside `BoardSpec`: one path for `--board` and `--board-spec`
 
-- Status: **Proposed — documented, not implemented (2026-08-17).** Nothing here is built. Agreed to
-  be the **first thing implemented next session**, ahead of other work, because two live defects
-  (below) are waiting on it rather than on fixes of their own.
+- Status: **Implemented (2026-08-17).** Everything below landed as designed, with one deliberate
+  departure on `mklittlefs --target` — see "Implementation notes" at the end, which is also where
+  the live-boot verification is recorded. (Original status, kept: *Proposed — documented, not
+  implemented (2026-08-17). Nothing here is built. Agreed to be the first thing implemented next
+  session, ahead of other work, because two live defects (below) are waiting on it rather than on
+  fixes of their own.*)
 - Conceived: 2026-08-17
 - Related: 0049 (`BoardSpec`/`--board-spec` board authoring - this extends its accepted design and
   supersedes one row of its flag-compatibility table), 0035 (board-aware flash offsets - where
@@ -250,3 +253,72 @@ would need its own answer to every question above, with no obvious owner.
 - **Nothing here needs `--board`'s registry to change.** A merged board file is still a
   `--board-spec` target; whether `BOARDS` should eventually be built from such files is the
   separate question above.
+
+## Implementation notes (2026-08-17)
+
+Landed as designed. What exists now:
+
+- `BoardSpec.firmware: dict[str, BoardFirmwareSpec] | None`, plus two functions in `boards.py`:
+  `resolve_firmware(spec, family, image=None)` (the whole resolution order above, in one place) and
+  `resolve_layout(spec, family)` — its image-free half, which is what lets `mklittlefs` size an
+  image with no network at all. `UnknownFirmwareFamilyError` names what the spec *does* declare.
+- `BOARDS["pico"]`/`["pico_w"]` carry `firmware` built straight from `firmware_specs.json`
+  (`micropython`/`circuitpython`/`kaluma`), so `--board` and `--board-spec` are literally the same
+  call. `resolve_board_spec()` survives unchanged as public API, now a thin wrapper: it maps its
+  `FirmwareSpec` argument back to a family name (`firmware_retrieve.family_of()`), and adapts a
+  caller-built one — including a `known_versions`-shaped spec like BOOTROM, which becomes one
+  board-agnostic `BoardFirmwareSpec` — so custom specs keep working exactly as before.
+- `firmware_retrieve.py` gained `SPECS`, `family_of()` and `board_flash_layout()` (the board-name-
+  free half of `flash_layout()`, which now delegates to it).
+- The CLI resolves through `_board_source()` + `resolve_firmware()` on `run`/`micropython`/
+  `kaluma`/`mklittlefs` — `_resolve_board()` takes a family *name* now, not a `FirmwareSpec`, which
+  incidentally makes [0061](0061-one-firmware-command-family.md)'s step 1 nearly free. `--image`
+  and `--fetch-fw-only` work with `--board-spec`; `_validate_board_spec_flags()` is gone.
+- `boards/` reorganised as designed: `boards/waveshare_rp2040_lcd_0_96/` (one file, both families —
+  the two former per-family files had identical `extras`) and `boards/weactstudio/`, with the
+  per-family directories and their `__init__.py`s deleted. `demo/lcd_run.py` imports the one file
+  and resolves the family itself. `pyproject.toml`'s `boards/**` `N999` exemption went with them:
+  the directory names are case-normalized now, so PEP8 module naming applies unassisted.
+
+**Departure: `--target` + `--board-spec` on `mklittlefs` is now allowed, and selects the family.**
+The flag table above kept them incompatible, on the reasoning that "`--target` picks a family for a
+*name* lookup, which a spec does not do". That reasoning expired inside this very record: once one
+spec carries several families with *different* layouts (which is exactly what
+`waveshare_rp2040_lcd_0_96` does — `fs_blockcount` 352 under MicroPython, 512 under CircuitPython),
+something has to pick, and `mklittlefs` has no `--circuitpython` flag of its own. So `--target` is
+that selector, and it is only *needed* when a spec declares more than one family — one declaration
+is selected implicitly, and a spec with an explicit `layout` skips the question entirely. Declaring
+several families and passing neither `--target` nor `--block-size`/`--block-count` is an error that
+says so, rather than a silent pick. This is the same "the family key stays explicit, a silent pick
+would be a trap" rule the record already argued for `--circuitpython`.
+
+One consequence worth naming, since [0061](0061-one-firmware-command-family.md) lists it as an open
+question: `--target`'s `choices` are still the three built-in family names, so a board file that
+invented a fourth family key could not be selected through it. Nothing needs one today.
+
+**Verified.** Full suite green plus `pre-commit run --all-files`, and live against real firmware —
+every image resolved offline from `~/.cache/rp2040py`, which is itself the point of (1):
+
+| what | result |
+|---|---|
+| `--board pico --image 1.28.0 -c ...` (built-in path, unchanged behavior) | boots, executes |
+| `--board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD -c ...` | boots real `WAVESHARE_RP2040_LCD_0_96` v1.28.0, `sys.implementation.version == (1, 28, 0)` |
+| the same spec `--circuitpython` | boots real CircuitPython `10.2.1`, `board.DISPLAY` 160x80 — one file, two families, picked at run time |
+| the same spec **plus `--image 1.28.0`** | boots — the combination this record set out to allow |
+| `mklittlefs --board-spec <same spec> --target {micropython,circuitpython}` | 1441792 vs. 2097152 bytes (352 vs. 512 blocks) — the two families' real, different geometries off one file, no network |
+| the same, no `--target` | refused, naming both families and how to pick |
+| `mklittlefs --board-spec boards/weactstudio/__init__.py:BOARD_FLASH_2M` | 1048576 bytes (256 blocks), no `--target` needed — one declared family is selected implicitly |
+| full round trip: that `mklittlefs` image booted back through `--board-spec --littlefs` | `os.statvfs('/')` = `(4096, 4096, 352, 350)`, and a module imported off it |
+| `boards/weactstudio/` under MicroPython `1.28.0` | boots, `os.statvfs('/')` = `(4096, 4096, 3840, 3838)` — the 16 MiB variant's own derived `fs_blockcount` |
+| the same file under CircuitPython `10.2.1` (a family added to it *because* this landed) | boots, `board.board_id == "weact_studio_pico"`, CIRCUITPY mounted and populated at the derived `0x100000` |
+
+`boards/weactstudio/` gaining CircuitPython is the change's first real use by someone other than
+itself: upstream ships that board under a *different id* (`weact_studio_pico` vs. MicroPython's
+`WEACTSTUDIO`), which is exactly the "two firmwares disagree on the id" case the naming rule above
+anticipated — one directory, both ids cited. Before this record it would have been a second file
+under `boards/circuitpython/`.
+
+CI (`ci-micropython.yml`'s `test-board-spec` job) gained four steps for the parts unit tests can't
+reach: a `boards/` file resolving its own firmware at use time, `--image` alongside `--board-spec`,
+`--circuitpython` selecting the second family of one file, and `mklittlefs --target` producing the
+two families' different sizes (1441792 vs. 2097152 bytes) off that same file.

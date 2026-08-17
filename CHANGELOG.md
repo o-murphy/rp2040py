@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `BoardSpec.firmware` - a board now *declares* its firmware instead of arriving with one already
+  resolved: a `dict` keyed by firmware family (`micropython`/`circuitpython`/`kaluma`, the names
+  `firmware_specs.json` already uses), each value the existing `BoardFirmwareSpec` (`default_tag`,
+  a tag -> URL **or local path** map, and that family's flash layout). `boards.resolve_firmware(
+  spec, family, image=None)` turns that into a concrete image/layout at use time, and
+  `boards.resolve_layout(spec, family)` is its image-free half. `--board` and `--board-spec` now go
+  through that one function - `BOARDS["pico"]`/`["pico_w"]` carry `firmware` built straight from
+  `firmware_specs.json`, and `resolve_board_spec()` remains as a thin board-name wrapper over it.
+  Consequences: importing a board file downloads nothing (it is data), `--image` and
+  `--fetch-fw-only` work with `--board-spec` the same way they do with `--board`, one board file
+  can serve several firmware families, and a board file that names a local `.uf2` is offline by
+  construction. See [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md).
+- `rp2040py.utils.firmware_retrieve` gained `SPECS`, `family_of()` (a `FirmwareSpec` -> its
+  `firmware_specs.json` family name) and `board_flash_layout()` (the board-name-free half of
+  `flash_layout()`, which now delegates to it).
+- `boards/weactstudio/` gained a **CircuitPython** declaration alongside its four MicroPython
+  flash variants - the same physical board, which that firmware ships under a different id
+  (`weact_studio_pico`), so the file cites both rather than splitting in two. `fs_start=0x100000`
+  derived from upstream the same way as every other CircuitPython entry here (no
+  `CIRCUITPY_FIRMWARE_SIZE` override and no `link.ld` of its own, so `link-rp2040.ld`'s 1020K
+  default plus the 4 KiB NVM applies), and CircuitPython's own `pins.c` confirms the LED and USR
+  button pins the board file already modelled (GPIO25 / GPIO23). Live-verified against real
+  firmware: MicroPython `1.28.0` reports the 16 MiB variant's own `os.statvfs('/')` (3840 4-KiB
+  blocks), and CircuitPython `10.2.1` boots with `board.board_id == "weact_studio_pico"` and a
+  mounted CIRCUITPY drive. The RESET button stays unmodelled (it pulls RUN, not a GPIO - see
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md)).
 - `rp2040py.external.st7735s.St7735s` - a new `ExternalDevice` emulating the ST7735S TFT
   controller behind Waveshare's 0.96inch 160x80 IPS panel: CASET/RASET address windows, RAMWR
   pixel streaming, MADCTL/COLMOD/DISPON/INVON state and the RST pin, all decoded off the vendor's
@@ -18,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the module's own reference orientation (`0xA8`, what the vendor driver sets) stays the identity.
   RGB444 and RGB666 are decoded too, normalized into the same RGB565 framebuffer so the callback
   speaks one format regardless of `COLMOD`.
-- `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` - a `--board-spec` target for the Waveshare
+- `boards/waveshare_rp2040_lcd_0_96/` - a `--board-spec` target for the Waveshare
   RP2040-LCD-0.96, with its onboard panel, BOOTSEL and LCD backlight attached as fixed extras.
   Flash layout derived from upstream (`MICROPY_HW_FLASH_STORAGE_BYTES = 1441792` + pico-sdk's
   `PICO_FLASH_SIZE_BYTES = 2 MiB` -> `fs_start=0xa0000`, `fs_blockcount=352`) and live-verified
@@ -26,8 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trip, `os.statvfs('/')` reporting 352 4-KiB blocks, and real frames decoded from a
   vendor-shaped guest driver. See [docs/records/0056](docs/records/0056-st7735s-waveshare-lcd-board.md).
 
-- `boards/circuitpython/waveshare_rp2040_lcd_0_96/` - the same Waveshare RP2040-LCD-0.96 under
-  CircuitPython, needing no new device code: its own flash layout (`fs_start=0x100000`, derived
+- the same board under **CircuitPython**, needing no new device code (a second `firmware` key in
+  the same file): its own flash layout (`fs_start=0x100000`, derived
   from `CIRCUITPY_FIRMWARE_SIZE` + the 4 KiB NVM region, with no board-level override) and the
   same panel/BOOTSEL/backlight extras. CircuitPython initialises the display in `board_init()`, so
   booting this spec paints the emulated panel with no guest code at all - live-verified against
@@ -54,10 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
 
 ### Documentation
-- [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - design-only record
-  (nothing implemented) for moving firmware resolution into `BoardSpec` itself, so `--board` and
-  `--board-spec` share one path, board files stop downloading at import time, `--image` works with
-  a custom board, and one file can serve several firmware families.
+- [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - now **implemented**
+  (see Added/Changed above): the record carries the design plus an implementation note covering the
+  one deliberate departure from it (`mklittlefs --target` became `--board-spec`'s firmware-family
+  selector instead of staying incompatible with it) and the live-boot verification.
 - [docs/records/0061](docs/records/0061-cli-family-flag.md) - deferred design record, dependent on
   0059, for folding `micropython` (plus its `--circuitpython` boolean) and `kaluma` into one
   command with `--family`: what actually differs between them (the device protocol, not the
@@ -74,6 +100,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence into the MCU, and the semantics still to settle before any of it is built.
 
 ### Changed
+- **`boards/` is one directory per board, not per firmware family.** `boards/micropython/
+  WAVESHARE_RP2040_LCD_0_96/` and `boards/circuitpython/waveshare_rp2040_lcd_0_96/` - which had
+  identical `extras`, being the same soldered hardware - are now the single
+  [`boards/waveshare_rp2040_lcd_0_96/`](boards/waveshare_rp2040_lcd_0_96/__init__.py), declaring
+  both firmwares and selected by `--circuitpython` at run time; `boards/micropython/WEACTSTUDIO/`
+  became [`boards/weactstudio/`](boards/weactstudio/__init__.py). Directory names are the
+  firmware's own board id, case-normalized. **Breaking for anyone pointing `--board-spec` at the
+  old paths**, and `demo/lcd_run.py` loads the one file (resolving the family itself) instead of
+  two.
+- CI (`ci-micropython.yml`'s `test-board-spec` job) now also boots a declarative `boards/` file,
+  checks `--image` alongside `--board-spec`, selects a two-family board file's CircuitPython side,
+  and asserts `mklittlefs --target` sizes that same file differently per family.
+- `--board-spec` is now mutually exclusive with `--board` and nothing else: `--image` (tag, path or
+  URL) and `--fetch-fw-only` work with it, given a `firmware` entry for the family being run. On
+  `mklittlefs`, `--target` changed meaning for `--board-spec` from "rejected" to "pick which of the
+  spec's firmware families to size the image against" - needed only when a spec declares more than
+  one, and declaring several without it is an error naming both rather than a silent pick.
+  Asking any spec for a family it does not declare raises/reports `UnknownFirmwareFamilyError`,
+  naming what it *does* declare.
 - `demo/mp_eink_demo.py` runs the panel's SPI bus at 10 MHz instead of 4 MHz and trims the
   settle delays that gate nothing (`RESET_MS` 5->2, `POWER_ON_SETTLE_MS` 10->3,
   `POWER_OFF_SETTLE_MS` 5->2), cutting the demo's wall time roughly in half with byte-identical

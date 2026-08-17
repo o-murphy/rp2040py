@@ -14,8 +14,9 @@
 window or as a numbered PNG sequence - the LCD counterpart of demo/eink_run.py, and the thing that
 produced the screenshots in docs/records/0056.
 
-Two firmwares, from the two board files under boards/ (this script is also a worked example of
-loading one from an ordinary Python program, the same `BoardSpec` a `--board-spec` CLI run gets):
+Two firmwares, from the one board file under boards/ (this script is also a worked example of
+loading one from an ordinary Python program, the same `BoardSpec` a `--board-spec` CLI run gets,
+resolved for a firmware family the same way the CLI resolves it):
 
     python demo/lcd_run.py --screenshot out            # MicroPython + demo/mp_lcd_demo.py
     python demo/lcd_run.py --circuitpython --tkinter   # CircuitPython, no guest code at all
@@ -24,10 +25,11 @@ loading one from an ordinary Python program, the same `BoardSpec` a `--board-spe
 and auto-refreshes it, so frames start arriving from the boot alone. MicroPython does need a
 driver, and gets `demo/mp_lcd_demo.py` pushed over the raw REPL.
 
-Both board files resolve their firmware image through `retrieve()`, which downloads on first use
-and caches under `~/.cache/rp2040py`. With no network, drop the `.uf2` there yourself under the
-exact filename its download URL ends with - `retrieve()` finds a cached file before it tries to
-fetch anything, so no flag is needed for an offline run.
+The board file declares both firmwares as data and downloads nothing when imported;
+`resolve_firmware(board, family)` below turns the one this run needs into a real image, through
+`retrieve()` - which downloads on first use and caches under `~/.cache/rp2040py`. With no network,
+drop the `.uf2` there yourself under the exact filename its download URL ends with - `retrieve()`
+finds a cached file before it tries to fetch anything, so no flag is needed for an offline run.
 
 Requires Pillow (`pip install Pillow`); `--tkinter` additionally needs a Tk-enabled Python build.
 `rp2040py.external.st7735s.St7735s` itself has no Pillow dependency - decoding its raw RGB565
@@ -46,6 +48,7 @@ from PIL import Image
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))  # boards/ lives at the repo root, outside the installed package
 
+from rp2040py.boards import resolve_firmware
 from rp2040py.device import MicroPythonDevice
 from rp2040py.external.st7735s import LCD_HEIGHT, LCD_WIDTH
 from rp2040py.utils.logging import LogLevel
@@ -178,12 +181,14 @@ def main() -> None:
     # widgets may only be touched from the thread that created them). Same shape as eink_run.py.
     frame_queue: queue.Queue[Image.Image] = queue.Queue()
 
-    if args.circuitpython:
-        from boards.circuitpython.waveshare_rp2040_lcd_0_96 import board_with
-    else:
-        from boards.micropython.WAVESHARE_RP2040_LCD_0_96 import board_with
+    from boards.waveshare_rp2040_lcd_0_96 import board_with
 
-    board = board_with(lambda buf: frame_queue.put(_decode_frame(buf)))
+    # One board file, two firmware families - `--circuitpython` picks which of its own `firmware`
+    # declarations to resolve, exactly as the CLI's own flag does (docs/records/0059).
+    board = resolve_firmware(
+        board_with(lambda buf: frame_queue.put(_decode_frame(buf))),
+        "circuitpython" if args.circuitpython else "micropython",
+    )
     device = MicroPythonDevice(board=board, circuitpython=args.circuitpython, log_level=LogLevel.ERROR)
     device.start_async().result()
 

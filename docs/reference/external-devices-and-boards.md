@@ -30,6 +30,7 @@ exist so the extension point does not read like `rp2040py.device`, which is the 
 - [Writing a `BoardSpec`](#writing-a-boardspec)
   - [Scenario A: your own device mix, existing firmware](#scenario-a-your-own-device-mix-existing-firmware)
   - [Scenario B: a fully custom board (your own firmware)](#scenario-b-a-fully-custom-board-your-own-firmware)
+  - [Resolving a `BoardSpec`](#resolving-a-boardspec)
   - [Using a `BoardSpec`](#using-a-boardspec)
   - [Ready-made examples in this repo](#ready-made-examples-in-this-repo)
   - [Seeing what a display device drew](#seeing-what-a-display-device-drew)
@@ -92,16 +93,18 @@ frozen dataclass, not a closed registry:
 class BoardSpec:
     mcu: type[RP2040] = RP2040
     extras: tuple[ExternalDeviceFactory, ...] = ()
-    layout: FlashLayout | None = None  # None where no filesystem concept applies
-    image: str | Path | None = None  # an already-resolved local file path
+    layout: FlashLayout | None = None  # resolved, or an explicit override
+    image: str | Path | None = None  # resolved, or an explicit override - never set by an author
+    firmware: dict[str, BoardFirmwareSpec] | None = None  # how to resolve those two
 ```
 
-`boards.BOARDS["pico"]` is an ordinary instance of it, nothing magic:
+`boards.BOARDS["pico"]` is an ordinary instance of it, nothing magic - its `firmware` comes from
+this project's own `firmware_specs.json`, and a board file's comes from whoever wrote it:
 
 ```python
 BOARDS = {
-    "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton)),
-    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton, Cyw43439)),
+    "pico": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton), firmware={...}),
+    "pico_w": BoardSpec(extras=(lambda: LEDMock(gpio=25), BootselButton, Cyw43439), firmware={...}),
 }
 ```
 
@@ -109,27 +112,31 @@ BOARDS = {
 per board construction, so two independently-built boards never end up sharing one device's
 mutable state (GPIO listeners, etc.).
 
+`firmware` is keyed by **firmware family** - `"micropython"`, `"circuitpython"`, `"kaluma"` - so
+one spec describes one *board*, for as many firmwares as run on it. Nothing is downloaded when
+your board file is imported: it declares data, and the CLI/SDK resolves it when something actually
+boots (see "Resolving a `BoardSpec`" below, and
+[record 0059](../records/0059-boardspec-firmware-resolution.md)).
+
 ### Scenario A: your own device mix, existing firmware
 
 Start from `pico`'s own `extras` and add your device to it:
 
 ```python
 import dataclasses
-from rp2040py.boards import BOARDS, resolve_board_spec
-from rp2040py.utils.firmware_retrieve import MICROPYTHON
+from rp2040py.boards import BOARDS, resolve_firmware
 from my_devices import MyDevice
 
 my_board = dataclasses.replace(BOARDS["pico"], extras=(*BOARDS["pico"].extras, MyDevice))
-resolved = resolve_board_spec("pico", MICROPYTHON, "1.28.0")  # or None for the default tag
-my_board = dataclasses.replace(my_board, image=resolved.image, layout=resolved.layout)
+my_board = resolve_firmware(my_board, "micropython", "1.28.0")  # or omit the tag for the default
 ```
 
-`resolve_board_spec(board, firmware_spec, tag=None)` is the same shortcut `--board` itself uses
-internally - `BOARDS[board]`'s `mcu`/`extras` plus that firmware family's resolved image/flash
-layout, combined into one ready-to-run `BoardSpec`. Reusing its `layout`/`image` (rather than
-`BOARDS["pico"]`'s bare `mcu`/`extras`, which carry neither) is what makes the two-step
-`dataclasses.replace()` above necessary - `resolve_board_spec()` itself always returns a spec with
-`BOARDS[board]`'s *original* `extras`, not yours.
+`BOARDS["pico"]` already carries `pico`'s own `firmware` for every family this project ships, so
+replacing `extras` keeps all of it - resolving your board is then the same one call any other spec
+gets. `resolve_board_spec(board, firmware_spec, tag=None)` is still there as the board-name
+shortcut `--board` uses (`BOARDS[board]` plus that family's resolved image/layout, in one call),
+but it always returns `BOARDS[board]`'s *original* `extras`, so it is the wrong tool once you have
+your own.
 
 ### Scenario B: a fully custom board (your own firmware)
 
@@ -141,19 +148,71 @@ derived it the same way this project derives `pico`'s/`pico_w`'s own numbers (fr
 real upstream board config - e.g. `ports/rp2/boards/<BOARD>/mpconfigboard.h` for MicroPython):
 
 ```python
-from rp2040py.boards import BoardSpec, FlashLayout
+from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
 my_board = BoardSpec(
     extras=(lambda: LEDMock(gpio=25), BootselButton),
-    layout=FlashLayout(fs_start=0x180000, fs_blockcount=352, fs_blocksize=4096),
-    image="/path/to/your/firmware.uf2",  # a local file - never a version tag or URL
+    firmware={
+        "micropython": BoardFirmwareSpec(
+            default_tag="1.28.0",
+            fw={"1.28.0": "/path/to/your/firmware.uf2"},  # or an https:// URL
+            layout={"fs_start": "0x180000", "fs_blockcount": 352, "fs_blocksize": 4096},
+        )
+    },
 )
 ```
 
-`FlashLayout.prog_start` is Kaluma-only (its separate YMODEM "user program" region) - leave it
-`None` for MicroPython/CircuitPython, which keep user code inside the filesystem itself.
+That is the whole file - **you never set `image` yourself**. `fw`'s values are a URL *or* a local
+path (a URL is downloaded once and cached under `~/.cache/rp2040py`; a local path is used as-is),
+so a board that pins a local `.uf2` works offline by construction. `layout` uses the same hex-string
+convention `firmware_specs.json` does, and `prog_start` is Kaluma-only (its separate YMODEM "user
+program" region) - leave it out for MicroPython/CircuitPython, which keep user code inside the
+filesystem itself.
+
+Add a second key to serve a second firmware for the same hardware - the devices, pin map and
+flash geometry belong to the board, not to whichever firmware is flashed:
+
+```python
+my_board = BoardSpec(
+    extras=(lambda: LEDMock(gpio=25), BootselButton),
+    firmware={
+        "micropython": BoardFirmwareSpec(default_tag="1.28.0", fw={...}, layout={...}),
+        "circuitpython": BoardFirmwareSpec(default_tag="10.2.1", fw={...}, layout={...}),
+    },
+)
+```
+
+The family key stays explicit even for a one-firmware board, and is never inferred from "there is
+only one entry": the family picks the flash loader and the console behavior as well as the image
+(`--circuitpython` means FAT12 and a different post-boot handshake), so a `--circuitpython` run
+quietly booting a lone MicroPython declaration would be a trap. Asking for a family a spec doesn't
+declare is an error that names what it *does* declare.
+
+`layout` and `image` are still writable directly, as overrides for a spec that has already been
+resolved (or a one-off you want to pin by hand) - see the resolution order below.
+
+### Resolving a `BoardSpec`
+
+The CLI does this for you: `--board`/`--board-spec` picks the spec, the subcommand picks the
+family (`micropython`, `--circuitpython`, `kaluma`), and `--image` overrides the tag. From the SDK,
+call it yourself before handing the spec to a `Device` class:
+
+```python
+from rp2040py.boards import resolve_firmware
+
+board = resolve_firmware(my_board, "micropython")  # its own default_tag
+board = resolve_firmware(my_board, "micropython", "1.27.0")  # a specific tag
+board = resolve_firmware(my_board, "micropython", "/tmp/other.uf2")  # a local file/URL
+```
+
+In order: an explicit `image` argument wins (a local path/URL is used as given, a tag is resolved
+against `firmware[family]`); else an `image` the spec already carries; else `firmware[family]` at
+its own `default_tag`. `layout` follows the same order - an explicit `spec.layout` first, else
+`firmware[family].layout`. `resolve_layout(spec, family)` gives you just the layout, without
+resolving (or downloading) an image at all.
 
 ### Using a `BoardSpec`
 
@@ -167,48 +226,53 @@ rp2040py mklittlefs --board-spec my_board.py:BOARD -o littlefs.img app.py
 rp2040py run --board-spec my_board.py:BOARD --image firmware.uf2
 ```
 
-`--board-spec` is mutually exclusive with `--board` (and, where relevant, `--image`/
-`--fetch-fw-only`/`--target` - see [record 0049](../records/0049-external-device-authoring-docs.md)'s
-flag-compatibility table for exactly which flag conflicts with it on which subcommand).
-`RP2040PY_BOARD_SPEC` (an env var, same `target:attr` syntax) works the same way as the flag, for
-a persistent local setup that doesn't want it typed every invocation - `tests/pico_spec.py` is a
-real, CI-verified worked example of a board-spec file, built by calling `resolve_board_spec()` at
-import time against an env-var-selected MicroPython tag.
+`--board-spec` is mutually exclusive with `--board`, and nothing else: `--image` (a tag, a path or
+a URL) and `--fetch-fw-only` work with it exactly as they do with `--board`, as long as the spec
+declares a `firmware` entry for the family being run. On `mklittlefs`, `--target` picks *which* of
+the spec's families to size the image against, and is only needed when it declares more than one
+(see [record 0059](../records/0059-boardspec-firmware-resolution.md), which superseded 0049's
+stricter table). `RP2040PY_BOARD_SPEC` (an env var, same `target:attr` syntax) works the same way
+as the flag, for a persistent local setup that doesn't want it typed every invocation -
+`tests/pico_spec.py` is a real, CI-verified worked example of a board-spec file.
 
-**From the SDK**, pass the `BoardSpec` straight to a `Device` class - `board` is always
-keyword-only, and always the *only* board-related argument (no separate `image` kwarg, no
+**From the SDK**, resolve the spec (see above) and pass it straight to a `Device` class - `board`
+is always keyword-only, and always the *only* board-related argument (no separate `image` kwarg, no
 board-name string):
 
 ```python
+from rp2040py.boards import resolve_firmware
 from rp2040py.device import MicroPythonDevice
 
-async with MicroPythonDevice(board=my_board) as device:
+async with MicroPythonDevice(board=resolve_firmware(my_board, "micropython")) as device:
     stdout, stderr = await device.aexec("print(1 + 1)")
 ```
+
+A `Device` class never resolves on your behalf - it asserts that the spec it was handed already
+carries an `image`, so nothing downloads firmware as a side effect of constructing a device.
 
 ### Ready-made examples in this repo
 
 Two complete board files live under [`boards/`](../../boards/), outside `src/rp2040py` (they are
 `--board-spec` targets, not part of the installed package). Both derive every number from the
 firmware's own upstream board config rather than guessing, and both are live-verified against real
-MicroPython `v1.28.0` images:
+firmware:
 
 | board | what it shows |
 |---|---|
-| [`boards/micropython/WEACTSTUDIO/`](../../boards/micropython/WEACTSTUDIO/__init__.py) | one `BoardSpec` per flash-size variant off a single `FirmwareSpec`, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
-| [`boards/micropython/WAVESHARE_RP2040_LCD_0_96/`](../../boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below) |
-| [`boards/circuitpython/waveshare_rp2040_lcd_0_96/`](../../boards/circuitpython/waveshare_rp2040_lcd_0_96/__init__.py) | the same physical board under a different firmware family: its own flash layout and image, the identical device set, and no guest code needed - CircuitPython initialises the panel itself at boot. Needs `--circuitpython` alongside `--board-spec` (that flag also picks the FAT12 loader and console behavior) |
+| [`boards/weactstudio/`](../../boards/weactstudio/__init__.py) | one `BoardSpec` per flash-size variant, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
+| [`boards/waveshare_rp2040_lcd_0_96/`](../../boards/waveshare_rp2040_lcd_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below). Also a **two-family** file: one declaration each for MicroPython and CircuitPython, with their different images and flash layouts, selected by `--circuitpython` at run time - under which the panel paints itself at boot, with no guest code at all |
 
-Directory names are the *firmware's own* board id - MicroPython's uppercase
-`ports/rp2/boards/<BOARD>` names under `boards/micropython/`, CircuitPython's lowercase
-`ports/raspberrypi/boards/<board>` names under `boards/circuitpython/` - which is what keeps every
-number in a board file checkable against a real upstream source.
+One directory per *board*, not per firmware family, named after the firmware's own board id,
+case-normalized (`weactstudio` for MicroPython's `ports/rp2/boards/WEACTSTUDIO`) - which is what
+keeps every number in a board file checkable against a real upstream source. Where two firmwares
+disagree on the id, pick one and cite both in the docstring.
 
-All are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
+Both are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
 
 ```sh
-rp2040py micropython --board-spec boards/micropython/WAVESHARE_RP2040_LCD_0_96/__init__.py:BOARD
-PYTHONPATH=. rp2040py micropython --board-spec boards.micropython.WEACTSTUDIO:BOARD_FLASH_4M
+rp2040py micropython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD
+rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD
+PYTHONPATH=. rp2040py micropython --board-spec boards.weactstudio:BOARD_FLASH_4M
 ```
 
 ### Seeing what a display device drew
@@ -232,8 +296,8 @@ sizes.
 
 The shape is the same in both, and is what to copy for your own device:
 
-1. Build the board with a callback closed over - `board_with(on_frame)` in the two
-   `WAVESHARE_RP2040_LCD_0_96` board files, or `attach_external_devices(mcu, Epd2in9G(on_frame=...))`
+1. Build the board with a callback closed over - `board_with(on_frame)` in the
+   `waveshare_rp2040_lcd_0_96` board file, or `attach_external_devices(mcu, Epd2in9G(on_frame=...))`
    for a device you wire up yourself.
 2. Hand frames to the drawing thread through a `queue.Queue`. `on_frame` fires on the device's own
    engine-room thread, and a GUI toolkit's widgets may only be touched from the thread that made
@@ -246,9 +310,11 @@ Two practical notes both runners now encode, learned the hard way:
 - **Bound the run.** A guest script can stall, and CircuitPython's display *never* stops - it
   auto-refreshes at 60 fps from `board_init()`, so "run until it finishes" has no meaning there.
   `demo/lcd_run.py` defaults to 5 frames when dumping PNGs, and both runners take `--timeout`.
-- **Offline images.** Board files resolve firmware through `retrieve()`, which checks
+- **Offline images.** Firmware resolution goes through `retrieve()`, which checks
   `~/.cache/rp2040py` before downloading anything. Dropping a `.uf2` there under the exact filename
-  its download URL ends with makes every path - CLI, SDK, these runners - work with no network.
+  its download URL ends with makes every path - CLI, SDK, these runners - work with no network; so
+  does declaring a local path in the board file's own `fw` map. Importing a board file downloads
+  nothing either way.
 
 ## Caveats worth knowing
 
@@ -260,7 +326,7 @@ Two practical notes both runners now encode, learned the hard way:
   factories, and `attach_external_devices()` returns nothing, so a device with a callback (a
   display's `on_frame`, say) can be *booted* through `--board-spec` but cannot deliver anything
   back to the caller. From the SDK, build the board with the callback already closed over - the
-  `board_with(on_frame)` helper in `boards/micropython/WAVESHARE_RP2040_LCD_0_96/` is the pattern.
+  `board_with(on_frame)` helper in `boards/waveshare_rp2040_lcd_0_96/` is the pattern.
   From the CLI there is no answer today; see [record 0056](../records/0056-st7735s-waveshare-lcd-board.md).
 - **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing

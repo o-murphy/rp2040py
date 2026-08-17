@@ -60,7 +60,16 @@ from typing import Any
 
 import argcomplete
 
-from rp2040py.boards import BOARDS, BoardSpec, FlashLayout, build_rp2040, build_rp2040_from_spec, resolve_board_spec
+from rp2040py.boards import (
+    BOARDS,
+    BoardSpec,
+    FlashLayout,
+    UnknownFirmwareFamilyError,
+    build_rp2040,
+    build_rp2040_from_spec,
+    resolve_firmware,
+    resolve_layout,
+)
 from rp2040py.cli.intelhex import load_hex
 from rp2040py.cli.mklittlefs import LITTLEFS_DEFAULT_DISK_VERSION, LITTLEFS_DISK_VERSIONS, build_littlefs_image
 from rp2040py.cli.pty_repl import PtyInteractiveRepl
@@ -80,15 +89,7 @@ from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import ShutdownRequest, Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.assembler import opcode_adds2, opcode_subs2
-from rp2040py.utils.firmware_retrieve import (
-    BOOTROM,
-    CIRCUITPYTHON,
-    KALUMA,
-    MICROPYTHON,
-    FirmwareSpec,
-    flash_layout,
-    retrieve,
-)
+from rp2040py.utils.firmware_retrieve import BOOTROM, retrieve
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 __all__ = ("main",)
@@ -204,18 +205,13 @@ def _resolve_run_mcu(args: argparse.Namespace) -> "RP2040 | None":
     0049's "Accepted design" section) into a constructed `RP2040` for `run`, or `None` (already
     logged) on failure. Unlike `micropython`/`kaluma`/`mklittlefs`, `--image` here is never routed
     through a `BoardSpec` at all - it's always a raw local program, not board-family-versioned
-    firmware, so it stays fully independent of whichever of `--board`/`--board-spec` picked the
-    mcu/extras."""
-    board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
-    if board_spec_source is not None:
-        if args.board is not None:
-            _logger.error("--board-spec is mutually exclusive with --board")
-            return None
-        board = _load_board_spec_target(board_spec_source)
-        if board is None:
-            return None
-        return build_rp2040_from_spec(board)
-    return build_rp2040(args.board if args.board is not None else "pico")
+    firmware - so no firmware family is selected and nothing is resolved: only the spec's
+    `mcu`/`extras` matter."""
+    source = _board_source(args)
+    if source is None:
+        return None
+    spec, _label, _from_file = source
+    return build_rp2040_from_spec(spec)
 
 
 async def _run_async(args: argparse.Namespace) -> int:
@@ -481,40 +477,43 @@ def _load_board_spec_target(target_attr: str) -> "BoardSpec | None":
     return board
 
 
-def _validate_board_spec_flags(args: argparse.Namespace) -> None:
-    """`--board-spec`'s incompatible-flag set (docs/records/0049's "Accepted design" flag-
-    compatibility table: `--image`/`--fetch-fw-only` don't mean anything once a `BoardSpec`
-    already carries a concrete, resolved `image` - there's no tag/URL left to resolve or
-    pre-fetch). Validated by hand, same pattern as `_validate_littlefs_fat12()` (0036)."""
-    incompatible = [flag for flag, given in (("--image", args.image), ("--fetch-fw-only", args.fetch_fw_only)) if given]
-    if incompatible:
-        _logger.error("--board-spec is mutually exclusive with %s", ", ".join(incompatible))
-        sys.exit(1)
-
-
-def _resolve_board(args: argparse.Namespace, firmware_spec: FirmwareSpec) -> "BoardSpec | None":
-    """Resolves `--board`/`--board-spec`/`RP2040PY_BOARD_SPEC` (mutually exclusive - docs/records/
-    0049's "Accepted design" section) into one ready-to-run `BoardSpec`, or `None` (already
-    logged) on failure. `firmware_spec` (MICROPYTHON/CIRCUITPYTHON/KALUMA) is only consulted for
-    the `--board` path - a `--board-spec` `BoardSpec` already carries its own resolved
-    `image`/`layout`, nothing left here to look up against a firmware family."""
+def _board_source(args: argparse.Namespace) -> "tuple[BoardSpec, str, bool] | None":
+    """The unresolved `BoardSpec` `--board`/`--board-spec`/`RP2040PY_BOARD_SPEC` names, a
+    human-readable label for it to put in error messages, and whether it came from a board *file*
+    (as opposed to the built-in registry). `None` (already logged) on failure - which today means
+    only the two being given together, since either one alone resolves through the same
+    `resolve_firmware()` afterwards (docs/records/0059)."""
     board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
     if board_spec_source is not None:
         if args.board is not None:
             _logger.error("--board-spec is mutually exclusive with --board")
             return None
-        _validate_board_spec_flags(args)
-        board = _load_board_spec_target(board_spec_source)
-        if board is None:
-            return None
-        if board.image is None:
-            _logger.error("--board-spec %s: BoardSpec.image is not set", board_spec_source)
-            return None
-        return board
+        spec = _load_board_spec_target(board_spec_source)
+        return None if spec is None else (spec, f"--board-spec {board_spec_source}", True)
 
-    board = resolve_board_spec(args.board if args.board is not None else "pico", firmware_spec, args.image)
+    board = args.board if args.board is not None else "pico"
+    return BOARDS[board], f"--board {board}", False
+
+
+def _resolve_board(args: argparse.Namespace, family: str) -> "BoardSpec | None":
+    """Resolves `--board`/`--board-spec`/`RP2040PY_BOARD_SPEC` (mutually exclusive) plus `--image`
+    into one ready-to-run `BoardSpec`, or `None` (already logged) on failure. `family` is which
+    firmware family this subcommand is running (`--circuitpython` picks `"circuitpython"` over
+    `"micropython"`; `kaluma` is always `"kaluma"`) - since docs/records/0059 that selects *which*
+    of the spec's own `firmware` declarations to resolve, for a `--board-spec` board file exactly
+    as for a `--board` registry entry, so `--image` now works with either."""
+    source = _board_source(args)
+    if source is None:
+        return None
+    spec, label, _from_file = source
+
+    try:
+        board = resolve_firmware(spec, family, args.image)
+    except UnknownFirmwareFamilyError as exc:
+        _logger.error("%s: %s", label, exc)
+        return None
     if board.image is None:
-        _logger.error("Could not find firmware image: %s", args.image)
+        _logger.error("Could not find firmware image for %s: %s", label, args.image or f"the default {family} tag")
         return None
     return board
 
@@ -567,7 +566,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
             _logger.error("--expect-text cannot be combined with -c/-m/<filename>")
             return 1
 
-    board = _resolve_board(args, CIRCUITPYTHON if args.circuitpython else MICROPYTHON)
+    board = _resolve_board(args, "circuitpython" if args.circuitpython else "micropython")
     if board is None:
         return 1
     assert board.image is not None  # _resolve_board() never returns a BoardSpec with image=None
@@ -668,7 +667,7 @@ def _cmd_micropython(args: argparse.Namespace) -> None:
 
 async def _kaluma_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
-    board = _resolve_board(args, KALUMA)
+    board = _resolve_board(args, "kaluma")
     if board is None:
         return 1
     assert board.image is not None  # _resolve_board() never returns a BoardSpec with image=None
@@ -799,7 +798,9 @@ def _bench_firmware(
 
     if littlefs:
         try:
-            load_micropython_flash_image(littlefs, rp2040, FlashLayout(**flash_layout(MICROPYTHON, board)))
+            micropython_layout = resolve_layout(BOARDS[board], "micropython")
+            assert micropython_layout is not None  # every built-in board declares one
+            load_micropython_flash_image(littlefs, rp2040, micropython_layout)
         except ValueError as exc:
             _logger.error("%s", exc)
             sys.exit(1)
@@ -959,54 +960,76 @@ def _target_fs_layout(target: str, board: str) -> "tuple[int, int]":
     docs/records/0035-board-aware-fs-flash-offset.md for why this can't be a plain per-target
     constant (a board's real firmware footprint changes where/how big its filesystem region is;
     building a littlefs image sized for the wrong board silently corrupts the firmware it's loaded
-    alongside). Both values come from the same `flash_layout()` dict - `fs_blocksize` is
+    alongside). Both values come off the board's own `firmware[target].layout` - `fs_blocksize` is
     per-board/firmware data too (docs/records/0049's "Design update"), not a shared constant."""
-    if target == "micropython":
-        layout = flash_layout(MICROPYTHON, board)
-    elif target == "kaluma":
-        layout = flash_layout(KALUMA, board)
-    else:
-        layout = flash_layout(CIRCUITPYTHON, board)
-    return layout["fs_blocksize"], layout["fs_blockcount"]
+    layout = resolve_layout(BOARDS[board], target)
+    assert layout is not None, f"{board!r} declares no {target!r} layout"  # every built-in one does
+    return layout.fs_blocksize, layout.fs_blockcount
+
+
+def _board_spec_layout(spec: BoardSpec, target: "str | None", label: str) -> "FlashLayout | None":
+    """A `--board-spec` spec's flash layout for `mklittlefs`: its own explicit `layout` first, else
+    whichever `firmware` family `--target` names - or its only declaration, when it has just one.
+    `mklittlefs` has no `--circuitpython` flag of its own, so `--target` is the family selector
+    here; that is a deliberate departure from docs/records/0059's own flag table, written before a
+    spec could hold several families at once (see the record's implementation note). `None`
+    (already logged) when nothing selects a layout."""
+    if spec.layout is not None:
+        return spec.layout
+
+    declared = sorted(spec.firmware or {})
+    family = target
+    if family is None:
+        if len(declared) == 1:
+            family = declared[0]
+        else:
+            _logger.error(
+                "%s: %s - pass --target to pick one, or --block-size/--block-count explicitly",
+                label,
+                f"declares more than one firmware family ({', '.join(declared)})"
+                if declared
+                else "carries neither a `layout` nor any `firmware` declaration to size against",
+            )
+            return None
+    try:
+        layout = resolve_layout(spec, family)
+    except UnknownFirmwareFamilyError as exc:
+        _logger.error("%s: %s", label, exc)
+        return None
+    if layout is None:
+        _logger.error("%s: its %r firmware declares no flash layout", label, family)
+    return layout
 
 
 def _resolve_mklittlefs_layout(args: argparse.Namespace) -> "tuple[int, int] | None":
-    """(block_size, block_count) for `mklittlefs`, from `--board-spec`'s own resolved
-    `BoardSpec.layout`, `--target`'s board-aware firmware-family lookup, or explicit
-    `--block-size`/`--block-count` - validated by hand (docs/records/0049's flag-compatibility
-    table: `--target` is incompatible with `--board-spec`, there's no board name left to resolve
-    it against once a `BoardSpec` already carries its own single, already-resolved layout).
-    Returns `None` (already logged) on failure."""
-    board_spec_source = args.board_spec if args.board_spec is not None else os.environ.get("RP2040PY_BOARD_SPEC")
-    if board_spec_source is not None:
-        if args.board is not None:
-            _logger.error("--board-spec is mutually exclusive with --board")
-            return None
+    """(block_size, block_count) for `mklittlefs`, from explicit `--block-size`/`--block-count`, a
+    `--board-spec` spec's own `layout`/`firmware[family].layout`, or `--target`'s board-aware
+    firmware-family lookup. Resolves without downloading anything either way - a flash layout is
+    data, not an image (docs/records/0059). Returns `None` (already logged) on failure."""
+    source = _board_source(args)
+    if source is None:
+        return None
+    spec, label, from_file = source
+
+    if not from_file:
+        # `--board`'s own path: `--target` (or micropython by default) picks the family, and
+        # `--block-size`/`--block-count` override whatever it produced.
+        board_name = args.board if args.board is not None else "pico"
         if args.target is not None:
-            _logger.error("--board-spec is mutually exclusive with --target")
-            return None
-        board = _load_board_spec_target(board_spec_source)
-        if board is None:
-            return None
-        if args.block_size is not None and args.block_count is not None:
-            return args.block_size, args.block_count
-        if board.layout is None:
-            _logger.error(
-                "--board-spec %s: BoardSpec.layout is not set (needed unless both "
-                "--block-size/--block-count are given)",
-                board_spec_source,
-            )
-            return None
-        block_size = args.block_size if args.block_size is not None else board.layout.fs_blocksize
-        block_count = args.block_count if args.block_count is not None else board.layout.fs_blockcount
+            return _target_fs_layout(args.target, board_name)
+        default_block_size, default_block_count = _target_fs_layout("micropython", board_name)
+        block_size = args.block_size if args.block_size is not None else default_block_size
+        block_count = args.block_count if args.block_count is not None else default_block_count
         return block_size, block_count
 
-    board_name = args.board if args.board is not None else "pico"
-    if args.target is not None:
-        return _target_fs_layout(args.target, board_name)
-    default_block_size, default_block_count = _target_fs_layout("micropython", board_name)
-    block_size = args.block_size if args.block_size is not None else default_block_size
-    block_count = args.block_count if args.block_count is not None else default_block_count
+    if args.block_size is not None and args.block_count is not None:
+        return args.block_size, args.block_count
+
+    layout = _board_spec_layout(spec, args.target, label)
+    if layout is None:
+        return None
+    block_size = args.block_size if args.block_size is not None else layout.fs_blocksize
+    block_count = args.block_count if args.block_count is not None else layout.fs_blockcount
     return block_size, block_count
 
 
@@ -1058,11 +1081,11 @@ _IMAGE_PATH_HELP = "local .hex/.uf2 image path"
 _BOARD_HELP = "which board's MCU/fixed extras to construct (default: pico)"
 _BOARD_SPEC_HELP = (
     "target:attr pointing at a module-level BoardSpec instance - a file path (loaded without "
-    "needing a package) or a dotted module path; brings your own mcu/extras/image/layout instead "
-    "of --board's fixed registry. Mutually exclusive with --board and any flag that would "
-    "otherwise resolve a tag/version against it (see this command's own error messages for which) "
-    "(also settable via the RP2040PY_BOARD_SPEC env var, so it doesn't need typing every "
-    "invocation)"
+    "needing a package) or a dotted module path; brings your own mcu/extras/firmware instead of "
+    "--board's fixed registry. Mutually exclusive with --board; --image works with it the same "
+    "way it does for --board, as long as the spec declares a `firmware` entry for the firmware "
+    "family being run (also settable via the RP2040PY_BOARD_SPEC env var, so it doesn't need "
+    "typing every invocation)"
 )
 _FETCH_FW_ONLY_HELP = (
     "download/cache the firmware image (and --bootrom, if a version tag) then exit, without "
@@ -1346,11 +1369,12 @@ def main(argv: "list[str] | None" = None) -> None:
             default=None,
             help=(
                 "preset --block-size/--block-count for a known firmware's filesystem layout - "
-                "mutually exclusive with passing them explicitly, sized for --board (micropython/"
-                "kaluma only - a board with a bigger compiled firmware needs a differently-sized/"
-                "placed filesystem region, see docs/records/0035) "
-                "(defaults to micropython's if neither --target nor --block-size/--block-count is "
-                "given)"
+                "mutually exclusive with passing them explicitly, sized for --board (a board with "
+                "a bigger compiled firmware needs a differently-sized/placed filesystem region, "
+                "see docs/records/0035). With --board-spec it picks which of that spec's own "
+                "`firmware` families to size against, and is only needed when it declares more "
+                "than one (defaults to micropython's if neither --target nor "
+                "--block-size/--block-count is given)"
             ),
         )
         mklittlefs_parser.add_argument("--block-size", type=int, default=None)
