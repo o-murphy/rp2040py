@@ -38,6 +38,27 @@ run the full `pre-commit` pass before considering work done.
 
 If `uv` isn't on `PATH` in the shell, prefix with `export PATH="$HOME/.local/bin:$PATH"` first.
 
+### Keep `uv` current - an old one silently breaks CI
+
+**In any session with network access, check `uv --version` against the latest release and upgrade
+before running `pre-commit`** (`python3 -m pip install --upgrade uv`, or `uv self update`). The
+`uv-lock` hook runs `uv lock --upgrade`, so whatever `uv` you have *writes* `uv.lock` - and CI
+installs the newest `uv` via `setup-uv`, then runs the same hook. If the two versions disagree
+about the lockfile's contents, CI rewrites `uv.lock`, the `Pre-commit` workflow fails with
+"pre-commit modified files, but auto-commit only runs on pull_request events", and the local run
+looks perfectly green. It is not a dependency problem and the diff can be a single line: seen
+2026-08-17, `uv 0.8.17` writes `exceptiongroup`'s dependency as `{ name = "typing-extensions",
+marker = "python_full_version < '3.13'" }` where `uv 0.12.5` writes plain `{ name =
+"typing-extensions" }`.
+
+Two practical notes:
+
+- After upgrading, **re-check `uv --version` with the same `PATH` export used above** - `pip`
+  installs to `/usr/local/bin`, and a stale binary in `~/.local/bin` (which that export puts
+  first) will keep shadowing it until you replace or symlink it.
+- With no network to upgrade, don't commit a lockfile an old `uv` regenerated - revert the hook's
+  change to `uv.lock` (`git checkout uv.lock`) and leave the refresh to a session that has one.
+
 ## Module layout
 
 Keep conceptually distinct pieces in separate top-level modules rather than nesting one inside
