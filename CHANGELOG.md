@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc1] - 2026-08-18
+
 ### Added
 - `scripts/fetch_firmware.py` (dev-only) gained a `list --family <family> --slug <slug>
   [--page <page>]` subcommand: prints one arbitrary board slug's real tag→url firmware-version map
@@ -108,6 +110,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unimplemented, and firmware that calls `multicore_launch_core1()` (or MicroPython's `_thread`)
   will not work - with the reason it is deliberate rather than pending, since adding the FIFO
   registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
+- `.claude/skills/external-devices-and-boards/` (dev-only) - a Claude Code skill giving the
+  execution checklist for adding a new `ExternalDevice` or `--board-spec` board: which template
+  device/board file to copy, which test file proves what, the "3g rule" (every electrical fact
+  cited to a real upstream source, never guessed), and 0059's promotion checklist for graduating a
+  `boards/` example into real `--board` support. Sits on top of, and doesn't duplicate,
+  [reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md). See
+  [docs/records/0067](docs/records/0067-external-devices-and-boards-skill.md).
+- `boards/waveshare_rp2040_zero/` - the Waveshare RP2040-Zero as a `--board-spec` target: a single
+  `Ws2812(gpio=16)` and `BootselButton`, nothing else - the board has no plain LED. Both firmware
+  families declared; flash geometry is identical to a plain Pico (`fs_start=0xa0000`,
+  `fs_blockcount=352` MicroPython / `0x100000`/`512` CircuitPython), confirmed by live boot.
+  CircuitPython drives the NeoPixel as its own boot-time status indicator (measured, not assumed -
+  11 frames decoded before any guest code ran). See
+  [docs/records/0068](docs/records/0068-waveshare-rp2040-zero-board.md).
+- `boards/adafruit_feather_rp2040/` - `LEDMock(gpio=13)` + `Ws2812(gpio=16)` + `BootselButton`, 8
+  MiB flash / 7 MiB storage (`fs_start=0x100000`, `fs_blockcount=1792` MicroPython / `512`
+  CircuitPython). Documents that Adafruit's own product page claims a switchable NeoPixel power
+  pin that both firmware ports' source directly contradicts ("power not toggleable" in
+  MicroPython's own comment, no `PICO_DEFAULT_WS2812_POWER_PIN` in either port) - not modelled,
+  since it isn't real. See [docs/records/0069](docs/records/0069-adafruit-feather-rp2040-board.md).
+- `boards/adafruit_itsybitsy_rp2040/` - `LEDMock(gpio=11)` + `Ws2812(gpio=17)` +
+  `KeyMock(gpio=13)` (a second, non-BOOTSEL BOOT button) + `BootselButton`. Same 8 MiB/7 MiB flash
+  split as the Feather. Unlike the Feather, this board's NeoPixel power-enable pin (GPIO16) is
+  real per both firmware ports - confirmed driven high before boot by directly attaching a GPIO
+  listener rather than inferring it. The BOOT button's pull/polarity isn't stated in either
+  firmware port, so it's sourced from Adafruit's own published EAGLE schematic: a direct short to
+  GND (no external pull-up, same shape as `vcc_gnd_yd_rp2040`'s USRKEY), *also* diode-and-resistor
+  coupled into the real BOOTSEL pad - one physical switch doing double duty. Only the direct-short
+  half is modelled; the diode coupling is an analog current path between two pins this project's
+  `ExternalDevice` model has no way to represent, stated as a real gap rather than silently
+  dropped. See [docs/records/0070](docs/records/0070-adafruit-itsybitsy-rp2040-board.md).
+- `boards/adafruit_qtpy_rp2040/` - `Ws2812(gpio=12)` + `KeyMock(gpio=21)` + `BootselButton`, no
+  plain LED at all (confirmed absent from every source). Same real NeoPixel power pin (GPIO11) and
+  the same diode-into-BOOTSEL button design as `adafruit_itsybitsy_rp2040` - component-for-component
+  identical per Adafruit's own schematic (`SW2`/`D2`/`R16` here vs. `SW3`/`D3`/`R11` there), not
+  merely similar. See [docs/records/0071](docs/records/0071-adafruit-qtpy-rp2040-board.md).
 
 ### Known issues
 - **PIO still runs at most one instruction per CPU instruction.** That is what `SM_CLKDIV = 1`
@@ -180,6 +218,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target
   the way BOOTSEL can, a `set_reset_hook()` on `RP2040` versus moving `BaseDevice`'s reset
   sequence into the MCU, and the semantics still to settle before any of it is built.
+- [docs/records/0066](docs/records/0066-board-support-expansion.md) - a survey of which upstream
+  RP2040 boards (MicroPython's and CircuitPython's board lists, 128 total) could become a new
+  `--board-spec` target using only `ExternalDevice`s this project already has: 49 addable with zero
+  new devices, 59 needing one or more (grouped by missing chip where shared across boards - a
+  Wiznet Ethernet PHY unblocks three at once), 17 RP2350 boards and 3 architecturally-unmodelable
+  ones flagged separately rather than dropped. Not a commitment to add any of them; four have been
+  picked up so far (Added, above).
+- [docs/records/0072](docs/records/0072-w5500-ethernet-and-board.md) - phased plan (nothing
+  implemented) for a W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board, sourced from
+  WIZnet's own public `ioLibrary_Driver` register map. Finds that MicroPython's stock firmware for
+  this board doesn't use the chip's advertised hardware TCP engine at all (`MICROPY_PY_LWIP=1`
+  drives it in raw MACRAW passthrough instead, with lwIP doing TCP/IP in software) - so that half
+  reuses [0048](docs/records/0048-cyw43-nat-reflector.md)'s `NatBridge` almost directly, while the
+  hardware TCP/UDP socket-engine mode (needed for CircuitPython's `adafruit_wiznet5k` and any raw
+  firmware that uses the chip's default mode) needs only a much thinner byte-pipe shim over real
+  host sockets - no protocol bytes to fake, since the guest never constructs its own TCP headers in
+  that mode at all. Explicitly reasons against a real embedded TCP/IP stack, citing this project's
+  own [0045](docs/records/0045-cyw43-nat-libslirp-cython.md)-superseded-by-0048 precedent.
 
 ### Changed
 - All three `boards/` example files now carry their firmware's real version history instead of a
@@ -1226,7 +1282,9 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...HEAD
+[0.3.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.2.5...v0.3.0rc1
+[0.2.5]: https://github.com/o-murphy/rp2040py/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...v0.2.4
 [0.2.2]: https://github.com/o-murphy/rp2040py/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/o-murphy/rp2040py/compare/v0.2.0...v0.2.1
