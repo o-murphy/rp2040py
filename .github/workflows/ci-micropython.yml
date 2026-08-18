@@ -195,6 +195,18 @@ jobs:
       - name: Test the YD-RP2040 board file boots its declared CircuitPython firmware
         run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --board-spec boards/vcc_gnd_yd_rp2040/__init__.py:BOARD -c "import board, os; print(board.board_id, os.statvfs('/')[:2])"
 
+      # The same board, but checking what its WS2812 actually receives - which the step above
+      # cannot, since `BoardSpec.extras` holds zero-arg factories and nothing hands a constructed
+      # device back to the CLI (docs/reference/external-devices-and-boards.md). This is
+      # docs/records/0063's acceptance test: the guest drives the LED through the PIO, and both the
+      # decoded bytes *and* the pulse widths they came from are checked - 312/703 ns, real
+      # silicon's own numbers, where before that record the emulator produced 8-40 ns with the two
+      # symbols overlapping. The widths matter on their own: `Ws2812` classifies by duty cycle
+      # against the frame's own period, so it would keep decoding correctly off a waveform running
+      # at the wrong rate entirely, and only the widths catch that.
+      - name: Test the YD-RP2040's WS2812 decodes a real PIO-driven write
+        run: timeout 5m uv run --no-dev -- python tests/ws2812_boot_decode.py
+
       - name: Test mklittlefs sizes a board file per --target family, without a network fetch
         run: |
           uv run rp2040py mklittlefs --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --target micropython -o mp.img -f

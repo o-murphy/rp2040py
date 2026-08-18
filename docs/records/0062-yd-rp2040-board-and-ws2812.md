@@ -340,6 +340,11 @@ Two things this settles about the design choices above:
   not by luck: what made this work was fixing the *waveform*, which a bit-banged driver benefits
   from identically.
 
+This also closes item 4 of this record's own "Order of work" - the CI step it asked for exists as
+`tests/ws2812_boot_decode.py`, in `ci-micropython.yml`'s `test-board-spec` job alongside the
+board-boot step 0059 added. It asserts the decoded bytes *and* the pulse widths, since a duty-cycle
+decoder cannot notice a waveform that is uniformly at the wrong rate.
+
 The caveat this record and `external/ws2812.py` both carried ("what it decodes from a PIO-driven
 driver is not what firmware wrote") is retired. 0063's own remaining ceilings - `CLKDIV=1` is still
 one instruction per CPU instruction, and PIO still does not run through a CPU idle jump - are stated

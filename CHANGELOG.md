@@ -126,7 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Live-verified on MicroPython `1.23.0`/`1.28.0` and CircuitPython `10.2.1` for Pico W (scan, join,
   DHCP, TCP through the NAT bridge, DNS, TLS, disconnect), and ~11% *faster* in wall clock than
   before - the due-time compare replaces a per-instruction scan of every state machine. A CPU-only
-  workload is unchanged. [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
+  workload is unchanged. `tests/ws2812_boot_decode.py` keeps the waveform itself under CI, not just
+  the decoded bytes. [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
 
 ### Documentation
 - [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - the YD-RP2040 board and

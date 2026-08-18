@@ -253,6 +253,18 @@ gSPI clock is now the `sysclk/2` its driver actually asked for instead of twice 
 workload (300k-iteration guest loop, no PIO enabled) is unchanged at 100.8 s vs 100.1 s, i.e.
 inside the noise: the `pio.stopped` short-circuit is untouched.
 
+**Kept as a CI step, not just a one-off measurement.** `tests/ws2812_boot_decode.py` boots the
+board file, has the guest write those same three bytes, and checks the decoded frame *and* the
+pulse widths it was decoded from - the widths on their own, because `Ws2812` classifies by duty
+cycle against the frame's own measured period (0062) and would therefore keep decoding correctly
+off a waveform running at entirely the wrong rate. Verified to fail on the pre-fix code, which is
+the only thing that makes it worth having: `\`0\` bits average 15 ns high (8-40 ns over 456
+pulses), outside 200-450 ns` plus `no frame decoded as ff 00 aa - last frames on the wire:
+4a 5f ad, ...`. It runs in `ci-micropython.yml`'s `test-board-spec` job, next to the step that
+already boots this board, and takes ~25 s. (A CLI step cannot do this: `BoardSpec.extras` holds
+zero-arg factories and nothing hands a constructed device back to the caller, which is 0062's own
+`board_with()` limitation.)
+
 `tests/test_pio_clkdiv.py` holds the arithmetic itself - integer, fractional and `INT == 0`
 dividers, `[delay]`, the two composed, the one-instruction-per-call ceiling, the arrears write-off,
 `CLKDIV_RESTART`, re-enable, and a stalled machine costing nothing until something unstalls it -
