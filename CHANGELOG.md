@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc2] - 2026-08-18
+
 ### Added
 - `boards/machdyne_werkzeug.py` - the Machdyne Werkzeug as a `--board-spec` target: two plain LEDs,
   green (`LEDMock(gpio=20, active_low=True)`) + red (`LEDMock(gpio=21)`), plus `BootselButton`.
@@ -78,8 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MicroPython/CircuitPython)" to "Kaluma" - the explanation already opens the section's own first
   sentence, so the heading was carrying redundant weight only the Table of Contents ever displayed
   in full.
-
-## [0.3.0rc2] - 2026-08-18
 
 ### Fixed
 - `sio.py`: reading the inter-core FIFO addresses (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`, `0x50`/`0x54`/
