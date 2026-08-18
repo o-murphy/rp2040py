@@ -101,3 +101,28 @@ Worth separating, because they are wildly different amounts of work:
 - **Does the viewer ship in this repo?** A Python package that serves a bundled JS app is a very
   different maintenance commitment from a documented protocol plus a separate demo. Leaning toward
   protocol-first, with a minimal single-file page in `demo/` as proof.
+
+## 2026-08-18: button-press input narrowed back into scope, re-flashing stays out
+
+Revisited "Read-only first, and probably read-only for a long time" above with a sharper
+distinction between two different things that section had lumped together as "the obvious next
+ask":
+
+- **Reconstructing the board while it's live** (attaching/detaching devices, changing wiring) stays
+  out of scope, for exactly the reasons already given - it touches `BoardSpec`/topology itself, not
+  just a device's own state, and needs the authority/consistency/security story this record
+  deliberately deferred.
+- **Driving an already-attached device's own input** - pressing a `KeyMock`/`BootselButton` that's
+  already wired into the running board - is a narrower case than that framing suggests. The SDK
+  already exposes exactly this as a single, well-scoped call
+  (`KeyMock.press()`/`GPIOPin.set_input_value()`/`release_input()`), routed through
+  `schedule_threadsafe()` per [0030] the same as any other cross-thread input today. It changes one
+  device's state, not the board's shape, so the authority question shrinks to "one button, one
+  caller" rather than "who may reshape the board" - much closer to what this record's own
+  read-only-viewer design already assumes than to the topology-editing case.
+
+Not implemented and not fully decided - still needs its own authority story (a socket that can
+press buttons is a socket that can drive the device under test, even if it can't rewire it), but
+it's a materially smaller open question than "an editor," and worth re-scoping as its own line
+whenever this record is picked up, rather than staying bundled with the topology-editing case under
+one "not yet" verdict.

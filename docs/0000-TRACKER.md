@@ -38,12 +38,14 @@ and `reference/` for those). The structure itself is decided in
   "In progress / Proposed" below. Records written before a fold-in still cite the old
   `docs/tasks/<name>.md` path — those references resolve to the appendix of whichever record the
   note was folded into (records are append-only, so the citations themselves are left as written).
-  Folded in so far, all on 2026-08-16: `3g-scripted-scan-join` → [0027],
+  Folded in so far: `3g-scripted-scan-join` → [0027],
   `cyw43-3g-live-boot-verification` → [0027],
   `cyw43-post-data-header-freeze` → [0041],
   `main-spi-hang` → [0044],
   `simulation-clock-cython-port` → [0039],
-  `circuitpython-10x-boot-stall` → [0050].
+  `circuitpython-10x-boot-stall` → [0050]
+  (all five on 2026-08-16), `queued-exec-erroring-flaky-test` → [0065] (2026-08-18, closed
+  dormant/not-root-caused rather than by a fix).
   (`littlefs-fat12-exclusivity`, cited by [0036], was
   deleted before this convention existed and was **not** preserved anywhere.)
 - **`reference/`** — living how-to / checklists. Not numbered.
@@ -52,13 +54,14 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
 - [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
 - [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation stated user-facing. Addendum settles the execution model: interleaved in one loop, not a thread per core
 - [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
-- [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md)
+- [ ] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | **Closed dormant, not root-caused** (2026-08-18) - single 2026-08-14 occurrence, not reproduced in ~85 subsequent CI runs; reopen if it recurs
 
 ### Implemented
 
@@ -203,3 +206,4 @@ record is added.
 [0062]: records/0062-yd-rp2040-board-and-ws2812.md
 [0063]: records/0063-pio-clkdiv-and-delay-cycles.md
 [0064]: records/0064-state-server-and-web-visualizer.md
+[0065]: records/0065-queued-exec-erroring-flaky-test.md

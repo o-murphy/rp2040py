@@ -91,3 +91,20 @@ the alternative is a footgun that only shows up after a boot.
   deprecation window, not a flag day.
 - Whether `--family` should also accept a family a *board file* declares but the built-in registry
   does not - which only becomes a real question once 0059 lets board files carry several.
+
+## 2026-08-18: step 2 confirmed no-break, one new naming question
+
+Revisited whether step 2 (one merged command) can land without breaking existing invocations: yes
+- `micropython`/`kaluma` kept as aliases onto the new command is exactly what this record already
+  proposed above, so nothing currently scripted against either subcommand needs to change.
+
+One naming question this record's "Not decided here" list didn't have yet: the CLI already has a
+third, unrelated subcommand named `run` (`run_parser` in `cli/__init__.py` - boots a raw local
+`.hex`/`.uf2` with a GDB server, no firmware-family concept, no `--board`/`--image` firmware
+resolution at all). If step 2's merged command is named `fw`, both `fw` and `run` read as "boot
+something" from the name alone, and the actual distinction - a known firmware family with a device/
+REPL/exec surface, versus an arbitrary image with nothing but a GDB server attached - isn't obvious
+from either name. Not resolved here; worth weighing alternative names (`boot`? keeping
+`micropython` as the canonical spelling with `kaluma`/`circuitpython` as aliases, per the existing
+"Not decided here" entry above?) against `fw` specifically for this collision before step 2 is
+picked up.
