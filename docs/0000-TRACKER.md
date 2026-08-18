@@ -66,6 +66,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0070] Adafruit ItsyBitsy RP2040 board | third board picked up off [0066]'s survey; `LEDMock`/`Ws2812`/`KeyMock`, both firmware families, live-boot-verified; BOOT button sourced from Adafruit's own schematic (also diode-coupled into real BOOTSEL, not modelled - analog cross-pin path)
 - [x] [0069] Adafruit Feather RP2040 board | second board picked up off [0066]'s survey; zero new devices needed (`LEDMock`/`Ws2812`), both firmware families, live-boot-verified; documents that its marketing copy's NeoPixel-power-pin claim is contradicted by firmware source
 - [x] [0068] Waveshare RP2040-Zero board | first board picked up off [0066]'s survey; zero new devices needed (`Ws2812` on GPIO16, already exists since [0062]), both firmware families, live-boot-verified
 - [x] [0067] Claude Code skill for adding `ExternalDevice`s/boards | `.claude/skills/external-devices-and-boards/`; execution layer on top of [0049]'s reference doc, `.gitignore` fixed so it's actually tracked
@@ -215,3 +216,4 @@ record is added.
 [0067]: records/0067-external-devices-and-boards-skill.md
 [0068]: records/0068-waveshare-rp2040-zero-board.md
 [0069]: records/0069-adafruit-feather-rp2040-board.md
+[0070]: records/0070-adafruit-itsybitsy-rp2040-board.md
