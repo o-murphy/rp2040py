@@ -110,6 +110,22 @@ class TestHardwareDivider:
         assert cpu.read_uint32(SIO_DIV_QUOTIENT) == 0x40000000
 
 
+def test_reading_inter_core_fifo_addresses_names_0053_instead_of_generic_invalid_address(cpu):
+    """docs/records/0053's "Interim option": FIFO_ST/FIFO_WR/FIFO_RD (0x50/0x54/0x58) aren't
+    implemented, but a read there should say so plainly instead of falling through to the generic
+    "invalid SIO address" warning - so `import _thread`/`multicore_launch_core1()` points straight
+    at the record explaining why, not a mystery address."""
+    warnings: list[str] = []
+    cpu.rp2040.logger.warning = lambda component_name, message: warnings.append(message)
+
+    for offset in (0x050, 0x054, 0x058):
+        warnings.clear()
+        assert cpu.read_uint32(SIO_START_ADDRESS + offset) == 0xFFFFFFFF
+        assert len(warnings) == 1
+        assert "0053" in warnings[0]
+        assert "core1" in warnings[0] or "_thread" in warnings[0]
+
+
 def test_unlock_lock_and_check_lock_status_of_spinlock10(cpu):
     cpu.write_uint32(SIO_SPINLOCK10, 0x00000001)  # ensure the spinlock is released
     assert cpu.read_uint32(SIO_SPINLOCK10) == 1024  # lock spinlock, return 1<<spinlock num if previously unlocked

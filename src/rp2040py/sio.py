@@ -40,6 +40,11 @@ GPIO_HI_OE_XOR = 0x04C  # QSPI output enable XOR
 
 GPIO_MASK = 0x3FFFFFFF
 
+# INTER-CORE FIFO - not implemented, see docs/records/0053-core1-and-inter-core-fifo.md
+FIFO_ST = 0x050
+FIFO_WR = 0x054
+FIFO_RD = 0x058
+
 # HARDWARE DIVIDER
 DIV_UDIVIDEND = 0x060  # Divider unsigned dividend
 DIV_UDIVISOR = 0x064  # Divider unsigned divisor
@@ -261,6 +266,13 @@ class RPSIO:
             return self.interp1.smresult0
         if offset == INTERP1_ACCUM1_ADD:
             return self.interp1.smresult1
+        if offset in (FIFO_ST, FIFO_WR, FIFO_RD):
+            self.rp2040.logger.warning(
+                LOG_NAME,
+                "Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is unsupported "
+                "(see docs/records/0053-core1-and-inter-core-fifo.md)",
+            )
+            return 0xFFFFFFFF
 
         self.rp2040.logger.warning(LOG_NAME, f"Read from invalid SIO address: {offset:x}")
         return 0xFFFFFFFF

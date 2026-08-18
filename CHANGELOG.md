@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc2] - 2026-08-18
+
+### Fixed
+- `sio.py`: reading the inter-core FIFO addresses (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`, `0x50`/`0x54`/
+  `0x58` - unimplemented, see [docs/records/0053](docs/records/0053-core1-and-inter-core-fifo.md))
+  now logs "Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is unsupported (see
+  docs/records/0053-core1-and-inter-core-fifo.md)" instead of the generic "Read from invalid SIO
+  address: 50" - the record's own "Interim option", turning a mystery address into a message
+  naming exactly what's missing and why (`import _thread`/`multicore_launch_core1()` are the
+  concrete trigger). Behavior otherwise unchanged: still returns `0xFFFFFFFF`, writes still
+  silently dropped - this does not implement the FIFO or core1, both still proposed/not built.
+
 ## [0.3.0rc1] - 2026-08-18
 
 ### Added
@@ -1323,7 +1335,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...HEAD
+[0.3.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.2.5...v0.3.0rc1
 [0.2.5]: https://github.com/o-murphy/rp2040py/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...v0.2.4
