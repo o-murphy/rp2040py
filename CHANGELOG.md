@@ -27,11 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached through `ports/rp2/CMakeLists.txt`'s own lowercase fallback. See
   [docs/records/0080](docs/records/0080-sparkfun-promicro-board.md).
 
+- `boards/waveshare_rp2040_one.py` - the Waveshare RP2040-One as a `--board-spec` target:
+  `Ws2812(gpio=16)` + `BootselButton`, 4 MiB flash. **CircuitPython-only** (upstream ships no
+  MicroPython port), the same one-family shape `boards/vcc_gnd_yd_rp2040/` uses - and the first
+  board taken off [docs/records/0066](docs/records/0066-board-support-expansion.md)'s
+  CircuitPython-only list. Live boot confirms `pins.c`'s four absences against the running firmware:
+  no `board.LED`, `board.BUTTON`, `board.SPI` or `board.I2C`. See
+  [docs/records/0081](docs/records/0081-waveshare-rp2040-one-board.md).
+- `boards/waveshare_rp2040_tiny.py` - the Waveshare RP2040-Tiny as a `--board-spec` target:
+  `Ws2812(gpio=16)` + `BootselButton`, 2 MiB flash, CircuitPython-only. The narrowest pin breakout
+  of any board here (`pins.c` declares `GP0`-`GP16` + `GP26`-`GP29` only), and the one board whose
+  plain-Pico MicroPython `--image` fallback is electrically exact rather than a compromise - its
+  flash part is a Pico's byte for byte, live-verified at 352 blocks. See
+  [docs/records/0082](docs/records/0082-waveshare-rp2040-tiny-board.md).
+
 ### Changed
 - [docs/records/0066](docs/records/0066-board-support-expansion.md)'s "addable now, has a
   MicroPython port" checklist is now **fully built - 12 of 12** (records 0068-0071 and 0073-0080).
-  What remains open on that survey is the CircuitPython-only addable list (37 boards, none started)
-  and everything gated behind a missing `ExternalDevice`.
+  What remains open on that survey is the CircuitPython-only addable list (37 boards, of which
+  `waveshare_rp2040_one`/`waveshare_rp2040_tiny` are now done) and everything gated behind a
+  missing `ExternalDevice`.
 
 ## [0.3.0rc2] - 2026-08-18
 

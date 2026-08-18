@@ -275,6 +275,8 @@ is live-boot-verified against real firmware:
 | [waveshare_rp2040_plus](../../boards/waveshare_rp2040_plus.py) | MicroPython (2 flash variants) + CircuitPython | plain LED + `BootselButton` only, no `pins.csv` at all upstream (uses the pico-sdk board header's own pin defaults directly); `BOARD`/`BOARD_16MB` for its two flash sizes |
 | [seeed_xiao_rp2040](../../boards/seeed_xiao_rp2040.py) | MicroPython + CircuitPython | the only example with **both** kinds of RGB LED at once - a WS2812 (power pin GPIO11) *and* three separate active-low GPIO LEDs; its polarity is sourced from the vendor's own wiki, because neither firmware port states it for all three pins |
 | [sparkfun_promicro](../../boards/sparkfun_promicro.py) | MicroPython + CircuitPython | WS2812 only, on GPIO25 - the pin a plain Pico puts its LED on, where upstream says outright there is no plain LED; the largest flash of any example (16 MiB, 15 MiB filesystem) |
+| [waveshare_rp2040_one](../../boards/waveshare_rp2040_one.py) | CircuitPython only | WS2812 only (GPIO16), 4 MiB - a one-family board whose `pins.c` exposes no `LED`, `BUTTON`, `SPI` or `I2C` at all, all four confirmed against the running firmware |
+| [waveshare_rp2040_tiny](../../boards/waveshare_rp2040_tiny.py) | CircuitPython only | WS2812 only (GPIO16), 2 MiB - the narrowest pin breakout of any example (GP0-16 + GP26-29 only), and the one board whose plain-Pico `--image` fallback is electrically exact rather than a compromise |
 
 Named after the firmware's own board id, case-normalized (`weactstudio` for MicroPython's
 `ports/rp2/boards/WEACTSTUDIO`) - which is what keeps every number in a board file checkable

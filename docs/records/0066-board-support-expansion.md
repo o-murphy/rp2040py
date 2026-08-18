@@ -6,8 +6,9 @@
   [0068](0068-waveshare-rp2040-zero-board.md)-[0071](0071-adafruit-qtpy-rp2040-board.md) and
   [0073](0073-garatronic-pybstick26-rp2040-board.md)-[0080](0080-sparkfun-promicro-board.md), each
   row below pointing at its own record. Every other checklist here is untouched: the
-  CircuitPython-only addable list (37 boards, none started) and everything gated behind a missing
-  `ExternalDevice` remain exactly as surveyed.
+  CircuitPython-only addable list (37 boards, **2 done** as of
+  [0081](0081-waveshare-rp2040-one-board.md)/[0082](0082-waveshare-rp2040-tiny-board.md)) and
+  everything gated behind a missing `ExternalDevice` remain otherwise as surveyed.
 - Conceived: 2026-08-18
 - Related: 0059 (`BoardSpec` firmware resolution - the mechanism any of these boards would use),
   0049 (external device authoring docs / the promotion checklist a board file clears), 0062
@@ -190,8 +191,13 @@ further out than the two lists above simply because more has to be built first; 
 - [ ] `solderparty_rp2040_stamp` - NeoPixel
 - [ ] `splitkb_liatris` - NeoPixel + power LED
 - [ ] `takayoshiotake_octave_rp2040` - NeoPixel
-- [ ] `waveshare_rp2040_one` - NeoPixel
-- [ ] `waveshare_rp2040_tiny` - NeoPixel
+- [x] `waveshare_rp2040_one` - NeoPixel (GPIO16), 4 MiB. **Done, see
+      [0081](0081-waveshare-rp2040-one-board.md)** - the first board taken off this
+      CircuitPython-only list; also turned up that `--image` needs a local `.uf2` path rather
+      than a bare version tag on a one-family spec
+- [x] `waveshare_rp2040_tiny` - NeoPixel (GPIO16), 2 MiB. **Done, see
+      [0082](0082-waveshare-rp2040-tiny-board.md)** - narrowest pin breakout here (GP0-16 +
+      GP26-29 only); its 2 MiB part matches a plain Pico's exactly
 - [ ] `weenoisemakers_noisenugget` - NeoPixel
 - [ ] `wisdpi_ardu2040m` - LED + NeoPixel
 - [ ] `wisdpi_tiny_rp2040` - LED + NeoPixel

@@ -515,7 +515,7 @@ the "3g rule" - every electrical fact cited to a real upstream source, never gue
 
 #### Ready-made example boards
 
-15 worked `--board-spec` targets for real third-party hardware live in [boards/](boards/) - every
+17 worked `--board-spec` targets for real third-party hardware live in [boards/](boards/) - every
 number sourced from that board's own upstream firmware config (never guessed), live-boot-verified
 against real firmware. See
 **[docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md#ready-made-examples-in-this-repo)**
@@ -614,9 +614,9 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above.
 - **A real extension point for third-party hardware** (`ExternalDevice`/`boards.BoardSpec`) -
   rp2040js has no board or device abstraction at all, only whatever's hardcoded into its own demo
-  scripts. rp2040py ships 15 worked `--board-spec` examples for real vendor boards (WeAct Studio,
-  Waveshare, VCC-GND Studio, three Adafruit boards, McHobby's PYBStick26, Machdyne, nullbits,
-  Pimoroni, Seeed Studio, SparkFun), every electrical fact cited to that board's own upstream firmware source and
+  scripts. rp2040py ships 17 worked `--board-spec` examples for real vendor boards (WeAct Studio,
+  four Waveshare boards, VCC-GND Studio, three Adafruit boards, McHobby's PYBStick26, Machdyne,
+  nullbits, Pimoroni, Seeed Studio, SparkFun), every electrical fact cited to that board's own upstream firmware source and
   live-boot-verified, plus a documented how-to for writing your own. See
   [External devices & custom boards](#external-devices--custom-boards) above.
 
