@@ -49,7 +49,8 @@ records generally).
 
 ## Checklist: addable now, has a MicroPython port
 
-- [ ] `ADAFRUIT_FEATHER_RP2040` - LED (GPIO13) + `Ws2812` (GPIO16, power not switchable); CircuitPython port exists (`adafruit_feather_rp2040`)
+- [x] `ADAFRUIT_FEATHER_RP2040` - LED (GPIO13) + `Ws2812` (GPIO16, power not switchable); CircuitPython port exists (`adafruit_feather_rp2040`). **Done, see
+      [0069](0069-adafruit-feather-rp2040-board.md).**
 - [ ] `ADAFRUIT_ITSYBITSY_RP2040` - LED (GPIO11) + `Ws2812` (GPIO17, power GPIO16) + a separate boot pushbutton (GPIO13); CircuitPython port exists
 - [ ] `ADAFRUIT_QTPY_RP2040` - `Ws2812` (GPIO12, power GPIO11) + boot pushbutton (GPIO21), no plain LED; CircuitPython port exists
 - [ ] `GARATRONIC_PYBSTICK26_RP2040` - LED (GPIO23) only; MicroPython-only, no CircuitPython port

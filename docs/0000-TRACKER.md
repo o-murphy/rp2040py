@@ -66,6 +66,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0069] Adafruit Feather RP2040 board | second board picked up off [0066]'s survey; zero new devices needed (`LEDMock`/`Ws2812`), both firmware families, live-boot-verified; documents that its marketing copy's NeoPixel-power-pin claim is contradicted by firmware source
 - [x] [0068] Waveshare RP2040-Zero board | first board picked up off [0066]'s survey; zero new devices needed (`Ws2812` on GPIO16, already exists since [0062]), both firmware families, live-boot-verified
 - [x] [0067] Claude Code skill for adding `ExternalDevice`s/boards | `.claude/skills/external-devices-and-boards/`; execution layer on top of [0049]'s reference doc, `.gitignore` fixed so it's actually tracked
 - [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | both halves landed as a due-time skip; unblocks pulse-width protocols and fixes CYW43's gSPI clock, ~11% faster. Ceiling kept: one instruction per CPU instruction, which [0043] depends on
@@ -213,3 +214,4 @@ record is added.
 [0066]: records/0066-board-support-expansion.md
 [0067]: records/0067-external-devices-and-boards-skill.md
 [0068]: records/0068-waveshare-rp2040-zero-board.md
+[0069]: records/0069-adafruit-feather-rp2040-board.md
