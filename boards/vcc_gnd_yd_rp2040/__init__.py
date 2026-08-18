@@ -63,12 +63,11 @@ two button nets from VCC-GND Studio's own schematic, `YD-2040 2022 V1.1 SCH`:
 
 Onboard extras:
 
-- The RGB LED: `Ws2812(gpio=23)` (`rp2040py.external.ws2812`). **Caveat worth knowing before you
-  wire up `on_pixels`:** CircuitPython drives this LED through the PIO, and this emulator's PIO
-  does not yet honour `SM_CLKDIV` or `[delay]` cycles (docs/records/0063), so the pulse *widths*
-  that carry a WS2812's bits arrive collapsed into each other. The edges are there and the device
-  decodes them, but what it decodes from a PIO-driven driver is not what firmware wrote. A
-  CPU-driven or bit-banged driver decodes correctly today; everything else waits on 0063.
+- The RGB LED: `Ws2812(gpio=23)` (`rp2040py.external.ws2812`). CircuitPython drives this LED
+  through the PIO, which this emulator paces by `SM_CLKDIV` and `[delay]` as of docs/records/0063 -
+  so booting this board with `board_with(on_pixels)` and no guest code at all decodes the status
+  LED's own frames. (Before 0063 the pulse *widths* that carry a WS2812's bits arrived collapsed
+  into each other, and what a PIO-driven driver produced here decoded as garbage.)
 - USRKEY: `KeyMock(gpio=24, active_high=False)` - see the schematic note above.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).

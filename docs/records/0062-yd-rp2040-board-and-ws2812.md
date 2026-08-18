@@ -1,8 +1,8 @@
 # 0062. YD-RP2040 (VCC-GND Studio), and the WS2812 device it needs
 
-- Status: **Implemented (2026-08-17), except live PIO-driven decoding, which is blocked on
-  [0063](0063-pio-clkdiv-and-delay-cycles.md)** - a defect this work uncovered and measured. See
-  "Implemented" at the end. (Original status, kept: *Proposed — documented, nothing implemented
+- Status: **Implemented (2026-08-17); the live PIO-driven decoding it was blocked on works as of
+  2026-08-18**, once [0063](0063-pio-clkdiv-and-delay-cycles.md) - the defect this work uncovered
+  and measured - was fixed. See "Implemented" and the 2026-08-18 addendum at the end. (Original status, kept: *Proposed — documented, nothing implemented
   (2026-08-17). No board file, no device, no tests. This record says what adding the board would
   take and what it would be worth; building it is a separate go-ahead.*)
 - Conceived: 2026-08-17
@@ -314,3 +314,34 @@ decodes a CPU-driven or bit-banged driver here, and any PIO-driven one only once
 Unchanged from the plan: the board still earns its place (its other three devices work, and it is a
 live-verified `--board-spec` example for a real third-party board), and RESET stays unmodelled
 (0057).
+
+## Addendum, 2026-08-18: the blocked half now works - [0063](0063-pio-clkdiv-and-delay-cycles.md) landed
+
+The one piece this record could not deliver - live decoding of the *PIO-driven* CircuitPython
+driver - is done, and nothing in `Ws2812` had to change to get it. 0063 taught `RPPIO` to pace its
+state machines by `SM_CLKDIV` and `[delay]`, so the waveform the emulator produces is now the one
+real silicon produces: 312 ns for a `0` and ~703 ns for a `1` on a 1.25 µs period, against the 8-40
+ns overlapping mush quoted above.
+
+Replaying this record's own acceptance test - the guest writing
+`neopixel_write(board.NEOPIXEL, bytearray([0xFF, 0x00, 0xAA]))` on real CircuitPython `10.2.1` -
+the device decodes the frame as wire bytes `ff 00 aa`, i.e. `(r, g, b) = (0x00, 0xff, 0xaa)` through
+its `GRB` order. Booting the board with **no guest code at all** decodes the status LED that
+`MICROPY_HW_NEOPIXEL` declares, exactly as this record predicted it would: alternating `(0, 0, 0)`
+and `(11, 11, 11)` frames from the first second of boot.
+
+Two things this settles about the design choices above:
+
+- **Duty-cycle classification was the right call and cost nothing.** The decoder is now being fed
+  the absolute timings it was originally written against, so an absolute ~500 ns threshold would
+  work too - but the measured widths carry ±40 ns of jitter from the CPU instruction each edge
+  lands inside, and the duty-cycle rule absorbs that without a per-driver constant.
+- **Pin edges, not PIO-program inspection, was also the right call** - and for the reason given,
+  not by luck: what made this work was fixing the *waveform*, which a bit-banged driver benefits
+  from identically.
+
+The caveat this record and `external/ws2812.py` both carried ("what it decodes from a PIO-driven
+driver is not what firmware wrote") is retired. 0063's own remaining ceilings - `CLKDIV=1` is still
+one instruction per CPU instruction, and PIO still does not run through a CPU idle jump - are stated
+there; neither is reachable by a WS2812 driver, which busy-waits rather than sleeps and runs its
+state machine at 12.8 MHz.
