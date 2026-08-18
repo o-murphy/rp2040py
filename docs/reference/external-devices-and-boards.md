@@ -271,6 +271,7 @@ is live-boot-verified against real firmware:
 | [machdyne_werkzeug](../../boards/machdyne_werkzeug.py) | MicroPython only | two plain LEDs - the first board whose LED is genuinely active-low (`LEDMock` gained `active_low` for it) |
 | [nullbits_bit_c_pro](../../boards/nullbits_bit_c_pro.py) | MicroPython + CircuitPython | RGB LED as three separate active-low GPIO LEDs, not a `Ws2812` - CircuitPython drives all three as a PWM status indicator from boot |
 | [pimoroni_picolipo](../../boards/pimoroni_picolipo.py) | MicroPython (2 flash variants) + CircuitPython | LiPo-charging board, `BOARD`/`BOARD_16MB` for its two flash sizes |
+| [pimoroni_tiny2040](../../boards/pimoroni_tiny2040.py) | MicroPython (2 flash variants) + CircuitPython | RGB LED as three separate active-low GPIO LEDs, not a `Ws2812` (same shape as `nullbits_bit_c_pro`); `BOARD`/`BOARD_8MB` for its two flash sizes |
 
 Named after the firmware's own board id, case-normalized (`weactstudio` for MicroPython's
 `ports/rp2/boards/WEACTSTUDIO`) - which is what keeps every number in a board file checkable

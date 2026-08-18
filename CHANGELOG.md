@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`fs_start=0x100000`, `fs_blockcount=768`/`3840`). `USER_SW` (GPIO23) left unmodelled - no vendor
   schematic found, and neither firmware port states its pull direction. See
   [docs/records/0076](docs/records/0076-pimoroni-picolipo-board.md).
+- `boards/pimoroni_tiny2040.py` - the Pimoroni Tiny 2040 as a `--board-spec` target: `BOARD` (2 MiB,
+  upstream's default) and `BOARD_8MB`, an RGB LED as three separate active-low GPIO LEDs
+  (`LEDMock(gpio=18/19/20, active_low=True)`, red/green/blue - not a `Ws2812`) + `BootselButton`,
+  both firmware families, both flash-size variants live-boot-verified (`fs_start=0x100000`,
+  `fs_blockcount=256`/`1792`). `USER_SW` (GPIO23) left unmodelled - same gap as
+  `pimoroni_picolipo`'s, no schematic found. See
+  [docs/records/0077](docs/records/0077-pimoroni-tiny2040-board.md).
 
 ### Changed
 - **`boards/` no longer defaults to one directory per board.** A directory

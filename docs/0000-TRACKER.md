@@ -67,6 +67,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0077] Pimoroni Tiny 2040 board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (not a `Ws2812`, same shape [0075]), two flash variants (2/8 MiB, `BOARD`/`BOARD_8MB`); `USER_SW` left unmodelled (no schematic, same gap as [0076])
 - [x] [0076] Pimoroni Pico LiPo board | off [0066]'s survey; two flash variants (4/16 MiB, `BOARD`/`BOARD_16MB`), a single flat file (not a directory - the first board built this way deliberately); `USER_SW` left unmodelled (no schematic). Also: 7 earlier boards this session retroactively flattened from directories to flat files, and the skill's own "never nest a device in boards/" text corrected against what 0059 actually says
 - [x] [0075] nullbits Bit-C PRO board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (confirmed by both firmware ports independently, not a `Ws2812`), CircuitPython drives it as a PWM status indicator from boot
 - [x] [0074] Machdyne Werkzeug board | off [0066]'s survey; `LEDMock` gained `active_low` (this board's green LED is genuinely active-low, the first such case), red LED's polarity stays an open gap
@@ -229,3 +230,4 @@ record is added.
 [0074]: records/0074-machdyne-werkzeug-board.md
 [0075]: records/0075-nullbits-bit-c-pro-board.md
 [0076]: records/0076-pimoroni-picolipo-board.md
+[0077]: records/0077-pimoroni-tiny2040-board.md

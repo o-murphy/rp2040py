@@ -74,6 +74,8 @@ the script's own module docstring before using it on an unfamiliar board.
    reusable across boards by nature (an LED, a button, a display controller); this exception is for
    the genuinely one-off case, not a way to avoid the shared location by default.
 5. **Write the unit test** - see "Testing" below before considering the device done.
+6. **Update the surrounding docs** - see "Don't forget the surrounding docs" below; a device isn't
+   done once tests pass, only once it's discoverable.
 
 ## Adding a new board
 
@@ -111,6 +113,8 @@ the script's own module docstring before using it on an unfamiliar board.
    already living in `rp2040py.external` rather than hidden in the board file (item 4), and a named
    maintainer for the row (item 5). Most new boards should stay in `boards/` as examples - that's
    the intended steady state, not a waiting room; ask before assuming a board should be promoted.
+6. **Update the surrounding docs** - see "Don't forget the surrounding docs" below; a board isn't
+   done once it live-boots, only once it's discoverable.
 
 ## Testing
 
@@ -158,6 +162,31 @@ Match the test to what actually needs proving - these are additive, not alternat
 
 Finish with `uv run pre-commit run --all-files` (mypy/ruff/pytest, both builds) per CLAUDE.md, same
 as any other change in this repo.
+
+## Don't forget the surrounding docs
+
+The code + a record isn't the whole job - a new board or device that live-boots but stays invisible
+everywhere else is easy to lose track of later. Every prior board addition
+([0068](../../../docs/records/0068-waveshare-rp2040-zero-board.md)-
+[0077](../../../docs/records/0077-pimoroni-tiny2040-board.md)) touched this same set; check each
+one rather than assuming a doc is out of scope because it isn't code:
+
+- **`CHANGELOG.md`** - a bullet under `## [Unreleased]` -> `### Added`, same shape as the existing
+  board/device entries there (what was added, the key sourced facts, a link to the new record).
+- **`docs/0000-TRACKER.md`** - a new row under `### Implemented` (with a `[N]: records/...` link at
+  the bottom of the file) - `[0077]` for this exact board is a real example to copy. If the board/
+  device was picked off an open survey record (e.g. [0066](../../../docs/records/0066-board-support-expansion.md)),
+  fold the result back into *that* record's own checklist too (`[ ]` -> `[x]`, pointing at the new
+  record) and update its own tracker row's summary if it still says "documented, not implemented".
+- **For a new board specifically**: `docs/reference/external-devices-and-boards.md`'s "Ready-made
+  examples in this repo" table needs a new row, and `README.md` has **two** separate mentions of the
+  current example-board count ("N worked `--board-spec` targets"/"N worked `--board-spec` examples")
+  that both need bumping - `grep -n "worked .--board-spec"  README.md` finds both.
+- **For a new device specifically**: `README.md`'s "Devices already shipping in-tree this way"
+  sentence (`### External devices & custom boards`) lists every device by name - add the new one.
+
+Do this before running the final `pre-commit` pass below, not as an afterthought after - it's easy
+to consider the work "done" once live-boot verification passes and stop there.
 
 ## Caveats worth re-reading before assuming something is a bug
 

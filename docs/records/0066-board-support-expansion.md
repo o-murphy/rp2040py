@@ -75,12 +75,13 @@ records generally).
       **Done, see [0076](0076-pimoroni-picolipo-board.md)** - two flash-size variants (4 MiB
       default + 16 MiB, `BOARD`/`BOARD_16MB`); `USER_SW` left unmodelled (no schematic found,
       polarity not stated in either firmware port).
-- [ ] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
-      pushbutton (GPIO23); CircuitPython port exists. **User note (2026-08-18, not yet verified
-      against source): also has 8 MiB/2 MiB flash-size variants on CircuitPython**, same
-      multi-variant shape as `PIMORONI_PICOLIPO`/`WAVESHARE_RP2040_PLUS` below - check
-      `https://adafruit-circuit-python.s3.amazonaws.com/index.html?prefix=bin/` for the real board
-      ids before building.
+- [x] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
+      pushbutton (GPIO23); CircuitPython port exists. **Done, see
+      [0077](0077-pimoroni-tiny2040-board.md)** - the user note below about 8 MiB/2 MiB flash-size
+      variants was confirmed against source: MicroPython's unnamed default variant and
+      CircuitPython's `pimoroni_tiny2040_2mb` board id are both the 2 MiB build, `FLASH_8M`/
+      `pimoroni_tiny2040` the 8 MiB one; `USER_SW` stayed unmodelled, same gap as
+      `PIMORONI_PICOLIPO`'s.
 - [ ] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
       LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`)
 - [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
