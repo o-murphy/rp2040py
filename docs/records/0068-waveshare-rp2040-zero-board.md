@@ -47,7 +47,7 @@ only the *start* has to be right, since the emulated flash buffer is 16 MiB).
 
 ## What was built
 
-`boards/waveshare_rp2040_zero/__init__.py` - both firmware families declared (unlike
+`boards/waveshare_rp2040_zero.py` - both firmware families declared (unlike
 `vcc_gnd_yd_rp2040`, which has no MicroPython port at all, this board has one for each), with:
 
 - `Ws2812(gpio=16)` - the board's only device, reusing 0062's device unchanged.
@@ -66,7 +66,7 @@ four 1.29.0 previews) and 128 CircuitPython releases going back to 7.2.0.
 
 ## Live-boot verification
 
-MicroPython, `--board-spec boards/waveshare_rp2040_zero/__init__.py:BOARD`:
+MicroPython, `--board-spec boards/waveshare_rp2040_zero.py:BOARD`:
 
 ```
 statvfs (4096, 4096, 352, 350, 350, 0, 0, 0, 0, 255)

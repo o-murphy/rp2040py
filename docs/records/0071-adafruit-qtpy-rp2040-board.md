@@ -58,7 +58,7 @@ Both the NeoPixel power pin and the BOOT button turned out to be the *identical*
 
 ## What was built
 
-`boards/adafruit_qtpy_rp2040/__init__.py` - both firmware families declared, with:
+`boards/adafruit_qtpy_rp2040.py` - both firmware families declared, with:
 
 - `Ws2812(gpio=12)`, `KeyMock(gpio=21, active_high=False)`, `BootselButton`. No `LEDMock` - this
   board genuinely has no plain LED.

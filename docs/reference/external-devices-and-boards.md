@@ -253,27 +253,47 @@ carries an `image`, so nothing downloads firmware as a side effect of constructi
 
 ### Ready-made examples in this repo
 
-Two complete board files live under [`boards/`](../../boards/), outside `src/rp2040py` (they are
-`--board-spec` targets, not part of the installed package). Both derive every number from the
-firmware's own upstream board config rather than guessing, and both are live-verified against real
-firmware:
+Worked `--board-spec` targets live under [`boards/`](../../boards/), outside `src/rp2040py` (they
+are examples, not part of the installed package). Every number in every one of these is derived
+from that board's own upstream firmware config rather than guessed (the "3g rule"), and every one
+is live-boot-verified against real firmware:
 
-| board | what it shows |
-|---|---|
-| [`boards/weactstudio/`](../../boards/weactstudio/__init__.py) | one `BoardSpec` per flash-size variant, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock(gpio=23, active_high=False)`) - no board-specific device class needed |
-| [`boards/vcc_gnd_yd_rp2040/`](../../boards/vcc_gnd_yd_rp2040/__init__.py) | a board declaring **one** firmware family, because upstream only builds one for it - and the how-to for the case where another firmware merely *runs* on your board without being built for it (pass `--image` explicitly rather than declaring a `firmware` key that claims otherwise). Carries the WS2812 RGB LED, the USRKEY button and the LED; its RESET button is a documented non-goal ([record 0057](../records/0057-run-pin-reset-hook.md)) |
-| [`boards/waveshare_rp2040_lcd_0_96/`](../../boards/waveshare_rp2040_lcd_0_96/__init__.py) | a board whose point *is* its device: the onboard 160x80 ST7735S panel (`external/st7735s.py`) attached as a fixed extra, plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below). Also a **two-family** file: one declaration each for MicroPython and CircuitPython, with their different images and flash layouts, selected by `--circuitpython` at run time - under which the panel paints itself at boot, with no guest code at all |
+| Board | Firmware | Highlight |
+| --- | --- | --- |
+| [weactstudio](../../boards/weactstudio/__init__.py) | MicroPython (4 flash variants) + CircuitPython | one `BoardSpec` per flash-size variant, built entirely from generic in-tree devices (`LEDMock`/`BootselButton`/`KeyMock`) - no board-specific device class needed |
+| [vcc_gnd_yd_rp2040](../../boards/vcc_gnd_yd_rp2040/__init__.py) | CircuitPython only | declares **one** firmware family, because upstream only builds one for it (see below for the how-to); WS2812 RGB LED driven as CircuitPython's own status indicator, decodes real pixel frames with no guest code at all |
+| [waveshare_rp2040_lcd_0_96](../../boards/waveshare_rp2040_lcd_0_96/__init__.py) | MicroPython + CircuitPython | a board whose point *is* its device: the onboard 160×80 ST7735S panel (`external/st7735s.py`), plus a `board_with(on_frame)` helper for the one thing a bare `--board-spec` target cannot do - hand the caller a way to receive the panel's frames (see below) |
+| [waveshare_rp2040_zero](../../boards/waveshare_rp2040_zero.py) | MicroPython + CircuitPython | the smallest example - a single WS2812, nothing else |
+| [adafruit_feather_rp2040](../../boards/adafruit_feather_rp2040.py) | MicroPython + CircuitPython | LED + WS2812 - and a worked example of a marketing claim (switchable NeoPixel power) contradicted by firmware source |
+| [adafruit_itsybitsy_rp2040](../../boards/adafruit_itsybitsy_rp2040.py) | MicroPython + CircuitPython | LED + WS2812 (real switchable power pin this time) + a second BOOT button sourced from the vendor's own schematic |
+| [adafruit_qtpy_rp2040](../../boards/adafruit_qtpy_rp2040.py) | MicroPython + CircuitPython | WS2812 + BOOT button - the same vendor-schematic pattern as ItsyBitsy, no plain LED |
+| [garatronic_pybstick26_rp2040](../../boards/garatronic_pybstick26_rp2040.py) | MicroPython only | plain LED, smallest board with no CircuitPython twin |
+| [machdyne_werkzeug](../../boards/machdyne_werkzeug.py) | MicroPython only | two plain LEDs - the first board whose LED is genuinely active-low (`LEDMock` gained `active_low` for it) |
+| [nullbits_bit_c_pro](../../boards/nullbits_bit_c_pro.py) | MicroPython + CircuitPython | RGB LED as three separate active-low GPIO LEDs, not a `Ws2812` - CircuitPython drives all three as a PWM status indicator from boot |
+| [pimoroni_picolipo](../../boards/pimoroni_picolipo.py) | MicroPython (2 flash variants) + CircuitPython | LiPo-charging board, `BOARD`/`BOARD_16MB` for its two flash sizes |
+| [pimoroni_tiny2040](../../boards/pimoroni_tiny2040.py) | MicroPython (2 flash variants) + CircuitPython | RGB LED as three separate active-low GPIO LEDs, not a `Ws2812` (same shape as `nullbits_bit_c_pro`); `BOARD`/`BOARD_8MB` for its two flash sizes |
+| [waveshare_rp2040_plus](../../boards/waveshare_rp2040_plus.py) | MicroPython (2 flash variants) + CircuitPython | plain LED + `BootselButton` only, no `pins.csv` at all upstream (uses the pico-sdk board header's own pin defaults directly); `BOARD`/`BOARD_16MB` for its two flash sizes |
 
-One directory per *board*, not per firmware family, named after the firmware's own board id,
-case-normalized (`weactstudio` for MicroPython's `ports/rp2/boards/WEACTSTUDIO`) - which is what
-keeps every number in a board file checkable against a real upstream source. Where two firmwares
-disagree on the id, pick one and cite both in the docstring.
+Named after the firmware's own board id, case-normalized (`weactstudio` for MicroPython's
+`ports/rp2/boards/WEACTSTUDIO`) - which is what keeps every number in a board file checkable
+against a real upstream source. Where two firmwares disagree on the id, pick one and cite both in
+the docstring.
 
-Both are loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module:
+**A directory (`boards/<name>/__init__.py`) is not required.** Only `weactstudio`,
+`vcc_gnd_yd_rp2040` and `waveshare_rp2040_lcd_0_96` use one, predating the convention below; every
+board added since is a single flat file (`boards/<name>.py`) per [record 0059](../records/0059-boardspec-firmware-resolution.md)'s
+own text ("`my_board.py` - a single file is still fine"). A directory is for a board that needs a
+device genuinely unique to it and not meant to be shared (`boards/<slug>/devices/` - see step 4 of
+"Adding a new `ExternalDevice`" above) or otherwise needs more than one file; most boards need
+neither, since their devices already live in `rp2040py.external`.
+
+Every board here is loadable either as a file path or, with `PYTHONPATH=.`, as a dotted module -
+the same either way, whether the board is a file or a package:
 
 ```sh
 rp2040py micropython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD
 rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD
+rp2040py micropython --board-spec boards/pimoroni_picolipo.py:BOARD_16MB
 PYTHONPATH=. rp2040py micropython --board-spec boards.weactstudio:BOARD_FLASH_4M
 ```
 

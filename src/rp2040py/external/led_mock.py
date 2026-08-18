@@ -32,10 +32,17 @@ class LEDMock:
     """Implements `ExternalDevice` structurally (see `external/device.py`). `.on` reflects
     whatever firmware last drove `gpio` to (only meaningful once `attach()`'s listener has fired
     at least once - see its own note); `.toggle_count` counts every on<->off transition, for
-    asserting things like "blinked N times" in a test without any real hardware involved."""
+    asserting things like "blinked N times" in a test without any real hardware involved.
 
-    def __init__(self, gpio: int = 25) -> None:
+    `active_low=True` is for the real, sourced case of a board wiring its LED so firmware drives
+    the pin *low* to light it (e.g. Machdyne Werkzeug's green LED - the pico-sdk board header's own
+    `PICO_DEFAULT_LED_PIN_INVERTED 1`) - `.on` still reports the LED's true logical state either
+    way, not the raw pin level, so a caller never has to know a board's polarity to read it.
+    Defaults to `False` (active-high), the wiring every existing board here uses."""
+
+    def __init__(self, gpio: int = 25, *, active_low: bool = False) -> None:
         self.gpio = gpio
+        self.active_low = active_low
         # False until the first real transition - matches a real LED's own unknown-until-driven
         # power-on state closely enough for a test double; nothing here claims to know the pin's
         # value before firmware has ever touched it (attach() doesn't read the pin's current
@@ -53,7 +60,8 @@ class LEDMock:
         (see `external/device.py`'s `attach_external_devices()` docstring)."""
 
         def _on_change(new_state: "GPIOPinState", _old_state: "GPIOPinState") -> None:
-            new_on = new_state == GPIOPinState.HIGH
+            lit_state = GPIOPinState.LOW if self.active_low else GPIOPinState.HIGH
+            new_on = new_state == lit_state
             if new_on != self.on:
                 self.on = new_on
                 self.toggle_count += 1

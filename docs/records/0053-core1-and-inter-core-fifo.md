@@ -1,6 +1,8 @@
 # 0053. Second core (core1) and the inter-core FIFO
 
-- Status: **Proposed — not implemented.** Documentation only; no code is changed by this record.
+- Status: **Proposed — core1/the real FIFO not implemented.** The "Interim option" below landed
+  2026-08-18 (a clearer read-side warning only); see that section's own addendum. Everything else
+  in this record is still documentation only, no code.
 - Conceived: 2026-08-16
 - Related: 0050 (where the missing FIFO was hypothesised, checked and *ruled out* as the cause of
   the CircuitPython 10.x stall), 0026/0025 (the asyncio engine-room model any second core would
@@ -68,6 +70,17 @@ a clear one-time warning naming `_thread`/`multicore` and this record, instead o
 "invalid SIO address" line. That is a five-line change and turns a mystery into a message. It is
 not implemented here either - noting it so the option is on the table without being mistaken for
 the real thing.
+
+**Implemented, 2026-08-18.** `sio.py` now names `FIFO_ST`/`FIFO_WR`/`FIFO_RD` (`0x50`/`0x54`/`0x58`)
+explicitly in `read_uint32()` - a read there still returns `0xFFFFFFFF` (unchanged behavior, still
+not the real FIFO), but logs "Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is
+unsupported (see docs/records/0053-core1-and-inter-core-fifo.md)" instead of the generic "Read from
+invalid SIO address: 50" a caller would otherwise have to trace back to this gap by hand. Writes
+are untouched (still silently dropped, as before) - the record's own interim proposal was read-side
+only, since that is the half `multicore_fifo_pop_blocking()`'s handshake actually blocks on.
+`tests/test_sio.py::test_reading_inter_core_fifo_addresses_names_0053_instead_of_generic_invalid_address`
+covers it. Nothing else in this record changed: core1 itself, the real FIFO pair, and the
+scheduling/addendum sections above remain proposed, not built.
 
 ## Addendum, 2026-08-17: how core1 should be *executed* - and why not on its own thread
 

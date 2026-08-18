@@ -5,8 +5,8 @@ is a single **WS2812 RGB LED on GPIO16**. Built as a worked `--board-spec` examp
 flagged this board first to pick up - the smallest candidate on that survey, one `Ws2812` and
 nothing else); load it with e.g.:
 
-    rp2040py micropython --board-spec boards/waveshare_rp2040_zero/__init__.py:BOARD -c "<probe>"
-    rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_zero/__init__.py:BOARD -c "<probe>"
+    rp2040py micropython --board-spec boards/waveshare_rp2040_zero.py:BOARD -c "<probe>"
+    rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_zero.py:BOARD -c "<probe>"
     PYTHONPATH=. rp2040py micropython --board-spec boards.waveshare_rp2040_zero:BOARD ...
 
 Nothing is downloaded when this module is imported: `firmware` is data, and
@@ -17,7 +17,7 @@ Lives outside `src/rp2040py` on purpose - a `--board-spec` target, not part of t
 package or the built-in `--board` registry. It clears neither item 2 (a `firmware_specs.json`
 entry) nor item 5 (a named maintainer) of 0059's promotion checklist.
 
-Directory named `waveshare_rp2040_zero` after both firmwares' own board id - MicroPython's
+File named `waveshare_rp2040_zero.py` after both firmwares' own board id - MicroPython's
 `ports/rp2/boards/WAVESHARE_RP2040_ZERO`, case-normalized, and CircuitPython's own
 `waveshare_rp2040_zero` (they agree here, unlike `boards/weactstudio/`).
 

@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `boards/machdyne_werkzeug.py` - the Machdyne Werkzeug as a `--board-spec` target: two plain LEDs,
+  green (`LEDMock(gpio=20, active_low=True)`) + red (`LEDMock(gpio=21)`), plus `BootselButton`.
+  MicroPython-only (no CircuitPython port exists). Smaller flash than a plain Pico (1 MiB vs.
+  2 MiB), `fs_start=0xa0000`/`fs_blockcount=96`, confirmed by live boot. See
+  [docs/records/0074](docs/records/0074-machdyne-werkzeug-board.md).
+- `rp2040py.external.led_mock.LEDMock` gained an `active_low` constructor argument (default
+  `False`, every existing board's behavior unchanged) - the Werkzeug's green LED is genuinely
+  wired active-low (pico-sdk's own `PICO_DEFAULT_LED_PIN_INVERTED 1`), the first board this
+  project has modelled where that's a real, sourced fact rather than the active-high default
+  every prior board's plain LED happened to use. `.on`/`.toggle_count` report the LED's true
+  logical state either way, not the raw pin level.
+- `boards/nullbits_bit_c_pro.py` - the nullbits Bit-C PRO as a `--board-spec` target: an RGB LED as
+  three separate active-low GPIO LEDs (`LEDMock(gpio=16/17/18, active_low=True)`, red/green/blue -
+  not a `Ws2812`, despite `board.json`'s own "RGB LED" tag) + `BootselButton`. Both firmware
+  families declared; 4 MiB flash (bigger than a plain Pico's 2 MiB), `fs_start=0x80000`/
+  `fs_blockcount=896` for MicroPython (the first board here whose flash-storage size is a formula
+  off `PICO_FLASH_SIZE_BYTES` rather than a fixed literal), confirmed by live boot. CircuitPython
+  drives all three as its own PWM status indicator from boot (`CIRCUITPY_RGB_STATUS_INVERTED_PWM`
+  - the non-NeoPixel equivalent of the WS2812 status-LED pattern earlier boards already showed),
+  measured directly rather than assumed. See
+  [docs/records/0075](docs/records/0075-nullbits-bit-c-pro-board.md).
+- `boards/pimoroni_picolipo.py` - the Pimoroni Pico LiPo as a `--board-spec` target: `BOARD` (4 MiB,
+  default) and `BOARD_16MB`, both firmware families, both flash-size variants live-boot-verified
+  (`fs_start=0x100000`, `fs_blockcount=768`/`3840`). `USER_SW` (GPIO23) left unmodelled - no vendor
+  schematic found, and neither firmware port states its pull direction. See
+  [docs/records/0076](docs/records/0076-pimoroni-picolipo-board.md).
+- `boards/pimoroni_tiny2040.py` - the Pimoroni Tiny 2040 as a `--board-spec` target: `BOARD` (2 MiB,
+  upstream's default) and `BOARD_8MB`, an RGB LED as three separate active-low GPIO LEDs
+  (`LEDMock(gpio=18/19/20, active_low=True)`, red/green/blue - not a `Ws2812`) + `BootselButton`,
+  both firmware families, both flash-size variants live-boot-verified (`fs_start=0x100000`,
+  `fs_blockcount=256`/`1792`). `USER_SW` (GPIO23) left unmodelled - same gap as
+  `pimoroni_picolipo`'s, no schematic found. See
+  [docs/records/0077](docs/records/0077-pimoroni-tiny2040-board.md).
+- `boards/waveshare_rp2040_plus.py` - the Waveshare RP2040-Plus as a `--board-spec` target: `BOARD`
+  (4 MiB, default) and `BOARD_16MB`, `LEDMock(gpio=25)` + `BootselButton` only - this board has no
+  `USER_SW`-equivalent pushbutton at all, so no open pull-direction gap - both firmware families,
+  both flash-size variants live-boot-verified (`fs_start=0x100000`, `fs_blockcount=768`/`3840`,
+  numerically identical to `pimoroni_picolipo`'s since both use the same-sized flash chips). See
+  [docs/records/0078](docs/records/0078-waveshare-rp2040-plus-board.md).
+
+### Changed
+- **`boards/` no longer defaults to one directory per board.** A directory
+  (`boards/<name>/__init__.py`) is now only for a board that needs a device genuinely unique to it
+  and not meant to be shared (`boards/<slug>/devices/`), or otherwise needs more than one file -
+  [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md)'s own text already said
+  "a single file is still fine," but every board added this session had defaulted to a directory
+  regardless. `boards/waveshare_rp2040_zero.py`, `adafruit_feather_rp2040.py`,
+  `adafruit_itsybitsy_rp2040.py`, `adafruit_qtpy_rp2040.py`, `garatronic_pybstick26_rp2040.py`,
+  `machdyne_werkzeug.py` and `nullbits_bit_c_pro.py` were retroactively flattened from
+  `boards/<name>/__init__.py` to `boards/<name>.py` (each re-verified live-booting identically from
+  its new path before the old directory was removed); `pimoroni_picolipo.py` above was built as a
+  flat file from the start. `weactstudio/`, `vcc_gnd_yd_rp2040/` and `waveshare_rp2040_lcd_0_96/`
+  (predating this session, cited by name throughout the skill and reference doc) keep their
+  directories - out of scope for this pass.
+- `.claude/skills/external-devices-and-boards/SKILL.md` corrected: it read "never nest a new device
+  inside `boards/`" as an absolute rule, citing 0059's promotion-checklist item 4 - but that item
+  only requires a device to live in `rp2040py.external` for a board *graduating* into
+  `boards.BOARDS` (real `--board` support), not for every example. A device genuinely unique to one
+  board and not meant to be shared may live under `boards/<slug>/devices/`; that board then simply
+  isn't eligible for promotion without moving the device out first.
+- `docs/reference/external-devices-and-boards.md`'s "Ready-made examples in this repo" table
+  expanded from 3 boards to all 11, and moved to be the canonical list - `README.md`'s own copy of
+  this table replaced with a short summary and a link to it, so the two don't drift out of sync as
+  more boards are added.
+
+### Fixed
+- `README.md`: the Kaluma section's heading shortened from "Kaluma (other USB-CDC firmware, not
+  MicroPython/CircuitPython)" to "Kaluma" - the explanation already opens the section's own first
+  sentence, so the heading was carrying redundant weight only the Table of Contents ever displayed
+  in full.
+
+## [0.3.0rc2] - 2026-08-18
+
+### Fixed
+- `sio.py`: reading the inter-core FIFO addresses (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`, `0x50`/`0x54`/
+  `0x58` - unimplemented, see [docs/records/0053](docs/records/0053-core1-and-inter-core-fifo.md))
+  now logs "Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is unsupported (see
+  docs/records/0053-core1-and-inter-core-fifo.md)" instead of the generic "Read from invalid SIO
+  address: 50" - the record's own "Interim option", turning a mystery address into a message
+  naming exactly what's missing and why (`import _thread`/`multicore_launch_core1()` are the
+  concrete trigger). Behavior otherwise unchanged: still returns `0xFFFFFFFF`, writes still
+  silently dropped - this does not implement the FIFO or core1, both still proposed/not built.
+
 ## [0.3.0rc1] - 2026-08-18
 
 ### Added
@@ -117,20 +201,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `boards/` example into real `--board` support. Sits on top of, and doesn't duplicate,
   [reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md). See
   [docs/records/0067](docs/records/0067-external-devices-and-boards-skill.md).
-- `boards/waveshare_rp2040_zero/` - the Waveshare RP2040-Zero as a `--board-spec` target: a single
+- `boards/waveshare_rp2040_zero.py` - the Waveshare RP2040-Zero as a `--board-spec` target: a single
   `Ws2812(gpio=16)` and `BootselButton`, nothing else - the board has no plain LED. Both firmware
   families declared; flash geometry is identical to a plain Pico (`fs_start=0xa0000`,
   `fs_blockcount=352` MicroPython / `0x100000`/`512` CircuitPython), confirmed by live boot.
   CircuitPython drives the NeoPixel as its own boot-time status indicator (measured, not assumed -
   11 frames decoded before any guest code ran). See
   [docs/records/0068](docs/records/0068-waveshare-rp2040-zero-board.md).
-- `boards/adafruit_feather_rp2040/` - `LEDMock(gpio=13)` + `Ws2812(gpio=16)` + `BootselButton`, 8
+- `boards/adafruit_feather_rp2040.py` - `LEDMock(gpio=13)` + `Ws2812(gpio=16)` + `BootselButton`, 8
   MiB flash / 7 MiB storage (`fs_start=0x100000`, `fs_blockcount=1792` MicroPython / `512`
   CircuitPython). Documents that Adafruit's own product page claims a switchable NeoPixel power
   pin that both firmware ports' source directly contradicts ("power not toggleable" in
   MicroPython's own comment, no `PICO_DEFAULT_WS2812_POWER_PIN` in either port) - not modelled,
   since it isn't real. See [docs/records/0069](docs/records/0069-adafruit-feather-rp2040-board.md).
-- `boards/adafruit_itsybitsy_rp2040/` - `LEDMock(gpio=11)` + `Ws2812(gpio=17)` +
+- `boards/adafruit_itsybitsy_rp2040.py` - `LEDMock(gpio=11)` + `Ws2812(gpio=17)` +
   `KeyMock(gpio=13)` (a second, non-BOOTSEL BOOT button) + `BootselButton`. Same 8 MiB/7 MiB flash
   split as the Feather. Unlike the Feather, this board's NeoPixel power-enable pin (GPIO16) is
   real per both firmware ports - confirmed driven high before boot by directly attaching a GPIO
@@ -141,12 +225,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half is modelled; the diode coupling is an analog current path between two pins this project's
   `ExternalDevice` model has no way to represent, stated as a real gap rather than silently
   dropped. See [docs/records/0070](docs/records/0070-adafruit-itsybitsy-rp2040-board.md).
-- `boards/adafruit_qtpy_rp2040/` - `Ws2812(gpio=12)` + `KeyMock(gpio=21)` + `BootselButton`, no
+- `boards/adafruit_qtpy_rp2040.py` - `Ws2812(gpio=12)` + `KeyMock(gpio=21)` + `BootselButton`, no
   plain LED at all (confirmed absent from every source). Same real NeoPixel power pin (GPIO11) and
   the same diode-into-BOOTSEL button design as `adafruit_itsybitsy_rp2040` - component-for-component
   identical per Adafruit's own schematic (`SW2`/`D2`/`R16` here vs. `SW3`/`D3`/`R11` there), not
   merely similar. See [docs/records/0071](docs/records/0071-adafruit-qtpy-rp2040-board.md).
-- `boards/garatronic_pybstick26_rp2040/` - the Garatronic/McHobby PYBStick26 RP2040 as a
+- `boards/garatronic_pybstick26_rp2040.py` - the Garatronic/McHobby PYBStick26 RP2040 as a
   `--board-spec` target: a single `LEDMock(gpio=23)` + `BootselButton`, MicroPython-only (no
   CircuitPython port exists for this board). `board.json`'s own `"RGB LED"` feature tag is
   contradicted by every real source checked (`pins.csv`, `mpconfigboard.h`, and the pico-sdk
@@ -1323,7 +1407,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...HEAD
+[0.3.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.2.5...v0.3.0rc1
 [0.2.5]: https://github.com/o-murphy/rp2040py/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/o-murphy/rp2040py/compare/v0.2.2...v0.2.4

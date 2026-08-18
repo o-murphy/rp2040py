@@ -61,12 +61,17 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
 - [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
-- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation stated user-facing. Addendum settles the execution model: interleaved in one loop, not a thread per core
+- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, core1/the real FIFO not implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation stated user-facing. Addendum settles the execution model: interleaved in one loop, not a thread per core. Its own "Interim option" - a clearer read-side warning naming this record instead of a generic "invalid SIO address" line - landed 2026-08-18
 - [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
 - [ ] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | **Closed dormant, not root-caused** (2026-08-18) - single 2026-08-14 occurrence, not reproduced in ~85 subsequent CI runs; reopen if it recurs
 
 ### Implemented
 
+- [x] [0078] Waveshare RP2040-Plus board | off [0066]'s survey; plain `LEDMock(gpio=25)` + `BootselButton` only - no `USER_SW` equivalent exists on this board at all, so no open pull-direction gap; two flash variants (4/16 MiB, `BOARD`/`BOARD_16MB`), numerically identical flash geometry to [0076]'s own table
+- [x] [0077] Pimoroni Tiny 2040 board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (not a `Ws2812`, same shape [0075]), two flash variants (2/8 MiB, `BOARD`/`BOARD_8MB`); `USER_SW` left unmodelled (no schematic, same gap as [0076])
+- [x] [0076] Pimoroni Pico LiPo board | off [0066]'s survey; two flash variants (4/16 MiB, `BOARD`/`BOARD_16MB`), a single flat file (not a directory - the first board built this way deliberately); `USER_SW` left unmodelled (no schematic). Also: 7 earlier boards this session retroactively flattened from directories to flat files, and the skill's own "never nest a device in boards/" text corrected against what 0059 actually says
+- [x] [0075] nullbits Bit-C PRO board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (confirmed by both firmware ports independently, not a `Ws2812`), CircuitPython drives it as a PWM status indicator from boot
+- [x] [0074] Machdyne Werkzeug board | off [0066]'s survey; `LEDMock` gained `active_low` (this board's green LED is genuinely active-low, the first such case), red LED's polarity stays an open gap
 - [x] [0073] Garatronic/McHobby PYBStick26 RP2040 board | smallest remaining board off [0066]'s survey; MicroPython-only, `LEDMock` (`board.json`'s own "RGB LED" tag contradicted by every real source), live-boot-verified
 - [x] [0071] Adafruit QT Py RP2040 board | fourth board picked up off [0066]'s survey; `Ws2812`/`KeyMock`, no plain LED, both firmware families, live-boot-verified; power pin and diode-into-BOOTSEL button design component-for-component identical to [0070]'s ItsyBitsy
 - [x] [0070] Adafruit ItsyBitsy RP2040 board | third board picked up off [0066]'s survey; `LEDMock`/`Ws2812`/`KeyMock`, both firmware families, live-boot-verified; BOOT button sourced from Adafruit's own schematic (also diode-coupled into real BOOTSEL, not modelled - analog cross-pin path)
@@ -223,3 +228,8 @@ record is added.
 [0071]: records/0071-adafruit-qtpy-rp2040-board.md
 [0072]: records/0072-w5500-ethernet-and-board.md
 [0073]: records/0073-garatronic-pybstick26-rp2040-board.md
+[0074]: records/0074-machdyne-werkzeug-board.md
+[0075]: records/0075-nullbits-bit-c-pro-board.md
+[0076]: records/0076-pimoroni-picolipo-board.md
+[0077]: records/0077-pimoroni-tiny2040-board.md
+[0078]: records/0078-waveshare-rp2040-plus-board.md

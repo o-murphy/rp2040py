@@ -64,7 +64,7 @@ needing a later correction.
 
 ## What was built
 
-`boards/adafruit_feather_rp2040/__init__.py` - both firmware families declared, with:
+`boards/adafruit_feather_rp2040.py` - both firmware families declared, with:
 
 - `LEDMock(gpio=13)` - the plain red LED.
 - `Ws2812(gpio=16)` - the RGB NeoPixel, reusing 0062's device unchanged.
@@ -84,7 +84,7 @@ releases.
 
 ## Live-boot verification
 
-MicroPython, `--board-spec boards/adafruit_feather_rp2040/__init__.py:BOARD`:
+MicroPython, `--board-spec boards/adafruit_feather_rp2040.py:BOARD`:
 
 ```
 statvfs (4096, 4096, 1792, 1790, 1790, 0, 0, 0, 0, 255)

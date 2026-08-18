@@ -62,17 +62,37 @@ records generally).
 - [x] `GARATRONIC_PYBSTICK26_RP2040` - LED (GPIO23) only; MicroPython-only, no CircuitPython port.
       **Done, see [0073](0073-garatronic-pybstick26-rp2040-board.md)** - `board.json`'s own "RGB
       LED" feature tag is contradicted by every real source (plain `LEDMock`, not `Ws2812`).
-- [ ] `MACHDYNE_WERKZEUG` - two plain LEDs, green (GPIO20) + red (GPIO21); MicroPython-only
-- [ ] `NULLBITS_BIT_C_PRO` - RGB LED as three plain active-low GPIO LEDs (GPIO16/17/18, i.e.
-      3×`LEDMock`, not a `Ws2812`); CircuitPython port exists
-- [ ] `PIMORONI_PICOLIPO` - LED (GPIO25) + `USER_SW` pushbutton (GPIO23); CircuitPython port exists
-- [ ] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
-      pushbutton (GPIO23); CircuitPython port exists
+- [x] `MACHDYNE_WERKZEUG` - two plain LEDs, green (GPIO20) + red (GPIO21); MicroPython-only.
+      **Done, see [0074](0074-machdyne-werkzeug-board.md)** - the green LED is genuinely
+      active-low (`PICO_DEFAULT_LED_PIN_INVERTED`), the first such case; `LEDMock` gained an
+      `active_low` argument for it.
+- [x] `NULLBITS_BIT_C_PRO` - RGB LED as three plain active-low GPIO LEDs (GPIO16/17/18, i.e.
+      3×`LEDMock`, not a `Ws2812`); CircuitPython port exists. **Done, see
+      [0075](0075-nullbits-bit-c-pro-board.md)** - `LEDMock.active_low` (added for
+      `MACHDYNE_WERKZEUG`) used on all three at once, confirmed by both firmware ports
+      independently.
+- [x] `PIMORONI_PICOLIPO` - LED (GPIO25) + `USER_SW` pushbutton (GPIO23); CircuitPython port exists.
+      **Done, see [0076](0076-pimoroni-picolipo-board.md)** - two flash-size variants (4 MiB
+      default + 16 MiB, `BOARD`/`BOARD_16MB`); `USER_SW` left unmodelled (no schematic found,
+      polarity not stated in either firmware port).
+- [x] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
+      pushbutton (GPIO23); CircuitPython port exists. **Done, see
+      [0077](0077-pimoroni-tiny2040-board.md)** - the user note below about 8 MiB/2 MiB flash-size
+      variants was confirmed against source: MicroPython's unnamed default variant and
+      CircuitPython's `pimoroni_tiny2040_2mb` board id are both the 2 MiB build, `FLASH_8M`/
+      `pimoroni_tiny2040` the 8 MiB one; `USER_SW` stayed unmodelled, same gap as
+      `PIMORONI_PICOLIPO`'s.
 - [ ] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
       LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`)
 - [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
-- [ ] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
-      Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port exists
+- [x] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
+      Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port
+      exists. **Done, see [0078](0078-waveshare-rp2040-plus-board.md)** - the user note below about
+      16 MiB/4 MiB flash-size variants was confirmed against source (both MicroPython's
+      `BOARD_VARIANT` mechanism and two separate CircuitPython board ids,
+      `waveshare_rp2040_plus_4mb`/`_16mb`, same shape as `PIMORONI_PICOLIPO`); unlike that board,
+      this one has no `USER_SW`-equivalent pushbutton at all, so no pull-direction gap was left
+      open.
 - [x] `WAVESHARE_RP2040_ZERO` - `Ws2812`/NeoPixel only (GPIO16); CircuitPython port exists. Flagged
       by the user as the one to pick up first, off
       [the board's own `board.json`](https://github.com/micropython/micropython/blob/master/ports/rp2/boards/WAVESHARE_RP2040_ZERO/board.json) -

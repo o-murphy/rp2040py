@@ -3,11 +3,11 @@
 as `boards/adafruit_feather_rp2040/` and three onboard indicators: a plain red LED on **GPIO11**, a
 **WS2812 RGB NeoPixel on GPIO17** with a genuine **power-enable pin on GPIO16**, and a second,
 non-BOOTSEL **BOOT button on GPIO13**. Built as a worked `--board-spec` example, the third board
-picked up off [0066](../../docs/records/0066-board-support-expansion.md)'s survey; load it with
+picked up off [0066](../docs/records/0066-board-support-expansion.md)'s survey; load it with
 e.g.:
 
-    rp2040py micropython --board-spec boards/adafruit_itsybitsy_rp2040/__init__.py:BOARD -c "<probe>"
-    rp2040py micropython --circuitpython --board-spec boards/adafruit_itsybitsy_rp2040/__init__.py:BOARD -c "<probe>"
+    rp2040py micropython --board-spec boards/adafruit_itsybitsy_rp2040.py:BOARD -c "<probe>"
+    rp2040py micropython --circuitpython --board-spec boards/adafruit_itsybitsy_rp2040.py:BOARD -c "<probe>"
     PYTHONPATH=. rp2040py micropython --board-spec boards.adafruit_itsybitsy_rp2040:BOARD ...
 
 Nothing is downloaded when this module is imported: `firmware` is data, and
@@ -18,7 +18,7 @@ Lives outside `src/rp2040py` on purpose - a `--board-spec` target, not part of t
 package or the built-in `--board` registry. It clears neither item 2 (a `firmware_specs.json`
 entry) nor item 5 (a named maintainer) of 0059's promotion checklist.
 
-Directory named `adafruit_itsybitsy_rp2040` after both firmwares' own board id - MicroPython's
+File named `adafruit_itsybitsy_rp2040.py` after both firmwares' own board id - MicroPython's
 `ports/rp2/boards/ADAFRUIT_ITSYBITSY_RP2040`, case-normalized, and CircuitPython's own
 `adafruit_itsybitsy_rp2040` (they agree here, unlike `boards/weactstudio/`).
 

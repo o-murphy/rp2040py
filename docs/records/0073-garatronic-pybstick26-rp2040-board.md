@@ -46,7 +46,7 @@ differs (96 vs. 352).
 
 ## What was built
 
-`boards/garatronic_pybstick26_rp2040/__init__.py` - one firmware family (MicroPython only, no
+`boards/garatronic_pybstick26_rp2040.py` - one firmware family (MicroPython only, no
 generic fallback the way `vcc_gnd_yd_rp2040` has for the reverse case), with `LEDMock(gpio=23)` +
 `BootselButton`. Not modelled: RESET (pulls RUN, not a GPIO - 0057, same gap every other board file
 here documents; McHobby's product page shows a physical RESET button, but with no schematic
