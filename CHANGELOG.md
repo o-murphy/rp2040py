@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `boards/machdyne_werkzeug/` - the Machdyne Werkzeug as a `--board-spec` target: two plain LEDs,
+  green (`LEDMock(gpio=20, active_low=True)`) + red (`LEDMock(gpio=21)`), plus `BootselButton`.
+  MicroPython-only (no CircuitPython port exists). Smaller flash than a plain Pico (1 MiB vs.
+  2 MiB), `fs_start=0xa0000`/`fs_blockcount=96`, confirmed by live boot. See
+  [docs/records/0074](docs/records/0074-machdyne-werkzeug-board.md).
+- `rp2040py.external.led_mock.LEDMock` gained an `active_low` constructor argument (default
+  `False`, every existing board's behavior unchanged) - the Werkzeug's green LED is genuinely
+  wired active-low (pico-sdk's own `PICO_DEFAULT_LED_PIN_INVERTED 1`), the first board this
+  project has modelled where that's a real, sourced fact rather than the active-high default
+  every prior board's plain LED happened to use. `.on`/`.toggle_count` report the LED's true
+  logical state either way, not the raw pin level.
+- `boards/nullbits_bit_c_pro/` - the nullbits Bit-C PRO as a `--board-spec` target: an RGB LED as
+  three separate active-low GPIO LEDs (`LEDMock(gpio=16/17/18, active_low=True)`, red/green/blue -
+  not a `Ws2812`, despite `board.json`'s own "RGB LED" tag) + `BootselButton`. Both firmware
+  families declared; 4 MiB flash (bigger than a plain Pico's 2 MiB), `fs_start=0x80000`/
+  `fs_blockcount=896` for MicroPython (the first board here whose flash-storage size is a formula
+  off `PICO_FLASH_SIZE_BYTES` rather than a fixed literal), confirmed by live boot. CircuitPython
+  drives all three as its own PWM status indicator from boot (`CIRCUITPY_RGB_STATUS_INVERTED_PWM`
+  - the non-NeoPixel equivalent of the WS2812 status-LED pattern earlier boards already showed),
+  measured directly rather than assumed. See
+  [docs/records/0075](docs/records/0075-nullbits-bit-c-pro-board.md).
+
+### Fixed
+- `README.md`: the Kaluma section's heading shortened from "Kaluma (other USB-CDC firmware, not
+  MicroPython/CircuitPython)" to "Kaluma" - the explanation already opens the section's own first
+  sentence, so the heading was carrying redundant weight only the Table of Contents ever displayed
+  in full.
+
 ## [0.3.0rc2] - 2026-08-18
 
 ### Fixed

@@ -46,7 +46,7 @@ to [External devices & custom boards](#external-devices--custom-boards) if you'r
   - [MicroPython code](#micropython-code)
     - [mpremote](#mpremote)
   - [CircuitPython code](#circuitpython-code)
-  - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
+  - [Kaluma](#kaluma)
   - [Filesystem support](#filesystem-support)
   - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
   - [Bootrom revisions](#bootrom-revisions)
@@ -248,7 +248,7 @@ is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc). F
 [Filesystem support](#filesystem-support) and [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
 below, which cover all three firmware families in one place.
 
-### Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)
+### Kaluma
 
 rp2040py's USB/CDC emulation isn't MicroPython-specific - any firmware presenting a CDC-ACM serial
 console works the same way underneath. The `kaluma` subcommand runs [Kaluma](https://kaluma.io/)

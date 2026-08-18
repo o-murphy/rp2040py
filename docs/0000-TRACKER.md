@@ -67,6 +67,8 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0075] nullbits Bit-C PRO board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (confirmed by both firmware ports independently, not a `Ws2812`), CircuitPython drives it as a PWM status indicator from boot
+- [x] [0074] Machdyne Werkzeug board | off [0066]'s survey; `LEDMock` gained `active_low` (this board's green LED is genuinely active-low, the first such case), red LED's polarity stays an open gap
 - [x] [0073] Garatronic/McHobby PYBStick26 RP2040 board | smallest remaining board off [0066]'s survey; MicroPython-only, `LEDMock` (`board.json`'s own "RGB LED" tag contradicted by every real source), live-boot-verified
 - [x] [0071] Adafruit QT Py RP2040 board | fourth board picked up off [0066]'s survey; `Ws2812`/`KeyMock`, no plain LED, both firmware families, live-boot-verified; power pin and diode-into-BOOTSEL button design component-for-component identical to [0070]'s ItsyBitsy
 - [x] [0070] Adafruit ItsyBitsy RP2040 board | third board picked up off [0066]'s survey; `LEDMock`/`Ws2812`/`KeyMock`, both firmware families, live-boot-verified; BOOT button sourced from Adafruit's own schematic (also diode-coupled into real BOOTSEL, not modelled - analog cross-pin path)
@@ -223,3 +225,5 @@ record is added.
 [0071]: records/0071-adafruit-qtpy-rp2040-board.md
 [0072]: records/0072-w5500-ethernet-and-board.md
 [0073]: records/0073-garatronic-pybstick26-rp2040-board.md
+[0074]: records/0074-machdyne-werkzeug-board.md
+[0075]: records/0075-nullbits-bit-c-pro-board.md

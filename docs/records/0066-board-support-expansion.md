@@ -62,9 +62,15 @@ records generally).
 - [x] `GARATRONIC_PYBSTICK26_RP2040` - LED (GPIO23) only; MicroPython-only, no CircuitPython port.
       **Done, see [0073](0073-garatronic-pybstick26-rp2040-board.md)** - `board.json`'s own "RGB
       LED" feature tag is contradicted by every real source (plain `LEDMock`, not `Ws2812`).
-- [ ] `MACHDYNE_WERKZEUG` - two plain LEDs, green (GPIO20) + red (GPIO21); MicroPython-only
-- [ ] `NULLBITS_BIT_C_PRO` - RGB LED as three plain active-low GPIO LEDs (GPIO16/17/18, i.e.
-      3×`LEDMock`, not a `Ws2812`); CircuitPython port exists
+- [x] `MACHDYNE_WERKZEUG` - two plain LEDs, green (GPIO20) + red (GPIO21); MicroPython-only.
+      **Done, see [0074](0074-machdyne-werkzeug-board.md)** - the green LED is genuinely
+      active-low (`PICO_DEFAULT_LED_PIN_INVERTED`), the first such case; `LEDMock` gained an
+      `active_low` argument for it.
+- [x] `NULLBITS_BIT_C_PRO` - RGB LED as three plain active-low GPIO LEDs (GPIO16/17/18, i.e.
+      3×`LEDMock`, not a `Ws2812`); CircuitPython port exists. **Done, see
+      [0075](0075-nullbits-bit-c-pro-board.md)** - `LEDMock.active_low` (added for
+      `MACHDYNE_WERKZEUG`) used on all three at once, confirmed by both firmware ports
+      independently.
 - [ ] `PIMORONI_PICOLIPO` - LED (GPIO25) + `USER_SW` pushbutton (GPIO23); CircuitPython port exists
 - [ ] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
       pushbutton (GPIO23); CircuitPython port exists

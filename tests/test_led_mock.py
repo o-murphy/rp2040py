@@ -73,3 +73,19 @@ def test_only_watches_its_own_gpio(rp2040_factory):
 
     assert led.on is False
     assert led.toggle_count == 0
+
+
+def test_active_low_reports_on_when_the_pin_is_driven_low(rp2040_factory):
+    rp2040 = rp2040_factory()
+    led = LEDMock(gpio=20, active_low=True)
+    led.attach(rp2040)
+
+    _drive_gpio_high(rp2040, 20, False)  # driven LOW - lit, for an active-low LED
+
+    assert led.on is True
+    assert led.toggle_count == 1
+
+    _drive_gpio_high(rp2040, 20, True)  # driven HIGH - off
+
+    assert led.on is False
+    assert led.toggle_count == 2
