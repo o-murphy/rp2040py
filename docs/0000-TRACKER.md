@@ -54,6 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **Proposed, documented.** 128 boards checklisted across both MicroPython's and CircuitPython's board lists - 49 addable with zero new devices, 59 need one or more device (grouped by missing chip where shared across boards); 17 RP2350 boards and 3 architecturally-unmodelable ones flagged separately, not dropped
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
@@ -219,3 +220,4 @@ record is added.
 [0069]: records/0069-adafruit-feather-rp2040-board.md
 [0070]: records/0070-adafruit-itsybitsy-rp2040-board.md
 [0071]: records/0071-adafruit-qtpy-rp2040-board.md
+[0072]: records/0072-w5500-ethernet-and-board.md

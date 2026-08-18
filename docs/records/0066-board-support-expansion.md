@@ -88,6 +88,12 @@ Three boards, two chips (W5100S and W5500 are the same vendor's SPI Ethernet fam
 in register shape that one `ExternalDevice` may cover both, or may not - not investigated). If an
 Ethernet device is ever built, this unblocks three boards at once, not one.
 
+**A phased plan for the W5500 half exists as of [0072](0072-w5500-ethernet-and-board.md)
+(2026-08-18) - proposed and documented, no phase implemented yet**, so none of the three rows above
+move to `[x]` on the strength of the plan alone (this record's own conventions: a plan is not an
+implementation). W5100S register-compatibility is explicitly deferred to 0072's own phase 5, not
+resolved by having a plan for W5500.
+
 ## Checklist: needs 2+ new devices, has a MicroPython port
 
 Theoretically supportable - the RP2040 chip itself is never the blocker here, only the count of
