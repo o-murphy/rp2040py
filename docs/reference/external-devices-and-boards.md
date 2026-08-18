@@ -65,7 +65,8 @@ def attach(self, rp2040: "RP2040") -> None:
     self._unsubscribe = rp2040.gpio[self.gpio].add_listener(_on_change)
 ```
 
-`GPIOPin.add_listener()` is the same primitive `Epd2in9G` (a full SPI e-paper display driver, the
+`GPIOPin.add_listener()` is the same primitive `Ws2812` (which decodes a single-wire pulse-width
+protocol from nothing but edge timestamps) and `Epd2in9G` (a full SPI e-paper display driver, the
 richer end of the same spectrum) and `Cyw43439` build on - `rp2040.gpio[n]` for a plain GPIO pin,
 or the relevant peripheral object (`rp2040.spi[n]`, ...) for anything else your device needs to
 watch or drive.
@@ -279,7 +280,8 @@ PYTHONPATH=. rp2040py micropython --board-spec boards.weactstudio:BOARD_FLASH_4M
 ### Seeing what a display device drew
 
 A display device hands you raw pixels, never a picture: `Epd2in9G.on_frame` fires with a packed
-2bpp e-paper buffer, `St7735s.on_frame` with a raw RGB565 one. Nothing in `src/rp2040py` decodes
+2bpp e-paper buffer, `St7735s.on_frame` with a raw RGB565 one, and `Ws2812.on_pixels` with one
+`(r, g, b)` tuple per LED in the frame it just latched. Nothing in `src/rp2040py` decodes
 them - that is the caller's job, and deliberately so, since it keeps an image library out of the
 package's dependencies ([record 0046](../records/0046-epd2in9g-external-device.md)). Two runnable
 viewers in [`demo/`](../../demo/) do that decoding, and are how the screenshots in
