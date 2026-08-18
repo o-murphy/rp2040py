@@ -64,10 +64,11 @@ records generally).
 - [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
 - [ ] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
       Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port exists
-- [ ] `WAVESHARE_RP2040_ZERO` - `Ws2812`/NeoPixel only (GPIO16); CircuitPython port exists. Flagged
+- [x] `WAVESHARE_RP2040_ZERO` - `Ws2812`/NeoPixel only (GPIO16); CircuitPython port exists. Flagged
       by the user as the one to pick up first, off
       [the board's own `board.json`](https://github.com/micropython/micropython/blob/master/ports/rp2/boards/WAVESHARE_RP2040_ZERO/board.json) -
-      the smallest of this whole list (one `Ws2812`, nothing else)
+      the smallest of this whole list (one `Ws2812`, nothing else). **Done, see
+      [0068](0068-waveshare-rp2040-zero-board.md).**
 
 ## Checklist: needs exactly one new device, has a MicroPython port
 

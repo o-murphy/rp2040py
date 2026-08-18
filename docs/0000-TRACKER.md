@@ -66,6 +66,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0068] Waveshare RP2040-Zero board | first board picked up off [0066]'s survey; zero new devices needed (`Ws2812` on GPIO16, already exists since [0062]), both firmware families, live-boot-verified
 - [x] [0067] Claude Code skill for adding `ExternalDevice`s/boards | `.claude/skills/external-devices-and-boards/`; execution layer on top of [0049]'s reference doc, `.gitignore` fixed so it's actually tracked
 - [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | both halves landed as a due-time skip; unblocks pulse-width protocols and fixes CYW43's gSPI clock, ~11% faster. Ceiling kept: one instruction per CPU instruction, which [0043] depends on
 - [x] [0062] YD-RP2040 board + the `Ws2812` device | device and board landed and live-verified; the PIO-driven live decoding it was open for works since [0063]
@@ -211,3 +212,4 @@ record is added.
 [0065]: records/0065-queued-exec-erroring-flaky-test.md
 [0066]: records/0066-board-support-expansion.md
 [0067]: records/0067-external-devices-and-boards-skill.md
+[0068]: records/0068-waveshare-rp2040-zero-board.md
