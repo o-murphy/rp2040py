@@ -39,7 +39,7 @@ from PIL import Image
 
 from rp2040py.boards import BOARDS
 from rp2040py.device import MicroPythonDevice
-from rp2040py.external.device import attach_external_devices
+from rp2040py.external import attach_external_devices
 from rp2040py.external.epd2in9g import EPD_HEIGHT, EPD_WIDTH, PALETTE, Epd2in9G
 from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.utils.logging import LogLevel
@@ -132,6 +132,13 @@ def _drain(frame_queue: queue.Queue[Image.Image], renderer: Renderer) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--image", help="version tag, local .hex/.uf2 file path, or omitted to download the default")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="give up if the demo script hasn't finished after this many seconds (0: no limit). "
+        "Without it, a firmware that stalls mid-frame leaves this runner spinning forever",
+    )
     render_group = parser.add_mutually_exclusive_group()
     render_group.add_argument("--tkinter", action="store_true", help="show frames in a live Tk window")
     render_group.add_argument(
@@ -176,15 +183,22 @@ def main() -> None:
     # Epd2in9G.on_frame fire off-thread from this Tkinter-driving main thread.
     device.start_async().result()
 
+    deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
     future = device.exec_file_async(_DEMO_SCRIPT, timeout=None)
     try:
-        while not future.done():
+        while not future.done() and not (deadline is not None and time.monotonic() > deadline):
             _drain(frame_queue, renderer)
             renderer.pump()
             time.sleep(0.05)
     except KeyboardInterrupt:
         device.stop()
         os._exit(130)
+
+    if not future.done():
+        print(f"Demo script did not finish within {args.timeout}s", file=sys.stderr)
+        _drain(frame_queue, renderer)
+        device.stop()
+        os._exit(1)
 
     stdout, stderr = future.result()
     _drain(frame_queue, renderer)
@@ -196,11 +210,13 @@ def main() -> None:
     # Keep a Tk window open (and responsive) after the demo finishes so the final frame stays
     # visible, instead of the window vanishing the instant the script completes.
     if isinstance(renderer, TkinterRenderer):
+        import tkinter
+
         try:
             while True:
                 renderer.pump()
                 time.sleep(0.05)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, tkinter.TclError):  # TclError: the user closed the window
             pass
 
     device.stop()

@@ -2,7 +2,7 @@
 - the CYW43_WIFI_BACKLOG.md step 0 plumbing that lets board-level hardware wire itself onto an
 `RP2040` without that hardware being a memory-mapped peripheral."""
 
-from rp2040py.external.device import attach_external_devices
+from rp2040py.external import attach_external_devices
 
 
 class _RecordingDevice:

@@ -22,6 +22,15 @@ and `reference/` for those). The structure itself is decided in
   closed. A merged PR says the code shipped; it does not say the idea is done. (Currently: [0048].)
 - **Granularity is tiered** (see [0032]): short-lived ideas are one file (**B1**);
   long-running, cross-cutting threads are split into several records (**B2**).
+- **A row is an index entry, not a summary.** One line: state, number, title, and a short clause
+  saying where it stands (and what it supersedes/depends on). Everything else — the reasoning, the
+  measurements, the caveats, the open gaps — belongs in the record file, which is the only place it
+  can be maintained. Rows that grow with each update stop being scannable, which is the one job
+  this list has.
+- **Newest first, and open work before finished work.** "In progress / Proposed" comes before
+  "Implemented", and every section is ordered by *recency* with the newest at the top, the same way
+  `CHANGELOG.md` reads — so what is being worked on now is what you see first, and the numbering
+  order (which is arrival order, not implementation order) stays a property of the record files.
 - **`tasks/NNN.md`** — working notes for investigations that aren't root-caused yet. Not
   numbered, not immutable, and **not permanent**: once a note is resolved it is folded into the
   record that resolves it (verbatim, as an `## Appendix: folded-in working note ...` section) and
@@ -41,73 +50,74 @@ and `reference/` for those). The structure itself is decided in
 
 ## Ideas
 
-### Implemented
-
-- [x] [0001] CLI tool + public device API | `#3,#5,#10`
-- [x] [0002] mklittlefs image handling | `#6`
-- [x] [0004] buffer overflow / race conditions | `#7`
-- [x] [0005] Kaluma firmware support | `#12`
-- [x] [0006] GPIO pull-up/down on floating pin | `#13`
-- [x] [0007] configurable bootrom (`--bootrom`, B0/B2) | `#16`
-- [x] [0008] SSI flash-write support | `#18`
-- [x] [0009] simulator fix | `#19`
-- [x] [0010] littlefs persistence → `--dump-fs` | `#24`
-- [x] [0011] MicroPython 1.21-vs-1.28 gap | resolved — upstream, not our bug
-- [x] [0012] CDC (USB serial) performance | root-caused + fixed
-- [x] [0013] Cython interpreter core | ~4x, on by default `#20`
-- [x] [0019] asyncio idle-yield latency | `#23`
-- [x] [0020] PTY / serial passthrough (`--pty`) |
-- [x] [0021] unified shutdown coordinator | Ctrl+X / --expect-text / SIGTERM
-- [x] [0022] mpremote REPL over `socket://` | `#27`
-- [x] [0023] Termux mpremote compat | `#30`
-- [x] [0025] full asyncio migration | phases 1–5 · **supersedes [0014]**
-- [x] [0026] main-thread asyncio | 5 phases landed
-- [x] [0028] CYW43 module layout | accepted
-- [x] [0029] CYW43 board composition | accepted
-- [x] [0030] ExternalDevice concurrency model | accepted
-- [x] [0031] PIO Cython + `clock.tick()` batching | follow-up of [0013]
-- [x] [0032] documentation restructure | this reorganization
-- [x] [0033] Add autocompletions for the cli tool | accepted
-- [x] [0034] `_execute_batch()` native Cython port | follow-up of [0013]/[0031]
-- [x] [0035] board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes pico_w wild-execution crash
-- [x] [0036] `--littlefs`/`--fat12` mutual exclusivity | explicit validation, matches `--tcp-port`/`--pty` pattern
-- [x] [0037] couple `RPPIO` stepping to the CPU's own instruction loop | fixes CYW43 native-mode livelock, follow-up of [0031]/[0034]
-- [x] [0038] `GSPIBus` ioctl-response zero-fill fix | fixes `nic.active(True)` real root cause (was misdiagnosed as throughput-only)
-- [x] [0039] `SimulationClock` native Cython port | follow-up of [0013]/[0031]/[0034], closes [0034]'s own leftover gap; ~2.7x on a synthetic busy-spin benchmark, `powersave` governor caveat, literal [0038] repro not re-run
-- [x] [0041] CYW43 live-boot freeze root cause + fix | fixes the `cyw43-post-data-header-freeze` working note (folded into [0041]'s own appendix); unblocks [0027] step 3g live-boot verification
-- [x] [0042] `GSPIBus` `SPI_INTERRUPT_REGISTER` write-1-to-clear (W1C) fix | fixes spurious `[CYW43] Bus error condition detected 0xb9` warning during live boot
-- [x] [0043] `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes MicroPython v1.23.0's CYW43 boot (`scan()` raising `EPERM`), follow-up of [0037]
-- [x] [0044] DMA-driven SPI TX/RX hang fix | fixes the `main-spi-hang` working note, folded into [0044]'s own appendix (stale DREQ cache after `RPDMA.reset()` + same-tick `SimulationClock` alarm starvation), confirmed unrelated to CYW43/[0027]
-- [x] [0040] `native/_simulator.pyx` hot loop: `libc.math.INFINITY` for `float("inf")` | kept; `cpython.time cimport monotonic` was also tried but **reverted** - broke real CI (`PyTime_t` not in the limited-API surface until 3.13, this project's `Py_LIMITED_API` floor is 3.11), back to plain `time.monotonic()`, follow-up of [0031]/[0034]/[0039]
-- [x] [0046] `epd2in9g` virtual e-paper ported forward + promoted to `ExternalDevice` | ported from the stale `component/epd2in9g` branch (fixes API drift vs. async-native `MicroPythonDevice`/`utils/firmware_retrieve.py`), moved `src/rp2040py/external/epd2in9g.py` alongside `external/cyw43/`, no Pillow dependency in `src/`, follow-up of [0029]/[0030]
-- [x] [0051] BOOTSEL button as an `ExternalDevice` | wired to `GPIO_QSPI_SS` (not any GPIO) and active-low, identically on both boards, so `boards.py` attaches it unconditionally; `release()` hands the pad back to its pull-up via a new `GPIOPin.release_input()` rather than driving it high - forcing it high would read the same but would mask a regression in the very pad defaults ([0050]) this device exists to exercise
-- [x] [0052] XIP_CTRL: implement the registers, not the cache | no cache is modelled on purpose (nothing observable would change); the registers exist so firmware polling them stops reading `BasePeripheral`'s `0xFFFFFFFF`, where every status bit looks set - the same hazard class that made `CHIP_RESET` look like a permanent psm_restart. Explicitly **not** what fixed CircuitPython 10.x
-- [x] [0054] CYW43 `disconnect()` root cause + fix | closes the only real correctness bug among [0048]'s remaining gaps; ioctl/event shapes derived from the vendored `cyw43-driver` source rather than guessed, per [0027]'s own 3g rule
-- [x] [0050] CircuitPython 10.x boot stall root cause + fix | `PADS_QSPI` reset values: `GPIO_QSPI_SS` needs its **pull-up** (`0x5A`), not bank0's pull-down default, or an undriven SS reads low forever - a permanently-held BOOTSEL button. 10.x polls it from a RAM-resident loop during boot and hung; 9.x/8.x never did, so the defect was latent for years. Also folds in the `circuitpython-10x-boot-stall` working note, and keeps two unrelated defects found on the way (SEV never set the event register; `VREG_AND_CHIP_RESET` was unimplemented so `CHIP_RESET` read all-ones) - both proven by ablation *not* to be this bug
-- [x] [0047] CYW43 pure-Python hot path: `check_changed_pins` fix + `GPIOPin`/`RPPIO` Cython ports | ~2.6x on CYW43 `pico_w` boot-to-`scan()`; `RPPIO` satisfies the `Peripheral` Protocol (can't inherit `BasePeripheral`), one-way `_pio`→`_gpio_pin`/`StateMachine` cimport (mutual cimport reverted — circular runtime import), abi3-verified on 3.14, `.pyi` stubs for `native.*` (surfaced+fixed the `IClock` protocol gap + `key_mock.drive_input` latent bug); PyPy still ~1.16x ahead — finishes [0031]'s "not yet tried #4", follow-up of [0013]/[0034]/[0039]
-- [x] [0027] CYW43439 / Pico W WiFi (epic) | steps 0-3g done, live-boot-verified on both v1.23.0 and v1.28.0 (2026-08-13/14, see [0042]/[0043]); step 4 (real network bridge, including DNS) implemented + live-boot-verified via [0048] (2026-08-16), **which is still open under "In progress / Proposed" for its own "Known gaps"** — this epic's own steps are done, step 4's remaining work is tracked on [0048]'s row, not here; `main-spi.py` hang fixed but confirmed unrelated to this epic, see [0044]
-- [x] [0049] document external devices/boards + how a user writes their own | all 5 phases of the `BoardSpec` board-authoring design landed 2026-08-16/17: `boards.py` gained `layout`/`image`/`FlashLayout`/`resolve_board_spec()`/`build_rp2040_from_spec()`; `load_flash.py`'s six functions take a resolved layout instead of a board-name string; `BaseDevice`/`MicroPythonDevice`/`KalumaDevice`'s breaking constructor change (keyword-only `board: BoardSpec`, no more separate `image` arg) shipped without a deprecation shim (no doc had promised the old shape as stable API); the CLI's `--board-spec target:attr`/`RP2040PY_BOARD_SPEC` shipped on `micropython`/`kaluma`/`mklittlefs`/`run` (`bench` excluded, nobody's asked); new test coverage (`tests/test_boards.py`, `tests/test_cli_board_spec.py`) plus the actual how-to doc, [reference/external-devices-and-boards.md](reference/external-devices-and-boards.md), linked from `README.md`. Live-verified against real MicroPython `1.28.0` firmware, locally and via CI (`tests/pico_spec.py` + `ci-micropython.yml`'s `test-board-spec` job, both `--board-spec` and the env var). Two narrow design questions remain genuinely open (not blockers): whether `ExternalDevice`'s attach-only surface is public-API-ready, and whether `demo/eink_run.py` gets its own dedicated example beyond being cited from the how-to — see the record's own closing section. **Addendum, 2026-08-17**: `boards/micropython/WEACTSTUDIO/` added as a real, live-verified `--board-spec` community-board example (WeAct Studio RP2040, not "YD-RP2040" - a different board; 4 flash-size variants, derived from real upstream MicroPython board headers, not guessed), which surfaced and fixed a real bug in `external/key_mock.py` (`release()` was force-driving the pin instead of `GPIOPin.release_input()`, the same masking-a-firmware-bug class `bootsel_button.py` was already written to avoid) - see the record's own "Addendum" section for the full story, including a `--board-spec` package-loading design that was built then deliberately reverted in favor of the dotted-module form (`PYTHONPATH=.`, "like `-m`")
-
 ### In progress / Proposed
 
-- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** `sio.py` has no `FIFO_ST`/`FIFO_WR`/`FIFO_RD` and there is no core1. Key point in the record: adding the registers *alone* is worse than leaving them out - `multicore_launch_core1()` blocks reading back an echo, so a faithful-looking FIFO turns today's honest warning into a silent infinite hang. Concrete trigger for building it: MicroPython's `_thread`, which runs on core1
-- [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md); observed on Windows + Ubuntu `pre-commit` CI (2026-08-14), unrelated to [0040]/[0044]
-- [ ] [0048] CYW43 step 4 NAT bridge: custom minimal hand-rolled TCP reflector + UDP relay (supersedes [0045]'s engine choice) | **4a-4e implemented, live-boot-verified on v1.23.0/v1.28.0, and merged** ([PR #37](https://github.com/o-murphy/rp2040py/pull/37), 2026-08-16, `9f5348f`, all 62 checks green incl. `pre-commit` on `windows-latest`) — **but this row stays open until the record's own "Known gaps" section is closed**, since a working happy path is not the same as a complete WiFi emulation. What landed: guest-facing leg reuses `bus.py`'s own lossless in-order FIFO (so no retransmission/congestion-control/reassembly needed), host-facing leg is a real `asyncio` socket; `main-cyw43.py` completes a real TCP round trip to `1.1.1.1:80`, `mip.install()` resolves DNS and installs a real package, `ntptime.settime()` round-trips real NTP. Same-day follow-up closed 3 gaps (real-RST-vs-clean-FIN, connect-timeout/flow-table leak, DNS-only→general UDP) plus a latent `except TimeoutError` bug that silently never fired on Python 3.10, and fixed **two separate** `windows-latest` CI flakes (a fixed-`asyncio.sleep()` race in the test suite; the RST test's `SO_LINGER` real-kernel-RST trick not reliably surfacing as `ConnectionResetError` through Windows' asyncio). Still open, full inventory in the record itself:
-  - [x] ~~**`disconnect()` is a no-op**~~ — **fixed 2026-08-16** in [0054]: `WLC_DISASSOC` (52, derived from `CYW43_IOCTL_SET_DISASSOC`'s `cmd >> 1` encoding) now gets a scripted `CYW43_EV_DISASSOC`/`CYW43_EV_LINK(down)` pair, and also resets the NAT bridge - a flow outliving its association swallowed the guest's next SYN on a reused port triple. Live-verified on v1.23.0/v1.28.0: `isconnected()` `True`→`False`, `status()` `3`→`0`
-  - [ ] **no window backpressure from the real destination socket** — accepted v1 simplification, not an oversight: shrink the advertised guest-facing window by `transport.get_write_buffer_size()` if a slow real destination + fast guest sender ever proves it matters
-  - [ ] **unbuilt: AP mode, multi-AP/hidden-SSID/negative-auth scan results, IPv6, multi-guest** — none partially-done; join is scripted unconditionally, so a *wrong* password currently "succeeds" too. Guest/gateway IP+MAC are fixed module constants in `nat.py` with no config surface
-  - [x] ~~unverified: real TLS/HTTPS + WebSocket end-to-end~~ — **verified 2026-08-16** on both `v1.23.0` and `v1.28.0`: real TLS to `micropython.org:443` (real cert chain), RFC 6455 WebSocket and WebSocket-over-TLS against an echo server on a non-loopback address. TLS step landed in `tests/micropython/main-cyw43.py`; WebSocket verified by hand, deliberately not wired into CI (see the record)
-  - [x] ~~unverified: CircuitPython live boot~~ — **verified 2026-08-16** against CircuitPython `9.2.9` on `--board pico_w`: scan/join/DHCP/TCP/DNS all work through `wifi`/`socketpool`. Landed `tests/circuitpython/main-cyw43.py` + `.github/workflows/ci-circuitpython.yml` (the project's first CircuitPython CI). Found a separate, unrelated blocker on the way — see the CircuitPython 10.x row below
+- [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
+- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
+- [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
+- [ ] [0057] RESET button / RUN pin: a reset hook on `RP2040` | **Proposed, design-only.** A vendor schematic (via [0062]) since showed a press is a level, not a pulse
+- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, nothing implemented.** Adding the registers alone would turn an honest warning into a silent hang; limitation stated user-facing. Addendum settles the execution model: interleaved in one loop, not a thread per core
+- [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
+- [ ] (no record yet) `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | not root-caused - see [docs/tasks/queued-exec-erroring-flaky-test.md](tasks/queued-exec-erroring-flaky-test.md)
 
-- [ ] [0055] `v0.2.2`/`v0.2.3` publish-workflow hang: `asyncio.Server.wait_closed()`'s 3.12.1 fix exposing a missing flow close | **Root-caused + fixed (twice), not yet CI-verified.** First pass fixed a real but secondary issue (unthrottled `RP2040()` construction in new CYW43 test coverage bypassing `conftest.py`'s memory-throttling `rp2040_factory` semaphore) - landed, but a `workflow_dispatch` on top of it hung identically, so it wasn't the actual blocker. Real cause, found via a `PYTHONFAULTHANDLER`+`SIGABRT` stack trace and local repro: `test_cyw43_nat.py::test_reset_clears_flows_so_a_reused_port_can_connect_again` never closed its second (post-reset) flow's connection before `echo_server.wait_closed()` - harmless on `cp310`/`cp311` (`wait_closed()` was buggy pre-3.12.1, ignored active connections), a permanent hang on `cp313`+ (`cp314t` on Linux/Windows/macOS, `cp313`/`cp314` on Android - not free-threading-specific, confirmed hanging under plain `--python 3.14` too). This project's regular CI/`pre-commit` never runs the full suite under `cp313`+ at all, so this was invisible until the first release cut since `test_cyw43_nat.py` landed. Fixed by closing the second flow before `wait_closed()`; `v0.2.2`/`v0.2.3` abandoned as dead tags (nothing published under either)
-  - [ ] watch a real `workflow_dispatch`/tag-triggered `publish.yml` run complete cleanly through `deploy`, then flip this row to Implemented
+### Implemented
+
+- [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | both halves landed as a due-time skip; unblocks pulse-width protocols and fixes CYW43's gSPI clock, ~11% faster. Ceiling kept: one instruction per CPU instruction, which [0043] depends on
+- [x] [0062] YD-RP2040 board + the `Ws2812` device | device and board landed and live-verified; the PIO-driven live decoding it was open for works since [0063]
+- [x] [0059] firmware resolution inside `BoardSpec`: one path for `--board` and `--board-spec` | `firmware` keyed by family, resolved at use time; `boards/` is one directory per board; `--image`/`--fetch-fw-only` now work with `--board-spec`
+- [x] [0049] document external devices/boards + how a user writes their own | all 5 phases landed; `reference/external-devices-and-boards.md` is the how-to
+- [x] [0056] `St7735s` external device + Waveshare RP2040-LCD-0.96 board | first board whose point is its device; MADCTL geometry + RGB444/666 in the addendum
+- [x] [0055] `v0.2.2`/`v0.2.3` publish-workflow hang | fixed; confirmed by the real `v0.2.5` release
+- [x] [0027] CYW43439 / Pico W WiFi (epic) | steps 0-3g done and live-boot-verified; step 4 landed via [0048], whose own gaps are tracked there
+- [x] [0047] CYW43 pure-Python hot path + `GPIOPin`/`RPPIO` Cython ports | ~2.6x to `scan()`; closes [0031]'s last gap
+- [x] [0050] CircuitPython 10.x boot stall root cause + fix | `PADS_QSPI` reset values - `GPIO_QSPI_SS` needs its pull-up
+- [x] [0054] CYW43 `disconnect()` root cause + fix | closes the only correctness bug among [0048]'s gaps
+- [x] [0052] XIP_CTRL: implement the registers, not the cache | no cache modelled on purpose
+- [x] [0051] BOOTSEL button as an `ExternalDevice` | on `GPIO_QSPI_SS`, active-low, released via `release_input()`
+- [x] [0046] `epd2in9g` virtual e-paper promoted to `ExternalDevice` | ported off a stale branch, no Pillow in `src/`
+- [x] [0040] `native/_simulator.pyx`: `libc.math.INFINITY` for `float("inf")` | kept; the `cpython.time` half was reverted (limited-API floor)
+- [x] [0044] DMA-driven SPI TX/RX hang fix | stale DREQ cache + same-tick alarm starvation; unrelated to [0027]
+- [x] [0043] `RPPIO` CTRL-enable first-batch/DMA-refill race fix | fixes v1.23.0's CYW43 boot
+- [x] [0042] `GSPIBus` `SPI_INTERRUPT_REGISTER` write-1-to-clear fix | fixes a spurious bus-error warning
+- [x] [0041] CYW43 live-boot freeze root cause + fix | unblocked [0027]'s 3g verification
+- [x] [0039] `SimulationClock` native Cython port | ~2.7x synthetic; closes [0034]'s leftover gap
+- [x] [0038] `GSPIBus` ioctl-response zero-fill fix | the real root cause of `nic.active(True)`
+- [x] [0037] couple `RPPIO` stepping to the CPU's instruction loop | fixes the CYW43 native-mode livelock
+- [x] [0036] `--littlefs`/`--fat12` mutual exclusivity | explicit validation instead of a silent drop
+- [x] [0035] board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes the pico_w wild-execution crash
+- [x] [0034] `_execute_batch()` native Cython port | follow-up of [0013]/[0031]
+- [x] [0033] shell autocompletions for the CLI | accepted
+- [x] [0032] documentation restructure | this scheme
+- [x] [0031] PIO Cython + `clock.tick()` batching | follow-up of [0013]
+- [x] [0030] `ExternalDevice` concurrency model | accepted
+- [x] [0029] CYW43 board composition | accepted
+- [x] [0028] CYW43 module layout | accepted
+- [x] [0026] main-thread asyncio | 5 phases landed
+- [x] [0025] full asyncio migration | phases 1-5 · **supersedes [0014]**
+- [x] [0023] Termux mpremote compat | `#30`
+- [x] [0022] mpremote REPL over `socket://` | `#27`
+- [x] [0021] unified shutdown coordinator | Ctrl+X / `--expect-text` / SIGTERM
+- [x] [0020] PTY / serial passthrough (`--pty`) | landed
+- [x] [0019] asyncio idle-yield latency | `#23`
+- [x] [0013] Cython interpreter core | ~4x, on by default `#20`
+- [x] [0012] CDC (USB serial) performance | root-caused + fixed
+- [x] [0011] MicroPython 1.21-vs-1.28 gap | upstream, not our bug
+- [x] [0010] littlefs persistence → `--dump-fs` | `#24`
+- [x] [0009] simulator fix | `#19`
+- [x] [0008] SSI flash-write support | `#18`
+- [x] [0007] configurable bootrom (`--bootrom`, B0/B2) | `#16`
+- [x] [0006] GPIO pull-up/down on floating pin | `#13`
+- [x] [0005] Kaluma firmware support | `#12`
+- [x] [0004] buffer overflow / race conditions | `#7`
+- [x] [0002] mklittlefs image handling | `#6`
+- [x] [0001] CLI tool + public device API | `#3,#5,#10`
 
 ### Rejected / Superseded
 
+- [ ] [0045] CYW43 step 4 NAT bridge via `gVisor`'s `pkg/tcpip` | **Superseded → [0048]** - kept for its research trail
+- [ ] [0016] basic-block fusion / mini-JIT | **Rejected** - net negative in every integration attempt
+- [ ] [0015] HLE memcpy hook | **Rejected** - net negative (measurements kept)
 - [ ] [0014] threading model | **Superseded → [0025]**
-- [ ] [0015] HLE memcpy hook | **Rejected** — net negative (measurements kept)
-- [ ] [0016] basic-block fusion / mini-JIT | **Rejected** — net negative in every real integration attempt; Cython interpreter core ([0013]) used instead
-- [ ] [0045] CYW43 step 4 NAT bridge: embed `gVisor`'s `pkg/tcpip` via `cgo` | **Superseded → [0048]** (2026-08-16, hand-rolled reflector, no new toolchain) — kept verbatim for its own research trail (the `PyTCP` negative result, the `gVisor` empirical PoC, and the SDPCM `DATA_HEADER` envelope derivation [0048] itself reuses directly)
 
 ## Notes (no state row — linked from ideas)
 
@@ -122,6 +132,7 @@ and `reference/` for those). The structure itself is decided in
 - [reference/mpremote.md](reference/mpremote.md) — using mpremote with rp2040py
 - [reference/os-compatibility.md](reference/os-compatibility.md) — OS × feature compatibility matrix
 - [reference/external-devices-and-boards.md](reference/external-devices-and-boards.md) — writing your own `ExternalDevice`/`BoardSpec`, the [0049](records/0049-external-device-authoring-docs.md) how-to
+- [../demo/README.md](../demo/README.md) — what each demo script does, and a gallery of real emulator output from the two display panels ([0046]/[0056]), checked in under `demo/screenshots/`
 
 ## Record links
 
@@ -184,3 +195,11 @@ record is added.
 [0053]: records/0053-core1-and-inter-core-fifo.md
 [0054]: records/0054-cyw43-disassoc.md
 [0055]: records/0055-rp2040-factory-throttle-test-hang-fix.md
+[0056]: records/0056-st7735s-waveshare-lcd-board.md
+[0057]: records/0057-run-pin-reset-hook.md
+[0059]: records/0059-boardspec-firmware-resolution.md
+[0060]: records/0060-external-io-bridges.md
+[0061]: records/0061-cli-family-flag.md
+[0062]: records/0062-yd-rp2040-board-and-ws2812.md
+[0063]: records/0063-pio-clkdiv-and-delay-cycles.md
+[0064]: records/0064-state-server-and-web-visualizer.md

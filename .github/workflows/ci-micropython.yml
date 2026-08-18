@@ -143,11 +143,12 @@ jobs:
   test-board-spec:
     # Not part of the version/runtime matrix above on purpose - this job proves the --board-spec
     # *mechanism* itself (docs/records/0049-external-device-authoring-docs.md's "Accepted design"
-    # section) boots a real device end-to-end via a user-supplied BoardSpec file
-    # (tests/pico_spec.py) instead of the built-in --board registry; one pinned MicroPython
-    # version is enough for that, the matrix job above already covers version compatibility.
+    # section, extended by 0059's declarative `BoardSpec.firmware`) boots a real device end-to-end
+    # via a user-supplied BoardSpec file instead of the built-in --board registry; one pinned
+    # MicroPython version is enough for that, the matrix job above already covers version
+    # compatibility.
     needs: build-littlefs
-    name: Board-spec smoke test (tests/pico_spec.py)
+    name: Board-spec smoke test (tests/pico_spec.py + boards/)
     runs-on: ubuntu-latest
 
     steps:
@@ -177,3 +178,38 @@ jobs:
         env:
           RP2040PY_BOARD_SPEC: tests/pico_spec.py:BOARD
           RP2040PY_MICROPYTHON_TAG: "1.28.0"
+
+      # tests/pico_spec.py above resolves eagerly, for a board the registry already knows. These
+      # cover the other half (docs/records/0059): a boards/ file that declares `firmware` as data
+      # and has it resolved at *use* time, for hardware this project does not ship - including
+      # picking one of a spec's two firmware families, and --image working alongside --board-spec
+      # (both of which were impossible before that record landed).
+      - name: Test a declarative boards/ file resolves its own firmware at use time
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --board-spec boards/weactstudio/__init__.py:BOARD -c "import os; print('statvfs', os.statvfs('/'))"
+
+      - name: Test --image alongside --board-spec, and a two-family board file's family selection
+        run: |
+          timeout 5m uv run --no-dev -- rp2040py micropython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --image 1.28.0 -c "import sys; print(sys.implementation.version)"
+          timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD -c "import board; print(board.DISPLAY.width, board.DISPLAY.height)"
+
+      - name: Test the YD-RP2040 board file boots its declared CircuitPython firmware
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --board-spec boards/vcc_gnd_yd_rp2040/__init__.py:BOARD -c "import board, os; print(board.board_id, os.statvfs('/')[:2])"
+
+      # The same board, but checking what its WS2812 actually receives - which the step above
+      # cannot, since `BoardSpec.extras` holds zero-arg factories and nothing hands a constructed
+      # device back to the CLI (docs/reference/external-devices-and-boards.md). This is
+      # docs/records/0063's acceptance test: the guest drives the LED through the PIO, and both the
+      # decoded bytes *and* the pulse widths they came from are checked - 312/703 ns, real
+      # silicon's own numbers, where before that record the emulator produced 8-40 ns with the two
+      # symbols overlapping. The widths matter on their own: `Ws2812` classifies by duty cycle
+      # against the frame's own period, so it would keep decoding correctly off a waveform running
+      # at the wrong rate entirely, and only the widths catch that.
+      - name: Test the YD-RP2040's WS2812 decodes a real PIO-driven write
+        run: timeout 5m uv run --no-dev -- python tests/ws2812_boot_decode.py
+
+      - name: Test mklittlefs sizes a board file per --target family, without a network fetch
+        run: |
+          uv run rp2040py mklittlefs --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --target micropython -o mp.img -f
+          uv run rp2040py mklittlefs --board-spec boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD --target circuitpython -o cp.img -f
+          test "$(stat -c%s mp.img)" -eq 1441792   # 352 blocks - MicroPython's own layout
+          test "$(stat -c%s cp.img)" -eq 2097152   # 512 blocks - CircuitPython's, same board file

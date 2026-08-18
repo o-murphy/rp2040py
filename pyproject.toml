@@ -65,11 +65,9 @@ extend-exclude = ["tests/micropython", "tests/circuitpython"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# boards/*/<BOARD_NAME> directories intentionally mirror upstream firmware board-port directory
-# names verbatim (e.g. MicroPython's own ports/rp2/boards/WEACTSTUDIO) for easy cross-reference -
-# not installed package code (see docs/reference/external-devices-and-boards.md), so PEP8 module
-# naming doesn't apply the same way it does under src/.
-"boards/**" = ["N999"]
+# (boards/ needed an N999 exemption while its directories mirrored upstream board-port names
+# verbatim, uppercase and all; docs/records/0059 case-normalized them - `boards/weactstudio/` for
+# MicroPython's `ports/rp2/boards/WEACTSTUDIO` - so PEP8 module naming applies there unassisted.)
 
 [tool.mypy]
 mypy_path = "src"

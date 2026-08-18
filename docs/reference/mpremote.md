@@ -148,7 +148,7 @@ corrupt that protocol. Quit the `rp2040py` process itself instead:
   cleanup - simply not sending anything meant for `mpremote` isn't enough on its own.
 - **`--expect-text`** (optionally with `--expect-regex`) - stop once given text appears on the
   device's console, same as every other subcommand; see the main
-  [README](../README.md#micropython) for the current syntax.
+  [README](../README.md#micropython-code) for the current syntax.
 
 ## What's verified working
 

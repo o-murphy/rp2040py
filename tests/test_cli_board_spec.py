@@ -3,6 +3,11 @@
 `_resolve_board()`/`_resolve_run_mcu()`/`_resolve_mklittlefs_layout()` mutual-exclusion/validation
 logic - exercised directly against hand-built `argparse.Namespace`s, same philosophy as
 `test_cli_bootrom.py` (no real network, no full `cli.main()`/simulator boot needed).
+
+Since docs/records/0059 a board spec is resolved for a firmware *family* rather than arriving
+pre-resolved, so board files here either already carry an `image` (which wins outright, resolving
+nothing) or declare no firmware at all - anything that would really resolve is monkeypatched, to
+keep this file network-free.
 """
 
 import argparse
@@ -28,6 +33,8 @@ def _write_board_file(tmp_path, source: str) -> str:
 
 
 _PLAIN_PICO_SOURCE = "from rp2040py.boards import BOARDS\nBOARD = BOARDS['pico']\n"
+# A board declaring neither an image nor any `firmware` - nothing for resolution to do (rule 5).
+_EMPTY_SOURCE = "from rp2040py.boards import BoardSpec\nBOARD = BoardSpec()\n"
 
 
 class TestLoadBoardSpecTarget:
@@ -69,22 +76,42 @@ class TestLoadBoardSpecTarget:
         assert "boom" in caplog.text
 
 
+@pytest.fixture
+def resolve_calls(monkeypatch):
+    """Records `(spec, family, image)` every `resolve_firmware()` call the CLI makes, and hands
+    back a spec with a fixed image - `resolve_firmware()` itself is covered in `test_boards.py`,
+    and running it for real here would download firmware."""
+    calls = []
+
+    def _resolve_firmware(spec, family, image=None):
+        calls.append((spec, family, image))
+        return BoardSpec(image="resolved.uf2")
+
+    monkeypatch.setattr(cli, "resolve_firmware", _resolve_firmware)
+    return calls
+
+
 class TestResolveBoard:
     """`_resolve_board()` - the `micropython`/`kaluma` `--board`/`--board-spec`/
     `RP2040PY_BOARD_SPEC` resolver."""
 
-    def test_board_spec_is_used_instead_of_resolve_board_spec(self, tmp_path, monkeypatch):
+    def test_board_spec_is_resolved_for_the_running_firmware_family(self, tmp_path, resolve_calls):
+        target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
+        args = argparse.Namespace(board=None, board_spec=target, image="1.21.0", fetch_fw_only=False)
+
+        board = cli._resolve_board(args, "circuitpython")
+
+        assert resolve_calls == [(BOARDS["pico"], "circuitpython", "1.21.0")]
+        assert board.image == "resolved.uf2"
+
+    def test_an_already_resolved_board_spec_needs_no_lookup(self, tmp_path):
         target = _write_board_file(
             tmp_path,
-            "import dataclasses\nfrom rp2040py.boards import BOARDS\n"
-            "BOARD = dataclasses.replace(BOARDS['pico'], image='custom.uf2')\n",
-        )
-        monkeypatch.setattr(
-            cli, "resolve_board_spec", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called"))
+            "import dataclasses\nfrom rp2040py.boards import BoardSpec\nBOARD = BoardSpec(image='custom.uf2')\n",
         )
         args = argparse.Namespace(board=None, board_spec=target, image=None, fetch_fw_only=False)
 
-        board = cli._resolve_board(args, MICROPYTHON)
+        board = cli._resolve_board(args, "micropython")
 
         assert board.image == "custom.uf2"
 
@@ -92,71 +119,55 @@ class TestResolveBoard:
         target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
         args = argparse.Namespace(board="pico", board_spec=target, image=None, fetch_fw_only=False)
 
-        assert cli._resolve_board(args, MICROPYTHON) is None
+        assert cli._resolve_board(args, "micropython") is None
         assert "--board" in caplog.text
-
-    def test_board_spec_with_image_flag_exits(self, tmp_path):
-        target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
-        args = argparse.Namespace(board=None, board_spec=target, image="1.21.0", fetch_fw_only=False)
-
-        with pytest.raises(SystemExit):
-            cli._resolve_board(args, MICROPYTHON)
-
-    def test_board_spec_with_fetch_fw_only_exits(self, tmp_path):
-        target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
-        args = argparse.Namespace(board=None, board_spec=target, image=None, fetch_fw_only=True)
-
-        with pytest.raises(SystemExit):
-            cli._resolve_board(args, MICROPYTHON)
 
     def test_board_spec_env_var_used_when_flag_omitted(self, tmp_path, monkeypatch):
         target = _write_board_file(
             tmp_path,
-            "import dataclasses\nfrom rp2040py.boards import BOARDS\n"
-            "BOARD = dataclasses.replace(BOARDS['pico'], image='env.uf2')\n",
+            "from rp2040py.boards import BoardSpec\nBOARD = BoardSpec(image='env.uf2')\n",
         )
         monkeypatch.setenv("RP2040PY_BOARD_SPEC", target)
         args = argparse.Namespace(board=None, board_spec=None, image=None, fetch_fw_only=False)
 
-        board = cli._resolve_board(args, MICROPYTHON)
+        board = cli._resolve_board(args, "micropython")
 
         assert board.image == "env.uf2"
 
-    def test_board_spec_with_no_image_set_is_rejected(self, tmp_path, caplog):
-        target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
+    def test_board_spec_with_nothing_to_resolve_is_rejected(self, tmp_path, caplog):
+        target = _write_board_file(tmp_path, _EMPTY_SOURCE)
         args = argparse.Namespace(board=None, board_spec=target, image=None, fetch_fw_only=False)
 
-        assert cli._resolve_board(args, MICROPYTHON) is None
+        assert cli._resolve_board(args, "micropython") is None
         assert "image" in caplog.text.lower()
 
-    def test_no_board_spec_falls_back_to_resolve_board_spec_with_the_board_name_and_tag(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr(
-            cli,
-            "resolve_board_spec",
-            lambda board, firmware_spec, tag=None: (
-                calls.append((board, firmware_spec, tag)) or BoardSpec(image="x.uf2")
-            ),
+    def test_board_spec_without_the_running_family_is_rejected_naming_what_it_declares(self, tmp_path, caplog):
+        target = _write_board_file(
+            tmp_path,
+            "from rp2040py.boards import BoardSpec\n"
+            "from rp2040py.utils.firmware_retrieve import MICROPYTHON\n"
+            "BOARD = BoardSpec(firmware={'micropython': MICROPYTHON.boards['pico']})\n",
         )
+        args = argparse.Namespace(board=None, board_spec=target, image=None, fetch_fw_only=False)
+
+        assert cli._resolve_board(args, "circuitpython") is None
+        assert "circuitpython" in caplog.text
+        assert "micropython" in caplog.text
+
+    def test_no_board_spec_resolves_the_named_board_with_the_tag(self, resolve_calls):
         args = argparse.Namespace(board="pico_w", board_spec=None, image="1.21.0", fetch_fw_only=False)
 
-        board = cli._resolve_board(args, MICROPYTHON)
+        board = cli._resolve_board(args, "micropython")
 
-        assert calls == [("pico_w", MICROPYTHON, "1.21.0")]
-        assert board.image == "x.uf2"
+        assert resolve_calls == [(BOARDS["pico_w"], "micropython", "1.21.0")]
+        assert board.image == "resolved.uf2"
 
-    def test_omitted_board_defaults_to_pico(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr(
-            cli,
-            "resolve_board_spec",
-            lambda board, firmware_spec, tag=None: calls.append(board) or BoardSpec(image="x"),
-        )
+    def test_omitted_board_defaults_to_pico(self, resolve_calls):
         args = argparse.Namespace(board=None, board_spec=None, image=None, fetch_fw_only=False)
 
-        cli._resolve_board(args, MICROPYTHON)
+        cli._resolve_board(args, "micropython")
 
-        assert calls == ["pico"]
+        assert resolve_calls == [(BOARDS["pico"], "micropython", None)]
 
 
 class TestResolveRunMcu:
@@ -179,38 +190,47 @@ class TestResolveRunMcu:
         assert cli._resolve_run_mcu(args) is None
         assert "--board" in caplog.text
 
-    def test_no_board_spec_uses_build_rp2040_with_the_board_name(self, monkeypatch, rp2040_factory):
+    def test_no_board_spec_builds_the_named_board_from_the_registry(self, monkeypatch, rp2040_factory):
         calls = []
-        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or rp2040_factory())
+        monkeypatch.setattr(cli, "build_rp2040_from_spec", lambda spec: calls.append(spec) or rp2040_factory())
         args = argparse.Namespace(board="pico_w", board_spec=None)
 
         mcu = cli._resolve_run_mcu(args)
 
-        assert calls == ["pico_w"]
+        assert calls == [BOARDS["pico_w"]]
         assert isinstance(mcu, RP2040)
 
     def test_omitted_board_defaults_to_pico(self, monkeypatch, rp2040_factory):
         calls = []
-        monkeypatch.setattr(cli, "build_rp2040", lambda board: calls.append(board) or rp2040_factory())
+        monkeypatch.setattr(cli, "build_rp2040_from_spec", lambda spec: calls.append(spec) or rp2040_factory())
         args = argparse.Namespace(board=None, board_spec=None)
 
         cli._resolve_run_mcu(args)
 
-        assert calls == ["pico"]
+        assert calls == [BOARDS["pico"]]
 
 
 class TestResolveMklittlefsLayout:
     """`_resolve_mklittlefs_layout()` - `mklittlefs`'s own `--board`/`--board-spec`/`--target`/
     `--block-size`/`--block-count` resolver. `mklittlefs` never constructs a `Device`/`RP2040` at
-    all, so unlike `_resolve_board()` there's no `--image`/`--fetch-fw-only` to reject - the only
-    real conflicts are `--board-spec` combined with `--board` or `--target`."""
+    all and never resolves an image, only a layout, so it needs no network on any path
+    (docs/records/0059). The only hard conflict left is `--board-spec` with `--board`; `--target`
+    became this subcommand's firmware-family selector instead."""
 
     def _layout_board_file(self, tmp_path):
         return _write_board_file(
             tmp_path,
-            "import dataclasses\nfrom rp2040py.boards import BOARDS, FlashLayout\n"
-            "BOARD = dataclasses.replace(BOARDS['pico'], "
-            "layout=FlashLayout(fs_start=0x180000, fs_blockcount=100, fs_blocksize=4096))\n",
+            "from rp2040py.boards import BoardSpec, FlashLayout\n"
+            "BOARD = BoardSpec(layout=FlashLayout(fs_start=0x180000, fs_blockcount=100, fs_blocksize=4096))\n",
+        )
+
+    def _two_family_board_file(self, tmp_path):
+        return _write_board_file(
+            tmp_path,
+            "from rp2040py.boards import BoardSpec\n"
+            "from rp2040py.utils.firmware_retrieve import CIRCUITPYTHON, MICROPYTHON\n"
+            "BOARD = BoardSpec(firmware={'micropython': MICROPYTHON.boards['pico_w'],\n"
+            "                            'circuitpython': CIRCUITPYTHON.boards['pico_w']})\n",
         )
 
     def test_board_spec_layout_used_when_no_explicit_block_size_or_count(self, tmp_path):
@@ -225,21 +245,47 @@ class TestResolveMklittlefsLayout:
 
         assert cli._resolve_mklittlefs_layout(args) == (512, 8)
 
-    def test_board_spec_with_no_layout_and_no_explicit_size_is_rejected(self, tmp_path, caplog):
-        target = _write_board_file(tmp_path, _PLAIN_PICO_SOURCE)
+    def test_board_spec_with_nothing_to_size_against_is_rejected(self, tmp_path, caplog):
+        target = _write_board_file(tmp_path, _EMPTY_SOURCE)
         args = argparse.Namespace(board=None, board_spec=target, target=None, block_size=None, block_count=None)
 
         assert cli._resolve_mklittlefs_layout(args) is None
         assert "layout" in caplog.text.lower()
 
-    def test_board_spec_with_target_is_rejected(self, tmp_path, caplog):
-        target = self._layout_board_file(tmp_path)
+    def test_board_spec_declaring_one_family_needs_no_target(self, tmp_path):
+        target = _write_board_file(
+            tmp_path,
+            "from rp2040py.boards import BoardSpec\n"
+            "from rp2040py.utils.firmware_retrieve import MICROPYTHON\n"
+            "BOARD = BoardSpec(firmware={'micropython': MICROPYTHON.boards['pico_w']})\n",
+        )
+        args = argparse.Namespace(board=None, board_spec=target, target=None, block_size=None, block_count=None)
+        expected = _flash_layout(MICROPYTHON, "pico_w")
+
+        assert cli._resolve_mklittlefs_layout(args) == (expected["fs_blocksize"], expected["fs_blockcount"])
+
+    def test_board_spec_with_several_families_needs_target_to_pick_one(self, tmp_path, caplog):
+        target = self._two_family_board_file(tmp_path)
+        args = argparse.Namespace(board=None, board_spec=target, target=None, block_size=None, block_count=None)
+
+        assert cli._resolve_mklittlefs_layout(args) is None
+        assert "--target" in caplog.text
+
+    def test_target_selects_which_family_of_a_board_spec_to_size_against(self, tmp_path):
+        target = self._two_family_board_file(tmp_path)
+        expected = _flash_layout(MICROPYTHON, "pico_w")
         args = argparse.Namespace(
             board=None, board_spec=target, target="micropython", block_size=None, block_count=None
         )
 
+        assert cli._resolve_mklittlefs_layout(args) == (expected["fs_blocksize"], expected["fs_blockcount"])
+
+    def test_target_naming_a_family_the_board_spec_lacks_is_rejected(self, tmp_path, caplog):
+        target = self._two_family_board_file(tmp_path)
+        args = argparse.Namespace(board=None, board_spec=target, target="kaluma", block_size=None, block_count=None)
+
         assert cli._resolve_mklittlefs_layout(args) is None
-        assert "--target" in caplog.text
+        assert "kaluma" in caplog.text
 
     def test_board_spec_with_board_is_rejected(self, tmp_path, caplog):
         target = self._layout_board_file(tmp_path)

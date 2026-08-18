@@ -12,30 +12,39 @@ Raspberry Pi Pico (RP2040) Emulator in Python — started as a port of [rp2040js
 
 See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) for the file-by-file port status against upstream rp2040js.
 
+> [!IMPORTANT]
+> **Single-core only.** rp2040py emulates `core0`; there is no `core1`, and SIO's inter-core FIFO
+> registers (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) are unimplemented — reads log a warning and return
+> all-ones, writes are dropped, and `CPUID` always reads `0`. Firmware that starts the second core
+> (`multicore_launch_core1()`, MicroPython's `_thread`) will not work. This is deliberate rather
+> than pending: adding the FIFO registers *without* a second core to answer them would turn today's
+> loud failure into a silent infinite hang inside `multicore_fifo_pop_blocking()`, which is strictly
+> worse — see [docs/records/0053](docs/records/0053-core1-and-inter-core-fifo.md) for what building
+> it properly involves. Single-core firmware — the default for MicroPython, CircuitPython, Kaluma
+> and the pico-examples — is unaffected.
+
 ## Table of Contents
 
-- [rp2040py](#rp2040py)
-  - [Table of Contents](#table-of-contents)
-  - [Installation](#installation)
-    - [Environments without compiled-extension support (iOS)](#environments-without-compiled-extension-support-ios)
-    - [Shell completions](#shell-completions)
-  - [Run the demo project](#run-the-demo-project)
-    - [Native code](#native-code)
-    - [MicroPython code](#micropython-code)
-      - [mpremote](#mpremote)
-      - [Filesystem support](#filesystem-support)
-      - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
-    - [CircuitPython code](#circuitpython-code)
-      - [Filesystem support](#filesystem-support-1)
-    - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
-    - [Bootrom revisions](#bootrom-revisions)
-    - [Library API](#library-api)
-      - [External devices & custom boards](#external-devices--custom-boards)
-  - [Performance](#performance)
-  - [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
-  - [Used by](#used-by)
-  - [Learn more](#learn-more)
-  - [License](#license)
+- [Installation](#installation)
+  - [Environments without compiled-extension support (iOS)](#environments-without-compiled-extension-support-ios)
+  - [Shell completions](#shell-completions)
+- [Run the demo project](#run-the-demo-project)
+  - [Native code](#native-code)
+  - [MicroPython code](#micropython-code)
+    - [mpremote](#mpremote)
+    - [Filesystem support](#filesystem-support)
+    - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
+  - [CircuitPython code](#circuitpython-code)
+    - [Filesystem support](#filesystem-support-1)
+  - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
+  - [Bootrom revisions](#bootrom-revisions)
+- [Library API](#library-api)
+  - [External devices & custom boards](#external-devices--custom-boards)
+- [Performance](#performance)
+- [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
+- [Used by](#used-by)
+- [Learn more](#learn-more)
+- [License](#license)
 
 ## Installation
 
@@ -140,6 +149,10 @@ same [src/rp2040py/cli](src/rp2040py/cli) code):
 | `rp2040py micropython ...` | `uv run python demo/micropython_run.py ...` |
 | `rp2040py kaluma ...`      | `uv run python demo/kaluma_run.py ...`      |
 | `rp2040py bench ...`       | `uv run python demo/benchmark.py ...`       |
+
+Two demos have no CLI equivalent because they emulate hardware rather than run firmware: the
+Waveshare 2.9″ e-Paper panel (`demo/eink_run.py`) and the RP2040-LCD-0.96's onboard ST7735S
+(`demo/lcd_run.py`). [demo/README.md](demo/README.md) shows what both actually draw.
 
 `--board {pico,pico_w}` (default `pico`) is available on all four and picks which board's fixed
 extras get attached alongside the RP2040 itself - the onboard LED and the BOOTSEL button on both,
@@ -577,7 +590,7 @@ extra: it's a pure-Python wheel with no platform-specific build to justify gatin
 the ROM image on the fly, no separate conversion step needed. A local `.bin` (e.g. produced with
 `objcopy -O binary`) is loaded directly with no parsing at all.
 
-### Library API
+## Library API
 
 Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image (optionally for a specific `board`, e.g. `board="pico_w"`) and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
 
@@ -623,7 +636,7 @@ Both share one `asyncio.Lock` per device: since the device only has a single REP
 
 ### External devices & custom boards
 
-Beyond the built-in `--board {pico,pico_w}` presets, the emulator has a real `ExternalDevice` extension point (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets wired up via `attach_external_devices()`. Four devices already ship in-tree this way (the onboard LED, the BOOTSEL button, the CYW43439 WiFi chip behind `pico_w`, and a Waveshare 2.9″ e-Paper display). Boards are just as open: `boards.BoardSpec` (what `--board` itself resolves to internally) is a public dataclass you can build your own instance of - your own device mix on an existing firmware family, or a fully custom board with its own firmware image and flash layout - and hand to any `Device` class (`board=...`) or the CLI (`--board-spec target:attr` / `RP2040PY_BOARD_SPEC`, on `run`/`micropython`/`kaluma`/`mklittlefs`). See [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) for the how-to (worked examples for both), and [docs/records/0049](docs/records/0049-external-device-authoring-docs.md) for the design history behind it.
+Beyond the built-in `--board {pico,pico_w}` presets, the emulator has a real `ExternalDevice` extension point (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets wired up via `attach_external_devices()`. Seven devices already ship in-tree this way (the onboard LED, the BOOTSEL button, a generic button/key, the CYW43439 WiFi chip behind `pico_w`, a Waveshare 2.9″ e-Paper panel, an ST7735S TFT controller, and a WS2812/WS2812B "NeoPixel" RGB LED). Boards are just as open: `boards.BoardSpec` (what `--board` itself resolves to internally) is a public dataclass you can build your own instance of - your own device mix on an existing firmware family, or a fully custom board with its own firmware and flash layout - and hand to any `Device` class (`board=...`) or the CLI (`--board-spec target:attr` / `RP2040PY_BOARD_SPEC`, on `run`/`micropython`/`kaluma`/`mklittlefs`). A board declares its firmware as data - a `firmware` dict keyed by family (`micropython`/`circuitpython`/`kaluma`), each entry a tag→URL-or-local-path map plus that family's flash layout - so one file covers one *board* for every firmware that runs on it, downloads nothing when imported, and works with `--image` and `--fetch-fw-only` exactly as `--board` does. Three ready-made community boards live in [boards/](boards/) as worked `--board-spec` targets: [weactstudio](boards/weactstudio/__init__.py) (WeAct Studio RP2040, four flash-size variants), [waveshare_rp2040_lcd_0_96](boards/waveshare_rp2040_lcd_0_96/__init__.py) (Waveshare RP2040-LCD-0.96, with its onboard 160×80 ST7735S panel attached as a fixed extra, under MicroPython *and* CircuitPython - the latter paints that panel straight from its own boot with no guest code at all) and [vcc_gnd_yd_rp2040](boards/vcc_gnd_yd_rp2040/__init__.py) (VCC-GND Studio YD-RP2040, with the WS2812 RGB LED on GPIO23 that CircuitPython drives as its *status* indicator - so booting it decodes real pixel frames before any guest code runs). Screenshots of what the two emulated display panels produce are in [demo/README.md](demo/README.md). See [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) for the how-to (worked examples for both), and [docs/records/0049](docs/records/0049-external-device-authoring-docs.md) / [0059](docs/records/0059-boardspec-firmware-resolution.md) for the design history behind it.
 
 ## Performance
 

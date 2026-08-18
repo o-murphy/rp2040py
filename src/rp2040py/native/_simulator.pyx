@@ -47,17 +47,6 @@ cdef int TIME_CHECK_INTERVAL = 256
 cdef long BATCH_INSTRUCTION_CEILING = 1000000
 
 
-def _has_runnable_machine(pio: object) -> bool:
-    """Mirrors _execute_batch.py's own helper of the same name - see its docstring for why a
-    machine sitting in `waiting=True` must not be re-`step()`'d every instruction (every wait
-    type already has its own targeted, event-driven re-check elsewhere) and
-    docs/records/0037-pio-clock-coupled-stepping.md for the real regression this fixes."""
-    for machine in pio.machines:
-        if machine.enabled and not machine.waiting:
-            return True
-    return False
-
-
 def execute_batch(simulator: object, tick_batch: int) -> None:
     """Same semantics as Simulator._execute_batch() (simulator.py), byte-for-byte translated -
     keep the two in sync by hand if either changes; there's no shared source between them (unlike
@@ -66,13 +55,16 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     cdef RP2040 rp2040 = simulator.rp2040
     cdef CortexM0Core core = rp2040.core
     cdef SimulationClock clock = simulator.clock
-    # Stepped once per loop iteration below (both the idle-jump and busy-instruction paths - real
-    # PIO keeps running independent of CPU sleep state), the same "driven directly by this loop,
-    # not a competing asyncio.Task" pattern clock.tick() itself already uses - see
-    # _execute_batch.py's own comment on the mirrored line and
-    # docs/records/0037-pio-clock-coupled-stepping.md. RPPIO isn't natively typed (no
-    # native/_pio.pyx), so this stays an ordinary Python attribute/method call from here, unlike
-    # clock (see native/_simulation_clock.pyx's docstring for why clock alone got ported).
+    # Advanced once per loop iteration below (both the idle-jump and busy-instruction paths -
+    # real PIO keeps running independent of CPU sleep state), by the system clocks that iteration
+    # covered rather than by one step regardless: honouring SM_CLKDIV and [delay] is
+    # RPPIO.advance()'s own job (docs/records/0063), and its fast path is a single integer
+    # compare, which is what let the `_has_runnable_machine()` scan that used to sit here go away
+    # entirely. Still the same "driven directly by this loop, not a competing asyncio.Task"
+    # pattern clock.tick() itself uses - see _execute_batch.py's own comment on the mirrored line
+    # and docs/records/0037-pio-clock-coupled-stepping.md. Called as an ordinary Python method
+    # from here (RPPIO is a cdef class in native/_pio.pyx, but this module deliberately doesn't
+    # cimport it - see this file's own docstring on the object-typed boundary).
     pios = rp2040.pio
 
     cdef long i = 0
@@ -82,7 +74,10 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     cdef int pending_count = 0
     cdef double nanos_budget
     cdef double delta_nanos
-    cdef int cycles
+    cdef double idle_nanos
+    # long long, not int: the idle branch below converts a jump straight to the next alarm into
+    # cycles, and that can be far more than a CPU instruction's handful.
+    cdef long long cycles
 
     nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
 
@@ -97,7 +92,11 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                 clock.tick(pending_nanos)
                 pending_nanos = 0.0
                 pending_count = 0
-            clock.tick(clock.nanos_to_next_alarm)
+            idle_nanos = clock.nanos_to_next_alarm
+            clock.tick(idle_nanos)
+            # The system clocks that jump covered, floored at one - see _execute_batch.py's own
+            # comment here for why the floor is load-bearing.
+            cycles = <long long>(idle_nanos / CYCLE_NANOS) or 1
             if tick_batch > 1:
                 nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
         else:
@@ -115,8 +114,8 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                     pending_count = 0
                     nanos_budget = clock.nanos_to_next_alarm if clock.has_scheduled_alarm else INFINITY
         for pio in pios:
-            if not pio.stopped and _has_runnable_machine(pio):
-                pio.step()
+            if not pio.stopped:
+                pio.advance(cycles)
         i += 1
     if pending_nanos:
         clock.tick(pending_nanos)

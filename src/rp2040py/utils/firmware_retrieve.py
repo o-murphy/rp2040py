@@ -27,6 +27,15 @@ keyed by the same board-name string as `boards` but structurally unrelated to it
 happened to use the same key by convention rather than by construction. BOOTROM keeps its own
 top-level `default_tag` (board-agnostic, no `boards` at all).
 
+**`BoardFirmwareSpec` is also the custom-board declaration format (2026-08-17), per
+docs/records/0059.** `boards.BoardSpec.firmware: dict[family, BoardFirmwareSpec]` reuses this exact
+type, keyed by this file's own top-level family names, so a built-in board and a hand-written
+board file describe "which images exist and where does the filesystem go" in one shape resolved by
+one function - `family_of()` maps a `FirmwareSpec` back to its family name for that path, and
+`board_flash_layout()` parses one declaration's `layout` without needing a board name to look it
+up through. The only thing that stays different is who maintains the data: `scripts/
+fetch_firmware.py` regenerates it here, a board file's author edits theirs by hand.
+
 `firmware_specs.json` isn't generated at request time by this module - it's fetched at development
 time by `scripts/fetch_firmware.py` (scrapes MicroPython's/CircuitPython's/Kaluma's/the
 RP2040 bootrom's own real, authoritative release sources) and committed straight into the JSON, so
@@ -50,8 +59,11 @@ __all__ = (
     "CIRCUITPYTHON",
     "KALUMA",
     "MICROPYTHON",
+    "SPECS",
     "BoardFirmwareSpec",
     "FirmwareSpec",
+    "board_flash_layout",
+    "family_of",
     "flash_layout",
     "retrieve",
 )
@@ -116,11 +128,22 @@ def _load_specs() -> "dict[str, FirmwareSpec]":
     return specs
 
 
-_SPECS = _load_specs()
-MICROPYTHON = _SPECS["micropython"]
-CIRCUITPYTHON = _SPECS["circuitpython"]
-KALUMA = _SPECS["kaluma"]
-BOOTROM = _SPECS["bootrom"]
+SPECS = _load_specs()
+MICROPYTHON = SPECS["micropython"]
+CIRCUITPYTHON = SPECS["circuitpython"]
+KALUMA = SPECS["kaluma"]
+BOOTROM = SPECS["bootrom"]
+
+
+def family_of(spec: FirmwareSpec) -> "str | None":
+    """The `firmware_specs.json` top-level name (`"micropython"`/`"circuitpython"`/`"kaluma"`/
+    `"bootrom"`) `spec` was loaded under - the same strings `boards.BoardSpec.firmware` is keyed by
+    (docs/records/0059), which is what lets one resolution path serve both a built-in board and a
+    custom board file. Identity, not equality: two `FirmwareSpec`s can compare equal without being
+    the shipped one, and a `FirmwareSpec` holds dicts, so it isn't hashable enough for a reverse
+    dict either. `None` for a spec a caller built themselves (a board file's own inline
+    declaration, a test double) - it simply isn't one of the four shipped families."""
+    return next((name for name, known in SPECS.items() if known is spec), None)
 
 
 def _cache_dir() -> Path:
@@ -218,20 +241,31 @@ def _download(url: str, filename: str) -> "Path | None":
     return cached_path
 
 
+def board_flash_layout(board_spec: BoardFirmwareSpec) -> "dict[str, int] | None":
+    """One `BoardFirmwareSpec.layout` as an all-`int` dict, parsing each `"0x..."` string value -
+    `firmware_specs.json` stores them as hex strings for human readability, plain JSON has no
+    hex-literal syntax, and a hand-written board file follows the same convention. `None` for a
+    declaration with no `layout` at all. The board-name-free half of `flash_layout()` below, so a
+    `boards.BoardSpec` that already holds its own `BoardFirmwareSpec` (docs/records/0059) can parse
+    it without inventing a `FirmwareSpec` and a board key to look it up through."""
+    if board_spec.layout is None:
+        return None
+    return {key: (int(value, 16) if isinstance(value, str) else value) for key, value in board_spec.layout.items()}
+
+
 def flash_layout(spec: FirmwareSpec, board: str) -> "dict[str, int]":
-    """Resolves `spec.boards[board].layout` into an all-`int` dict, parsing each `"0x..."` string
-    value - `firmware_specs.json` stores them as hex strings for human readability, plain JSON has
-    no hex-literal syntax. Raises `KeyError` for a spec with no `boards` at all (BOOTROM), a
-    `board` not present in it, or a board with no `layout` - all considered a caller bug (every
-    board this project actually supports for a layout-bearing spec must have an entry), not a
-    runtime condition to degrade gracefully from.
+    """Resolves `spec.boards[board].layout` into an all-`int` dict (see `board_flash_layout()`).
+    Raises `KeyError` for a spec with no `boards` at all (BOOTROM), a `board` not present in it, or
+    a board with no `layout` - all considered a caller bug (every board this project actually
+    supports for a layout-bearing spec must have an entry), not a runtime condition to degrade
+    gracefully from.
     """
     if spec.boards is None:
         raise KeyError(f"{spec!r} has no boards")
-    layout = spec.boards[board].layout
+    layout = board_flash_layout(spec.boards[board])
     if layout is None:
         raise KeyError(f"{spec!r}'s {board!r} board has no layout")
-    return {key: (int(value, 16) if isinstance(value, str) else value) for key, value in layout.items()}
+    return layout
 
 
 def retrieve(spec: FirmwareSpec, image: "str | None" = None, board: str = _DEFAULT_BOARD) -> "Path | None":

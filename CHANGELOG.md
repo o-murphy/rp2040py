@@ -7,6 +7,205 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rp2040py.external.ws2812.Ws2812` - a new `ExternalDevice` decoding the WS2812/WS2812B
+  ("NeoPixel") single-wire protocol off one GPIO: each bit classified by its duty cycle against the
+  frame's own measured bit period (so any driver's clock choice decodes - CircuitPython's 12.8 MHz
+  PIO program, MicroPython's, pico-examples' `ws2812.pio`), frames separated by the protocol's
+  latch gap, and `on_pixels` handing over raw `(r, g, b)` tuples - never a picture, the same
+  boundary `Epd2in9G`/`St7735s` draw. Colour order (`GRB`, `GRBW`, ...) is a constructor argument.
+  Timings derived from CircuitPython's own driver rather than datasheet folklore; see
+  [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md). PIO-driven drivers decode
+  live too, once the PIO timing defect this work uncovered was fixed - see Fixed, below.
+- `boards/vcc_gnd_yd_rp2040/` - the VCC-GND Studio **YD-RP2040** as a `--board-spec` target: the
+  WS2812 RGB LED (GPIO23), the USRKEY button (GPIO24), BOOTSEL and the user LED (GPIO25). Flash
+  layout derived from the upstream `vcc_gnd_yd_rp2040` CircuitPython port (no
+  `CIRCUITPY_FIRMWARE_SIZE` override and no `link.ld`, so `fs_start=0x100000`), and the two button
+  nets from the vendor's own `YD-2040 2022 V1.1` schematic - USRKEY has a 10k in *series* and no
+  external pull-up, so `KeyMock(gpio=24, active_high=False)` relies on firmware's own internal
+  pull, which is exactly the case `release()` is written for. Declares **CircuitPython only**,
+  deliberately: MicroPython ships no port for this board, and a `firmware` key means "built *for*
+  this board", not "runs here" - the generic `RPI_PICO` image is one explicit `--image` away. Live
+  verified: boots CircuitPython `10.2.1`, `board.board_id == "vcc_gnd_yd_rp2040"`, CIRCUITPY mounts
+  at the derived offset. RESET stays unmodelled ([0057](docs/records/0057-run-pin-reset-hook.md)).
+- `BoardSpec.firmware` - a board now *declares* its firmware instead of arriving with one already
+  resolved: a `dict` keyed by firmware family (`micropython`/`circuitpython`/`kaluma`, the names
+  `firmware_specs.json` already uses), each value the existing `BoardFirmwareSpec` (`default_tag`,
+  a tag -> URL **or local path** map, and that family's flash layout). `boards.resolve_firmware(
+  spec, family, image=None)` turns that into a concrete image/layout at use time, and
+  `boards.resolve_layout(spec, family)` is its image-free half. `--board` and `--board-spec` now go
+  through that one function - `BOARDS["pico"]`/`["pico_w"]` carry `firmware` built straight from
+  `firmware_specs.json`, and `resolve_board_spec()` remains as a thin board-name wrapper over it.
+  Consequences: importing a board file downloads nothing (it is data), `--image` and
+  `--fetch-fw-only` work with `--board-spec` the same way they do with `--board`, one board file
+  can serve several firmware families, and a board file that names a local `.uf2` is offline by
+  construction. See [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md).
+- `rp2040py.utils.firmware_retrieve` gained `SPECS`, `family_of()` (a `FirmwareSpec` -> its
+  `firmware_specs.json` family name) and `board_flash_layout()` (the board-name-free half of
+  `flash_layout()`, which now delegates to it).
+- `boards/weactstudio/` gained a **CircuitPython** declaration alongside its four MicroPython
+  flash variants - the same physical board, which that firmware ships under a different id
+  (`weact_studio_pico`), so the file cites both rather than splitting in two. `fs_start=0x100000`
+  derived from upstream the same way as every other CircuitPython entry here (no
+  `CIRCUITPY_FIRMWARE_SIZE` override and no `link.ld` of its own, so `link-rp2040.ld`'s 1020K
+  default plus the 4 KiB NVM applies), and CircuitPython's own `pins.c` confirms the LED and USR
+  button pins the board file already modelled (GPIO25 / GPIO23). Live-verified against real
+  firmware: MicroPython `1.28.0` reports the 16 MiB variant's own `os.statvfs('/')` (3840 4-KiB
+  blocks), and CircuitPython `10.2.1` boots with `board.board_id == "weact_studio_pico"` and a
+  mounted CIRCUITPY drive. The RESET button stays unmodelled (it pulls RUN, not a GPIO - see
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md)).
+- `rp2040py.external.st7735s.St7735s` - a new `ExternalDevice` emulating the ST7735S TFT
+  controller behind Waveshare's 0.96inch 160x80 IPS panel: CASET/RASET address windows, RAMWR
+  pixel streaming, MADCTL/COLMOD/DISPON/INVON state and the RST pin, all decoded off the vendor's
+  own MicroPython driver's wire traffic. `on_frame` hands over the raw RGB565 framebuffer, never a
+  decoded picture, so nothing in `src/` gains an image-library dependency (same boundary
+  `Epd2in9G` draws). `MADCTL`'s MV/MX/MY are applied as a real memory-to-panel remap - a portrait
+  or mirrored orientation is shown rotated/mirrored the way the glass would show it - anchored so
+  the module's own reference orientation (`0xA8`, what the vendor driver sets) stays the identity.
+  RGB444 and RGB666 are decoded too, normalized into the same RGB565 framebuffer so the callback
+  speaks one format regardless of `COLMOD`.
+- `boards/waveshare_rp2040_lcd_0_96/` - a `--board-spec` target for the Waveshare
+  RP2040-LCD-0.96, with its onboard panel, BOOTSEL and LCD backlight attached as fixed extras.
+  Flash layout derived from upstream (`MICROPY_HW_FLASH_STORAGE_BYTES = 1441792` + pico-sdk's
+  `PICO_FLASH_SIZE_BYTES = 2 MiB` -> `fs_start=0xa0000`, `fs_blockcount=352`) and live-verified
+  against the real `WAVESHARE_RP2040_LCD_0_96` v1.28.0 firmware: `mklittlefs --board-spec` round
+  trip, `os.statvfs('/')` reporting 352 4-KiB blocks, and real frames decoded from a
+  vendor-shaped guest driver. See [docs/records/0056](docs/records/0056-st7735s-waveshare-lcd-board.md).
+
+- the same board under **CircuitPython**, needing no new device code (a second `firmware` key in
+  the same file): its own flash layout (`fs_start=0x100000`, derived
+  from `CIRCUITPY_FIRMWARE_SIZE` + the 4 KiB NVM region, with no board-level override) and the
+  same panel/BOOTSEL/backlight extras. CircuitPython initialises the display in `board_init()`, so
+  booting this spec paints the emulated panel with no guest code at all - live-verified against
+  `10.2.1`: 58 decoded frames, `board.DISPLAY` 160x80 at rotation 90, and a formatted CIRCUITPY
+  drive through the CLI's `--circuitpython --board-spec` path. It also independently checks the
+  MADCTL work above, since CircuitPython drives the panel through a different orientation
+  (`0xC8` with transposed offsets and displayio `rotation=90`) than MicroPython's `0xA8`, and both
+  render upright.
+
+- `rp2040py.external` now re-exports `ExternalDevice` and `attach_external_devices`, so the
+  extension point is `from rp2040py.external import ExternalDevice` rather than the deeper
+  `rp2040py.external.device` path - one identifier away from the unrelated, host-side
+  `rp2040py.device` (`MicroPythonDevice` and friends), which was the actual source of confusion.
+  The submodule keeps its name and still works.
+
+- [demo/README.md](demo/README.md) - an index of the demo scripts plus a gallery of what the two
+  emulated display panels actually draw, with the frames checked in under `demo/screenshots/`
+  (real device output: each PNG is a decoded `on_frame` buffer, at the panel's own pixel size).
+
+- `README.md` and [reference/os-compatibility.md](docs/reference/os-compatibility.md) now state
+  the single-core limitation up front: there is no `core1`, SIO's inter-core FIFO is
+  unimplemented, and firmware that calls `multicore_launch_core1()` (or MicroPython's `_thread`)
+  will not work - with the reason it is deliberate rather than pending, since adding the FIFO
+  registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
+
+### Known issues
+- **PIO still runs at most one instruction per CPU instruction.** That is what `SM_CLKDIV = 1`
+  looks like here: real hardware would run one to three, since a Cortex-M0+ instruction is one to
+  three system clocks. The ceiling is deliberate - `clock.tick()` has to run between PIO steps or a
+  DMA-fed FIFO can be outrun ([0043](docs/records/0043-pio-dma-first-batch-race.md)) - and it only
+  ever makes a state machine slower, never faster, so every divider above ~1.4 is now exact. Same
+  reason PIO does not run through a CPU idle jump (`RPPIO.backlog_drops` counts when that costs a
+  machine something). [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
+
+### Fixed
+- **`RPPIO` now paces its state machines by `SM_CLKDIV` and `[delay]` cycles.** Both were parsed
+  and read back correctly, and neither was ever used for pacing: every enabled state machine
+  advanced exactly one instruction per CPU instruction, whatever divider it had configured. PIO is
+  now advanced by the system clocks each CPU instruction costs, and a machine executes when its own
+  due time arrives - one integer compare per PIO block in the common case, kept as a 16.8
+  fixed-point accumulator so a fractional divider needs no float. `CTRL.CLKDIV_RESTART` is
+  implemented rather than warned about. Two things this fixes, measured:
+  - **PIO-generated pulse-width protocols decode.** Real CircuitPython writing `ff 00 aa` to the
+    YD-RP2040's NeoPixel produced 8-40 ns highs with the `0` and `1` populations *overlapping*; it
+    now produces 272-352 ns and 664-720 ns on a 1.25 µs period - real silicon's own 312/703 ns - and
+    `Ws2812` decodes the frame. WS2812, DHT11/22, servo PWM, IR codes and one-wire were all out of
+    reach before this; they are the whole class it unblocks.
+  - **CYW43's gSPI runs at the `sysclk/2` its driver asks for**, not at twice that. The most
+    exercised PIO path in the project had a measurably wrong clock.
+  Live-verified on MicroPython `1.23.0`/`1.28.0` and CircuitPython `10.2.1` for Pico W (scan, join,
+  DHCP, TCP through the NAT bridge, DNS, TLS, disconnect), and ~11% *faster* in wall clock than
+  before - the due-time compare replaces a per-instruction scan of every state machine. A CPU-only
+  workload is unchanged. `tests/ws2812_boot_decode.py` keeps the waveform itself under CI, not just
+  the decoded bytes. [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
+
+### Documentation
+- [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - the YD-RP2040 board and
+  the `Ws2812` device it needs: now implemented (above), including why emulating a WS2812 is not
+  the case record 0060 ruled out, the rule that a `firmware` key means "built *for* this board",
+  and the two button nets read off the vendor schematic.
+- [docs/records/0064](docs/records/0064-state-server-and-web-visualizer.md) - deferred design
+  record for an optional read-only state server (WebSocket, or Socket.IO behind an extra) exposing
+  GPIO/peripheral/device state, and the browser viewer it would enable (`@wokwi/elements` is
+  MIT-licensed and maps almost one-to-one onto the devices already shipped). Splits the *watching*
+  half out of 0060, since none of that record's wall-clock ceiling applies to a viewer; names the
+  real blocker - `ExternalDevice` cannot describe itself - and rules an editor out of scope.
+- [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md) - the PIO timing defect
+  that work uncovered, now **implemented** (see Fixed above): the captured trace as its acceptance
+  test, three options ranked by faithfulness, and an implementation note on the one thing the
+  design got wrong - walking through every instruction a machine was owed breaks CYW43 outright,
+  because 0043 depends on `clock.tick()` running between PIO steps.
+- [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - now **implemented**
+  (see Added/Changed above): the record carries the design plus an implementation note covering the
+  one deliberate departure from it (`mklittlefs --target` became `--board-spec`'s firmware-family
+  selector instead of staying incompatible with it) and the live-boot verification.
+- [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - design-only record
+  (nothing implemented) for adding the VCC-GND Studio YD-RP2040 board and the `Ws2812`
+  `ExternalDevice` it needs: every number derived from the upstream `vcc_gnd_yd_rp2040`
+  CircuitPython port, why emulating a WS2812 is not the case record 0060 ruled out (that ceiling is
+  about driving *real* hardware in wall-clock time), and the question a board with no upstream
+  MicroPython build raises - whether a `firmware` key may name someone else's image, with the
+  proposed rule that it means "built *for* this board", not "runs here".
+- [docs/records/0061](docs/records/0061-cli-family-flag.md) - deferred design record, dependent on
+  0059, for folding `micropython` (plus its `--circuitpython` boolean) and `kaluma` into one
+  command with `--family`: what actually differs between them (the device protocol, not the
+  firmware family), the per-family flag matrix such a merge needs, and the positional-argument
+  trap it has to avoid.
+- [docs/records/0060](docs/records/0060-external-io-bridges.md) - deferred (not rejected) design
+  record for external I/O bridges: a browser viewer built on `@wokwi/elements`, and mapping
+  emulated GPIO onto a real host's pins. Decides the parts both share - coalesced outbound
+  snapshots, inbound events through `schedule_threadsafe()`, optional dependency extras - and
+  states the timing ceiling a pin-level bridge cannot escape.
+- [docs/records/0057](docs/records/0057-run-pin-reset-hook.md) - design-only record (nothing
+  implemented) for emulating a board's RESET button: why RUN cannot be an `ExternalDevice` target
+  the way BOOTSEL can, a `set_reset_hook()` on `RP2040` versus moving `BaseDevice`'s reset
+  sequence into the MCU, and the semantics still to settle before any of it is built.
+
+### Changed
+- **`boards/` is one directory per board, not per firmware family.** `boards/micropython/
+  WAVESHARE_RP2040_LCD_0_96/` and `boards/circuitpython/waveshare_rp2040_lcd_0_96/` - which had
+  identical `extras`, being the same soldered hardware - are now the single
+  [`boards/waveshare_rp2040_lcd_0_96/`](boards/waveshare_rp2040_lcd_0_96/__init__.py), declaring
+  both firmwares and selected by `--circuitpython` at run time; `boards/micropython/WEACTSTUDIO/`
+  became [`boards/weactstudio/`](boards/weactstudio/__init__.py). Directory names are the
+  firmware's own board id, case-normalized. **Breaking for anyone pointing `--board-spec` at the
+  old paths**, and `demo/lcd_run.py` loads the one file (resolving the family itself) instead of
+  two.
+- CI (`ci-micropython.yml`'s `test-board-spec` job) now also boots a declarative `boards/` file,
+  checks `--image` alongside `--board-spec`, selects a two-family board file's CircuitPython side,
+  and asserts `mklittlefs --target` sizes that same file differently per family.
+- `--board-spec` is now mutually exclusive with `--board` and nothing else: `--image` (tag, path or
+  URL) and `--fetch-fw-only` work with it, given a `firmware` entry for the family being run. On
+  `mklittlefs`, `--target` changed meaning for `--board-spec` from "rejected" to "pick which of the
+  spec's firmware families to size the image against" - needed only when a spec declares more than
+  one, and declaring several without it is an error naming both rather than a silent pick.
+  Asking any spec for a family it does not declare raises/reports `UnknownFirmwareFamilyError`,
+  naming what it *does* declare.
+- `demo/mp_eink_demo.py` runs the panel's SPI bus at 10 MHz instead of 4 MHz and trims the
+  settle delays that gate nothing (`RESET_MS` 5->2, `POWER_ON_SETTLE_MS` 10->3,
+  `POWER_OFF_SETTLE_MS` 5->2), cutting the demo's wall time roughly in half with byte-identical
+  output. The BUSY handshake's own timings (`BUSY_POLL_MS`, `eink_run.py`'s `busy_nanos_refresh`)
+  were measured at ~3% of a frame and deliberately left alone - see
+  [docs/records/0046](docs/records/0046-epd2in9g-external-device.md)'s timing addendum for the
+  full breakdown.
+
+### Fixed
+- `README.md`'s table of contents nested every section under a self-referencing `rp2040py` root
+  entry (so indentation was one level deeper than the headings it described) and listed
+  "External devices & custom boards" as a child of "Library API" while the headings said
+  otherwise. The ToC now mirrors the heading levels, and "Library API" is a top-level section
+  rather than a step of "Run the demo project".
+
 ## [0.2.5] - 2026-08-17
 
 ### Fixed

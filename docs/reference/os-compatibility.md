@@ -18,6 +18,11 @@ sit **in the specific cell they explain** and link to the matching note below; n
 strict reading order (top-to-bottom, left-to-right). The same note is reused (same number) wherever
 the same reason applies.
 
+> [!IMPORTANT]
+> One limitation is **not** per-OS and so has no meaningful row above: rp2040py emulates a single
+> core. Firmware that launches `core1` does not work anywhere — see the last row and note
+> [[16]](#fn16).
+
 | Feature | Linux | macOS | Windows | Android (Termux / Pydroid 3) | iOS (Pythonista) | iOS (PythonIDE) |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Core emulation (`run` / `micropython` / `circuitpython` / `kaluma`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -43,6 +48,7 @@ the same reason applies.
 | `[fs]` littlefs image tooling (`--littlefs`, `mklittlefs`) | ✅ | ✅ | ✅ | ✅ <sup>[[15]](#fn15)</sup> | ❌ <sup>[[1]](#fn1)</sup> | ❌ <sup>[[1]](#fn1)</sup> |
 | `--dump-fs` (littlefs-python-free FS dump) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `--fat12 <image>` (consume a pre-built FAT12 image) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Second core (`core1`) — `multicore_launch_core1()`, MicroPython `_thread` | ❌ <sup>[[16]](#fn16)</sup> | ❌ <sup>[[16]](#fn16)</sup> | ❌ <sup>[[16]](#fn16)</sup> | ❌ <sup>[[16]](#fn16)</sup> | ❌ <sup>[[16]](#fn16)</sup> | ❌ <sup>[[16]](#fn16)</sup> |
 
 ## Notes
 
@@ -139,3 +145,12 @@ back to Ctrl+C only, matching this command's pre-asyncio behavior. See `cli/__in
 **[15]** The `[fs]` extra pulls in `littlefs-python`, a compiled C dependency. Confirmed working by
 hand on Android under **both** Termux and Pydroid 3. Where `[fs]` is unavailable (iOS — see [1]),
 `--dump-fs` is the littlefs-python-free alternative for reading a filesystem back out.
+
+<a id="fn16"></a>
+**[16]** Host-independent: there is no second `CortexM0Core` at all, and SIO's inter-core FIFO
+(`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) is unimplemented — those reads log `"Read from invalid SIO
+address"` and return `0xFFFFFFFF`, writes are dropped, and `CPUID` always reads `0`. Implementing
+the FIFO registers alone would be worse than leaving them out: `multicore_launch_core1()` blocks
+reading back an echo of what it pushed, so a faithful-looking FIFO with nothing behind it hangs
+silently instead of failing loudly. See
+[record 0053](../records/0053-core1-and-inter-core-fifo.md).

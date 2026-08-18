@@ -72,9 +72,7 @@ def _isolated_cwd(tmp_path, monkeypatch):
 def fake_device(monkeypatch):
     _FakeMicroPythonDevice.last_kwargs = None
     monkeypatch.setattr(cli, "MicroPythonDevice", _FakeMicroPythonDevice)
-    monkeypatch.setattr(
-        cli, "resolve_board_spec", lambda board, firmware_spec, tag=None: BoardSpec(image="fixed-image.uf2")
-    )
+    monkeypatch.setattr(cli, "resolve_firmware", lambda spec, family, image=None: BoardSpec(image="fixed-image.uf2"))
     return _FakeMicroPythonDevice
 
 
@@ -155,7 +153,7 @@ def test_micropython_littlefs_and_fat12_are_mutually_exclusive_even_with_circuit
 def test_missing_image_prints_the_requested_identifier_not_none(caplog, monkeypatch):
     # Regression test: this used to print the literal string "None" (the *result* of the failed
     # lookup) instead of what the user actually asked for.
-    monkeypatch.setattr(cli, "resolve_board_spec", lambda board, firmware_spec, tag=None: BoardSpec())
+    monkeypatch.setattr(cli, "resolve_firmware", lambda spec, family, image=None: BoardSpec())
 
     with pytest.raises(SystemExit) as exc_info:
         cli._cmd_micropython(_mp_args(image="totally-bogus-version"))
@@ -432,7 +430,7 @@ def fake_kaluma_device(monkeypatch):
     _FakeKalumaDevice.last_instance = None
     monkeypatch.setattr(cli, "KalumaDevice", _FakeKalumaDevice)
     monkeypatch.setattr(
-        cli, "resolve_board_spec", lambda board, firmware_spec, tag=None: BoardSpec(image="fixed-kaluma-image.uf2")
+        cli, "resolve_firmware", lambda spec, family, image=None: BoardSpec(image="fixed-kaluma-image.uf2")
     )
     monkeypatch.setattr(cli, "StdioInteractiveRepl", _FakeStdioInteractiveRepl)
     return _FakeKalumaDevice
@@ -479,7 +477,7 @@ def test_kaluma_sends_no_nudge_bytes_after_start(fake_kaluma_device):
 
 
 def test_kaluma_missing_image_prints_the_requested_identifier(caplog, monkeypatch):
-    monkeypatch.setattr(cli, "resolve_board_spec", lambda board, firmware_spec, tag=None: BoardSpec())
+    monkeypatch.setattr(cli, "resolve_firmware", lambda spec, family, image=None: BoardSpec())
 
     with pytest.raises(SystemExit) as exc_info:
         cli._cmd_kaluma(_kaluma_args(image="totally-bogus-version"))
