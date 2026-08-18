@@ -3,10 +3,10 @@ Pico-class RP2040 board with a bigger 4 MiB flash part (vs. a Pico's 2 MiB) and 
 three separate active-low GPIO LEDs** - not a WS2812/NeoPixel, despite `board.json`'s own "RGB LED"
 feature tag: red on **GPIO16**, green on **GPIO17**, blue on **GPIO18**. Built as a worked
 `--board-spec` example, picked up off
-[0066](../../docs/records/0066-board-support-expansion.md)'s survey; load it with e.g.:
+[0066](../docs/records/0066-board-support-expansion.md)'s survey; load it with e.g.:
 
-    rp2040py micropython --board-spec boards/nullbits_bit_c_pro/__init__.py:BOARD -c "<probe>"
-    rp2040py micropython --circuitpython --board-spec boards/nullbits_bit_c_pro/__init__.py:BOARD -c "<probe>"
+    rp2040py micropython --board-spec boards/nullbits_bit_c_pro.py:BOARD -c "<probe>"
+    rp2040py micropython --circuitpython --board-spec boards/nullbits_bit_c_pro.py:BOARD -c "<probe>"
     PYTHONPATH=. rp2040py micropython --board-spec boards.nullbits_bit_c_pro:BOARD ...
 
 Nothing is downloaded when this module is imported: `firmware` is data, and
@@ -17,7 +17,7 @@ Lives outside `src/rp2040py` on purpose - a `--board-spec` target, not part of t
 package or the built-in `--board` registry. It clears neither item 2 (a `firmware_specs.json`
 entry) nor item 5 (a named maintainer) of 0059's promotion checklist.
 
-Directory named `nullbits_bit_c_pro` after both firmwares' own board id - MicroPython's
+File named `nullbits_bit_c_pro.py` after both firmwares' own board id - MicroPython's
 `ports/rp2/boards/NULLBITS_BIT_C_PRO`, case-normalized, and CircuitPython's own
 `nullbits_bit_c_pro` (they agree here, unlike `boards/weactstudio/`).
 

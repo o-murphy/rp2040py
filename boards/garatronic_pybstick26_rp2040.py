@@ -1,11 +1,11 @@
 """BoardSpec definition for the **Garatronic/McHobby PYBStick26 RP2040**
 (https://shop.mchobby.be/product.php?id_product=2331) - a Pico-class RP2040 board with a smaller
 1 MiB flash part (vs. a Pico's 2 MiB) and a single plain LED on **GPIO23**. Built as a worked
-`--board-spec` example, picked up off [0066](../../docs/records/0066-board-support-expansion.md)'s
+`--board-spec` example, picked up off [0066](../docs/records/0066-board-support-expansion.md)'s
 survey as the smallest remaining candidate needing zero new devices - MicroPython-only, one device,
 no schematic or second firmware family to cross-check; load it with e.g.:
 
-    rp2040py micropython --board-spec boards/garatronic_pybstick26_rp2040/__init__.py:BOARD -c "<probe>"
+    rp2040py micropython --board-spec boards/garatronic_pybstick26_rp2040.py:BOARD -c "<probe>"
     PYTHONPATH=. rp2040py micropython --board-spec boards.garatronic_pybstick26_rp2040:BOARD ...
 
 Nothing is downloaded when this module is imported: `firmware` is data, and
@@ -21,7 +21,7 @@ entry) nor item 5 (a named maintainer) of 0059's promotion checklist.
 Unlike `boards/vcc_gnd_yd_rp2040/` (the reverse case - CircuitPython-only), there is no generic
 image to fall back on here either; this board simply has one firmware family.
 
-Directory named `garatronic_pybstick26_rp2040` after MicroPython's own board id
+File named `garatronic_pybstick26_rp2040.py` after MicroPython's own board id
 (`ports/rp2/boards/GARATRONIC_PYBSTICK26_RP2040`), case-normalized.
 
 Every number below is derived from a local checkout of the upstream MicroPython port at its current

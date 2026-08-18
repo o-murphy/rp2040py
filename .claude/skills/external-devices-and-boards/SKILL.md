@@ -65,8 +65,14 @@ the script's own module docstring before using it on an unfamiliar board.
      need one. Default to a single flat file under `external/`; only reach for a sub-package when a
      device is this kind of multi-file system in its own right (see CLAUDE.md's "Module layout").
 4. **Module placement**: one flat file, `src/rp2040py/external/<name>.py`, unless step 3 says
-   otherwise. Never nest a new device inside `boards/` - a board is not where a device
-   implementation lives (0059's promotion checklist item 4 exists specifically to catch this).
+   otherwise - **if the device is reusable or you intend the board to graduate into
+   `boards.BOARDS`** (0059's promotion checklist item 4 requires this: "its devices already in
+   `rp2040py.external`"). A device that is genuinely unique to one board and not meant to be
+   shared may instead live alongside it under `boards/<slug>/devices/` - that board then simply
+   isn't eligible for promotion without first moving the device out, which is exactly what item 4
+   is there to catch. Most devices belong in `rp2040py.external` regardless, since most are
+   reusable across boards by nature (an LED, a button, a display controller); this exception is for
+   the genuinely one-off case, not a way to avoid the shared location by default.
 5. **Write the unit test** - see "Testing" below before considering the device done.
 
 ## Adding a new board

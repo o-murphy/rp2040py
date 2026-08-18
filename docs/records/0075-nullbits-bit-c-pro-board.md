@@ -57,7 +57,7 @@ MicroPython's build declares no such default.
 
 ## What was built
 
-`boards/nullbits_bit_c_pro/__init__.py` - both firmware families declared, with three
+`boards/nullbits_bit_c_pro.py` - both firmware families declared, with three
 `LEDMock(gpio=N, active_low=True)` instances (red/green/blue) + `BootselButton`. Not modelled:
 RESET (pulls RUN, not a GPIO - 0057), USB-C, the RP2040's own RTC. Firmware histories fetched via
 `scripts/fetch_firmware.py list` and verified byte-for-byte against the fetched JSON - 17

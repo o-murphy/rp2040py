@@ -2,9 +2,9 @@
 - a Pico-class RP2040 board with a smaller 1 MiB flash part (vs. a Pico's 2 MiB) and **two plain
 LEDs**: green on **GPIO20** (active-low) and red on **GPIO21** (polarity not stated upstream - see
 below). Built as a worked `--board-spec` example, picked up off
-[0066](../../docs/records/0066-board-support-expansion.md)'s survey; load it with e.g.:
+[0066](../docs/records/0066-board-support-expansion.md)'s survey; load it with e.g.:
 
-    rp2040py micropython --board-spec boards/machdyne_werkzeug/__init__.py:BOARD -c "<probe>"
+    rp2040py micropython --board-spec boards/machdyne_werkzeug.py:BOARD -c "<probe>"
     PYTHONPATH=. rp2040py micropython --board-spec boards.machdyne_werkzeug:BOARD ...
 
 Nothing is downloaded when this module is imported: `firmware` is data, and
@@ -18,7 +18,7 @@ entry) nor item 5 (a named maintainer) of 0059's promotion checklist.
 **MicroPython-only, deliberately - no CircuitPython port exists for this board at all**
 (`ports/raspberrypi/boards/machdyne_werkzeug/` 404s upstream, confirmed via `gh api`).
 
-Directory named `machdyne_werkzeug` after MicroPython's own board id
+File named `machdyne_werkzeug.py` after MicroPython's own board id
 (`ports/rp2/boards/MACHDYNE_WERKZEUG`), case-normalized.
 
 Every number below is derived from a local checkout of the upstream MicroPython port at its current

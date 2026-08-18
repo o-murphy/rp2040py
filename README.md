@@ -515,23 +515,13 @@ the "3g rule" - every electrical fact cited to a real upstream source, never gue
 
 #### Ready-made example boards
 
-Worked `--board-spec` targets living in [boards/](boards/) - real third-party hardware, every
+11 worked `--board-spec` targets for real third-party hardware live in [boards/](boards/) - every
 number sourced from that board's own upstream firmware config (never guessed), live-boot-verified
-against real firmware:
-
-| Board | Firmware | Highlight |
-| --- | --- | --- |
-| [weactstudio](boards/weactstudio/__init__.py) | MicroPython (4 flash variants) + CircuitPython | Plain LED/button - the baseline example, no new device needed |
-| [vcc_gnd_yd_rp2040](boards/vcc_gnd_yd_rp2040/__init__.py) | CircuitPython only | WS2812 RGB LED, driven as CircuitPython's own *status* indicator - decodes real pixel frames with no guest code at all |
-| [waveshare_rp2040_lcd_0_96](boards/waveshare_rp2040_lcd_0_96/__init__.py) | MicroPython + CircuitPython | Onboard 160×80 ST7735S TFT panel, painted from boot under CircuitPython |
-| [waveshare_rp2040_zero](boards/waveshare_rp2040_zero/__init__.py) | MicroPython + CircuitPython | The smallest example - a single WS2812, nothing else |
-| [adafruit_feather_rp2040](boards/adafruit_feather_rp2040/__init__.py) | MicroPython + CircuitPython | LED + WS2812 - and a worked example of a marketing claim (switchable NeoPixel power) contradicted by firmware source |
-| [adafruit_itsybitsy_rp2040](boards/adafruit_itsybitsy_rp2040/__init__.py) | MicroPython + CircuitPython | LED + WS2812 (real switchable power pin) + a second BOOT button sourced from the vendor's own schematic |
-| [adafruit_qtpy_rp2040](boards/adafruit_qtpy_rp2040/__init__.py) | MicroPython + CircuitPython | WS2812 + BOOT button - the same vendor schematic pattern as ItsyBitsy, no plain LED |
-| [garatronic_pybstick26_rp2040](boards/garatronic_pybstick26_rp2040/__init__.py) | MicroPython only | Plain LED, smallest board with no CircuitPython twin |
-
-Screenshots of what the two emulated display panels actually draw are in
-[demo/README.md](demo/README.md). See [docs/records/0049](docs/records/0049-external-device-authoring-docs.md)/
+against real firmware. See
+**[docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md#ready-made-examples-in-this-repo)**
+for the full list with what each one demonstrates. Screenshots of what the two emulated display
+panels actually draw are in [demo/README.md](demo/README.md); see
+[docs/records/0049](docs/records/0049-external-device-authoring-docs.md)/
 [0059](docs/records/0059-boardspec-firmware-resolution.md) for the design history behind the
 extension points themselves.
 
@@ -624,10 +614,10 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above.
 - **A real extension point for third-party hardware** (`ExternalDevice`/`boards.BoardSpec`) -
   rp2040js has no board or device abstraction at all, only whatever's hardcoded into its own demo
-  scripts. rp2040py ships 8 worked `--board-spec` examples for real vendor boards (WeAct Studio,
-  Waveshare, VCC-GND Studio, three Adafruit boards, McHobby's PYBStick26), every electrical fact
-  cited to that board's own upstream firmware source and live-boot-verified, plus a documented
-  how-to for writing your own. See
+  scripts. rp2040py ships 11 worked `--board-spec` examples for real vendor boards (WeAct Studio,
+  Waveshare, VCC-GND Studio, three Adafruit boards, McHobby's PYBStick26, Machdyne, nullbits,
+  Pimoroni), every electrical fact cited to that board's own upstream firmware source and
+  live-boot-verified, plus a documented how-to for writing your own. See
   [External devices & custom boards](#external-devices--custom-boards) above.
 
 See [docs/reference/porting-checklist.md#known-differences-from-rp2040js](docs/reference/porting-checklist.md#known-differences-from-rp2040js)

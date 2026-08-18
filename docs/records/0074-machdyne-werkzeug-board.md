@@ -56,7 +56,7 @@ document).
 
 ## What was built
 
-`boards/machdyne_werkzeug/__init__.py` - one firmware family (MicroPython only), with
+`boards/machdyne_werkzeug.py` - one firmware family (MicroPython only), with
 `LEDMock(gpio=20, active_low=True)` + `LEDMock(gpio=21)` + `BootselButton`. Not modelled: RESET
 (pulls RUN, not a GPIO - 0057), the USB-A host port (`USBA_POWER`/`USBA_DN`/`USBA_DP`/
 `USBA_DP_PU` in `pins.csv` - a real onboard receptacle exposed as plain GPIO, out of scope for a

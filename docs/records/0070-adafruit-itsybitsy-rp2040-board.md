@@ -80,7 +80,7 @@ left for the Feather's GPIO4 button. Here it was resolved, from Adafruit's publi
 
 ## What was built
 
-`boards/adafruit_itsybitsy_rp2040/__init__.py` - both firmware families declared, with:
+`boards/adafruit_itsybitsy_rp2040.py` - both firmware families declared, with:
 
 - `LEDMock(gpio=11)`, `Ws2812(gpio=17)`, `KeyMock(gpio=13, active_high=False)`, `BootselButton`.
 - `board_with(on_pixels)` - the same closure pattern 0062/0068/0069 established.

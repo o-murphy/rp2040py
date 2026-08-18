@@ -71,14 +71,24 @@ records generally).
       [0075](0075-nullbits-bit-c-pro-board.md)** - `LEDMock.active_low` (added for
       `MACHDYNE_WERKZEUG`) used on all three at once, confirmed by both firmware ports
       independently.
-- [ ] `PIMORONI_PICOLIPO` - LED (GPIO25) + `USER_SW` pushbutton (GPIO23); CircuitPython port exists
+- [x] `PIMORONI_PICOLIPO` - LED (GPIO25) + `USER_SW` pushbutton (GPIO23); CircuitPython port exists.
+      **Done, see [0076](0076-pimoroni-picolipo-board.md)** - two flash-size variants (4 MiB
+      default + 16 MiB, `BOARD`/`BOARD_16MB`); `USER_SW` left unmodelled (no schematic found,
+      polarity not stated in either firmware port).
 - [ ] `PIMORONI_TINY2040` - RGB LED as three plain active-low GPIO LEDs (GPIO18/19/20) + `USER_SW`
-      pushbutton (GPIO23); CircuitPython port exists
+      pushbutton (GPIO23); CircuitPython port exists. **User note (2026-08-18, not yet verified
+      against source): also has 8 MiB/2 MiB flash-size variants on CircuitPython**, same
+      multi-variant shape as `PIMORONI_PICOLIPO`/`WAVESHARE_RP2040_PLUS` below - check
+      `https://adafruit-circuit-python.s3.amazonaws.com/index.html?prefix=bin/` for the real board
+      ids before building.
 - [ ] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
       LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`)
 - [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
 - [ ] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
-      Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port exists
+      Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port
+      exists. **User note (2026-08-18, not yet verified against source): also has 16 MiB/4 MiB
+      flash-size variants on CircuitPython** - same multi-variant shape `PIMORONI_PICOLIPO` turned
+      out to have; check source before assuming the single-variant summary above is complete.
 - [x] `WAVESHARE_RP2040_ZERO` - `Ws2812`/NeoPixel only (GPIO16); CircuitPython port exists. Flagged
       by the user as the one to pick up first, off
       [the board's own `board.json`](https://github.com/micropython/micropython/blob/master/ports/rp2/boards/WAVESHARE_RP2040_ZERO/board.json) -
