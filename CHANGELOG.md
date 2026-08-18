@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- `boards/garatronic_pybstick26_rp2040/` - the Garatronic/McHobby PYBStick26 RP2040 as a
-  `--board-spec` target: a single `LEDMock(gpio=23)` + `BootselButton`, MicroPython-only (no
-  CircuitPython port exists for this board). `board.json`'s own `"RGB LED"` feature tag is
-  contradicted by every real source checked (`pins.csv`, `mpconfigboard.h`, and the pico-sdk
-  header's explicit `// no PICO_DEFAULT_WS2812_PIN` comment) - modelled as a plain LED, not a
-  `Ws2812`. Smaller flash than a plain Pico (1 MiB vs. 2 MiB), `fs_start=0xa0000`/
-  `fs_blockcount=96`, confirmed by live boot. See
-  [docs/records/0073](docs/records/0073-garatronic-pybstick26-rp2040-board.md).
-
 ## [0.3.0rc1] - 2026-08-18
 
 ### Added
@@ -156,6 +146,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same diode-into-BOOTSEL button design as `adafruit_itsybitsy_rp2040` - component-for-component
   identical per Adafruit's own schematic (`SW2`/`D2`/`R16` here vs. `SW3`/`D3`/`R11` there), not
   merely similar. See [docs/records/0071](docs/records/0071-adafruit-qtpy-rp2040-board.md).
+- `boards/garatronic_pybstick26_rp2040/` - the Garatronic/McHobby PYBStick26 RP2040 as a
+  `--board-spec` target: a single `LEDMock(gpio=23)` + `BootselButton`, MicroPython-only (no
+  CircuitPython port exists for this board). `board.json`'s own `"RGB LED"` feature tag is
+  contradicted by every real source checked (`pins.csv`, `mpconfigboard.h`, and the pico-sdk
+  header's explicit `// no PICO_DEFAULT_WS2812_PIN` comment) - modelled as a plain LED, not a
+  `Ws2812`. Smaller flash than a plain Pico (1 MiB vs. 2 MiB), `fs_start=0xa0000`/
+  `fs_blockcount=96`, confirmed by live boot. See
+  [docs/records/0073](docs/records/0073-garatronic-pybstick26-rp2040-board.md).
 
 ### Known issues
 - **PIO still runs at most one instruction per CPU instruction.** That is what `SM_CLKDIV = 1`
@@ -288,6 +286,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "External devices & custom boards" as a child of "Library API" while the headings said
   otherwise. The ToC now mirrors the heading levels, and "Library API" is a top-level section
   rather than a step of "Run the demo project".
+- `README.md` reorganized for readability: a new "Quick start" section up front (install + boot
+  MicroPython in three lines, before any deep-dive content); the iOS/Android compiled-extension
+  content (which had drifted under the wrong heading, "Shell completions" instead of "Environments
+  without compiled-extension support") demoted from its own top-level subsection to an 8-line
+  `[!NOTE]` inline in Installation, pointing at
+  [docs/reference/os-compatibility.md](docs/reference/os-compatibility.md)'s fuller matrix for
+  everything else - it was a niche, iOS-specific edge case sitting prominently near the top of the
+  doc, ahead of content every reader needs; the MicroPython boot-speed benchmark `[!TIP]` trimmed
+  from ~70 lines to the headline numbers plus a link to
+  [docs/records/0013](docs/records/0013-cython-core.md); the `mpremote` subsection trimmed to its
+  two runnable examples plus a link to
+  [docs/reference/mpremote.md](docs/reference/mpremote.md), which already covers the rest under
+  matching headings. **"External devices & custom boards"** - previously one 640-word paragraph -
+  restructured into a short intro, a new "Adding your own" subsection naming both
+  [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md)
+  and the [external-devices-and-boards skill](.claude/skills/external-devices-and-boards/SKILL.md),
+  and a table of all 8 `boards/` examples (previously named only 3 - the 5 added this session
+  weren't mentioned at all). **MicroPython/CircuitPython/Kaluma's parallel "mpremote / Filesystem
+  support / WiFi" sub-structure collapsed**: `mpremote` stays MicroPython-only (the other two have
+  no raw-REPL equivalent to remote into), but `Filesystem support` and `WiFi (Pico W / CYW43439)` -
+  previously a full copy under MicroPython plus a shorter, partially-duplicated copy under
+  CircuitPython and/or Kaluma each - are now single top-level sections covering all three firmware
+  families' real differences (littlefs vs. FAT12, which flash region, auto-run semantics) in one
+  place, with each firmware's own "how to run it" section trimmed to a short pointer. **"Learn
+  more"** expanded from 2 links (rp2040js, the porting checklist) to include
+  [os-compatibility.md](docs/reference/os-compatibility.md),
+  [mpremote.md](docs/reference/mpremote.md),
+  [external-devices-and-boards.md](docs/reference/external-devices-and-boards.md), the
+  [tracker](docs/0000-TRACKER.md), and [demo/README.md](demo/README.md) - all of which the rest of
+  the README now links to inline but which weren't indexed anywhere. **"Differences from upstream
+  rp2040js"** gained a bullet for the `ExternalDevice`/`BoardSpec` extension point itself (8 worked
+  example boards) - arguably the single biggest differentiator from rp2040js, which has no board/
+  device abstraction at all, and it was missing from this list entirely.
 
 ## [0.2.5] - 2026-08-17
 

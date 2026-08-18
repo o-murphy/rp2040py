@@ -23,23 +23,37 @@ See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) f
 > it properly involves. Single-core firmware — the default for MicroPython, CircuitPython, Kaluma
 > and the pico-examples — is unaffected.
 
+## Quick start
+
+```sh
+pip install rp2040py
+rp2040py micropython          # boots real MicroPython firmware, drops you into its REPL (Ctrl+X to quit)
+rp2040py micropython -c "print(1 + 1)"   # or run one command non-interactively and exit
+```
+
+That's it — no manual firmware download, no board wiring. Everything below is depth: more firmware
+families (CircuitPython, Kaluma), WiFi, filesystems, a programmatic API, and how to add your own
+boards/devices. See [Run the demo project](#run-the-demo-project) for the full CLI, or jump straight
+to [External devices & custom boards](#external-devices--custom-boards) if you're here to extend it.
+
 ## Table of Contents
 
+- [Quick start](#quick-start)
 - [Installation](#installation)
-  - [Environments without compiled-extension support (iOS)](#environments-without-compiled-extension-support-ios)
   - [Shell completions](#shell-completions)
 - [Run the demo project](#run-the-demo-project)
   - [Native code](#native-code)
   - [MicroPython code](#micropython-code)
     - [mpremote](#mpremote)
-    - [Filesystem support](#filesystem-support)
-    - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
   - [CircuitPython code](#circuitpython-code)
-    - [Filesystem support](#filesystem-support-1)
   - [Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)](#kaluma-other-usb-cdc-firmware-not-micropythoncircuitpython)
+  - [Filesystem support](#filesystem-support)
+  - [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
   - [Bootrom revisions](#bootrom-revisions)
 - [Library API](#library-api)
   - [External devices & custom boards](#external-devices--custom-boards)
+    - [Adding your own](#adding-your-own)
+    - [Ready-made example boards](#ready-made-example-boards)
 - [Performance](#performance)
 - [Differences from upstream rp2040js](#differences-from-upstream-rp2040js)
 - [Used by](#used-by)
@@ -64,28 +78,14 @@ Any of these gives you the `rp2040py` console script (`python -m rp2040py` works
 the emulator is runnable without a git checkout - see [Run the demo project](#run-the-demo-project)
 below for the checkout-equivalent commands.
 
-### Environments without compiled-extension support (iOS)
-
-`rp2040py` ships an optional Cython-accelerated backend as a compiled extension (see
-[Performance](#performance)) alongside a pure-Python fallback with identical behavior - but a
-handful of environments, fully sandboxed by the OS with no dynamic-library loading at all, can't
-load compiled `.so` extensions or import native code dynamically. So far that's confirmed only for
-iOS app runtimes like [Pythonista](http://omz-software.com/pythonista/) and
-[PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - **not** Android: both
-[Termux](https://github.com/termux) and [Python 3 IDE (Pydroid
-3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) load the compiled
-`rp2040py.native` extension fine, confirmed by hand (see "Tested" below). A plain `pip install
-rp2040py` in one of the affected iOS environments resolves to a platform-specific wheel that simply
-won't load. Force the pure-Python universal wheel instead:
-
-```sh
-pip download rp2040py --only-binary=:all: --platform any --abi none
-pip install rp2040py-*.whl --upgrade
-```
-
-This is the exact same artifact `rp2040py`'s own release pipeline builds and publishes for every
-release (`RP2040PY_SKIP_NATIVE_BUILD=1`, see `.github/workflows/publish.yml`'s `build-pure` job) -
-not a degraded or unsupported build, just the emulator without the compiled speedup.
+> [!NOTE]
+> A handful of fully-sandboxed environments (iOS app runtimes - Pythonista, PythonIDE) can't load
+> `rp2040py`'s compiled extension; plain `pip install rp2040py` resolves to a wheel that won't
+> load there. Force the pure-Python one instead: `pip download rp2040py --only-binary=:all:
+> --platform any --abi none && pip install rp2040py-*.whl --upgrade` (the same artifact the
+> release pipeline itself publishes, not a degraded build). Full platform × feature matrix -
+> including Android, which works fine with the compiled extension - in
+> [docs/reference/os-compatibility.md](docs/reference/os-compatibility.md).
 
 ### Shell completions
 
@@ -100,41 +100,6 @@ source ~/.bashrc   # or ~/.zshrc
 
 This appends the shell's `register-python-argcomplete` hook to `~/.bashrc`/`~/.zshrc` (detected
 from `$SHELL`) - a one-time setup step, not something run on every invocation.
-
-To confirm you actually got it:
-- **Before installing**: the downloaded file's name - a genuine pure-Python wheel is
-  `rp2040py-<version>-py3-none-any.whl`, with no platform/ABI tag (e.g. no `cp310-abi3-manylinux...`)
-  anywhere in the filename.
-- **At runtime**: `rp2040py.rp2040.RP2040.__module__` is `"rp2040py._rp2040"` (pure Python) rather
-  than `"rp2040py.native._rp2040"` (compiled) - equivalently, watch for the `UserWarning` ("Native
-  extensions are not available...") `rp2040py.native` raises on import once the compiled backend
-  isn't present, which is the expected, harmless case here rather than an error.
-
-**Tested:**
-- iOS
-  - [Pythonista](http://omz-software.com/pythonista/) - full support (no `[fs]` optional
-    dependency); `mpremote` itself now confirmed to work over `--tcp-port`, but running the
-    emulator and `mpremote` **at the same time** did not work on-device - the app's sandbox appears
-    to only run one Python process per app instance, with no real subprocess/multi-process support,
-    so there's no way to have `rp2040py micropython --tcp-port ...` and a separate `mpremote`
-    invocation running concurrently the way this works on a normal OS. This is a constraint of the
-    app sandbox itself, not something `rp2040py`/`rp2040py mpremote` can patch around (unlike the
-    `list_ports` `ImportError` below).
-  - [PythonIDE](https://apps.apple.com/ua/app/pythonide/id6753987304) - full support (no `[fs]`
-    optional dependency); same `mpremote`-works-but-not-concurrently-with-the-emulator caveat as
-    Pythonista above.
-- Android
-  - [Termux](https://github.com/termux) - full support, including `mpremote` via `rp2040py
-    mpremote` (the real `mpremote` binary alone still fails - pySerial's `list_ports` has no
-    Android backend and raises `ImportError` at import time regardless of which subcommand you
-    run; `rp2040py mpremote` patches around it - see
-    [docs/reference/mpremote.md](docs/reference/mpremote.md#androidtermux-and-ios-pyserials-list_ports-importerror)).
-    The compiled `rp2040py.native` (Cython) extension loads and runs fine here too - confirmed by
-    hand, no pure-Python fallback needed.
-  - [Python 3 IDE (Pydroid 3)](https://play.google.com/store/apps/details?id=ru.iiec.pydroid3) -
-    full support, including `mpremote` via `rp2040py mpremote` over `--tcp-port` (same caveat and
-    same fix as Termux above) and the compiled `rp2040py.native` (Cython) extension, both confirmed
-    by hand.
 
 ## Run the demo project
 
@@ -202,73 +167,24 @@ file already on disk:
 
 > [!TIP]
 > Booting real firmware means executing millions of Thumb instructions through a pure-Python
-> interpreter, which is dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js.
-> Measured with [demo/benchmark.py](demo/benchmark.py) booting MicroPython 1.28 + littlefs, then
-> running a typical resident script (`while True: print(...); time.sleep(1)`, same as
-> [ci-micropython.yml](.github/workflows/ci-micropython.yml)'s fixture) to its first output:
+> interpreter - dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js, though the
+> compiled `rp2040py.native` backend (on by default, see [Performance](#performance) below) closes
+> most of that gap:
 >
-> | Interpreter | Time |
+> | Interpreter | Time to a resident script's first output (MicroPython 1.28 boot) |
 > |---|---|
 > | CPython 3.10 | 133.3s |
-> | CPython 3.10 + `rp2040py.native` (Cython, on by default) | 11.3s (~11.8x) |
-> | CPython 3.14 + `PYTHON_JIT=1` | 79.9s (~1.7x) |
+> | CPython 3.10 + `rp2040py.native` (on by default) | 11.3s (~11.8x) |
 > | PyPy 3.10 | 8.9s (~15x) |
 >
-> Re-measured 2026-08-14 (best-of-N, 3-5 runs each) on a 4-core Intel Xeon @2.8GHz shared/containerised host,
-> booting MicroPython **1.28.0** to the resident script's first output; run-to-run contention on
-> that host reached ~2x, so these are best-of-N minima, not single runs. Absolute seconds are
-> host-specific - the *ratios* and ordering are the portable takeaway. The headline change since the
-> original round: **the native core has closed the gap to PyPy** - it was ~3x slower than PyPy then
-> (25.83s vs 8.75s), and is ~1.3x now (11.3s vs 8.9s), after the native `_execute_batch()` and
-> `SimulationClock` ports landed (records
-> [0031](docs/records/0031-pio-cython-tick-batching.md)/[0034](docs/records/0034-execute-batch-native-port.md)/[0039](docs/records/0039-simulation-clock-native-port.md)).
-> The historical/analytical figures in the paragraphs below (46.65s→25.83s Cython history, the
-> 33.90s abi3 gap, the 1.21-vs-1.28 numbers) are kept from that original measurement round.
->
-> The `rp2040py.native` figure improved from an earlier 46.65s (~4.1x) after fixing two Cython
-> compilation gotchas in the bus/interpreter hot path (untyped `address`/`value` parameters forcing
-> a `PyLong` box on every memory access, and bare `0x80000000`+ hex literals silently compiling as
-> Python-object constants instead of C literals) - see
-> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md#follow-up-two-more-boxing-sources-found-by-reading-the-generated-c-not-by-guessing)
-> for the full writeup, including why PyPy's gap didn't close by the same amount (a real boot
-> spends a large, unchanged share of its time in still-Python peripheral emulation that these fixes
-> don't touch). **This row is CPython 3.10 specifically** (this project's default target, and below
-> the abi3 floor - see [Performance](#performance) below): CPython 3.11+ actually measures slower
-> in absolute terms (33.90s, ~5.6x) on the *same* fixed source, purely from the stable-ABI
-> (`Py_LIMITED_API`) build every 3.11+ wheel uses - see the same [record 0013](docs/records/0013-cython-core.md) section for that gap
-> too, found (and initially mismeasured!) while producing these very numbers.
->
-> The `rp2040py.native` row is what most installs actually get with no extra effort - see
-> [Performance](#performance) below. It doesn't help PyPy (compilation is deliberately skipped
-> there - PyPy's own JIT already does better on its own than routing through `rp2040py.native`'s
-> CPython-C-API-based extension would), so for CPU-bound runs PyPy is still the clear winner - with
-> one measured exception: on a Pico W CYW43 boot, after the GPIO/PIO ports in
-> [0047](docs/records/0047-cyw43-pio-gpio-hotpath.md), PyPy's lead narrows to ~1.16x, i.e. the two
-> are close enough there that it stops being an obvious choice.
-> `uv run --python pypy3.10 --no-dev -- rp2040py micropython ...` (or `... -- python
-> demo/micropython_run.py ...` from a checkout). See
-> [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js) for the full breakdown
-> (including a synthetic instructions/sec benchmark) and CI's `python_runtime` matrix, which tests
-> all three.
->
-> This is also why **1.21 is the recommended version**: reaching the bare REPL prompt is fast on
-> *both* 1.21 and 1.28 (well under a second, whether or not a littlefs `main.py` auto-runs first) -
-> the gap above is specifically about *running* a script shaped like the one above afterward. On
-> the same machine and CPython 3.10, that same script reaches its first `print()` in 3.72s
-> (1,418,835 steps) under 1.21 versus 188.98s (64,679,599 steps) under 1.28 - identical instruction
-> counts run-to-run (this is deterministic, not host-speed noise), so the ~45x gap is a real
-> difference in how much work 1.28 does per loop iteration, not an emulator bug: profiling shows
-> the core essentially never reaches `WFI`/idle during that time, so it's real Thumb instructions
-> being interpreted, not something hanging. 1.28 still boots and mounts a `mklittlefs`-built
-> littlefs image correctly (that's exactly the version pinned `disk_version` fixed compatibility
-> for, see below); it's simply much more expensive to actually *run* typical resident scripts on.
->
-> Core-level per-instruction throughput work continues independently of this version gap (most
-> recently: `RP2040.write_uint32()` was checking a peripheral dict lookup before cheap RAM/flash
-> range comparisons - see [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js) for
-> the running log). These are general wins, not something that closes the 1.21-vs-1.28 gap itself -
-> that gap is real work MicroPython 1.28's own compiled firmware does per loop iteration, not
-> something this project's emulator code controls.
+> This is also why **1.21 is the recommended default version**: both 1.21 and 1.28 reach the bare
+> REPL prompt in well under a second, but *running* a typical resident script afterward is ~45x
+> more expensive under 1.28 than 1.21 - real work MicroPython 1.28's own firmware does per loop
+> iteration, not an emulator bug. See
+> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md) for the full measured
+> breakdown (methodology, PyPy/CPython-JIT comparisons, the 1.21-vs-1.28 instruction-count numbers)
+> and [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
+> for a synthetic instructions/sec benchmark across all three runtimes.
 
 ```sh
 rp2040py micropython --image 1.28.0
@@ -294,12 +210,8 @@ rp2040py micropython path/to/script.py
 #### mpremote
 
 `--tcp-port <port>` serves the console over a plain TCP socket instead of this process's own
-stdio - for tools that expect a serial port but can't open one, notably
-[`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) in a sandboxed
-environment with no serial support at all (e.g.
-[Pythonista](#environments-without-compiled-extension-support-ios), see above). No
-client-side patching needed - `mpremote connect socket://host:port` just talks directly
-to rp2040py, via pySerial's own built-in `socket://` URL support:
+stdio, so [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) can connect
+directly via pySerial's built-in `socket://` support - no client-side patching needed:
 
 ```sh
 rp2040py micropython --tcp-port 4321
@@ -308,135 +220,17 @@ mpremote connect socket://127.0.0.1:4321 exec "print(1 + 1)"
 mpremote connect socket://127.0.0.1:4321 fs cp your_script.py :main.py
 ```
 
-`--pty` (POSIX only) is the alternative: a real pseudo-terminal instead of a TCP socket, whose
-slave side (e.g. `/dev/pts/3`) is a genuine POSIX serial device path - everything `--tcp-port`
-supports also works here, *plus* `mpremote`'s own bare interactive REPL, which does not work over
-`--tcp-port`'s `socket://` transport through the real `mpremote` binary (see below) - though
-`rp2040py mpremote` (a thin proxy subcommand, same arguments as `mpremote` itself) patches around
-that specific crash, so `rp2040py mpremote connect socket://host:port repl` works too, no `--pty`
-needed.
+`--pty` (POSIX only) is the alternative - a real pseudo-terminal, which additionally supports
+`mpremote`'s own bare interactive REPL (`rp2040py mpremote`, a thin proxy subcommand, gets that
+working over `--tcp-port` too, patching around an upstream `mpremote` bug).
 
-See **[docs/reference/mpremote.md](docs/reference/mpremote.md)** for the full picture: connection details for both
-flags, the `rp2040py mpremote` proxy and the upstream bug it patches around
-([micropython#18660](https://github.com/micropython/micropython/issues/18660#issuecomment-5239811170)),
-how to quit the emulator when `mpremote` owns the console, and an explicit list of which `mpremote`
-commands are verified working against each transport (`exec`, `fs`, `mount`, `run`,
-`reset`/`bootloader`, the interactive `repl` over `--pty` or `rp2040py mpremote`, ...) versus the
-remaining documented limitations (the real `mpremote` binary's own bare interactive REPL over
-`--tcp-port`, `--pty` on Windows, and `df` on MicroPython ≤1.21).
+See **[docs/reference/mpremote.md](docs/reference/mpremote.md)** for the full picture: connection
+details for both flags, the proxy and the bug it patches around, how to quit the emulator when
+`mpremote` owns the console, and exactly which `mpremote` commands are verified working where.
 
-#### Filesystem support
-
-With MicroPython, you can use the filesystem on the Pico. This becomes useful as more than one script file is used in your code. Build a [LittleFS](https://github.com/littlefs-project/littlefs) formatted filesystem image (see `mklittlefs` below) and pass it with `--littlefs path/to/littlefs.img`, and your `main.py` will be automatically started from there (it's silently skipped, not an error, if the file doesn't exist - but it's never loaded unless `--littlefs` is given explicitly, even if a `littlefs.img` happens to sit in the current directory).
-
-The `mklittlefs` subcommand builds such an image (requires the optional `fs` extra: `pip install
-rp2040py[fs]` / `uv sync --extra fs`). Every file keeps its own basename; pass `--main` to mark one
-of them as `main.py` (auto-run on boot) - omit it entirely for a filesystem with no auto-run
-script, e.g. modules staged for a raw-REPL-driven test, or omit `files` entirely for an empty
-formatted image. Always builds fresh - pass `-f`/`--force` to overwrite an existing `--output`
-(there's no "add these files to the existing image" mode; rebuild from the full file list):
-
-```sh
-rp2040py mklittlefs -o littlefs.img your_main.py your.py files.py here.py --main your_main.py
-rp2040py mklittlefs -o littlefs.img --force your_main.py --main your_main.py  # to overwrite it later
-```
-
-`--disk-version {2.0,2.1}` selects the littlefs on-disk format (defaults to `2.0`): MicroPython
-<=1.21's bundled littlefs can only mount `2.0`, while 1.28's reads both - see
-[docs/records/0003-littlefs-image-format.md](docs/records/0003-littlefs-image-format.md#littlefs-image-format-vs-old-micropython-not-actually-a-port-bug)
-for why.
-
-`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` to a known
-firmware's own filesystem layout instead of spelling them out by hand (mutually exclusive with
-passing them explicitly) - see the Kaluma section below for why its layout differs from
-MicroPython/CircuitPython's.
-
-The filesystem is writeable - MicroPython's `os`/`rp2.Flash` calls go through a real JEDEC
-SPI-NOR flash command emulation in the SSI peripheral (`RPSSI`), the same peripheral real
-hardware uses to erase/program flash.
-
-`--dump-fs <path>` dumps the device's filesystem flash region back out to a local file when the
-`micropython`/`kaluma` subcommand exits (Ctrl+X, `--expect-text`, or the end of a `-c`/`-m`/script
-run) - the same layout `--littlefs path/to/littlefs.img` reads back in, so a dump can be fed
-straight back with `--littlefs`/`--dump-fs` pointing at the same path for persistence across runs:
-
-```sh
-rp2040py micropython --littlefs littlefs.img --dump-fs littlefs.img -c "open('log.txt', 'a').write('run\n')"
-```
-
-> [!TIP]
-> This makes `--dump-fs` a `littlefs-python`-free alternative to `mklittlefs`: instead of building
-> the image on the host with `littlefs-python`, boot the real emulated MicroPython firmware
-> against blank flash, write files to it the normal way (`open(path, "wb").write(data)`, exactly
-> as code running on a real Pico would), and dump the resulting filesystem - built by MicroPython's
-> own bundled littlefs, not a separately-installed library. [demo/mklittlefs_dump.py](demo/mklittlefs_dump.py)
-> generates such a script from a list of local files (mirroring `mklittlefs`'s own `--main`
-> semantics) for use as the positional `<filename>` argument:
->
-> ```sh
-> python demo/mklittlefs_dump.py your_main.py your.py files.py here.py --main your_main.py \
->     --output flash_script.py
-> rp2040py micropython --dump-fs littlefs.img flash_script.py
-> ```
->
-> Useful when the `fs` extra isn't installed, or to build against exactly the same littlefs
-> version/behavior a given firmware boots with instead of whatever `littlefs-python` happens to
-> bundle.
-
-#### WiFi (Pico W / CYW43439)
-
-`--board pico_w` (default: `pico`) attaches an emulated CYW43439 - the WiFi/Bluetooth chip on a
-real Pico W - over the same gSPI bus real firmware drives it through:
-
-```sh
-rp2040py micropython --board pico_w
-```
-
-`network.WLAN` works against it: `nic.active(True)`, `nic.scan()`, and `nic.connect(ssid, key)`
-all complete, answered by a fixed fake `"RP2040PY-GUEST"` access point built into the emulation.
-The association is fake, but **the network behind it is real** - a NAT bridge gives the guest a
-DHCP lease, answers its ARP, and splices its TCP connections and UDP datagrams onto real sockets on
-your machine, so code running on the emulated Pico W reaches the actual internet. Live-boot
-verified against real, unmodified MicroPython firmware on both 1.23.0 and 1.28.0:
-
-```python
-import network, socket, mip, ntptime
-
-nic = network.WLAN(network.WLAN.IF_STA)
-nic.active(True)
-print(nic.scan())  # [(b'RP2040PY-GUEST', ...)]
-nic.connect("RP2040PY-GUEST", "key")  # any password is accepted
-print(nic.isconnected(), nic.ipconfig("addr4"))  # True ('10.0.0.2', '255.255.255.0')
-
-s = socket.socket()  # real TCP, out through your host's network
-s.connect(("1.1.1.1", 80))
-s.send(b"GET / HTTP/1.0\r\n\r\n")
-print(s.recv(64))  # b'HTTP/1.1 301 Moved Permanently\r\n...'
-
-mip.install("os-path")  # real DNS + a real HTTPS download
-ntptime.settime()  # real NTP, sets the emulated RTC
-nic.disconnect()  # link really goes down: isconnected() -> False, status() -> 0
-```
-
-TLS works through the same path (the reflector relays bytes without inspecting them), and so do
-WebSockets over both `ws://` and `wss://`. The same emulated chip also serves **CircuitPython**
-(`wifi`/`socketpool`) and **Kaluma** (`require('wifi')`/`net`) - three independent network stacks
-over one bus, none of them needing anything CYW43-specific from the emulator.
-
-What is **not** emulated, so you don't discover it the hard way:
-
-- The AP is a fixture. `scan()` always returns the one fake `"RP2040PY-GUEST"` network, any
-  password "succeeds," and there's no hidden-SSID or auth-failure path to test against.
-- No AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest only (the guest/gateway IP and MAC are
-  fixed constants, with no config surface yet).
-- No flow-control backpressure from the real destination onto the guest: the emulator always
-  advertises a fixed TCP receive window, so a guest that outran a slow destination would grow the
-  host process's socket buffer rather than being told to slow down. An emulated Cortex-M0 can't
-  realistically outrun a real socket, which is why this hasn't mattered in practice.
-
-See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for what's emulated at the
-gSPI/SDPCM protocol level and [docs/records/0048-cyw43-nat-reflector.md](docs/records/0048-cyw43-nat-reflector.md)
-for the network bridge (how the reflector works, and the full list of what's still open).
+Filesystem support and WiFi both work here too, and cover MicroPython/CircuitPython/Kaluma in one
+place below - see [Filesystem support](#filesystem-support) and
+[WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439).
 
 ### CircuitPython code
 
@@ -449,44 +243,10 @@ rp2040py micropython --circuitpython
 and start the CircuitPython REPL! As with MicroPython, the firmware (**8.0.2** by default) is
 downloaded automatically on first use; a different version or a local file can be given via
 `--image` (e.g. `--image 10.2.1` or a path to an already-downloaded UF2). The rest of the experience
-is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc).
-
-
-WiFi works here too: `--board pico_w` gives CircuitPython's `wifi`/`socketpool` the same emulated
-CYW43439 and NAT bridge described under [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above -
-`wifi.radio.connect()`, a DHCP lease, and real TCP/DNS out to the internet. See
-[tests/circuitpython/main-cyw43.py](tests/circuitpython/main-cyw43.py) for a runnable example.
-Note that CircuitPython enforces WPA2's 8-64 character passphrase rule client-side, so the
-password you pass must be at least 8 characters even though the emulated AP accepts anything.
-
-#### Filesystem support
-
-For CircuitPython, you can create a FAT12 filesystem in Linux using the `truncate` and `mkfs.vfat` utilities:
-
-```shell
-truncate fat12.img -s 1M  # make the image file
-mkfs.vfat -F12 -S512 fat12.img  # create the FAT12 filesystem
-```
-
-You can then mount the filesystem image and add files to it:
-
-```shell
-mkdir fat12  # create the mounting folder if needed
-sudo mount -o loop fat12.img fat12/  # mount the filesystem to the folder
-sudo cp code.py fat12/  # copy code.py to the filesystem
-sudo umount fat12/  # unmount the filesystem
-```
-
-Then pass it explicitly with `--fat12` (no default - `fat12.img` sitting in the current directory
-is never picked up implicitly):
-
-```sh
-rp2040py micropython --circuitpython --fat12 fat12.img
-```
-
-CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython's
-`os`/`rp2.Flash` does, so this hasn't been separately exercised - but the underlying flash-write
-path (see the MicroPython filesystem support section) is the same SSI peripheral either way.
+is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc). Filesystem support
+(a FAT12 image, not littlefs) and WiFi both work here too - see
+[Filesystem support](#filesystem-support) and [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
+below, which cover all three firmware families in one place.
 
 ### Kaluma (other USB-CDC firmware, not MicroPython/CircuitPython)
 
@@ -516,52 +276,20 @@ auto-executes on every boot:
 rp2040py kaluma your_script.js
 ```
 
-`--board pico_w` works here too, with the same emulated CYW43439 and NAT bridge the MicroPython
-section describes - Kaluma's own `require('wifi')` scans, joins, gets a DHCP lease, and opens real
-`net.Socket` connections to the internet through it. `tests/kaluma/main-cyw43.js` is a runnable
-example.
+`--board pico_w` works here too - Kaluma's own `require('wifi')` scans, joins, gets a DHCP lease,
+and opens real `net.Socket` connections to the internet through the same bridge described under
+[WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) below (`tests/kaluma/main-cyw43.js` is a
+runnable example), and filesystem support is covered under
+[Filesystem support](#filesystem-support) below too, alongside MicroPython/CircuitPython's.
 
 Give it a few real seconds after connecting before expecting output - like MicroPython, booting
 real firmware through an interpreted emulator takes actual wall-clock time (JerryScript engine
 init, then running your script), not something `--expect-text` needs to work around, just something
 to expect if driving this non-interactively.
 
-Separately, Kaluma has its own pluggable littlefs-backed filesystem (see
-[its docs](https://kalumajs.org/docs/api/file-system)), mounted from a 512K region of flash with
-4096-byte blocks - a *different* flash region than the user-program one above, with no auto-run
-semantics of its own (plain storage, accessible from JS via `require('fs')`). Build a compatible
-image with `mklittlefs` and pass it via `--littlefs` explicitly (no default - unlike MicroPython's
-`--littlefs`, it's never picked up implicitly, even from a `kaluma_littlefs.img` sitting in the
-current directory):
-
-```sh
-rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
-rp2040py kaluma --littlefs kaluma_littlefs.img
-```
-
-`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` for a known
-firmware's filesystem layout (mutually exclusive with passing them explicitly) - omit both for
-MicroPython's own defaults.
-
-`--dump-fs <path>` works here too, dumping the same littlefs-formatted region back out on exit -
-but unlike `micropython`, `kaluma` has no non-interactive exec mode to script filesystem writes
-through (no `-c`/`<filename>` raw-REPL equivalent, see above), so the `mklittlefs`-without-
-`littlefs-python` trick above doesn't apply the same way; use it interactively via `require('fs')`
-at the REPL instead, or stick with `mklittlefs`.
-
 `--tcp-port <port>`/`--pty` also work here, same as `micropython` - see [mpremote](#mpremote) above
 (that section is `mpremote`-specific, but the underlying mechanism, a plain socket/pty serving the
 console instead of this process's own stdio, is not).
-
-> [!NOTE]
-> Without a valid `--littlefs` image, `board.js`'s unconditional mount-at-startup logs `Bad block
-> at 0x0`/`Superblock 0x0 has become unwritable`/`Error: No space left on device` against the
-> unformatted flash region - purely cosmetic, Kaluma catches and prints the error without aborting,
-> so boot and `<script.js>` auto-run both continue normally past it. This used to reproduce even
-> against a validly-built `mklittlefs` image, not just blank flash - no longer reproduced after the
-> SSI flash-read/write fixes in `docs/records/0008-ssi-flash-write.md` (a real `--target kaluma` image now mounts and
-> reads/writes cleanly, verified via `tests/kaluma/index-flash-rw.js`), though that wasn't a
-> deliberate target of those fixes and hasn't been separately root-caused - flag it if it resurfaces.
 
 Kaluma prints its "Welcome to Kaluma" banner exactly once, right at boot - but that's before the
 emulated USB-CDC connection to the host is actually up, so (same as real hardware racing a host
@@ -571,6 +299,129 @@ doesn't send anything to work around this - type `.hi` yourself at the prompt to
 banner on demand if you need to see it; if you're scripting against a device's output instead of
 typing at it interactively, stage a `<script.js>` and match against *its* output, which isn't racy
 (see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml), which does exactly that).
+
+### Filesystem support
+
+`mklittlefs` builds a writeable [LittleFS](https://github.com/littlefs-project/littlefs)-formatted
+image on the host (needs the optional `fs` extra: `pip install rp2040py[fs]` / `uv sync --extra
+fs`) - shared by MicroPython and Kaluma, which both boot from real littlefs flash:
+
+```sh
+rp2040py mklittlefs -o littlefs.img your_main.py your.py files.py here.py --main your_main.py
+```
+
+Every file keeps its own basename; `--main` marks one as auto-run on boot (omit it for a
+filesystem with no auto-run script, or omit `files` entirely for an empty formatted image).
+Always builds fresh - pass `-f`/`--force` to overwrite an existing `--output`.
+`--target {micropython,circuitpython,kaluma}` presets `--block-size`/`--block-count` to a known
+firmware's own layout instead of spelling them out by hand (mutually exclusive with passing them
+explicitly - the three differ, see the per-firmware notes below). `--disk-version {2.0,2.1}`
+selects the littlefs on-disk format (defaults to `2.0`: MicroPython <=1.21's bundled littlefs can
+only mount `2.0`, 1.28's reads both - see
+[docs/records/0003](docs/records/0003-littlefs-image-format.md)).
+
+- **MicroPython**: `--littlefs path/to/littlefs.img` mounts it and auto-runs `main.py` if present
+  (silently skipped, not an error, if it isn't - but never loaded at all unless `--littlefs` is
+  given explicitly). The filesystem is writeable at runtime - `os`/`rp2.Flash` calls go through a
+  real JEDEC SPI-NOR command emulation in the SSI peripheral (`RPSSI`), the same one real flash
+  hardware uses.
+- **Kaluma**: its own pluggable littlefs-backed filesystem (see
+  [its docs](https://kalumajs.org/docs/api/file-system)) lives in a *different*, fixed 512K flash
+  region (4096-byte blocks) than the `<script.js>` user-program staging area above, with no
+  auto-run semantics of its own - plain storage, accessed from JS via `require('fs')`. Pass it via
+  `--littlefs` explicitly (never picked up implicitly, even from a `kaluma_littlefs.img` in the
+  current directory):
+
+  ```sh
+  rp2040py mklittlefs -o kaluma_littlefs.img --target kaluma your_script.js
+  rp2040py kaluma --littlefs kaluma_littlefs.img
+  ```
+
+  Without a valid image, `board.js`'s unconditional mount-at-startup logs cosmetic `Bad block`/
+  `Superblock ... unwritable`/`No space left on device` errors against unformatted flash - Kaluma
+  catches and prints them without aborting, so boot and `<script.js>` auto-run continue normally.
+- **CircuitPython**: a FAT12 image instead of littlefs - build one with `truncate`/`mkfs.vfat`
+  (not `mklittlefs`) and pass it via `--fat12` (no default, never picked up implicitly):
+
+  ```sh
+  truncate fat12.img -s 1M && mkfs.vfat -F12 -S512 fat12.img
+  mkdir fat12 && sudo mount -o loop fat12.img fat12/ && sudo cp code.py fat12/ && sudo umount fat12/
+  rp2040py micropython --circuitpython --fat12 fat12.img
+  ```
+
+  CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython does,
+  so this path hasn't been separately exercised - the underlying flash-write mechanism is the same
+  SSI peripheral either way.
+
+`--dump-fs <path>` dumps a device's littlefs flash region back out to a local file on exit (Ctrl+X,
+`--expect-text`, or the end of a run) - the same layout `--littlefs` reads back in, so it
+round-trips for persistence across runs. Works for both **MicroPython** and **Kaluma**; MicroPython
+additionally supports scripting it non-interactively via `-c`/`-m`/`<filename>` (see
+[demo/mklittlefs_dump.py](demo/mklittlefs_dump.py), which builds such a script from local files) -
+Kaluma has no non-interactive exec mode, so use `require('fs')` at its REPL instead. This makes
+`--dump-fs` a `littlefs-python`-free alternative to `mklittlefs` on either firmware: boot against
+blank flash, write files the normal way, dump the result - built by that firmware's own bundled
+littlefs, not a separately-installed library.
+
+### WiFi (Pico W / CYW43439)
+
+`--board pico_w` (default: `pico`, any firmware) attaches an emulated CYW43439 - the WiFi/Bluetooth
+chip on a real Pico W - over the same gSPI bus real firmware drives it through. `network.WLAN`
+(MicroPython), `wifi`/`socketpool` (CircuitPython), and `require('wifi')`/`net` (Kaluma) all work
+against it - three independent network stacks over one bus, none of them needing anything
+CYW43-specific from the emulator:
+
+```sh
+rp2040py micropython --board pico_w
+```
+
+`nic.active(True)`, `nic.scan()`, and `nic.connect(ssid, key)` all complete, answered by a fixed
+fake `"RP2040PY-GUEST"` access point built into the emulation. The association is fake, but **the
+network behind it is real** - a NAT bridge gives the guest a DHCP lease, answers its ARP, and
+splices its TCP connections and UDP datagrams onto real sockets on your machine, so code running
+on the emulated Pico W reaches the actual internet. Live-boot verified against real, unmodified
+MicroPython firmware on both 1.23.0 and 1.28.0:
+
+```python
+import network, socket, mip, ntptime
+
+nic = network.WLAN(network.WLAN.IF_STA)
+nic.active(True)
+print(nic.scan())  # [(b'RP2040PY-GUEST', ...)]
+nic.connect("RP2040PY-GUEST", "key")  # any password is accepted
+print(nic.isconnected(), nic.ipconfig("addr4"))  # True ('10.0.0.2', '255.255.255.0')
+
+s = socket.socket()  # real TCP, out through your host's network
+s.connect(("1.1.1.1", 80))
+s.send(b"GET / HTTP/1.0\r\n\r\n")
+print(s.recv(64))  # b'HTTP/1.1 301 Moved Permanently\r\n...'
+
+mip.install("os-path")  # real DNS + a real HTTPS download
+ntptime.settime()  # real NTP, sets the emulated RTC
+nic.disconnect()  # link really goes down: isconnected() -> False, status() -> 0
+```
+
+TLS works through the same path (the reflector relays bytes without inspecting them), and so do
+WebSockets over both `ws://` and `wss://`. CircuitPython
+([tests/circuitpython/main-cyw43.py](tests/circuitpython/main-cyw43.py)) and Kaluma
+(`tests/kaluma/main-cyw43.js`) have their own runnable examples; CircuitPython additionally
+enforces WPA2's 8-64 character passphrase rule client-side, so the password you pass must be at
+least 8 characters even though the emulated AP accepts anything.
+
+What is **not** emulated, so you don't discover it the hard way:
+
+- The AP is a fixture. `scan()` always returns the one fake `"RP2040PY-GUEST"` network, any
+  password "succeeds," and there's no hidden-SSID or auth-failure path to test against.
+- No AP mode (`network.WLAN.IF_AP`), no IPv6, and one guest only (the guest/gateway IP and MAC are
+  fixed constants, with no config surface yet).
+- No flow-control backpressure from the real destination onto the guest: the emulator always
+  advertises a fixed TCP receive window, so a guest that outran a slow destination would grow the
+  host process's socket buffer rather than being told to slow down. An emulated Cortex-M0 can't
+  realistically outrun a real socket, which is why this hasn't mattered in practice.
+
+See [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) for what's emulated at the
+gSPI/SDPCM protocol level and [docs/records/0048-cyw43-nat-reflector.md](docs/records/0048-cyw43-nat-reflector.md)
+for the network bridge (how the reflector works, and the full list of what's still open).
 
 ### Bootrom revisions
 
@@ -636,7 +487,53 @@ Both share one `asyncio.Lock` per device: since the device only has a single REP
 
 ### External devices & custom boards
 
-Beyond the built-in `--board {pico,pico_w}` presets, the emulator has a real `ExternalDevice` extension point (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets wired up via `attach_external_devices()`. Seven devices already ship in-tree this way (the onboard LED, the BOOTSEL button, a generic button/key, the CYW43439 WiFi chip behind `pico_w`, a Waveshare 2.9″ e-Paper panel, an ST7735S TFT controller, and a WS2812/WS2812B "NeoPixel" RGB LED). Boards are just as open: `boards.BoardSpec` (what `--board` itself resolves to internally) is a public dataclass you can build your own instance of - your own device mix on an existing firmware family, or a fully custom board with its own firmware and flash layout - and hand to any `Device` class (`board=...`) or the CLI (`--board-spec target:attr` / `RP2040PY_BOARD_SPEC`, on `run`/`micropython`/`kaluma`/`mklittlefs`). A board declares its firmware as data - a `firmware` dict keyed by family (`micropython`/`circuitpython`/`kaluma`), each entry a tag→URL-or-local-path map plus that family's flash layout - so one file covers one *board* for every firmware that runs on it, downloads nothing when imported, and works with `--image` and `--fetch-fw-only` exactly as `--board` does. Three ready-made community boards live in [boards/](boards/) as worked `--board-spec` targets: [weactstudio](boards/weactstudio/__init__.py) (WeAct Studio RP2040, four flash-size variants), [waveshare_rp2040_lcd_0_96](boards/waveshare_rp2040_lcd_0_96/__init__.py) (Waveshare RP2040-LCD-0.96, with its onboard 160×80 ST7735S panel attached as a fixed extra, under MicroPython *and* CircuitPython - the latter paints that panel straight from its own boot with no guest code at all) and [vcc_gnd_yd_rp2040](boards/vcc_gnd_yd_rp2040/__init__.py) (VCC-GND Studio YD-RP2040, with the WS2812 RGB LED on GPIO23 that CircuitPython drives as its *status* indicator - so booting it decodes real pixel frames before any guest code runs). Screenshots of what the two emulated display panels produce are in [demo/README.md](demo/README.md). See [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) for the how-to (worked examples for both), and [docs/records/0049](docs/records/0049-external-device-authoring-docs.md) / [0059](docs/records/0059-boardspec-firmware-resolution.md) for the design history behind it.
+Beyond the built-in `--board {pico,pico_w}` presets, the emulator has a real extension point for
+hardware it doesn't model out of the box:
+
+- **`ExternalDevice`** (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets
+  wired up via `attach_external_devices()`. Devices already shipping in-tree this way: the onboard
+  LED, the BOOTSEL button, a generic button/key, the CYW43439 WiFi chip behind `pico_w`, a Waveshare
+  2.9″ e-Paper panel, an ST7735S TFT controller, and a WS2812/WS2812B "NeoPixel" RGB LED.
+- **`boards.BoardSpec`** (what `--board` itself resolves to internally) - a public dataclass you
+  build your own instance of: your own device mix on an existing firmware family, or a fully custom
+  board with its own firmware and flash layout. Hand it to any `Device` class (`board=...`) or the
+  CLI (`--board-spec target:attr` / `RP2040PY_BOARD_SPEC`, on `run`/`micropython`/`kaluma`/
+  `mklittlefs`). A board declares its firmware as data - a `firmware` dict keyed by family
+  (`micropython`/`circuitpython`/`kaluma`), each entry a tag→URL-or-local-path map plus that
+  family's flash layout - so one file covers one *board* for every firmware that runs on it,
+  downloads nothing when imported, and works with `--image`/`--fetch-fw-only` exactly as `--board`
+  does.
+
+#### Adding your own
+
+**[docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md)**
+is the full how-to: worked examples for both a new device and a new board, the attach-timing rule,
+and the caveats worth knowing before you start. If you're working in Claude Code, the
+**[external-devices-and-boards skill](.claude/skills/external-devices-and-boards/SKILL.md)** turns
+that into a step-by-step execution checklist (which template to copy, which test proves what, and
+the "3g rule" - every electrical fact cited to a real upstream source, never guessed).
+
+#### Ready-made example boards
+
+Worked `--board-spec` targets living in [boards/](boards/) - real third-party hardware, every
+number sourced from that board's own upstream firmware config (never guessed), live-boot-verified
+against real firmware:
+
+| Board | Firmware | Highlight |
+| --- | --- | --- |
+| [weactstudio](boards/weactstudio/__init__.py) | MicroPython (4 flash variants) + CircuitPython | Plain LED/button - the baseline example, no new device needed |
+| [vcc_gnd_yd_rp2040](boards/vcc_gnd_yd_rp2040/__init__.py) | CircuitPython only | WS2812 RGB LED, driven as CircuitPython's own *status* indicator - decodes real pixel frames with no guest code at all |
+| [waveshare_rp2040_lcd_0_96](boards/waveshare_rp2040_lcd_0_96/__init__.py) | MicroPython + CircuitPython | Onboard 160×80 ST7735S TFT panel, painted from boot under CircuitPython |
+| [waveshare_rp2040_zero](boards/waveshare_rp2040_zero/__init__.py) | MicroPython + CircuitPython | The smallest example - a single WS2812, nothing else |
+| [adafruit_feather_rp2040](boards/adafruit_feather_rp2040/__init__.py) | MicroPython + CircuitPython | LED + WS2812 - and a worked example of a marketing claim (switchable NeoPixel power) contradicted by firmware source |
+| [adafruit_itsybitsy_rp2040](boards/adafruit_itsybitsy_rp2040/__init__.py) | MicroPython + CircuitPython | LED + WS2812 (real switchable power pin) + a second BOOT button sourced from the vendor's own schematic |
+| [adafruit_qtpy_rp2040](boards/adafruit_qtpy_rp2040/__init__.py) | MicroPython + CircuitPython | WS2812 + BOOT button - the same vendor schematic pattern as ItsyBitsy, no plain LED |
+| [garatronic_pybstick26_rp2040](boards/garatronic_pybstick26_rp2040/__init__.py) | MicroPython only | Plain LED, smallest board with no CircuitPython twin |
+
+Screenshots of what the two emulated display panels actually draw are in
+[demo/README.md](demo/README.md). See [docs/records/0049](docs/records/0049-external-device-authoring-docs.md)/
+[0059](docs/records/0059-boardspec-firmware-resolution.md) for the design history behind the
+extension points themselves.
 
 ## Performance
 
@@ -717,7 +614,7 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
 - **An optional native-compiled backend** (`rp2040py.native`, Cython) for when pure-Python
   instruction dispatch is the bottleneck - see [Performance](#performance) above - alongside a
   pure-Python universal wheel for environments that can't load compiled extensions at all (e.g.
-  [Pythonista](#environments-without-compiled-extension-support-ios)).
+  Pythonista, see [Installation](#installation)).
 - **Pico W / CYW43439 WiFi emulation** (`--board pico_w`) - real `network.WLAN` calls
   (`active()`/`scan()`/`connect()`) against a real, unmodified MicroPython firmware's CYW43439
   driver are answered at the actual gSPI/SDPCM protocol level, not stubbed out, and a NAT bridge
@@ -725,6 +622,13 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   `ntptime` all reach the actual internet) - something rp2040js has no equivalent of at all (no
   `--board` concept, no WiFi chip emulation). See
   [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439) above.
+- **A real extension point for third-party hardware** (`ExternalDevice`/`boards.BoardSpec`) -
+  rp2040js has no board or device abstraction at all, only whatever's hardcoded into its own demo
+  scripts. rp2040py ships 8 worked `--board-spec` examples for real vendor boards (WeAct Studio,
+  Waveshare, VCC-GND Studio, three Adafruit boards, McHobby's PYBStick26), every electrical fact
+  cited to that board's own upstream firmware source and live-boot-verified, plus a documented
+  how-to for writing your own. See
+  [External devices & custom boards](#external-devices--custom-boards) above.
 
 See [docs/reference/porting-checklist.md#known-differences-from-rp2040js](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
 for the exhaustive, file-level breakdown (including behavioral divergences found while porting,
@@ -740,6 +644,11 @@ not just added features).
 
 - [rp2040js](https://github.com/wokwi/rp2040js) — the upstream TypeScript emulator this project is ported from.
 - [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) — port status, file by file.
+- [docs/reference/os-compatibility.md](docs/reference/os-compatibility.md) — OS × feature compatibility matrix.
+- [docs/reference/mpremote.md](docs/reference/mpremote.md) — using `mpremote` with rp2040py in full.
+- [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) — writing your own `ExternalDevice`/`BoardSpec`.
+- [docs/0000-TRACKER.md](docs/0000-TRACKER.md) — the engineering-notes index behind every design decision cited above (`docs/records/`).
+- [demo/README.md](demo/README.md) — what each demo script does, and a gallery of real emulator output.
 
 ## License
 
