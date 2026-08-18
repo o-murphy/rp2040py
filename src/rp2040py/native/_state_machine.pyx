@@ -116,6 +116,11 @@ cdef class StateMachine:
 
         self.clock_div_int = 1
         self.clock_div_frac = 0
+        # Divider/due-time pacing - see _state_machine.py's own comments on these three for what
+        # they mean and docs/records/0063 for why they exist.
+        self.div_fp = 1 << 8
+        self.next_due_fp = 0
+        self.due_rearmed = False
         self.exec_ctrl = 0x1F << 12
         self.shift_ctrl = 0b11 << 18
         self.pin_ctrl = 0x5 << 26
@@ -590,15 +595,22 @@ cdef class StateMachine:
             self.pc = (self.pc + 1) & 0x1F
 
     cpdef step(self):
+        """See _state_machine.py's own step() docstring - `RPPIO.advance()` decides when this
+        runs, this re-arms `next_due_fp` for the instruction after (docs/records/0063)."""
+        cdef long long before
         if self.waiting:
             self.check_wait()
             if self.waiting:
                 return
 
+        before = self.cycles
+        self.due_rearmed = False
         self.update_pc = True
         self.execute_instruction(self.pio.instructions[self.pc])
         if self.update_pc:
             self.next_pc()
+        if not self.due_rearmed:
+            self.next_due_fp += (self.cycles - before) * self.div_fp
 
     cdef void set_set_pin_dirs(self, unsigned int value):
         self.pio.pin_directions_changed(value, self.set_base, self.set_count)
@@ -681,6 +693,9 @@ cdef class StateMachine:
         if absolute_offset == SM0_CLKDIV:
             self.clock_div_frac = (value >> 8) & 0xFF
             self.clock_div_int = value >> 16
+            # CLKDIV_INT == 0 divides by 65536 (RP2040 datasheet 3.5.5), not by zero.
+            self.div_fp = ((self.clock_div_int if self.clock_div_int else 65536) << 8) | self.clock_div_frac
+            self.pio.recompute_due()
         elif absolute_offset == SM0_EXECCTRL:
             self.exec_ctrl = ((value & 0x7FFFFFFF) | (self.exec_ctrl & 0x80000000U)) & 0xFFFFFFFFU
         elif absolute_offset == SM0_SHIFTCTRL:
@@ -691,6 +706,7 @@ cdef class StateMachine:
             self.execute_instruction(value & 0xFFFF)
             if self.waiting:
                 self.exec_ctrl |= EXECCTRL_EXEC_STALLED
+            self.pio.recompute_due()
         elif absolute_offset == SM0_PINCTRL:
             self.pin_ctrl = value
         else:
@@ -708,6 +724,7 @@ cdef class StateMachine:
 
     cpdef restart(self):
         self.cycles = 0
+        self.next_due_fp = self.pio.cycle_fp
         self.input_shift_count = 0
         self.output_shift_count = 32
         self.input_shift_reg = 0
@@ -715,7 +732,9 @@ cdef class StateMachine:
         # TODO any pin write left asserted due to OUT_STICKY.
 
     cpdef clk_div_restart(self):
-        self.pio.warn("clkDivRestart not implemented")
+        """`CTRL.CLKDIV_RESTART`: restarts the clock divider from phase 0 - see
+        _state_machine.py's own clk_div_restart() (docs/records/0063)."""
+        self.next_due_fp = <long long>self.pio.cycle_fp + self.div_fp
 
     cpdef check_wait(self):
         if not self.waiting:
@@ -759,3 +778,10 @@ cdef class StateMachine:
             self.next_pc()
             self.cycles += self.wait_delay
             self.exec_ctrl &= ~EXECCTRL_EXEC_STALLED
+            # Absolute, not a delta - see _state_machine.py's own comment here.
+            wait_delay = self.wait_delay
+            if wait_delay < 0:
+                wait_delay = 0
+            self.next_due_fp = <long long>self.pio.cycle_fp + (1 + wait_delay) * self.div_fp
+            self.due_rearmed = True
+            self.pio.notify_due(self.next_due_fp)

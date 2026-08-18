@@ -50,6 +50,19 @@ if TYPE_CHECKING:
 
 __all__ = ("RPPIO",)
 
+# "No enabled, unstalled machine has anything to do" - larger than any cycle count a simulated
+# RP2040 can reach (2**54 system clocks at 125 MHz is ~4.5 years of simulated time, and this is
+# the 1/256ths of one), small enough to leave headroom under a C `long long` in the native twin.
+NEVER_DUE = 1 << 62
+
+# How far behind its own due time a state machine may fall before the backlog is written off and
+# it is re-armed from the current cycle, in 1/256ths of a system clock. Comfortably more than the
+# handful of cycles any one CPU instruction costs (so ordinary running keeps an exact schedule and
+# never drifts), and far less than an idle jump, which goes straight to the next scheduled alarm -
+# possibly a millisecond, i.e. 125,000 cycles, away. See advance() for why that backlog can never
+# be walked through anyway. docs/records/0063.
+MAX_ARREARS_FP = 8 << 8
+
 
 class RPPIO(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str, first_irq: int, index: int):
@@ -84,6 +97,15 @@ class RPPIO(BasePeripheral):
         self._run_task: asyncio.Task[None] | None = None
 
         self.stopped = True
+        # System-clock cycles elapsed, in 1/256ths so a fractional CLKDIV needs no float anywhere
+        # (docs/records/0063). advance() moves it; the machines' own next_due_fp is on the same
+        # scale, and next_due_fp here is the earliest of theirs - the single integer compare that
+        # decides whether any state machine has to be touched at all this cycle.
+        self.cycle_fp = 0
+        self.next_due_fp = NEVER_DUE
+        # Counts machine-steps that arrived so late their backlog was written off (see
+        # _run_due()) - a diagnostic for "how much of this waveform did a sleeping CPU eat".
+        self.backlog_drops = 0
         self.fdebug = 0
         self.tx_stall = 0
         self.rx_stall = 0
@@ -215,11 +237,18 @@ class RPPIO(BasePeripheral):
 
         if offset == CTRL:
             for index in range(4):
-                self.machines[index].enabled = bool(value & (1 << index))
+                machine = self.machines[index]
+                enabled = bool(value & (1 << index))
+                if enabled and not machine.enabled:
+                    # Starts running now, not at whatever due time it left behind last time it was
+                    # disabled (which may be arbitrarily far in the past - docs/records/0063).
+                    machine.next_due_fp = self.cycle_fp
+                machine.enabled = enabled
                 if value & (1 << (4 + index)):
-                    self.machines[index].restart()
+                    machine.restart()
                 if value & (1 << (8 + index)):
-                    self.machines[index].clk_div_restart()
+                    machine.clk_div_restart()
+            self.recompute_due()
             should_run = value & 0xF
             if self.stopped and should_run:
                 self.stopped = False
@@ -351,15 +380,81 @@ class RPPIO(BasePeripheral):
                     gpio[gpio_index].check_for_updates()
                 remaining &= remaining - 1
 
-    def step(self) -> None:
+    def recompute_due(self) -> None:
+        """Recomputes `next_due_fp` - the earliest cycle any state machine has something to do -
+        from scratch. Called after anything that can change a machine's schedule other than the
+        machine executing an instruction: enable/restart, a CLKDIV write, a stall beginning."""
+        next_due_fp = NEVER_DUE
         for machine in self.machines:
-            machine.step()
+            if machine.enabled and not machine.waiting and machine.next_due_fp < next_due_fp:
+                next_due_fp = machine.next_due_fp
+        self.next_due_fp = next_due_fp
+
+    def notify_due(self, due_fp: int) -> None:
+        """A machine just re-armed itself out of band - i.e. `check_wait()` unstalled it from an
+        MMIO write, a GPIO edge or an IRQ, not from inside `advance()`. Only ever lowers
+        `next_due_fp`, so the machine gets picked up on the very next `advance()` rather than
+        having to wait for whatever the previous earliest due time was."""
+        self.next_due_fp = min(self.next_due_fp, due_fp)
+
+    def advance(self, cycles: int) -> None:
+        """Advances this PIO block by `cycles` system clocks - the paced entry point
+        `_execute_batch()` calls once per CPU instruction (or idle jump), with that instruction's
+        own cycle count.
+
+        This is where `SM_CLKDIV` and `[delay]` finally get honoured (docs/records/0063). Nothing
+        decouples from the CPU's instruction loop - 0037 coupled them deliberately, and this stays
+        inside that coupling - but a state machine no longer executes one instruction per CPU
+        instruction *regardless* of what it asked for: it executes when its own due time arrives,
+        which for anything with a divider or a delay is less often than that. The common case is a
+        single integer compare against the earliest due time of any machine, so a block whose
+        machines are all disabled, stalled, or simply not due yet costs less than the
+        `_has_runnable_machine()` scan this replaced.
+
+        **At most one instruction per machine per call, and that ceiling is load-bearing**, not a
+        performance shortcut. docs/records/0043 turns on `clock.tick()` running between every
+        single PIO step: a DMA-fed TX FIFO is refilled by `SimulationClock` alarms that only fire
+        from the CPU loop, so a state machine allowed to take two steps between two ticks can
+        drain a FIFO the DMA channel has had no chance to refill, raise a premature
+        `FDEBUG_TXSTALL`, and be read by `cyw43_spi_transfer()`'s TX-only branch as "transfer
+        complete" after the first few words. Measured, not theorized: letting `advance()` run the
+        machine as many times as its due time said it was owed - which for CYW43's CLKDIV=2 is
+        occasionally twice - turns MicroPython v1.23.0's `nic.scan()` into `OSError: EPERM`
+        instantly, every time. So this only ever *slows* a machine down relative to the CPU: a
+        divider below the average cycles-per-instruction still runs "as fast as the CPU dispatches
+        instructions", exactly as everything did before this change."""
+        self.cycle_fp += cycles << 8
+        if self.cycle_fp < self.next_due_fp:
+            return
+        self._run_due()
+
+    def _run_due(self) -> None:
+        cycle_fp = self.cycle_fp
+        for machine in self.machines:
+            if machine.enabled and not machine.waiting and machine.next_due_fp <= cycle_fp:
+                if cycle_fp - machine.next_due_fp > MAX_ARREARS_FP:
+                    # Owed more instructions than one-per-CPU-instruction can ever deliver - an
+                    # idle jump straight to the next alarm, essentially. Write the backlog off and
+                    # re-arm from now, so the machine keeps running at the *rate* it asked for
+                    # instead of flat out until it has paid off a debt it accrued while the CPU
+                    # was asleep. This is the same ceiling PIO always had here (an idle jump was
+                    # worth exactly one PIO step before this change too), now explicit.
+                    self.backlog_drops += 1
+                    machine.next_due_fp = cycle_fp
+                machine.step()
+        self.recompute_due()
         self.check_changed_pins()
+
+    def step(self) -> None:
+        """One system clock. Kept as the no-owning-`Simulator` entry point (`_step_batch()`/
+        `run()`, and tests driving `RPPIO` directly) - with the reset CLKDIV of 1 and no `[delay]`
+        cycles this is exactly the "every machine executes one instruction" it has always been."""
+        self.advance(1)
 
     def _step_batch(self) -> None:
         i = 0
         while i < 1000 and not self.stopped:
-            self.step()
+            self.advance(1)
             i += 1
 
     async def run(self) -> None:

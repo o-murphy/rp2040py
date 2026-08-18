@@ -15,9 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latch gap, and `on_pixels` handing over raw `(r, g, b)` tuples - never a picture, the same
   boundary `Epd2in9G`/`St7735s` draw. Colour order (`GRB`, `GRBW`, ...) is a constructor argument.
   Timings derived from CircuitPython's own driver rather than datasheet folklore; see
-  [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md). **Known limitation:** a
-  PIO-driven driver does not decode correctly on this emulator yet - see the Known issues note
-  below.
+  [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md). PIO-driven drivers decode
+  live too, once the PIO timing defect this work uncovered was fixed - see Fixed, below.
 - `boards/vcc_gnd_yd_rp2040/` - the VCC-GND Studio **YD-RP2040** as a `--board-spec` target: the
   WS2812 RGB LED (GPIO23), the USRKEY button (GPIO24), BOOTSEL and the user LED (GPIO25). Flash
   layout derived from the upstream `vcc_gnd_yd_rp2040` CircuitPython port (no
@@ -101,15 +100,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registers alone would replace a loud failure with a silent hang ([0053](docs/records/0053-core1-and-inter-core-fifo.md)).
 
 ### Known issues
-- **PIO-generated pulse-width protocols do not decode correctly.** `RPPIO` stores `SM_CLKDIV` and
-  accumulates `[delay]` cycles but paces itself by neither - every state machine advances one
-  instruction per CPU instruction - so a waveform whose meaning is in pulse *widths* (WS2812,
-  DHT11/22, servo PWM, IR codes, one-wire) arrives with its symbols collapsed into each other.
-  Measured against real firmware writing `ff 00 aa` to a NeoPixel: the all-zeros byte and the
-  all-ones byte both contain 16 ns highs, so no threshold can separate them. Edge-*order* protocols
-  (CYW43's clocked gSPI, and everything SPI/I2C-shaped) are unaffected, which is why this went
-  unnoticed until now. Diagnosis, options and an acceptance test in
-  [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md); nothing is fixed yet.
+- **PIO still runs at most one instruction per CPU instruction.** That is what `SM_CLKDIV = 1`
+  looks like here: real hardware would run one to three, since a Cortex-M0+ instruction is one to
+  three system clocks. The ceiling is deliberate - `clock.tick()` has to run between PIO steps or a
+  DMA-fed FIFO can be outrun ([0043](docs/records/0043-pio-dma-first-batch-race.md)) - and it only
+  ever makes a state machine slower, never faster, so every divider above ~1.4 is now exact. Same
+  reason PIO does not run through a CPU idle jump (`RPPIO.backlog_drops` counts when that costs a
+  machine something). [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
+
+### Fixed
+- **`RPPIO` now paces its state machines by `SM_CLKDIV` and `[delay]` cycles.** Both were parsed
+  and read back correctly, and neither was ever used for pacing: every enabled state machine
+  advanced exactly one instruction per CPU instruction, whatever divider it had configured. PIO is
+  now advanced by the system clocks each CPU instruction costs, and a machine executes when its own
+  due time arrives - one integer compare per PIO block in the common case, kept as a 16.8
+  fixed-point accumulator so a fractional divider needs no float. `CTRL.CLKDIV_RESTART` is
+  implemented rather than warned about. Two things this fixes, measured:
+  - **PIO-generated pulse-width protocols decode.** Real CircuitPython writing `ff 00 aa` to the
+    YD-RP2040's NeoPixel produced 8-40 ns highs with the `0` and `1` populations *overlapping*; it
+    now produces 272-352 ns and 664-720 ns on a 1.25 µs period - real silicon's own 312/703 ns - and
+    `Ws2812` decodes the frame. WS2812, DHT11/22, servo PWM, IR codes and one-wire were all out of
+    reach before this; they are the whole class it unblocks.
+  - **CYW43's gSPI runs at the `sysclk/2` its driver asks for**, not at twice that. The most
+    exercised PIO path in the project had a measurably wrong clock.
+  Live-verified on MicroPython `1.23.0`/`1.28.0` and CircuitPython `10.2.1` for Pico W (scan, join,
+  DHCP, TCP through the NAT bridge, DNS, TLS, disconnect), and ~11% *faster* in wall clock than
+  before - the due-time compare replaces a per-instruction scan of every state machine. A CPU-only
+  workload is unchanged. [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md).
 
 ### Documentation
 - [docs/records/0062](docs/records/0062-yd-rp2040-board-and-ws2812.md) - the YD-RP2040 board and
@@ -123,8 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half out of 0060, since none of that record's wall-clock ceiling applies to a viewer; names the
   real blocker - `ExternalDevice` cannot describe itself - and rules an editor out of scope.
 - [docs/records/0063](docs/records/0063-pio-clkdiv-and-delay-cycles.md) - the PIO timing defect
-  that work uncovered, with the captured trace as its acceptance test and three options ranked by
-  faithfulness; nothing implemented.
+  that work uncovered, now **implemented** (see Fixed above): the captured trace as its acceptance
+  test, three options ranked by faithfulness, and an implementation note on the one thing the
+  design got wrong - walking through every instruction a machine was owed breaks CYW43 outright,
+  because 0043 depends on `clock.tick()` running between PIO steps.
 - [docs/records/0059](docs/records/0059-boardspec-firmware-resolution.md) - now **implemented**
   (see Added/Changed above): the record carries the design plus an implementation note covering the
   one deliberate departure from it (`mklittlefs --target` became `--board-spec`'s firmware-family

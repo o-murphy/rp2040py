@@ -48,6 +48,13 @@ cdef class StateMachine:
 
     cdef public unsigned int clock_div_int
     cdef public unsigned int clock_div_frac
+    # SM_CLKDIV as one 16.8 fixed-point divisor (1/256ths of a system clock), and the absolute
+    # system-clock cycle - on that same scale - this machine may next execute at. Both are read as
+    # direct C field reads from _pio.pyx's own advance()/recompute_due() hot path, which is why
+    # they are declared here rather than left as Python attributes. docs/records/0063.
+    cdef public long long div_fp
+    cdef public long long next_due_fp
+    cdef public bint due_rearmed
     cdef public unsigned int exec_ctrl
     cdef public unsigned int shift_ctrl
     cdef public unsigned int pin_ctrl

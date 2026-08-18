@@ -68,6 +68,19 @@ class StateMachine:
 
         self.clock_div_int = 1
         self.clock_div_frac = 0
+        # `SM_CLKDIV` as a single 16.8 fixed-point divisor in 1/256ths of a system clock, kept in
+        # sync with the two halves above by every write that touches them (`div_fp` is what the
+        # pacing below actually multiplies by - the halves stay because the register reads them
+        # back). `CLKDIV_INT == 0` means /65536 on real hardware, not /0.
+        self.div_fp = 1 << 8
+        # Absolute system-clock cycle, in the same 1/256ths, at which this machine may execute its
+        # next instruction - the "due time" `RPPIO.advance()` compares against. Meaningless while
+        # `enabled` is False or `waiting` is True (both are filtered before it is read); re-armed
+        # from the current cycle when either of those ends. See docs/records/0063.
+        self.next_due_fp = 0
+        # Set by check_wait() when it re-arms next_due_fp itself, so step() knows not to also add
+        # this instruction's own cycles on top of an already-absolute due time.
+        self.due_rearmed = False
         self.exec_ctrl = 0x1F << 12
         self.shift_ctrl = 0b11 << 18
         self.pin_ctrl = 0x5 << 26
@@ -533,15 +546,29 @@ class StateMachine:
             self.pc = (self.pc + 1) & 0x1F
 
     def step(self) -> None:
+        """Executes one instruction and re-arms `next_due_fp` for the next one.
+
+        `RPPIO.advance()` is what decides *when* this runs (docs/records/0063): it only calls this
+        on a machine whose due time has arrived, so the pacing lives entirely in the two fields
+        this maintains. The cycles the instruction actually costs are read straight off `cycles`,
+        which `execute_instruction()` already accumulated correctly (1 for the instruction plus
+        its `[delay]`, or nothing extra when it stalled) - the divider turns those PIO cycles into
+        system-clock ones. `check_wait()` re-arming `next_due_fp` absolutely (an unstall lands on
+        the cycle the condition became true, not on a delta from when the stall began) wins over
+        the delta, which is what `due_rearmed` says."""
         if self.waiting:
             self.check_wait()
             if self.waiting:
                 return
 
+        before = self.cycles
+        self.due_rearmed = False
         self.update_pc = True
         self.execute_instruction(self.pio.instructions[self.pc])
         if self.update_pc:
             self.next_pc()
+        if not self.due_rearmed:
+            self.next_due_fp += (self.cycles - before) * self.div_fp
 
     def set_set_pin_dirs(self, value: int) -> None:
         self.pio.pin_directions_changed(value, self.set_base, self.set_count)
@@ -624,6 +651,9 @@ class StateMachine:
         if absolute_offset == SM0_CLKDIV:
             self.clock_div_frac = (value >> 8) & 0xFF
             self.clock_div_int = value >> 16
+            # CLKDIV_INT == 0 divides by 65536 (RP2040 datasheet 3.5.5), not by zero.
+            self.div_fp = ((self.clock_div_int or 65536) << 8) | self.clock_div_frac
+            self.pio.recompute_due()
         elif absolute_offset == SM0_EXECCTRL:
             self.exec_ctrl = ((value & 0x7FFFFFFF) | (self.exec_ctrl & 0x80000000)) & 0xFFFFFFFF
         elif absolute_offset == SM0_SHIFTCTRL:
@@ -634,6 +664,7 @@ class StateMachine:
             self.execute_instruction(value & 0xFFFF)
             if self.waiting:
                 self.exec_ctrl |= EXECCTRL_EXEC_STALLED
+            self.pio.recompute_due()
         elif absolute_offset == SM0_PINCTRL:
             self.pin_ctrl = value
         else:
@@ -651,6 +682,7 @@ class StateMachine:
 
     def restart(self) -> None:
         self.cycles = 0
+        self.next_due_fp = self.pio.cycle_fp
         self.input_shift_count = 0
         self.output_shift_count = 32
         self.input_shift_reg = 0
@@ -658,7 +690,11 @@ class StateMachine:
         # TODO any pin write left asserted due to OUT_STICKY.
 
     def clk_div_restart(self) -> None:
-        self.pio.warn("clkDivRestart not implemented")
+        """`CTRL.CLKDIV_RESTART`: restarts the clock divider "from an initial phase of 0" (RP2040
+        datasheet 3.5.6), so the next PIO cycle is a whole divider period away rather than wherever
+        the fractional accumulator happened to have got to. Was a "not implemented" warning for as
+        long as nothing paced anything by the divider at all (docs/records/0063)."""
+        self.next_due_fp = self.pio.cycle_fp + self.div_fp
 
     def check_wait(self) -> None:
         if not self.waiting:
@@ -702,3 +738,12 @@ class StateMachine:
             self.next_pc()
             self.cycles += self.wait_delay
             self.exec_ctrl &= ~EXECCTRL_EXEC_STALLED
+            # A stall ends on the cycle its condition becomes true, whenever that is - so the due
+            # time is absolute (from *now*), not a delta from whenever the stall started: one PIO
+            # cycle to retire the stalled instruction, then its own `[delay]`. `wait_delay` is -1
+            # until execute_instruction() resolves it, which is why it is clamped here.
+            wait_delay = self.wait_delay
+            wait_delay = max(wait_delay, 0)
+            self.next_due_fp = self.pio.cycle_fp + (1 + wait_delay) * self.div_fp
+            self.due_rearmed = True
+            self.pio.notify_due(self.next_due_fp)

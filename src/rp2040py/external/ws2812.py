@@ -7,8 +7,8 @@ derivations every constant below comes from.
 ceiling is about *driving real hardware*: a physical WS2812 measures pulse widths with its own
 silicon, in wall-clock nanoseconds, and this emulator runs ~20-30x slower than real time and in
 bursts - so every "0" would arrive stretched into a "1". A decoder inside the emulator has no such
-problem: it timestamps edges off `rp2040.clock` (emulated time), where `RPPIO` is stepped in lock
-step with the CPU's own instruction loop (docs/records/0037), so the waveform's proportions are
+problem: it timestamps edges off `rp2040.clock` (emulated time), where `RPPIO` is paced in system
+clocks by the CPU's own instruction loop (docs/records/0037/0063), so the waveform's widths are
 exactly what firmware intended however slowly the host is going. Decoding in, not driving out.
 
 **Timings are derived from CircuitPython's own driver, not from datasheet folklore**
@@ -32,16 +32,17 @@ the estimate every other bit is judged by. `LATCH_NANOS` is absolute because the
 CPU-timed, not PIO-timed (CircuitPython spins on `port_get_raw_ticks()` for >=300 us), and CPU-timed
 intervals are faithful in this emulator.
 
-**Live decoding does not work on this emulator yet, and that is not this device's fault.**
-`RPPIO` stores `SM_CLKDIV` and accumulates `[delay]` cycles but paces itself by neither - it
-advances every state machine once per CPU instruction (docs/records/0037) - so a PIO-generated
-WS2812 waveform arrives with its two symbols collapsed and jittered into each other. Measured
+**Live decoding of a PIO-driven driver works as of docs/records/0063.** It did not when this
+device was first written: `RPPIO` stored `SM_CLKDIV` and accumulated `[delay]` cycles but paced
+itself by neither, advancing every state machine once per CPU instruction, so a PIO-generated
+WS2812 waveform arrived with its two symbols collapsed and jittered into each other - measured
 against real CircuitPython firmware writing `ff 00 aa`, the eight `0` bits came out as high times
-of 8, 16, 8, 16, 16, 16, 16, 16 ns while the eight `1` bits gave 16-40 ns: overlapping, so *no*
-threshold can separate them. This device is written for the waveform real hardware produces (and
-the tests hold it to CircuitPython's own numbers); making the emulator produce that waveform is
-docs/records/0063's job, and until then only a bit-banged or CPU-driven WS2812 driver decodes
-reliably here.
+of 8, 16, 8, 16, 16, 16, 16, 16 ns while the eight `1` bits gave 16-40 ns, overlapping, so *no*
+threshold could separate them. `RPPIO` now paces its state machines by both, in system clocks, so
+12.8 MHz means 12.8 MHz: the same capture gives 272-352 ns for a `0` and 664-720 ns for a `1` -
+real hardware's own 312/703 ns, ±40 ns of jitter from the CPU instruction each edge lands inside.
+This device was always written for the waveform real hardware produces (its tests hold it to
+CircuitPython's own numbers); what changed is the emulator producing it.
 
 Boundary, same as `Epd2in9G`/`St7735s` (docs/records/0046): this hands over raw pixel *values*,
 never a picture, so nothing in `src/` grows an image dependency. What a caller does with
