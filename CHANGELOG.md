@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `boards/garatronic_pybstick26_rp2040/` - the Garatronic/McHobby PYBStick26 RP2040 as a
+  `--board-spec` target: a single `LEDMock(gpio=23)` + `BootselButton`, MicroPython-only (no
+  CircuitPython port exists for this board). `board.json`'s own `"RGB LED"` feature tag is
+  contradicted by every real source checked (`pins.csv`, `mpconfigboard.h`, and the pico-sdk
+  header's explicit `// no PICO_DEFAULT_WS2812_PIN` comment) - modelled as a plain LED, not a
+  `Ws2812`. Smaller flash than a plain Pico (1 MiB vs. 2 MiB), `fs_start=0xa0000`/
+  `fs_blockcount=96`, confirmed by live boot. See
+  [docs/records/0073](docs/records/0073-garatronic-pybstick26-rp2040-board.md).
+
 ## [0.3.0rc1] - 2026-08-18
 
 ### Added
