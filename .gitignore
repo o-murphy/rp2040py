@@ -75,8 +75,9 @@ dmypy.json
 # pyright
 pyrightconfig.json
 
-# claude
-.claude/
+# claude - local state/settings stay ignored, but project skills are shared/checked in
+.claude/*
+!.claude/skills/
 
 # OS
 .DS_Store

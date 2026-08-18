@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `scripts/fetch_firmware.py` (dev-only) gained a `list --family <family> --slug <slug>
+  [--page <page>]` subcommand: prints one arbitrary board slug's real tag→url firmware-version map
+  (JSON, directly pastable into a `--board-spec` file's own `BoardFirmwareSpec.fw`) for a board
+  outside the built-in `pico`/`pico_w` registry, without touching `firmware_specs.json`. `--page`
+  is `micropython`-only, for a board whose single download page serves several `BOARD_VARIANT`
+  images under different filename prefixes (e.g. WEACTSTUDIO's flash-size variants) - fixing a real
+  bug the same case exposed in the *existing* fetch path along the way: the href filter now anchors
+  on firmware's real `{board}[-{variant}]-{8-digit date}-vVERSION.uf2` filename shape instead of
+  matching anything up to the next `.uf2`, so a bare board slug's version history can no longer
+  silently swallow its `BOARD_VARIANT` siblings' releases under the same version key.
 - `rp2040py.external.ws2812.Ws2812` - a new `ExternalDevice` decoding the WS2812/WS2812B
   ("NeoPixel") single-wire protocol off one GPIO: each bit classified by its duty cycle against the
   frame's own measured bit period (so any driver's clock choice decodes - CircuitPython's 12.8 MHz
@@ -172,6 +182,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence into the MCU, and the semantics still to settle before any of it is built.
 
 ### Changed
+- All three `boards/` example files now carry their firmware's real version history instead of a
+  single pinned tag - fetched via the `scripts/fetch_firmware.py list` addition above, so
+  `--image <older tag>` works against them where previously there was only one version to select
+  (`default_tag` unchanged everywhere): `boards/weactstudio/`'s MicroPython maps (all four
+  flash-size variants, 11-17 tags each), `boards/waveshare_rp2040_lcd_0_96/`'s MicroPython map
+  (+4 preview tags) and both boards' plus `boards/vcc_gnd_yd_rp2040/`'s CircuitPython maps
+  (one pinned `10.2.1` URL each -> ~90-107 tags spanning `8.0.0` through current `10.3.0` previews).
 - **`boards/` is one directory per board, not per firmware family.** `boards/micropython/
   WAVESHARE_RP2040_LCD_0_96/` and `boards/circuitpython/waveshare_rp2040_lcd_0_96/` - which had
   identical `extras`, being the same soldered hardware - are now the single

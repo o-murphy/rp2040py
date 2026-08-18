@@ -86,6 +86,18 @@ Prefer a real `@property`/setter over one class poking a bare (even `_`-prefixed
 another class it doesn't own - e.g. `Simulator` sets `rp2040.simulator = self` through a real
 property, not `rp2040._simulator = self` directly.
 
+## External devices & boards
+
+Adding a new `ExternalDevice` (LED, button, sensor, display, radio...) or a new `--board-spec`
+board has its own execution checklist as a project skill:
+[.claude/skills/external-devices-and-boards/](.claude/skills/external-devices-and-boards/SKILL.md)
+(record [0067](docs/records/0067-external-devices-and-boards-skill.md)) - which template device/
+board file to copy, which test file proves what, the "3g rule" (every electrical fact cited to a
+real upstream source, never guessed), and 0059's promotion checklist for graduating a `boards/`
+example into real `--board` support. It sits on top of, and doesn't duplicate,
+[docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) (the
+design/API how-to) - read that first if this area hasn't come up yet this session.
+
 ## "Document" vs. "implement"
 
 When asked to "document" a possible design/decision (задокументуй), that means write it into the

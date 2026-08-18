@@ -45,10 +45,24 @@ Sources, one function each below:
 Usage: `uv run scripts/fetch_firmware.py` (stdlib only - no inline deps to install). Re-run
 whenever new releases land in any of the four; diff the resulting `firmware_specs.json` change
 before committing, same as any other generated-but-committed file.
+
+**`list --family <family> --slug <slug>`** fetches the same tag->url version map as above, but for
+one arbitrary board slug outside `firmware_specs.json` entirely - no `firmware_specs.json` read or
+write happens, and no built-in board is touched. It just prints that one slug's map (JSON, i.e.
+directly pastable as a `BoardFirmwareSpec.fw` literal) to stdout and returns only that - nothing
+else is fetched or merged. For a `--board-spec` board file author (`boards/vcc_gnd_yd_rp2040/`
+and friends): `--family` is one of `micropython`/`circuitpython`/`kaluma` (`bootrom` has no
+per-board slug, not supported here), and `--slug` is that family's own board identifier -
+MicroPython's `ports/rp2/boards/` directory name (e.g. `WAVESHARE_RP2040_ZERO`), CircuitPython's
+`ports/raspberrypi/boards/` directory name (e.g. `waveshare_rp2040_zero`), or Kaluma's release
+asset `-<suffix>-` segment (e.g. `pico-w`). Example:
+`uv run scripts/fetch_firmware.py list --family circuitpython --slug waveshare_rp2040_zero`.
 """
 
+import argparse
 import json
 import re
+import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -129,18 +143,36 @@ def _http_get(url: str, *, accept_json: bool = False) -> bytes:
         return response.read()
 
 
+def _fetch_micropython_versions(slug: str, *, page: "str | None" = None) -> "dict[str, str]":
+    """The tag->url map for one MicroPython board slug (its `ports/rp2/boards/` directory name,
+    e.g. `RPI_PICO_W`/`WAVESHARE_RP2040_ZERO`) - the per-slug half `_fetch_micropython()` (built-in
+    boards) and the `list` subcommand (any other board) both call.
+
+    `page` is the `micropython.org/download/<page>/` slug to scrape, when it differs from `slug`
+    itself - needed for a board that builds several `BOARD_VARIANT` images (different flash sizes,
+    say) off *one* shared download page, e.g. `WEACTSTUDIO`'s page lists `WEACTSTUDIO-FLASH_2M-*`/
+    `_FLASH_4M-*`/`_FLASH_8M-*` *and* the bare default `WEACTSTUDIO-*` side by side - `slug` picks
+    which of those filename prefixes this call wants, `page` says where to look for any of them.
+    Defaults to `slug` (the common one-image-per-page case, true for both built-in boards today).
+
+    The href filter requires an 8-digit build date immediately after `{slug}-` (every real
+    filename's own `{BOARD}[-{VARIANT}]-{date}-v{version}.uf2` shape) rather than accepting
+    anything up to the next `.uf2` - without that anchor, a bare board slug like `WEACTSTUDIO`
+    also prefix-matches its own `WEACTSTUDIO-FLASH_2M-...`/`_FLASH_4M-...` siblings on the same
+    page, silently folding several variants' versions into one dict as later hrefs overwrite
+    earlier ones under the same version key."""
+    html = _http_get(f"https://micropython.org/download/{page or slug}/").decode()
+    href_pattern = rf'href="(/resources/firmware/{re.escape(slug)}-\d{{8}}-[^"]*\.uf2)"'
+    versions: dict[str, str] = {}
+    for href in re.findall(href_pattern, html):
+        match = re.search(r"-v(.+)\.uf2$", href.rsplit("/", 1)[-1])
+        if match is not None:
+            versions[match.group(1)] = "https://micropython.org" + href
+    return versions
+
+
 def _fetch_micropython() -> "dict[str, dict[str, str]]":
-    boards: dict[str, dict[str, str]] = {}
-    for board, slug in _MICROPYTHON_BOARD_SLUGS.items():
-        html = _http_get(f"https://micropython.org/download/{slug}/").decode()
-        href_pattern = rf'href="(/resources/firmware/{re.escape(slug)}-[^"]*\.uf2)"'
-        versions: dict[str, str] = {}
-        for href in re.findall(href_pattern, html):
-            match = re.search(r"-v(.+)\.uf2$", href.rsplit("/", 1)[-1])
-            if match is not None:
-                versions[match.group(1)] = "https://micropython.org" + href
-        boards[board] = versions
-    return boards
+    return {board: _fetch_micropython_versions(slug) for board, slug in _MICROPYTHON_BOARD_SLUGS.items()}
 
 
 # CI nightly/PR-preview builds also live in the same S3 prefix as real releases, named
@@ -151,37 +183,54 @@ def _fetch_micropython() -> "dict[str, dict[str, str]]":
 _CIRCUITPYTHON_NIGHTLY_BUILD = re.compile(r"^\d{8}-")
 
 
+def _fetch_circuitpython_versions(slug: str) -> "dict[str, str]":
+    """The tag->url map for one CircuitPython board slug (its `ports/raspberrypi/boards/`
+    directory name, e.g. `raspberry_pi_pico_w`/`waveshare_rp2040_zero`) - the per-slug half
+    `_fetch_circuitpython()` (built-in boards) and the `list` subcommand (any other board) both
+    call."""
+    xml_bytes = _http_get(f"https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/{slug}/en_US/")
+    root = ET.fromstring(xml_bytes)
+    key_pattern = re.compile(rf"^adafruit-circuitpython-{re.escape(slug)}-en_US-(.+)\.uf2$")
+    versions: dict[str, str] = {}
+    for content in root.findall("s3:Contents", _S3_XML_NS):
+        key = content.findtext("s3:Key", namespaces=_S3_XML_NS)
+        if key is None:
+            continue
+        match = key_pattern.match(key.rsplit("/", 1)[-1])
+        if match is not None and not _CIRCUITPYTHON_NIGHTLY_BUILD.match(match.group(1)):
+            versions[match.group(1)] = f"https://adafruit-circuit-python.s3.amazonaws.com/{key}"
+    return versions
+
+
 def _fetch_circuitpython() -> "dict[str, dict[str, str]]":
-    boards: dict[str, dict[str, str]] = {}
-    for board, slug in _CIRCUITPYTHON_BOARD_SLUGS.items():
-        xml_bytes = _http_get(f"https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/{slug}/en_US/")
-        root = ET.fromstring(xml_bytes)
-        key_pattern = re.compile(rf"^adafruit-circuitpython-{re.escape(slug)}-en_US-(.+)\.uf2$")
-        versions: dict[str, str] = {}
-        for content in root.findall("s3:Contents", _S3_XML_NS):
-            key = content.findtext("s3:Key", namespaces=_S3_XML_NS)
-            if key is None:
-                continue
-            match = key_pattern.match(key.rsplit("/", 1)[-1])
-            if match is not None and not _CIRCUITPYTHON_NIGHTLY_BUILD.match(match.group(1)):
-                versions[match.group(1)] = f"https://adafruit-circuit-python.s3.amazonaws.com/{key}"
-        boards[board] = versions
-    return boards
+    return {board: _fetch_circuitpython_versions(slug) for board, slug in _CIRCUITPYTHON_BOARD_SLUGS.items()}
+
+
+def _fetch_kaluma_releases() -> "list[dict]":
+    return json.loads(
+        _http_get("https://api.github.com/repos/kaluma-project/kaluma/releases?per_page=100", accept_json=True)
+    )
+
+
+def _kaluma_versions_for_suffix(releases: "list[dict]", suffix: str) -> "dict[str, str]":
+    """The tag->url map for one Kaluma release-asset suffix (the `-<suffix>-` segment of
+    `kaluma-rp2-<suffix>-<tag>.uf2`, e.g. `pico-w`) against an already-fetched release list - the
+    per-slug half `_fetch_kaluma()` (built-in boards, one release fetch shared across both) and the
+    `list` subcommand (any other board, its own single release fetch) both call."""
+    versions: dict[str, str] = {}
+    for release in releases:
+        tag = release["tag_name"]
+        filename = f"kaluma-rp2-{suffix}-{tag}.uf2"
+        if filename in {asset["name"] for asset in release["assets"]}:
+            versions[tag] = f"https://github.com/kaluma-project/kaluma/releases/download/{tag}/{filename}"
+    return versions
 
 
 def _fetch_kaluma() -> "dict[str, dict[str, str]]":
-    releases = json.loads(
-        _http_get("https://api.github.com/repos/kaluma-project/kaluma/releases?per_page=100", accept_json=True)
-    )
-    boards: dict[str, dict[str, str]] = {board: {} for board in _KALUMA_BOARD_ASSET_SUFFIXES}
-    for release in releases:
-        tag = release["tag_name"]
-        asset_names = {asset["name"] for asset in release["assets"]}
-        for board, suffix in _KALUMA_BOARD_ASSET_SUFFIXES.items():
-            filename = f"kaluma-rp2-{suffix}-{tag}.uf2"
-            if filename in asset_names:
-                boards[board][tag] = f"https://github.com/kaluma-project/kaluma/releases/download/{tag}/{filename}"
-    return boards
+    releases = _fetch_kaluma_releases()
+    return {
+        board: _kaluma_versions_for_suffix(releases, suffix) for board, suffix in _KALUMA_BOARD_ASSET_SUFFIXES.items()
+    }
 
 
 def _fetch_bootrom() -> "dict[str, str]":
@@ -221,7 +270,66 @@ def _apply_board_layout(boards: "dict[str, dict]", layout: "dict[str, dict]", de
         board_entry.setdefault("default_tag", default_tag)
 
 
-def main() -> None:
+_LIST_FETCHERS = {
+    "micropython": _fetch_micropython_versions,
+    "circuitpython": _fetch_circuitpython_versions,
+    "kaluma": lambda slug: _kaluma_versions_for_suffix(_fetch_kaluma_releases(), slug),
+}
+
+
+def _cmd_list(family: str, slug: str, page: "str | None") -> None:
+    """`list --family <family> --slug <slug> [--page <page>]`: prints *only* that one slug's
+    tag->url map (JSON, directly pastable as a `BoardFirmwareSpec.fw` literal) to stdout. Reads and
+    writes nothing - `firmware_specs.json` (built-in boards only) is never touched, and no other
+    slug is fetched. `--page` is `micropython`-only (see `_fetch_micropython_versions()`'s own
+    docstring for why some boards need it) - rejected outright for the other two families rather
+    than silently ignored, since a typo'd `--page` there would otherwise look like it did
+    something."""
+    if page is not None and family != "micropython":
+        print(f"--page is only meaningful for --family micropython, not {family!r}", file=sys.stderr)
+        raise SystemExit(2)
+    versions = _fetch_micropython_versions(slug, page=page) if family == "micropython" else _LIST_FETCHERS[family](slug)
+    if not versions:
+        print(f"No {family} versions found for slug {slug!r}" + (f" (page {page!r})" if page else ""), file=sys.stderr)
+        raise SystemExit(1)
+    print(json.dumps(versions, indent=2))
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
+    subparsers = parser.add_subparsers(dest="command")
+
+    list_parser = subparsers.add_parser(
+        "list",
+        help="print one arbitrary (non-built-in) board slug's tag->url version map and exit - "
+        "firmware_specs.json is never read or written",
+    )
+    list_parser.add_argument(
+        "--family",
+        required=True,
+        choices=tuple(_LIST_FETCHERS),
+        help="firmware family to query (bootrom has no per-board slug, not supported here)",
+    )
+    list_parser.add_argument(
+        "--slug",
+        required=True,
+        help="that family's own board identifier - MicroPython: its ports/rp2/boards/ directory "
+        "name (e.g. WAVESHARE_RP2040_ZERO); CircuitPython: its ports/raspberrypi/boards/ directory "
+        "name (e.g. waveshare_rp2040_zero); Kaluma: the '-<suffix>-' segment of its release asset "
+        "filename (e.g. pico-w)",
+    )
+    list_parser.add_argument(
+        "--page",
+        default=None,
+        help="micropython.org/download/<page>/ slug to scrape, only when it differs from --slug - "
+        "needed for a board with several BOARD_VARIANT images sharing one download page (e.g. "
+        "--slug WEACTSTUDIO-FLASH_2M --page WEACTSTUDIO). --family micropython only; rejected for "
+        "circuitpython/kaluma, which have no such split",
+    )
+    return parser
+
+
+def _cmd_update() -> None:
     specs = json.loads(_SPECS_PATH.read_text())
 
     _merge_boards(specs["micropython"].setdefault("boards", {}), _fetch_micropython(), "micropython")
@@ -240,6 +348,14 @@ def main() -> None:
 
     _SPECS_PATH.write_text(json.dumps(specs, indent=2) + "\n")
     print(f"Updated {_SPECS_PATH}")
+
+
+def main() -> None:
+    args = _build_arg_parser().parse_args()
+    if args.command == "list":
+        _cmd_list(args.family, args.slug, args.page)
+        return
+    _cmd_update()
 
 
 if __name__ == "__main__":
