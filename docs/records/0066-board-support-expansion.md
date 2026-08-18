@@ -1,7 +1,13 @@
 # 0066. Board support expansion: which upstream RP2040 boards are addable, and what each still needs
 
-- Status: **Proposed — documented, not implemented (2026-08-18).** A checklist of concrete
-  candidate boards, not a commitment to add any of them.
+- Status: **Partly worked through (2026-08-18).** Originally proposed as a checklist of concrete
+  candidate boards, not a commitment to add any of them. Since then the **"addable now, has a
+  MicroPython port" checklist below has been fully built - 12 of 12**, records
+  [0068](0068-waveshare-rp2040-zero-board.md)-[0071](0071-adafruit-qtpy-rp2040-board.md) and
+  [0073](0073-garatronic-pybstick26-rp2040-board.md)-[0080](0080-sparkfun-promicro-board.md), each
+  row below pointing at its own record. Every other checklist here is untouched: the
+  CircuitPython-only addable list (37 boards, none started) and everything gated behind a missing
+  `ExternalDevice` remain exactly as surveyed.
 - Conceived: 2026-08-18
 - Related: 0059 (`BoardSpec` firmware resolution - the mechanism any of these boards would use),
   0049 (external device authoring docs / the promotion checklist a board file clears), 0062
@@ -82,9 +88,19 @@ records generally).
       CircuitPython's `pimoroni_tiny2040_2mb` board id are both the 2 MiB build, `FLASH_8M`/
       `pimoroni_tiny2040` the 8 MiB one; `USER_SW` stayed unmodelled, same gap as
       `PIMORONI_PICOLIPO`'s.
-- [ ] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
-      LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`)
-- [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
+- [x] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
+      LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`). **Done, see
+      [0079](0079-seeed-xiao-rp2040-board.md)** - the first board here carrying *both* kinds of RGB
+      LED at once. Its three plain LEDs' active-low polarity is the one fact neither firmware port
+      fully states (CircuitPython declares no RGB status LED here, and pico-sdk's
+      `PICO_DEFAULT_LED_PIN_INVERTED` qualifies only GPIO25), so it came from Seeed's own wiki
+      rather than by inferring the other two pins from the third.
+- [x] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists.
+      **Done, see [0080](0080-sparkfun-promicro-board.md)** - the largest flash part of any board
+      here (16 MiB, 15 MiB filesystem); ships neither a `pins.csv` nor a `set(PICO_BOARD ...)`, so
+      its pico-sdk board header is reached through `ports/rp2/CMakeLists.txt`'s own lowercase
+      fallback. **This row completes the checklist above: 12 of 12 addable-now MicroPython boards
+      are now built.**
 - [x] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
       Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port
       exists. **Done, see [0078](0078-waveshare-rp2040-plus-board.md)** - the user note below about

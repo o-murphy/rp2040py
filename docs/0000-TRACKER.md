@@ -55,7 +55,7 @@ and `reference/` for those). The structure itself is decided in
 ### In progress / Proposed
 
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
-- [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **Proposed, documented.** 128 boards checklisted across both MicroPython's and CircuitPython's board lists - 49 addable with zero new devices, 59 need one or more device (grouped by missing chip where shared across boards); 17 RP2350 boards and 3 architecturally-unmodelable ones flagged separately, not dropped
+- [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **Partly worked through.** Its "addable now, has a MicroPython port" checklist is **fully built** as of [0080] (12/12, records [0068]-[0071] and [0073]-[0080]); what remains open is the CircuitPython-only addable list (37 boards, none started) and everything gated behind a missing `ExternalDevice`. 128 boards checklisted across both MicroPython's and CircuitPython's board lists - 49 addable with zero new devices, 59 need one or more device (grouped by missing chip where shared across boards); 17 RP2350 boards and 3 architecturally-unmodelable ones flagged separately, not dropped
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
@@ -67,6 +67,8 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0080] SparkFun Pro Micro RP2040 board | off [0066]'s survey, and the row that **completes** its "addable now, has a MicroPython port" checklist (12/12); `Ws2812(gpio=25)` + `BootselButton` only - no plain LED at all, upstream says so explicitly rather than by omission. Largest flash of any board here (16 MiB, `fs_blockcount=3840`); ships neither a `pins.csv` nor a `set(PICO_BOARD ...)`, so its pico-sdk header is reached via `ports/rp2/CMakeLists.txt`'s lowercase fallback
+- [x] [0079] Seeed Studio XIAO RP2040 board | off [0066]'s survey; the first board here with **both** kinds of RGB LED - `Ws2812(gpio=12)` (power pin GPIO11, not gated, same as [0071]) *and* 3×`LEDMock(active_low=True)` (GPIO16/17/25). Polarity came from Seeed's own wiki, not either firmware port: CircuitPython declares no RGB status LED here and pico-sdk's `PICO_DEFAULT_LED_PIN_INVERTED` qualifies only GPIO25
 - [x] [0078] Waveshare RP2040-Plus board | off [0066]'s survey; plain `LEDMock(gpio=25)` + `BootselButton` only - no `USER_SW` equivalent exists on this board at all, so no open pull-direction gap; two flash variants (4/16 MiB, `BOARD`/`BOARD_16MB`), numerically identical flash geometry to [0076]'s own table
 - [x] [0077] Pimoroni Tiny 2040 board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (not a `Ws2812`, same shape [0075]), two flash variants (2/8 MiB, `BOARD`/`BOARD_8MB`); `USER_SW` left unmodelled (no schematic, same gap as [0076])
 - [x] [0076] Pimoroni Pico LiPo board | off [0066]'s survey; two flash variants (4/16 MiB, `BOARD`/`BOARD_16MB`), a single flat file (not a directory - the first board built this way deliberately); `USER_SW` left unmodelled (no schematic). Also: 7 earlier boards this session retroactively flattened from directories to flat files, and the skill's own "never nest a device in boards/" text corrected against what 0059 actually says
@@ -233,3 +235,5 @@ record is added.
 [0076]: records/0076-pimoroni-picolipo-board.md
 [0077]: records/0077-pimoroni-tiny2040-board.md
 [0078]: records/0078-waveshare-rp2040-plus-board.md
+[0079]: records/0079-seeed-xiao-rp2040-board.md
+[0080]: records/0080-sparkfun-promicro-board.md

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `boards/seeed_xiao_rp2040.py` - the Seeed Studio XIAO RP2040 as a `--board-spec` target, and the
+  first board here carrying **both** kinds of RGB LED at once: a `Ws2812(gpio=12)` NeoPixel (with a
+  real power-enable pin on GPIO11, not gated - same treatment as the Adafruit boards) *and* a second
+  RGB LED as three plain `LEDMock(active_low=True)` on GPIO16/17/25. Both firmware families, under
+  different upstream board ids (`SEEED_XIAO_RP2040` / `seeeduino_xiao_rp2040`); plain-Pico flash
+  geometry (`fs_start=0xa0000`/`fs_blockcount=352`), confirmed by live boot. The three plain LEDs'
+  active-low polarity is the one fact neither firmware port fully states - CircuitPython declares no
+  RGB status LED here and pico-sdk's `PICO_DEFAULT_LED_PIN_INVERTED` qualifies only GPIO25 - so it
+  is sourced from Seeed's own wiki rather than inferred from the third pin. See
+  [docs/records/0079](docs/records/0079-seeed-xiao-rp2040-board.md).
+- `boards/sparkfun_promicro.py` - the SparkFun Pro Micro RP2040 as a `--board-spec` target:
+  `Ws2812(gpio=25)` + `BootselButton`, no plain LED at all (upstream's pico-sdk header says so
+  outright, with the `PICO_DEFAULT_LED_PIN 25` block commented out - GPIO25 being exactly where a
+  plain Pico puts its LED). Both firmware families; the largest flash part of any board here -
+  16 MiB with a 15 MiB filesystem (`fs_start=0x100000`/`fs_blockcount=3840`), confirmed by live
+  boot. Ships neither a `pins.csv` nor a `set(PICO_BOARD ...)`, so its pico-sdk board header is
+  reached through `ports/rp2/CMakeLists.txt`'s own lowercase fallback. See
+  [docs/records/0080](docs/records/0080-sparkfun-promicro-board.md).
+
+### Changed
+- [docs/records/0066](docs/records/0066-board-support-expansion.md)'s "addable now, has a
+  MicroPython port" checklist is now **fully built - 12 of 12** (records 0068-0071 and 0073-0080).
+  What remains open on that survey is the CircuitPython-only addable list (37 boards, none started)
+  and everything gated behind a missing `ExternalDevice`.
+
 ## [0.3.0rc2] - 2026-08-18
 
 ### Added
