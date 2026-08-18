@@ -329,13 +329,15 @@ Two practical notes both runners now encode, learned the hard way:
   back to the caller. From the SDK, build the board with the callback already closed over - the
   `board_with(on_frame)` helper in `boards/waveshare_rp2040_lcd_0_96/` is the pattern.
   From the CLI there is no answer today; see [record 0056](../records/0056-st7735s-waveshare-lcd-board.md).
-- **A PIO-driven pulse-width protocol does not decode correctly yet.** `RPPIO` stores `SM_CLKDIV`
-  and accumulates `[delay]` cycles but paces itself by neither, so waveforms whose *meaning* is in
-  pulse widths - WS2812, DHT11/22, servo PWM, IR codes, one-wire - arrive with their symbols
-  collapsed into each other. Edge-*order* protocols (CYW43's clocked gSPI, SPI/I2C-shaped things)
-  are unaffected, which is why this went unnoticed for so long. `Ws2812` is written for the real
-  waveform and unit-tested against it; live decoding waits on
-  [record 0063](../records/0063-pio-clkdiv-and-delay-cycles.md).
+- **A state machine never runs more than one instruction per CPU instruction.** `RPPIO` paces its
+  machines by `SM_CLKDIV` and `[delay]` in system clocks ([record
+  0063](../records/0063-pio-clkdiv-and-delay-cycles.md)), so pulse-width protocols - WS2812,
+  DHT11/22, servo PWM, IR codes, one-wire - decode at their real timings; what it cannot do is run
+  *faster* than the CPU dispatches instructions, which is what a divider of 1 would need. The
+  ceiling is deliberate (`clock.tick()` must run between PIO steps, [record
+  0043](../records/0043-pio-dma-first-batch-race.md)), and for the same reason PIO does not run
+  through a CPU idle jump. Anything asking for a divider above ~1.4 - which is every pulse-width
+  driver - is exact.
 - **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See

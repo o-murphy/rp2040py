@@ -19,7 +19,7 @@ and `reference/` for those). The structure itself is decided in
   carries open work against itself — a "Known gaps"/"Still open" section listing things that are
   wrong or unbuilt, not merely ideas for later — the row stays `[ ]` under "In progress /
   Proposed", with those gaps as nested checkboxes, and only moves to "Implemented" once they are
-  closed. A merged PR says the code shipped; it does not say the idea is done. (Currently: [0048], [0062].)
+  closed. A merged PR says the code shipped; it does not say the idea is done. (Currently: [0048].)
 - **Granularity is tiered** (see [0032]): short-lived ideas are one file (**B1**);
   long-running, cross-cutting threads are split into several records (**B2**).
 - **A row is an index entry, not a summary.** One line: state, number, title, and a short clause
@@ -52,8 +52,6 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0063] `RPPIO` ignores `SM_CLKDIV` and `[delay]` cycles | **Found and measured, nothing implemented.** Blocks pulse-width protocols (WS2812, DHT, servo, IR); edge-order ones are unaffected. Blocks [0062]'s live decoding
-- [ ] [0062] YD-RP2040 board + the `Ws2812` device | **device and board landed and live-verified**; open only for live decoding of a *PIO-driven* driver, which waits on [0063]
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
@@ -64,6 +62,8 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | both halves landed as a due-time skip; unblocks pulse-width protocols and fixes CYW43's gSPI clock, ~11% faster. Ceiling kept: one instruction per CPU instruction, which [0043] depends on
+- [x] [0062] YD-RP2040 board + the `Ws2812` device | device and board landed and live-verified; the PIO-driven live decoding it was open for works since [0063]
 - [x] [0059] firmware resolution inside `BoardSpec`: one path for `--board` and `--board-spec` | `firmware` keyed by family, resolved at use time; `boards/` is one directory per board; `--image`/`--fetch-fw-only` now work with `--board-spec`
 - [x] [0049] document external devices/boards + how a user writes their own | all 5 phases landed; `reference/external-devices-and-boards.md` is the how-to
 - [x] [0056] `St7735s` external device + Waveshare RP2040-LCD-0.96 board | first board whose point is its device; MADCTL geometry + RGB444/666 in the addendum

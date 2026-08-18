@@ -86,6 +86,11 @@ cdef extern from *:
     unsigned int rp2040py_ctz(unsigned int x) nogil
 
 
+# See _pio.py for what these two mean - the pure-Python reference is the documentation.
+cdef long long NEVER_DUE = <long long>1 << 62
+cdef long long MAX_ARREARS_FP = <long long>8 << 8
+
+
 cdef class RPPIO:
     def __cinit__(self, rp2040, str name, unsigned int first_irq, unsigned int index):
         self.rp2040 = rp2040
@@ -102,6 +107,11 @@ cdef class RPPIO:
         self._run_task = None
 
         self.stopped = True
+        # Elapsed system clocks and the earliest cycle any machine is due, both in 1/256ths so a
+        # fractional CLKDIV needs no float - see _pio.py's own comments (docs/records/0063).
+        self.cycle_fp = 0
+        self.next_due_fp = NEVER_DUE
+        self.backlog_drops = 0
         self.fdebug = 0
         self.tx_stall = 0
         self.rx_stall = 0
@@ -264,11 +274,17 @@ cdef class RPPIO:
 
         if offset == CTRL:
             for index in range(4):
-                self.machines[index].enabled = bool(value & (1 << index))
+                machine = <StateMachine>self.machines[index]
+                enabled = bool(value & (1 << index))
+                if enabled and not machine.enabled:
+                    # Starts running now, not at a due time left behind when it was disabled.
+                    machine.next_due_fp = self.cycle_fp
+                machine.enabled = enabled
                 if value & (1 << (4 + index)):
-                    self.machines[index].restart()
+                    machine.restart()
                 if value & (1 << (8 + index)):
-                    self.machines[index].clk_div_restart()
+                    machine.clk_div_restart()
+            self.recompute_due()
             should_run = value & 0xF
             if self.stopped and should_run:
                 self.stopped = False
@@ -373,16 +389,53 @@ cdef class RPPIO:
                     (<GPIOPin>gpio[gpio_index]).check_for_updates()
                 remaining &= remaining - 1
 
-    cpdef step(self):
+    cpdef recompute_due(self):
+        """Earliest cycle any machine has something to do, from scratch - see _pio.py."""
+        cdef long long next_due_fp = NEVER_DUE
         cdef StateMachine machine
         for machine in self.machines:
-            machine.step()
+            if machine.enabled and not machine.waiting and machine.next_due_fp < next_due_fp:
+                next_due_fp = machine.next_due_fp
+        self.next_due_fp = next_due_fp
+
+    cpdef notify_due(self, long long due_fp):
+        """A machine re-armed itself out of band (check_wait() from an MMIO write, a GPIO edge or
+        an IRQ) - only ever lowers next_due_fp. See _pio.py."""
+        if due_fp < self.next_due_fp:
+            self.next_due_fp = due_fp
+
+    cpdef advance(self, long long cycles):
+        """Advance this PIO block by `cycles` system clocks - the paced entry point
+        _execute_batch() calls per CPU instruction. At most one instruction per machine per call,
+        which docs/records/0043 depends on. See _pio.py's own advance() docstring for the
+        measured failure that ceiling prevents and docs/records/0063 for the rest; the fast path
+        here is one C add and one C compare."""
+        self.cycle_fp += cycles << 8
+        if self.cycle_fp < self.next_due_fp:
+            return
+        self._run_due()
+
+    cdef _run_due(self):
+        cdef long long cycle_fp = self.cycle_fp
+        cdef StateMachine machine
+        for machine in self.machines:
+            if machine.enabled and not machine.waiting and machine.next_due_fp <= cycle_fp:
+                if cycle_fp - machine.next_due_fp > MAX_ARREARS_FP:
+                    # See _pio.py: write off a backlog one-per-CPU-instruction can never deliver.
+                    self.backlog_drops += 1
+                    machine.next_due_fp = cycle_fp
+                machine.step()
+        self.recompute_due()
         self.check_changed_pins()
+
+    cpdef step(self):
+        """One system clock - the no-owning-Simulator entry point. See _pio.py."""
+        self.advance(1)
 
     def _step_batch(self):
         cdef int i = 0
         while i < 1000 and not self.stopped:
-            self.step()
+            self.advance(1)
             i += 1
 
     async def run(self):

@@ -1,8 +1,11 @@
 # 0063. `RPPIO` ignores `SM_CLKDIV` and `[delay]` cycles, so PIO-generated waveforms are not to scale
 
-- Status: **Proposed — found and measured, nothing implemented (2026-08-17).** Discovered while
-  building [0062](0062-yd-rp2040-board-and-ws2812.md)'s `Ws2812`, which it blocks. No fix is
-  attempted here: this touches the emulator's hottest loop and would need its own go-ahead.
+- Status: **Implemented (2026-08-18)** - both halves, measured against 0062's own trace and
+  re-verified live on CYW43. See "Implemented" at the end for what the experiment changed about the
+  recommendation below. (Original status, kept: *Proposed — found and measured, nothing implemented
+  (2026-08-17). Discovered while building [0062](0062-yd-rp2040-board-and-ws2812.md)'s `Ws2812`,
+  which it blocks. No fix is attempted here: this touches the emulator's hottest loop and would need
+  its own go-ahead.*)
 - Conceived: 2026-08-17
 - Related: [0062](0062-yd-rp2040-board-and-ws2812.md) (the device that hit it), 0037 (PIO stepping
   coupled to the CPU's instruction loop - the design this is a gap in, not a regression of), 0031 /
@@ -133,3 +136,134 @@ Land it in two steps, because the second is where the risk is:
    with no overlap, and `Ws2812` must decode `ff 00 aa`;
 2. CYW43 live on `1.23.0` and `1.28.0`, because its effective SPI clock halves and 0043 exists
    precisely because that interaction is brittle. `bench` before/after alongside.
+
+## Implemented, 2026-08-18 — both halves, and the ceiling that had to come with them
+
+Built as recommended above: a due-time skip in `RPPIO`, honouring **both** `SM_CLKDIV` and
+`[delay]`, in both twins (`peripherals/_pio.py` + `peripherals/_state_machine.py`, and
+`native/_pio.pyx` + `native/_state_machine.pyx` with their `.pxd`s). The design is exactly the one
+sketched above, with one addition the sketch did not have and that live firmware forced - see "What
+the experiment found" below.
+
+### The mechanism
+
+- **One integer per PIO block.** `RPPIO.cycle_fp` counts elapsed system clocks and `next_due_fp`
+  holds the earliest cycle any of its four machines is next due at, both in 1/256ths of a system
+  clock so a fractional divider needs no float anywhere. `advance(cycles)` - the paced entry point
+  `_execute_batch()` now calls once per CPU instruction, with **that instruction's own cycle
+  count** rather than a flat 1 - adds and compares, and returns. That is the whole fast path.
+- **One integer per state machine.** `StateMachine.div_fp` is `SM_CLKDIV` as a single 16.8
+  fixed-point divisor (`CLKDIV_INT == 0` meaning /65536, per datasheet 3.5.5), recomputed on
+  every write to the register; `next_due_fp` is that machine's own absolute due time. `step()`
+  re-arms it by the cycles the instruction actually cost - which `execute_instruction()` already
+  accumulated correctly into `cycles` (1 for the instruction plus its `[delay]`), so the `[delay]`
+  half needed no new decoding at all, only somewhere for the number to go.
+- **Stalls are excluded, not polled.** A `waiting` machine has no answer to "when next due", so it
+  is left out of `next_due_fp` entirely; `check_wait()` - which already runs on every event that
+  can unstall a machine (an MMIO FIFO write, a GPIO edge, an IRQ) - re-arms it *absolutely* (a
+  stall ends on the cycle its condition becomes true, not on a delta from when it began) and
+  lowers the block's due time so the very next `advance()` picks it up. That is what let
+  `_execute_batch()`'s `_has_runnable_machine()` scan be deleted outright rather than kept
+  alongside.
+- `CTRL.CLKDIV_RESTART` is implemented rather than warned about, now that there is a divider phase
+  to restart.
+
+### What the experiment found, and what it cost
+
+**The recommendation above was right about the arithmetic and wrong about the loop.** Written as
+recommended - "touch machines only when one is actually due", walking through as many instructions
+as the due times said were owed - it broke CYW43 immediately and totally: MicroPython v1.23.0's
+`nic.scan()` returned `OSError: EPERM` instantly, every run, on both `1.23.0` and a
+divider-forced-to-1 build. Bisected by forcing each half in turn:
+
+| build | `nic.scan()` |
+|---|---|
+| the new mechanism, but advancing PIO exactly 1 cycle per CPU instruction (i.e. the old rate) | works |
+| `[delay]` honoured, `CLKDIV` forced to 1 | **EPERM** |
+| both honoured | **EPERM** |
+| both honoured, **at most one instruction per `advance()` call** | works |
+
+So it was never the *average* rate - CYW43's own `CLKDIV=2` makes its state machine **slower**
+relative to the CPU, not faster. It was the **burst**. [0043](0043-pio-dma-first-batch-race.md)
+turns on `clock.tick()` running between every single PIO step: a DMA-fed TX FIFO is refilled only
+by `SimulationClock` alarms, and those only fire from the CPU loop, so a machine allowed two steps
+between two ticks can drain a FIFO the DMA channel has had no chance to refill, raise a premature
+`FDEBUG_TXSTALL`, and be read by `cyw43_spi_transfer()`'s TX-only branch as "transfer complete"
+after the first few words. Handing `advance()` the instruction's real cycle count (1-3, averaging
+~1.4) is enough on its own to produce that second step sometimes, with or without a divider.
+
+**So the ceiling is part of the fix, not a shortcut: a state machine never executes more than one
+instruction per CPU instruction.** This only ever *slows* a machine relative to the CPU. A divider
+at or below the average cycles-per-instruction still runs "as fast as the CPU dispatches
+instructions" - exactly what every state machine did before this change - so nothing that worked
+before can be outrun by anything now. Two consequences worth stating plainly:
+
+- **`CLKDIV=1` is still not simulated faithfully**, and cannot be inside 0037's coupling: real
+  hardware runs 1-3 PIO instructions per CPU instruction there, and this runs one. What changed is
+  that every divider *above* that is now right, which is the entire class of pulse-width protocols.
+- **A CPU idle jump still costs PIO its backlog.** The idle branch jumps straight to the next
+  scheduled alarm - a millisecond, i.e. 125,000 system clocks, is ordinary - and one instruction
+  per `advance()` can never pay that off. Rather than let a machine then run flat out for the next
+  125,000 CPU instructions working off a debt it accrued while the CPU was asleep, a backlog beyond
+  `MAX_ARREARS_FP` (8 system clocks - more than any single CPU instruction, far less than any idle
+  jump) is written off and the machine re-armed from the current cycle, so its *rate* stays right.
+  `RPPIO.backlog_drops` counts these. This is the same ceiling PIO always had here (an idle jump
+  was worth exactly one PIO step before this change too), now explicit and countable.
+
+One smaller thing the idle branch needed: an idle jump with **no** alarm scheduled at all advances
+simulated time by nothing (`nanos_to_next_alarm` is 0), so the cycles handed to `advance()` are
+floored at one. Without that floor a PIO fed only by DMA, with no ARM program running at all, can
+never make the progress that would let anything wake the CPU up again - `tests/test_pio.py`'s own
+0043 regression test is exactly that shape, and it deadlocked until the floor went in.
+
+### Measured
+
+**0062's acceptance test passes.** Real CircuitPython `10.2.1` on the YD-RP2040 board, guest
+running `neopixel_write(board.NEOPIXEL, bytearray([0xFF, 0x00, 0xAA]))`, captured as raw GPIO23
+edges - the same capture that produced this record's opening trace:
+
+| | before | after | real hardware |
+|---|---|---|---|
+| `0` bits | 8-16 ns | **272-352 ns** | 312 ns |
+| `1` bits | 8-40 ns (*overlapping* the above) | **664-720 ns** | 703 ns |
+| bit period | ~24-40 ns | **~1250 ns** | 1250 ns |
+
+Not merely a restored 4:9 ratio: the widths are the **absolute nanosecond values real silicon
+produces**, because pacing PIO by system clocks makes 12.8 MHz mean 12.8 MHz. The residual ±40 ns
+is the CPU instruction the edge lands inside (1-3 system clocks, and the arrears write-off keeps it
+from accumulating) - a seventh of the ~190 ns margin either side of the decision threshold.
+`Ws2812` decodes the frame as wire bytes `ff 00 aa`, i.e. `(r, g, b) = (0x00, 0xff, 0xaa)` through
+its `GRB` order. Booting the same board with no guest code decodes the status LED cleanly too -
+alternating `(0, 0, 0)` and `(11, 11, 11)` frames, where before the fix nothing decoded at all.
+
+**CYW43 live, both firmwares, and it got faster.** `tests/micropython/main-cyw43.py` on
+`RPI_PICO_W-1.23.0` and `RPI_PICO_W-1.28.0`, plus `tests/circuitpython/main-cyw43.py` on
+CircuitPython `10.2.1` for Pico W: all three complete - scan, join, DHCP, a real TCP connection
+through the NAT bridge, DNS, TLS (`1.28.0`), disconnect. Timed on a scan+join+DHCP script:
+
+| | wall clock | simulated time the guest measured |
+|---|---|---|
+| before | 16.9 s | 829 ms |
+| after | **15.0 s** (~11% faster) | 841 ms (+1.4%) |
+
+Both directions are the honest ones: **cheaper** in wall clock, as predicted - a single integer
+compare replaces four `step()` calls plus a `_has_runnable_machine()` scan per CPU instruction, and
+`CLKDIV=2` halves what survives that compare - and **slower in simulated time**, because CYW43's
+gSPI clock is now the `sysclk/2` its driver actually asked for instead of twice that. A CPU-only
+workload (300k-iteration guest loop, no PIO enabled) is unchanged at 100.8 s vs 100.1 s, i.e.
+inside the noise: the `pio.stopped` short-circuit is untouched.
+
+`tests/test_pio_clkdiv.py` holds the arithmetic itself - integer, fractional and `INT == 0`
+dividers, `[delay]`, the two composed, the one-instruction-per-call ceiling, the arrears write-off,
+`CLKDIV_RESTART`, re-enable, and a stalled machine costing nothing until something unstalls it -
+one system clock at a time, on both twins.
+
+### Still open
+
+- **`CLKDIV=1` fidelity**, as above: bounded by 0037's coupling, not by this record.
+- **PIO does not run during a CPU idle jump**, as above. A `MAX_ARREARS_FP` write-off is visible in
+  `backlog_drops` when it happens; it did not fire once during either CYW43 boot or the WS2812
+  capture, because those drivers busy-wait rather than sleep.
+- The fourth option this record rejected (precompute a pin-change schedule instead of simulating
+  idle cycles) stays rejected and stays available as a future special case inside the due-time
+  model, which is now real.

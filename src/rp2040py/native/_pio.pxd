@@ -18,6 +18,10 @@ cdef class RPPIO:
     cdef public list machines
     cdef public object _run_task
     cdef public bint stopped
+    # Divider/due-time pacing state - docs/records/0063. See _pio.py for what each one means.
+    cdef public long long cycle_fp
+    cdef public long long next_due_fp
+    cdef public long long backlog_drops
     cdef public unsigned int fdebug
     cdef public unsigned int tx_stall
     cdef public unsigned int rx_stall
@@ -33,5 +37,9 @@ cdef class RPPIO:
     cdef public unsigned int irq1_int_force
 
     cdef _warn(self, msg)
+    cpdef recompute_due(self)
+    cpdef notify_due(self, long long due_fp)
+    cpdef advance(self, long long cycles)
+    cdef _run_due(self)
     cpdef step(self)
     cpdef check_changed_pins(self)
