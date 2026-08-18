@@ -55,7 +55,10 @@ records generally).
       [0070](0070-adafruit-itsybitsy-rp2040-board.md)** - the power pin is real here (unlike
       `ADAFRUIT_FEATHER_RP2040`'s false claim), and the boot pushbutton is also diode-coupled into
       the real BOOTSEL pad per Adafruit's own schematic (not modelled - an analog cross-pin path).
-- [ ] `ADAFRUIT_QTPY_RP2040` - `Ws2812` (GPIO12, power GPIO11) + boot pushbutton (GPIO21), no plain LED; CircuitPython port exists
+- [x] `ADAFRUIT_QTPY_RP2040` - `Ws2812` (GPIO12, power GPIO11) + boot pushbutton (GPIO21), no plain LED; CircuitPython port exists. **Done, see
+      [0071](0071-adafruit-qtpy-rp2040-board.md)** - same power pin and diode-into-BOOTSEL button
+      design as `ADAFRUIT_ITSYBITSY_RP2040`, component-for-component identical per Adafruit's own
+      schematic.
 - [ ] `GARATRONIC_PYBSTICK26_RP2040` - LED (GPIO23) only; MicroPython-only, no CircuitPython port
 - [ ] `MACHDYNE_WERKZEUG` - two plain LEDs, green (GPIO20) + red (GPIO21); MicroPython-only
 - [ ] `NULLBITS_BIT_C_PRO` - RGB LED as three plain active-low GPIO LEDs (GPIO16/17/18, i.e.
