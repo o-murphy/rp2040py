@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fs_blockcount=256`/`1792`). `USER_SW` (GPIO23) left unmodelled - same gap as
   `pimoroni_picolipo`'s, no schematic found. See
   [docs/records/0077](docs/records/0077-pimoroni-tiny2040-board.md).
+- `boards/waveshare_rp2040_plus.py` - the Waveshare RP2040-Plus as a `--board-spec` target: `BOARD`
+  (4 MiB, default) and `BOARD_16MB`, `LEDMock(gpio=25)` + `BootselButton` only - this board has no
+  `USER_SW`-equivalent pushbutton at all, so no open pull-direction gap - both firmware families,
+  both flash-size variants live-boot-verified (`fs_start=0x100000`, `fs_blockcount=768`/`3840`,
+  numerically identical to `pimoroni_picolipo`'s since both use the same-sized flash chips). See
+  [docs/records/0078](docs/records/0078-waveshare-rp2040-plus-board.md).
 
 ### Changed
 - **`boards/` no longer defaults to one directory per board.** A directory

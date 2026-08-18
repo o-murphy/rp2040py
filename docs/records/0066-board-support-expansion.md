@@ -85,11 +85,14 @@ records generally).
 - [ ] `SEEED_XIAO_RP2040` - `Ws2812` (GPIO12, power GPIO11) + a separate RGB LED as three plain GPIO
       LEDs (GPIO16/17/25); CircuitPython port exists (`seeeduino_xiao_rp2040`)
 - [ ] `SPARKFUN_PROMICRO` - `Ws2812` only (GPIO25), no plain LED; CircuitPython port exists
-- [ ] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
+- [x] `WAVESHARE_RP2040_PLUS` - LED (GPIO25) only, no NeoPixel despite the board's own "Battery
       Charging" feature tag (that circuit is analog-only, not addressable); CircuitPython port
-      exists. **User note (2026-08-18, not yet verified against source): also has 16 MiB/4 MiB
-      flash-size variants on CircuitPython** - same multi-variant shape `PIMORONI_PICOLIPO` turned
-      out to have; check source before assuming the single-variant summary above is complete.
+      exists. **Done, see [0078](0078-waveshare-rp2040-plus-board.md)** - the user note below about
+      16 MiB/4 MiB flash-size variants was confirmed against source (both MicroPython's
+      `BOARD_VARIANT` mechanism and two separate CircuitPython board ids,
+      `waveshare_rp2040_plus_4mb`/`_16mb`, same shape as `PIMORONI_PICOLIPO`); unlike that board,
+      this one has no `USER_SW`-equivalent pushbutton at all, so no pull-direction gap was left
+      open.
 - [x] `WAVESHARE_RP2040_ZERO` - `Ws2812`/NeoPixel only (GPIO16); CircuitPython port exists. Flagged
       by the user as the one to pick up first, off
       [the board's own `board.json`](https://github.com/micropython/micropython/blob/master/ports/rp2/boards/WAVESHARE_RP2040_ZERO/board.json) -
