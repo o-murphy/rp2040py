@@ -18,6 +18,14 @@ the emulator loads as flash content (see `mkfat12.py`) instead of being pushed o
 | [`lcd_run.py`](lcd_run.py) + [`mp_lcd_demo.py`](mp_lcd_demo.py) / [`cp_lcd_demo.py`](cp_lcd_demo.py) | Waveshare RP2040-LCD-0.96's onboard 160×80 ST7735S panel, MicroPython or CircuitPython |
 | [`wifi_lcd_run.py`](wifi_lcd_run.py) + [`cp_wifi_lcd_demo.py`](cp_wifi_lcd_demo.py) | a Pico W's CYW43439 *and* an ST7735S wired to it: a CircuitPython WiFi join, on screen |
 
+`mkfat12.py` writes root-level 8.3 names on its own, with nothing installed. A long name or a path
+(`settings.toml`, `lib/greeter.py`) needs VFAT/LFN entry chains it deliberately doesn't implement,
+so it hands those images to `pyfatfs` - declared in that script's own PEP 723 header, so
+`uv run --script demo/mkfat12.py ...` installs it for that script alone and the project itself
+takes no dependency on it. [Record 0086](../docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md)
+is the plan for making that a real optional dependency plus a `mkfat12` CLI subcommand, and the
+survey of the libraries that could back it.
+
 ## What the display demos actually produce
 
 Every image below came out of the emulator - each is the raw framebuffer a device emitted
@@ -61,8 +69,8 @@ That `wifi: MISSING` is the honest answer to "would a WiFi connection show up he
 board: it has no CYW43439, so its CircuitPython build ships no `wifi` module at all. `wifi_lcd_run.py`
 below is where a real join happens. `--boot` works the same way but is invisible to any
 screenshot - CircuitPython sends `boot.py`'s output to `boot_out.txt` instead of the console, so
-`--dump-fs after.img` plus `python demo/mkfat12.py --output /dev/null --base after.img --read
-boot_out.txt` is how to read it. Both findings are [record 0085](../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
+`--dump-fs after.img` plus `python demo/mkfat12.py --base after.img --read boot_out.txt` is how to
+read it. Both findings are [record 0085](../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 The two runs also drive the panel through *different* orientations (`MADCTL` `0xA8` vs `0xC8`,
 with transposed window offsets); both come out upright because the emulated controller applies

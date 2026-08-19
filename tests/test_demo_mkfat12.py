@@ -8,6 +8,7 @@ parser, so a bug in `Fat12Volume` can't agree with itself: these assertions are 
 layout as documented, and against the numbers a real CircuitPython-formatted volume was measured
 to have."""
 
+import importlib.util
 import struct
 import subprocess
 import sys
@@ -142,13 +143,25 @@ def test_content_survives_byte_for_byte_including_crlf(tmp_path):
     assert _read(output, "code.py") == source.read_bytes()
 
 
-def test_a_name_that_needs_a_long_filename_entry_is_refused(tmp_path):
-    # settings.toml is the one CircuitPython file this builder genuinely cannot write, since it
-    # needs an LFN chain - refused outright rather than silently mangled into SETTIN~1.TOM.
-    source = _write(tmp_path, "settings.py", "x = 1\n")
-    result = _run("--output", str(tmp_path / "out.img"), f"{source}=settings.toml")
-    assert result.returncode != 0
-    assert "8.3" in result.stderr
+def test_a_long_name_is_handed_to_pyfatfs_rather_than_mangled(tmp_path):
+    # settings.toml and lib/ are what the 8.3 builder genuinely cannot write (LFN entry chains and
+    # a subdirectory), so build_image() routes the whole image through pyfatfs instead of mangling
+    # them into SETTIN~1.TOM. That library is in this script's PEP 723 dependencies rather than the
+    # project's, so it is only importable here when the developer happens to have it - both
+    # outcomes are asserted, since which one applies is an environment fact, not a behaviour.
+    settings = _write(tmp_path, "settings.py", 'GREETING = "hi"\n')
+    nested = _write(tmp_path, "greeter.py", "def greet(n):\n    return n\n")
+    args = ("--output", str(tmp_path / "out.img"), f"{settings}=settings.toml", f"{nested}=lib/greeter.py")
+
+    result = _run(*args)
+    if importlib.util.find_spec("pyfatfs") is None:
+        assert result.returncode != 0
+        # Naming the flag that fixes it matters more than the ImportError itself.
+        assert "pyfatfs" in result.stderr and "uv run --script" in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    assert _read(tmp_path / "out.img", "settings.toml") == settings.read_bytes()
+    assert _read(tmp_path / "out.img", "lib/greeter.py") == nested.read_bytes()
 
 
 def test_read_needs_a_base_image(tmp_path):
