@@ -173,6 +173,27 @@ convention `firmware_specs.json` does, and `prog_start` is Kaluma-only (its sepa
 program" region) - leave it out for MicroPython/CircuitPython, which keep user code inside the
 filesystem itself.
 
+The numbers above are an illustration; a real board's come from that firmware's own config, and
+each family reads a different field:
+
+| family | `fs_start` | source |
+|---|---|---|
+| MicroPython | `PICO_FLASH_SIZE_BYTES - MICROPY_HW_FLASH_STORAGE_BYTES` | the board's `ports/rp2/boards/<BOARD>/mpconfigboard.h` |
+| CircuitPython | `CIRCUITPY_FIRMWARE_SIZE + 4096` (NVM) | `ports/raspberrypi/mpconfigport.h`'s default `1020 * 1024`, overridden in the board's **`mpconfigboard.mk`** |
+| Kaluma | `KALUMA_BINARY_MAX + base * 4096` | `targets/rp2/boards/<board>/board.h` + `board.js`'s `new Flash(base, count)` |
+
+The CircuitPython row is the one with a trap in it. A board may also carry a `link.ld` with its own
+`firmware_size`, and that is **not** what the drive start is computed from - `raspberry_pi_pico_w`
+has `firmware_size = 1532k` in `link.ld` and `-DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` in
+`mpconfigboard.mk`, and the filesystem follows the second one. Reading the first is what put a
+wrong `0x180000` in this project's own specs until 2026-08-19; see
+[record 0085](../records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 for how it
+presented (a `--fat12` image the firmware silently ignored, then reformatted over).
+
+Getting it wrong is silent, so verify it on a real boot rather than by reading alone: `--dump-fs`
+should return an image the firmware itself wrote, and `-c "import os; print(os.statvfs('/'))"`
+should report the geometry you expect.
+
 Add a second key to serve a second firmware for the same hardware - the devices, pin map and
 flash geometry belong to the board, not to whichever firmware is flashed:
 
