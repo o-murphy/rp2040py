@@ -27,14 +27,17 @@ jobs:
           # The project's own default (README), and the oldest thing we claim to support.
           - tag: "8.0.2"
             wlan: false
-          # WiFi through the CYW43 NAT bridge. Pinned to 9.2.9 because that is the version
-          # tests/circuitpython/main-cyw43.py was actually verified against (0048); moving it to
-          # 10.x needs a live re-verification first, not just a matrix edit.
+          # WiFi through the CYW43 NAT bridge. 9.2.9 is the version
+          # tests/circuitpython/main-cyw43.py was originally verified against (0048), kept as the
+          # older of the two CYW43 host stacks this exercises.
           - tag: "9.2.9"
             wlan: true
-          # Regression test for 0050 - this is the version that used to hang forever.
+          # Regression test for 0050 - this is the version that used to hang forever - and, since
+          # 2026-08-19, WiFi as well: 0048 asked for a live re-verification before moving the
+          # CYW43 job to 10.x, and 0085 did it (scan/join/DHCP all the way to a DHCP address
+          # rendered on an emulated panel), so this stops being banner-only.
           - tag: "10.2.1"
-            wlan: false
+            wlan: true
 
     steps:
       - uses: actions/checkout@v7

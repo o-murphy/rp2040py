@@ -240,6 +240,19 @@ request for the gateway → ARP reply → (now) TCP SYN.
     construction and already covered by the plain-TCP and TLS steps. Verified by hand, recorded
     here, not automated.
 
+- 2026-08-19: **CircuitPython 10.2.1 live-verified too**, which is what the 2026-08-16 entry below
+  said was needed before the CYW43 job could move off 9.2.9 ("moving it to 10.x needs a live
+  re-verification first, not just a matrix edit"). The exact CI command
+  (`rp2040py micropython --circuitpython --image 10.2.1 --board pico_w
+  tests/circuitpython/main-cyw43.py`) runs unchanged and clean: same `_GUEST_MAC`, the
+  `RP2040PY-GUEST` scan result, `connected: True`, DHCP `10.0.0.2`/`10.0.0.1`, a real 151-byte
+  HTTP response from `1.1.1.1:80` through the reflector, DNS for `micropython.org` →
+  `176.58.119.26`, and the script's own `CIRCUITPYTHON CYW43 OK`. `ci-circuitpython.yml`'s
+  `10.2.1` matrix entry is therefore now `wlan: true` - it had been the boot-banner-only
+  regression test for [0050](0050-qspi-pad-reset-values.md). Found while building
+  [0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s WiFi-on-a-panel demo, which drives
+  the same path from guest `code.py` instead.
+
 - 2026-08-16: **CircuitPython live-boot verified** - closing the other half of the "Unverified"
   gap. `tests/circuitpython/main-cyw43.py` added (the `wifi`/`socketpool` counterpart of the
   MicroPython script) and run against real CircuitPython **9.2.9** with `--board pico_w`:

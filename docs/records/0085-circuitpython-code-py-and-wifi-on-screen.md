@@ -247,3 +247,8 @@ matrix's `wlan` flag for 10.2.1 is a separate, deliberate change and is **not** 
 - 2026-08-19: the Pico W run produced no frames at all until finding 5's wrong `fs_start` was
   found and fixed; with `0x181000` it draws the join on the panel, and
   `demo/screenshots/wifi-lcd-circuitpython-connected.png` is that frame.
+- 2026-08-19: `ci-circuitpython.yml`'s `10.2.1` job flipped to `wlan: true`. This record's demo
+  drives CYW43 from guest `code.py` rather than from the raw REPL, so the CI script itself was run
+  as its own check first - `tests/circuitpython/main-cyw43.py` passes unchanged on 10.2.1, right
+  through to its `CIRCUITPYTHON CYW43 OK`. Evidence in [0048](0048-cyw43-nat-reflector.md)'s
+  progress log, which is where that re-verification was asked for.
