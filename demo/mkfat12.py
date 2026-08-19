@@ -321,7 +321,11 @@ def main(argv: "list[str] | None" = None) -> None:
             parser.error("--read needs --base: it prints a file out of an existing image")
         volume = Fat12Volume(bytearray(args.base.read_bytes()))
         for name in args.read:
-            sys.stdout.write(volume.read(name).decode(errors="replace"))
+            # Bytes, not decoded text: this is a file being read out of a filesystem image, so
+            # nothing here should re-encode it or translate its line endings (a text-mode stdout
+            # on Windows turns every \n in the file into \r\n, corrupting exactly the round-trip
+            # this exists to provide).
+            sys.stdout.buffer.write(volume.read(name))
         return
 
     if args.output is None:
