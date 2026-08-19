@@ -252,3 +252,47 @@ matrix's `wlan` flag for 10.2.1 is a separate, deliberate change and is **not** 
   as its own check first - `tests/circuitpython/main-cyw43.py` passes unchanged on 10.2.1, right
   through to its `CIRCUITPYTHON CYW43 OK`. Evidence in [0048](0048-cyw43-nat-reflector.md)'s
   progress log, which is where that re-verification was asked for.
+
+## Correction (2026-08-19, same day)
+
+**This record's premise for why the host has to build the CIRCUITPY image is wrong.** It says
+CircuitPython "deliberately refuses to write to CIRCUITPY while USB is attached
+(`storage.remount()` raises), so on that side the host has to lay the bytes down itself". That is
+true of a real board plugged into a real computer. It is **not** true in this emulator, and the
+difference is a property of rp2040py, not of CircuitPython:
+
+- CircuitPython's guard is not "is USB attached" but a lock:
+  `shared-module/storage/__init__.c`'s `common_hal_storage_remount()` raises only
+  `if (!blockdev_lock(fs_usermount))`.
+- That lock is taken from `supervisor/shared/usb/usb_msc_flash.c`'s `tud_msc_is_writable_cb()`
+  ("Lock the blockdev once we say we're writable") - a **TinyUSB callback**, which fires only once
+  a USB host actually issues mass-storage traffic.
+- rp2040py never issues any: `usb/cdc.py`'s `extract_endpoint_numbers()` walks the firmware's own
+  configuration descriptor for the one interface with `interface_class == CDC_DATA_CLASS` and two
+  endpoints, takes those, and ignores every other interface. The firmware exposes an MSC interface;
+  nothing here ever claims it or sends it a CBW. So the lock is free.
+
+Measured, not reasoned: `rp2040py micropython --circuitpython --board-spec
+boards/waveshare_rp2040_lcd_0_96/__init__.py:BOARD -c "..."` running
+`storage.remount('/', readonly=False)` answers `REMOUNT: ok`, a following `open('/probe.txt','w')`
+answers `WRITE: ok`, and the file appears in `os.listdir('/')`. A second run wrote `code.py`,
+`settings.toml` **and** `lib/greeter.py` and dumped the drive with `--dump-fs`: all three are in
+the image, written by the firmware's own FatFS - including the LFN chain for `settings.toml` and
+the `LIB` directory entry (with `DIR_NTres = 0x08`, so it reads back as `lib`) holding
+`GREETER PY`.
+
+What follows from that:
+
+- The MicroPython trick this record said had no CircuitPython equivalent - "let the firmware write
+  its own filesystem over the raw REPL", which is exactly what `demo/mklittlefs_dump.py` does -
+  **does** have one here. A `demo/mkfat12_dump.py` counterpart is now the obvious thing to build
+  ([0086](0086-fat12-library-and-a-mkfat12-subcommand.md) carries that, since it changes what a
+  FAT12 library would even be for).
+- `demo/mkfat12.py` keeps a real job that route cannot do: building an image **offline**, in
+  milliseconds, with no firmware booted - which is what a test, CI, and `--code`/`--boot` need -
+  and reading files back out of a dump.
+- Nothing about the screenshots, the `boot.py` -> `boot_out.txt` finding, or finding 5's `fs_start`
+  fix is affected. Only the justification for the builder is.
+- One caveat this hands to whoever builds the REPL route: enumerating MSC later (for fidelity with
+  a real board, where CIRCUITPY *is* read-only to the guest) would take that lock and break it. So
+  the two are mutually exclusive by construction, and an MSC implementation has to be opt-in.

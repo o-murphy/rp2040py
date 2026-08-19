@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `demo/mkfat12.py` - builds (and reads back) the CIRCUITPY FAT12 image CircuitPython auto-runs
-  `boot.py`/`code.py` from, with no host dependencies. The CircuitPython counterpart of the
-  `mklittlefs` subcommand / `demo/mklittlefs_dump.py`, and it exists because the MicroPython trick
-  those use - let the firmware write its own filesystem over the raw REPL - has no CircuitPython
-  equivalent: CircuitPython refuses to write CIRCUITPY while USB is attached, so the host has to
-  lay the bytes down itself.
+  `boot.py`/`code.py` from, with no host dependencies, and without booting anything - which is what
+  makes it usable from a test, from CI, and as `--code`/`--boot`'s implementation. (It was
+  originally justified by "CircuitPython refuses to write CIRCUITPY while USB is attached, so the
+  host has to lay the bytes down itself". That is wrong for this emulator - see the correction in
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md) - and the
+  offline-build property is the real reason to keep it.)
 - `demo/lcd_run.py --code/--boot/--fat12/--dump-fs` plus `demo/cp_lcd_demo.py` - guest
   CircuitPython code on the Waveshare RP2040-LCD-0.96, and reading the drive back afterwards.
   What the resulting screenshots show: `code.py` output *does* reach the panel (it is

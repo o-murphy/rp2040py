@@ -33,11 +33,33 @@ project nothing.
    `--board-spec`'s own CircuitPython `layout` rather than passed as raw byte counts the way the
    demo script takes them. `--dump-fs` already exists as the read side and needs nothing new.
 
-Note the asymmetry with `mklittlefs` worth designing around: MicroPython's own firmware can write
+~~Note the asymmetry with `mklittlefs` worth designing around: MicroPython's own firmware can write
 its filesystem over the raw REPL (`demo/mklittlefs_dump.py` exists precisely so `littlefs-python`
 is optional), and CircuitPython's cannot - it refuses to write CIRCUITPY while USB is attached. So
 there is no "let the firmware do it" fallback on this side; whatever library is chosen is the only
-route to long names, and the 8.3 builder is the only dependency-free floor.
+route to long names, and the 8.3 builder is the only dependency-free floor.~~
+
+**Struck the same day it was written.** There is no such asymmetry: a guest
+`storage.remount("/", readonly=False)` succeeds in this emulator, because nothing here enumerates
+USB mass storage and CircuitPython's read-only switch is a blockdev lock its MSC callbacks take
+only on real SCSI traffic - measured, with the upstream citations, in
+[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s own correction. So the "let the firmware
+do it" fallback exists here too, long names and subdirectories included, and it is
+**dependency-free**.
+
+That changes what this record is deciding. A library is no longer the only route to
+`settings.toml`/`lib/`, so the question stops being "which FAT12 library do we depend on" and
+becomes "is an offline, boot-free image builder worth a dependency at all, given a
+`demo/mkfat12_dump.py` route that needs none". The offline property is real - a test or a CI job
+cannot spend minutes of emulated boot to produce a fixture - so the answer is not automatically
+no, but the bar is now much higher than when this record was written.
+
+One more data point for the survey below, found the same way: **pyfatfs cannot traverse a
+subdirectory written by real firmware**. Reading `lib/greeter.py` out of a dump raises
+`Cannot find entry lib`, because the on-disk entry is `LIB` with `DIR_NTres = 0x08` (the lowercase
+flag) rather than an LFN chain, and pyfatfs matches case-sensitively. It reads `settings.toml`
+(a genuine LFN chain) from the same image without trouble, and `demo/mkfat12.py`'s own reader
+handles the flagged form.
 
 ## Library survey (2026-08-19)
 

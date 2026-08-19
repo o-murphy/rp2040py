@@ -13,10 +13,19 @@
     python demo/mkfat12.py --output fat12.img demo/cp_lcd_demo.py=code.py
 
 This is the CircuitPython counterpart of the `mklittlefs` subcommand / demo/mklittlefs_dump.py,
-and it exists for the same reason the latter does: it needs nothing installed on the host. There
-is no `--circuitpython` equivalent of MicroPython's "let the firmware write its own filesystem
-over the raw REPL" trick, because CircuitPython deliberately refuses to write to CIRCUITPY while
-USB is attached (`storage.remount()` raises), so the host has to lay the bytes down itself.
+and it exists for the same reason the latter does: it needs nothing installed on the host. It
+builds an image *offline* - in milliseconds, with no firmware booted at all - which is what makes
+it usable from a test, from CI, and as the `--code`/`--boot` implementation.
+
+It is **not** the only route, and the reason first written here for why it had to be ("CircuitPython
+refuses to write CIRCUITPY while USB is attached") is wrong for this emulator - corrected
+2026-08-19, see docs/records/0085's own correction. CircuitPython gates that on
+`blockdev_lock()`, which its USB mass-storage callbacks take only once a host actually issues SCSI
+traffic; nothing in rp2040py enumerates MSC (`usb/cdc.py` claims the CDC data interface and
+ignores every other one), so the lock is free and a guest `storage.remount("/", readonly=False)`
+succeeds. The firmware can therefore write its own filesystem over the raw REPL exactly the way
+MicroPython's does - long names and subdirectories included, since that is FatFS doing the
+writing - and `--dump-fs` reads the result back out.
 
 **8.3 names on its own; long names and subdirectories through pyfatfs.** Everything this file
 writes itself is one short-name (SFN) root-directory entry, with the lowercase flags real firmware
