@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "pyfatfs>=1.1.0",
+#     "setuptools<81",
+# ]
+# ///
 """Builds a CIRCUITPY filesystem image - the FAT12 volume CircuitPython auto-runs `boot.py` and
 `code.py` from - for `rp2040py micropython --circuitpython --fat12 <image>` (or
 `MicroPythonDevice(fat12=...)`, which is what demo/lcd_run.py's own `--code`/`--boot` use).
@@ -11,11 +18,21 @@ is no `--circuitpython` equivalent of MicroPython's "let the firmware write its 
 over the raw REPL" trick, because CircuitPython deliberately refuses to write to CIRCUITPY while
 USB is attached (`storage.remount()` raises), so the host has to lay the bytes down itself.
 
-**8.3 names only.** Every file is written as one short-name (SFN) root-directory entry, with the
-lowercase flags real firmware also uses (`DIR_NTres` bits 0x08/0x10), so `code.py` reads back as
-`code.py` and not `CODE.PY`. Long filenames would need VFAT/LFN entry chains, which nothing this
-demo needs uses - `boot.py`, `code.py`, `main.py` and `lib/` all fit 8.3. A name that doesn't fit
-raises rather than being silently mangled; `settings.toml` is the notable one that doesn't.
+**8.3 names on its own; long names and subdirectories through pyfatfs.** Everything this file
+writes itself is one short-name (SFN) root-directory entry, with the lowercase flags real firmware
+also uses (`DIR_NTres` bits 0x08/0x10), so `code.py` reads back as `code.py` and not `CODE.PY` -
+and that covers what the demos need (`boot.py`, `code.py`, `main.py`). A name that needs a VFAT
+(LFN) entry chain or a directory - `settings.toml`, `lib/greeter.py` - is not mangled into
+`SETTIN~1.TOM`: `build_image()` hands the *whole* image to `pyfatfs` instead, which implements
+both. That library is declared in this script's own PEP 723 dependencies, so
+
+    uv run --script demo/mkfat12.py --output fat12.img settings.toml lib/greeter.py=lib/greeter.py
+
+installs it for this script alone - the project itself takes no dependency on it, and the 8.3 path
+keeps working under a plain `python demo/mkfat12.py` with nothing installed at all. Which route a
+build takes is decided per image, not per file, since two writers on one volume would mean this
+one walking LFN chains it does not implement (docs/records/0086 has the plan for making this a
+real, declared dependency and a `mkfat12` CLI subcommand).
 
 Two ways to get the volume geometry right, since `--fat12` images are loaded raw into flash and
 CircuitPython only mounts what its own driver recognises:
@@ -50,11 +67,13 @@ verified by booting a from-scratch image and finding CircuitPython's `code.py` r
 
 import argparse
 import itertools
+import posixpath
 import struct
 import sys
+import tempfile
 from pathlib import Path
 
-__all__ = ("Fat12Volume", "build_image")
+__all__ = ("Fat12Volume", "build_image", "fits_short_name")
 
 SECTOR_SIZE = 512
 # The Waveshare RP2040-LCD-0.96 defaults, both derived in the module docstring above.
@@ -279,6 +298,89 @@ class Fat12Volume:
         return volume
 
 
+def fits_short_name(name: str) -> bool:
+    """Whether `Fat12Volume.put()` can write this name on its own - a root-level 8.3 name. Anything
+    else (a long name like `settings.toml`, or a path like `lib/greeter.py`) needs the pyfatfs
+    route below."""
+    if "/" in name:
+        return False
+    try:
+        Fat12Volume.short_name(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _build_with_pyfatfs(
+    files: "dict[str, bytes]", *, base: "Path | None", volume_bytes: int, label: str = "CIRCUITPY"
+) -> bytearray:
+    """The long-name/subdirectory route: hand the volume to `pyfatfs`, which implements the VFAT
+    (LFN) entry chains and directories this file deliberately does not (see the module docstring).
+
+    Imported here rather than at module scope so the 8.3 path - everything demo/lcd_run.py itself
+    needs - keeps working with nothing installed. `uv run --script demo/mkfat12.py` supplies it
+    from this file's own PEP 723 dependencies; a plain `python demo/mkfat12.py` only gets this far
+    if pyfatfs happens to be importable."""
+    try:
+        from pyfatfs.PyFat import PyFat
+        from pyfatfs.PyFatFS import PyFatFS
+    except ImportError as exc:  # includes fs/PyFilesystem2's own pkg_resources import
+        raise ValueError(
+            f"{sorted(n for n in files if not fits_short_name(n))} need long-filename or "
+            f"subdirectory support, which this builder leaves to pyfatfs ({exc}). Run it as "
+            f"`uv run --script demo/mkfat12.py ...`, which installs it from the script's own "
+            f"dependencies, or keep every name a root-level 8.3 one."
+        ) from exc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        volume = Path(tmp) / "volume.img"
+        if base is not None:
+            volume.write_bytes(base.read_bytes())
+        else:
+            # mkfs() opens its target 'rb+', so the file has to exist at full size first - the one
+            # step `truncate` would do in a shell pipeline, and the reason this isn't a one-liner.
+            volume.write_bytes(b"\x00" * volume_bytes)
+            fat = PyFat()
+            fat.mkfs(str(volume), fat_type=PyFat.FAT_TYPE_FAT12, size=volume_bytes, number_of_fats=1, label=label)
+            # close() flushes and closes the file (verified: the handle is closed afterwards) and
+            # only *then* raises, because its _mark_clean() indexes a FAT table mkfs() never fills
+            # in. __del__ swallows the library's own PyFATException but not this, so it would raise
+            # a second time at collection - hence neutering close() once it has done its work.
+            try:
+                fat.close()
+            except TypeError:
+                pass
+            fat.close = lambda: None
+
+        filesystem = PyFatFS(str(volume))
+        try:
+            for name, content in files.items():
+                directory = posixpath.dirname(name)
+                if directory and not filesystem.exists(directory):
+                    filesystem.makedirs(directory)
+                filesystem.writebytes("/" + name, content)
+        finally:
+            filesystem.close()
+        return bytearray(volume.read_bytes())
+
+
+def _read_with_pyfatfs(image: "Path", name: str) -> bytes:
+    """`build_image()`'s counterpart for reading: the same pyfatfs route, for a name this file's
+    own reader cannot address."""
+    with tempfile.TemporaryDirectory() as tmp:
+        volume = Path(tmp) / "volume.img"
+        volume.write_bytes(image.read_bytes())
+        try:
+            from pyfatfs.PyFatFS import PyFatFS
+        except ImportError as exc:
+            raise ValueError(f"reading {name!r} needs pyfatfs ({exc}) - see build_image()") from exc
+        filesystem = PyFatFS(str(volume))
+        try:
+            return filesystem.readbytes("/" + name)
+        finally:
+            filesystem.close()
+
+
 def build_image(
     files: "dict[str, bytes]",
     *,
@@ -287,11 +389,18 @@ def build_image(
     image_bytes: int = DEFAULT_IMAGE_BYTES,
 ) -> bytes:
     """The whole job in one call: a `--fat12`-loadable image of exactly `image_bytes`, holding
-    `files` (`{"code.py": b"..."}`) either in a freshly formatted volume or patched into `base`."""
-    data = bytearray(base.read_bytes()) if base is not None else Fat12Volume.format(volume_bytes).data
-    volume = Fat12Volume(data)
-    for name, content in files.items():
-        volume.put(name, content)
+    `files` (`{"code.py": b"..."}`) either in a freshly formatted volume or patched into `base`.
+
+    Root-level 8.3 names take this file's own builder; a long name or a path (`settings.toml`,
+    `lib/greeter.py`) routes the whole image through pyfatfs instead, since mixing the two writers
+    on one volume would mean this one walking LFN chains it doesn't implement."""
+    if all(fits_short_name(name) for name in files):
+        data = bytearray(base.read_bytes()) if base is not None else Fat12Volume.format(volume_bytes).data
+        volume = Fat12Volume(data)
+        for name, content in files.items():
+            volume.put(name, content)
+    else:
+        data = _build_with_pyfatfs(files, base=base, volume_bytes=volume_bytes)
     if len(data) > image_bytes:
         raise ValueError(f"image is {len(data)} bytes, larger than the {image_bytes}-byte flash region")
     # The flash region past the volume is erased, not zeroed - matching what a `--dump-fs` of an
@@ -307,7 +416,8 @@ def main(argv: "list[str] | None" = None) -> None:
         "files",
         nargs="*",
         metavar="SRC[=NAME]",
-        help="host file to add, under its own basename or an explicit 8.3 NAME (e.g. demo/cp_lcd_demo.py=code.py)",
+        help="host file to add, under its own basename or an explicit NAME (e.g. "
+        "demo/cp_lcd_demo.py=code.py); a long name or a path like lib/greeter.py needs pyfatfs",
     )
     parser.add_argument("--output", type=Path, help="image to write (required unless --read)")
     parser.add_argument("--base", type=Path, help="patch this existing image instead of formatting a fresh volume")
@@ -321,11 +431,12 @@ def main(argv: "list[str] | None" = None) -> None:
             parser.error("--read needs --base: it prints a file out of an existing image")
         volume = Fat12Volume(bytearray(args.base.read_bytes()))
         for name in args.read:
+            content = volume.read(name) if fits_short_name(name) else _read_with_pyfatfs(args.base, name)
             # Bytes, not decoded text: this is a file being read out of a filesystem image, so
             # nothing here should re-encode it or translate its line endings (a text-mode stdout
             # on Windows turns every \n in the file into \r\n, corrupting exactly the round-trip
             # this exists to provide).
-            sys.stdout.buffer.write(volume.read(name))
+            sys.stdout.buffer.write(content)
         return
 
     if args.output is None:
