@@ -321,11 +321,10 @@ cases):
   `OSError` handler) and sends the guest a real `TCP_RST|TCP_ACK` instead of a FIN. Verified with
   a new hermetic test that forces a real kernel-level RST via `SO_LINGER`
   (`test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin`).
-- **`disconnect()` from the guest has no effect.** Only link-*up* is ever scripted
-  (`_queue_join_events()`'s `CYW43_EV_LINK` with `flags=1`) - `bus.py` has no `WLC_DISASSOC`/
-  deauth handling and never sends a link-down event, so a guest that calls `disconnect()` keeps
-  believing it's still connected. **Still open** - needs the same kind of protocol research 4a-4c
-  needed (real `cyw43-driver` ioctl/event shape for disassoc), not attempted this pass.
+- ~~`disconnect()` from the guest has no effect.~~ **Fixed, see
+  [0054](0054-cyw43-disassoc.md) (2026-08-16)**: `bus.py` now answers `WLC_DISASSOC` with
+  `_queue_disassoc_events()` (`CYW43_EV_DISASSOC` + a link-down `CYW43_EV_LINK`), derived from
+  `cyw43-driver`'s own event handlers rather than guessed.
 - ~~A real connection attempt that never resolves leaks its flow-table entry forever.~~ **Fixed
   2026-08-16**: `TcpReflector` gained a `connect_timeout` (default 10s) wrapping the real connect
   in `asyncio.wait_for()` - a timeout now gets the same synthesized-RST-and-evict treatment as any
