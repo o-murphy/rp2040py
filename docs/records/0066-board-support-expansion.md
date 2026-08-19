@@ -330,3 +330,20 @@ wouldn't unblock them:
   three separate `LEDMock` instances or deserve a small `RGBLEDMock` combinator - not designed here.
 - Whether one Ethernet-PHY `ExternalDevice` can cover both W5500 and W5100S, or whether they need
   two - not investigated at the register level.
+
+## Note (2026-08-19): read the flash-offset rule before adding any board off these checklists
+
+Every row here ends in a board file with a `layout={"fs_start": ...}`, and that number has exactly
+one correct source per firmware family - now written down in the
+`external-devices-and-boards` skill's 3g-rule section and in
+`docs/reference/external-devices-and-boards.md`. For CircuitPython it is the board's
+`mpconfigboard.mk` (`CIRCUITPY_FIRMWARE_SIZE`, default `1020 * 1024`), **not** its `link.ld`,
+which can carry a different number for the linker's own use;
+[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 is what happens when the two
+are confused, and [0035](0035-board-aware-fs-flash-offset.md)'s appended correction audits every
+board this project already ships (all correct - `pico_w` was the only one affected, and none of
+the boards on these checklists overrides the default).
+
+A wrong value here is silent: the firmware just formats its own drive where it expects one, and
+nothing errors. So the live-boot check a new board gets should read the filesystem back
+(`--dump-fs`, or `-c "import os; print(os.statvfs('/'))"`), not only the banner.

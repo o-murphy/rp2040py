@@ -24,6 +24,30 @@ that citation is what makes a device or board file checkable rather than folklor
 genuinely can't be sourced, say so and treat it as a documented "not modelled" gap, not a guess -
 `boards/vcc_gnd_yd_rp2040/__init__.py`'s RESET-button section is the pattern to copy for that.
 
+**Where a flash offset comes from, per family** - the one number in a board file that is easy to
+derive from a plausible-looking wrong source, and did get derived wrongly once
+([record 0085](../../../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5,
+which cost a silent drive reformat):
+
+- **MicroPython**: `fs_start = PICO_FLASH_SIZE_BYTES - MICROPY_HW_FLASH_STORAGE_BYTES`, the latter
+  from the board's own `ports/rp2/boards/<BOARD>/mpconfigboard.h` (**not** `mpconfigboard.cmake`,
+  which carries `PICO_BOARD` and feature switches); `fs_blockcount` is that size / 4096.
+- **CircuitPython**: `fs_start = CIRCUITPY_FIRMWARE_SIZE + 4096` (the NVM), where
+  `CIRCUITPY_FIRMWARE_SIZE` defaults to `1020 * 1024` in `ports/raspberrypi/mpconfigport.h` and is
+  overridden **in the board's `mpconfigboard.mk`** (`CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE=...`).
+  **A board's `link.ld` is not the source**: it sizes the linker's section and can hold a
+  *different* number - `raspberry_pi_pico_w` says `firmware_size = 1532k` there while its
+  `mpconfigboard.mk` says `(1536 * 1024)`, and the drive follows the mk. Audited 2026-08-19: no
+  board under `boards/` overrides it at all, so every one of them is the `0x100000` default - if a
+  new board's `mpconfigboard.mk` *does* carry the flag, that is the number to use.
+- **Kaluma**: `targets/rp2/boards/<board>/board.h`'s `KALUMA_BINARY_MAX` plus
+  `KALUMA_PROG_SECTOR_BASE`/`_COUNT`, cross-checked against `board.js`'s own `new Flash(base,
+  count)`.
+
+Verify rather than trust: boot the board and read the filesystem back (`--dump-fs`, or
+`-c "import os; print(os.statvfs('/'))"`). A wrong `fs_start` is silent - the firmware simply
+formats its own drive where it expects one, and nothing errors.
+
 For a board specifically: `scripts/fetch_firmware.py list --family <family> --slug <slug>
 [--page <page>]` pulls a real firmware version history straight from the source
 (micropython.org / CircuitPython's S3 bucket / Kaluma's GitHub releases) - use it instead of

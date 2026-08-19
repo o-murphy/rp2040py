@@ -114,3 +114,16 @@ works.
   needs an explicit flush before `--dump-fs` on every path - the two runs measured above both came
   back complete, but both happened to read files back afterwards, which is itself what calls
   `port_internal_flash_flush()`.
+
+## Sequencing (agreed 2026-08-19)
+
+The order these four records get worked in, decided with the maintainer rather than derived here:
+
+1. **This record (0087)** - unify the REPL story for MicroPython and CircuitPython, since it is
+   what makes the filesystem writable at all and therefore constrains everything below.
+2. **[0086](0086-fat12-library-and-a-mkfat12-subcommand.md)** - pick the stack (a FAT12 library, or
+   none) now that the firmware-writes-its-own-filesystem route is on the table.
+3. **[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)** - rework the demo half on top of
+   whatever 0087 and 0086 settle on, rather than on the premise it was written under.
+4. **[0088](0088-usb-host-side-msc-control-lines-and-reset.md)** - the USB host side last, since
+   mass storage is mutually exclusive with 1 and nothing above depends on it.

@@ -98,6 +98,11 @@ example into real `--board` support. It sits on top of, and doesn't duplicate,
 [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) (the
 design/API how-to) - read that first if this area hasn't come up yet this session.
 
+Both now spell out **where a board's flash offset comes from, per firmware family** - the one
+number that is easy to take from a plausible-looking wrong file (CircuitPython's drive start is in
+the board's `mpconfigboard.mk`, *not* its `link.ld`) and whose wrongness is completely silent. See
+[record 0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5.
+
 ## "Document" vs. "implement"
 
 When asked to "document" a possible design/decision (задокументуй), that means write it into the
