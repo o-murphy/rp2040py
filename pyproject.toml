@@ -68,6 +68,11 @@ ignore = []
 # (boards/ needed an N999 exemption while its directories mirrored upstream board-port names
 # verbatim, uppercase and all; docs/records/0059 case-normalized them - `boards/weactstudio/` for
 # MicroPython's `ports/rp2/boards/WEACTSTUDIO` - so PEP8 module naming applies there unassisted.)
+# `0xcb_gemini.py` is a permanent exception, not a case-normalization gap: CircuitPython's own board
+# id genuinely starts with a digit, so no case-normalized spelling can ever satisfy PEP8 module
+# naming here (docs/records/0083). Only the `--board-spec path:ATTR` file-loading form works for it
+# as a result - documented in the file's own docstring.
+"boards/0xcb_gemini.py" = ["N999"]
 
 [tool.mypy]
 mypy_path = "src"

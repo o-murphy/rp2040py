@@ -1,14 +1,15 @@
 # 0066. Board support expansion: which upstream RP2040 boards are addable, and what each still needs
 
-- Status: **Partly worked through (2026-08-18).** Originally proposed as a checklist of concrete
+- Status: **Partly worked through (2026-08-19).** Originally proposed as a checklist of concrete
   candidate boards, not a commitment to add any of them. Since then the **"addable now, has a
   MicroPython port" checklist below has been fully built - 12 of 12**, records
   [0068](0068-waveshare-rp2040-zero-board.md)-[0071](0071-adafruit-qtpy-rp2040-board.md) and
   [0073](0073-garatronic-pybstick26-rp2040-board.md)-[0080](0080-sparkfun-promicro-board.md), each
-  row below pointing at its own record. Every other checklist here is untouched: the
-  CircuitPython-only addable list (37 boards, **2 done** as of
-  [0081](0081-waveshare-rp2040-one-board.md)/[0082](0082-waveshare-rp2040-tiny-board.md)) and
-  everything gated behind a missing `ExternalDevice` remain otherwise as surveyed.
+  row below pointing at its own record. Every other checklist here is untouched apart from the
+  CircuitPython-only addable list (37 boards, **3 done** as of
+  [0081](0081-waveshare-rp2040-one-board.md)/[0082](0082-waveshare-rp2040-tiny-board.md)/
+  [0083](0083-0xcb-gemini-board.md)); everything gated behind a missing `ExternalDevice` remains
+  otherwise as surveyed.
 - Conceived: 2026-08-18
 - Related: 0059 (`BoardSpec` firmware resolution - the mechanism any of these boards would use),
   0049 (external device authoring docs / the promotion checklist a board file clears), 0062
@@ -159,7 +160,10 @@ further out than the two lists above simply because more has to be built first; 
 `board.c`/`pins.c`-confirmed onboard peripherals are a subset of {nothing extra, `LEDMock`,
 `KeyMock`, `Ws2812`} for every one of these:
 
-- [ ] `0xcb_gemini` - NeoPixel
+- [x] `0xcb_gemini` - NeoPixel (GPIO16), 16 MiB. **Done, see
+      [0083](0083-0xcb-gemini-board.md)** - the first board file here with an identifier-unsafe
+      name (`0xcb_gemini` starts with a digit), so it documents only the `--board-spec path:ATTR`
+      form and states outright that the dotted `module.path:ATTR` form cannot exist for it.
 - [ ] `0xcb_helios` - LED + a single-wire RGB pin that looks WS2812-compatible (not fully confirmed)
 - [ ] `42keebs_frood` - LED
 - [ ] `8086_rp2040_interfacer` - button + 3 plain LEDs

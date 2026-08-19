@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `boards/0xcb_gemini.py` - the 0xCB Gemini (a split-mechanical-keyboard RP2040 mainboard) as a
+  `--board-spec` target: `Ws2812(gpio=16)` + `BootselButton`, 16 MiB flash, CircuitPython-only. The
+  third board taken off [docs/records/0066](docs/records/0066-board-support-expansion.md)'s
+  CircuitPython-only list, and the first board file here with an identifier-unsafe module name
+  (`0xcb_gemini` starts with a digit) - documented as having no dotted `module.path:ATTR`
+  `--board-spec` form, only the file-path one. See
+  [docs/records/0083](docs/records/0083-0xcb-gemini-board.md).
 - `boards/seeed_xiao_rp2040.py` - the Seeed Studio XIAO RP2040 as a `--board-spec` target, and the
   first board here carrying **both** kinds of RGB LED at once: a `Ws2812(gpio=12)` NeoPixel (with a
   real power-enable pin on GPIO11, not gated - same treatment as the Adafruit boards) *and* a second
