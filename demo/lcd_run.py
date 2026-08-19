@@ -25,6 +25,17 @@ resolved for a firmware family the same way the CLI resolves it):
 and auto-refreshes it, so frames start arriving from the boot alone. MicroPython does need a
 driver, and gets `demo/mp_lcd_demo.py` pushed over the raw REPL.
 
+Guest code under `--circuitpython` does not go over the REPL either - CircuitPython runs
+`boot.py`/`code.py` off its CIRCUITPY drive, so `--code`/`--boot` build a FAT12 image (via
+demo/mkfat12.py) and hand it to the emulator as flash content instead:
+
+    python demo/lcd_run.py --circuitpython --code demo/cp_lcd_demo.py --screenshot out
+
+Whatever that `code.py` prints lands on the panel, because the panel *is* CircuitPython's console
+on this board. `boot.py` is the exception worth knowing about: it runs, but CircuitPython
+redirects its output to `boot_out.txt` on the drive rather than to the console, so it shows up in
+`--dump-fs` and never in a screenshot (docs/records/0085).
+
 The board file declares both firmwares as data and downloads nothing when imported;
 `resolve_firmware(board, family)` below turns the one this run needs into a real image, through
 `retrieve()` - which downloads on first use and caches under `~/.cache/rp2040py`. With no network,
@@ -40,6 +51,7 @@ demo/eink_run.py draws for the e-paper panel).
 import argparse
 import queue
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -48,12 +60,14 @@ from PIL import Image
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))  # boards/ lives at the repo root, outside the installed package
 
-from rp2040py.boards import resolve_firmware
+from demo.mkfat12 import build_image
+from rp2040py.boards import BoardSpec, resolve_firmware
 from rp2040py.device import MicroPythonDevice
 from rp2040py.external.st7735s import LCD_HEIGHT, LCD_WIDTH
 from rp2040py.utils.logging import LogLevel
 
 _DEMO_SCRIPT = Path(__file__).parent / "mp_lcd_demo.py"
+_START_TIMEOUT_SECONDS = 180.0  # see device.start_async() below
 
 
 def _decode_frame(buf: bytes) -> Image.Image:
@@ -138,12 +152,54 @@ def _drain(frame_queue: "queue.Queue[Image.Image]", renderer: Renderer, budget: 
     return drained
 
 
+def _circuitpy_image(args: argparse.Namespace, board: BoardSpec, destination: Path) -> "Path | None":
+    """Resolves `--code`/`--boot`/`--fat12` into one loadable CIRCUITPY image, or None when none of
+    them was given (a blank flash region, which CircuitPython formats itself on first boot).
+
+    `image_bytes` comes from the board's own CircuitPython flash layout rather than mkfat12's
+    default, since `load_circuitpython_flash_image()` requires exactly that size - the same
+    `fs_blocksize x fs_blockcount` a `--board-spec` declares."""
+    if args.code is None and args.boot is None:
+        return args.fat12
+    files = {name: path.read_bytes() for name, path in (("code.py", args.code), ("boot.py", args.boot)) if path}
+    assert board.layout is not None, "board.layout must be set to build a CIRCUITPY image"
+    image_bytes = board.layout.fs_blocksize * board.layout.fs_blockcount
+    destination.write_bytes(build_image(files, base=args.fat12, image_bytes=image_bytes))
+    return destination
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--circuitpython",
         action="store_true",
         help="boot the CircuitPython board file instead of the MicroPython one (paints by itself)",
+    )
+    parser.add_argument(
+        "--code",
+        type=Path,
+        metavar="PATH",
+        help="--circuitpython only: run this file as CIRCUITPY's code.py (built into a FAT12 image)",
+    )
+    parser.add_argument(
+        "--boot",
+        type=Path,
+        metavar="PATH",
+        help="--circuitpython only: same, as boot.py - whose output goes to boot_out.txt, not the panel",
+    )
+    parser.add_argument(
+        "--fat12",
+        type=Path,
+        metavar="PATH",
+        help="--circuitpython only: load this prepared FAT12 image instead of building one "
+        "(--code/--boot are then patched into a copy of it)",
+    )
+    parser.add_argument(
+        "--dump-fs",
+        type=Path,
+        metavar="PATH",
+        help="--circuitpython only: write CIRCUITPY back out after the run - how to read boot_out.txt "
+        "(python demo/mkfat12.py --base PATH --read boot_out.txt)",
     )
     parser.add_argument(
         "--frames",
@@ -169,6 +225,10 @@ def main() -> None:
         help="dump each frame as PREFIX_000.png, PREFIX_001.png, ... (default: %(const)s)",
     )
     args = parser.parse_args()
+    circuitpython_only = {"--code": args.code, "--boot": args.boot, "--fat12": args.fat12, "--dump-fs": args.dump_fs}
+    if not args.circuitpython and any(value is not None for value in circuitpython_only.values()):
+        given = ", ".join(flag for flag, value in circuitpython_only.items() if value is not None)
+        parser.error(f"{given} need --circuitpython (MicroPython has no CIRCUITPY drive to put files on)")
 
     renderer: Renderer = TkinterRenderer() if args.tkinter else ScreenshotRenderer(Path(args.screenshot or "lcd_out"))
     # A live window is watched until the user closes it; a PNG dump needs a bound, or a
@@ -189,8 +249,18 @@ def main() -> None:
         board_with(lambda buf: frame_queue.put(_decode_frame(buf))),
         "circuitpython" if args.circuitpython else "micropython",
     )
-    device = MicroPythonDevice(board=board, circuitpython=args.circuitpython, log_level=LogLevel.ERROR)
-    device.start_async().result()
+    # The image is read into emulated flash by MicroPythonDevice.__init__ itself, so the temporary
+    # copy only has to outlive that call - hence building it here rather than keeping a file
+    # around for the run. A `--fat12` given without `--code`/`--boot` is passed through untouched.
+    with tempfile.TemporaryDirectory() as tmp:
+        fat12 = _circuitpy_image(args, board, Path(tmp) / "circuitpy.img")
+        device = MicroPythonDevice(board=board, circuitpython=args.circuitpython, fat12=fat12, log_level=LogLevel.ERROR)
+    # Not the 30s default: a `--code`/`--boot` image is a *freshly formatted* CIRCUITPY, and
+    # CircuitPython lays down its own boot_out.txt/lib/.fseventsd on such a volume before it
+    # brings USB up - measured past 30s in emulation, where the same board with an
+    # already-populated drive enumerates well inside it. Nothing here waits on the timeout when
+    # the device is quicker, so the higher ceiling costs a fast run nothing.
+    device.start_async(timeout=_START_TIMEOUT_SECONDS).result()
 
     shown = 0
     try:
@@ -231,6 +301,12 @@ def main() -> None:
                 time.sleep(0.05)
         except (KeyboardInterrupt, tkinter.TclError):  # TclError: the user closed the window
             pass
+
+    if args.dump_fs is not None:
+        # Read back what the firmware itself wrote to CIRCUITPY during the run - boot_out.txt
+        # above all, since that is where boot.py's output goes instead of to the panel.
+        device.dump_flash_image(args.dump_fs)
+        print(f"CIRCUITPY written to {args.dump_fs}")
 
     device.stop()
 
