@@ -67,6 +67,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0085] CircuitPython `code.py`/`boot.py` on the display demos, and where a WiFi screenshot has to come from | `demo/mkfat12.py` (a dependency-free CIRCUITPY/FAT12 builder - CircuitPython refuses to write its own drive over the REPL, unlike MicroPython's littlefs) plus `demo/lcd_run.py --code/--boot/--fat12/--dump-fs`. Guest `code.py` output does reach the LCD screenshots; `boot.py` output never can (it goes to `boot_out.txt`); and this board's firmware has no `wifi` module at all, so the WiFi demo is a Pico W with an `St7735s` wired to it (`demo/wifi_lcd_run.py`) - guest-built displays get the console too, per upstream
 - [x] [0084] 0xCB Helios board | fourth board off [0066]'s CircuitPython-only list; closes that record's own "not fully confirmed" flag on this board's RGB pin - the pico-sdk header's `PICO_DEFAULT_WS2812_PIN 25` settles it, since CircuitPython's own port source never says what protocol GPIO25 speaks. `LEDMock(gpio=17)` + `Ws2812(gpio=25)` + `BootselButton`, one firmware family, 16 MiB. Live boot: LED toggles 16 times as CircuitPython's status indicator, RGB decodes 0 frames with no guest code - the opposite WS2812-at-boot behavior from every other board here
 - [x] [0083] 0xCB Gemini board | third board off [0066]'s CircuitPython-only list; `Ws2812(gpio=16)` + `BootselButton`, one firmware family, 16 MiB (`W25Q128JVxQ`, same capacity as [0080]'s part). First board with an identifier-unsafe filename (`0xcb_gemini` starts with a digit), so no `PYTHONPATH=. --board-spec module.path:ATTR` form exists for it - documented rather than silently dropped. 11 WS2812 status-LED frames decoded at boot, no guest code run
 - [x] [0082] Waveshare RP2040-Tiny board | off [0066]'s CircuitPython-only list; `Ws2812(gpio=16)` + `BootselButton`, one firmware family. Narrowest pin breakout of any board here (`pins.c` declares GP0-16 + GP26-29 only); its 2 MiB part matches a plain Pico's byte for byte, so the local-path `--image` MicroPython fallback is electrically exact rather than a compromise
@@ -245,3 +246,4 @@ record is added.
 [0082]: records/0082-waveshare-rp2040-tiny-board.md
 [0083]: records/0083-0xcb-gemini-board.md
 [0084]: records/0084-0xcb-helios-board.md
+[0085]: records/0085-circuitpython-code-py-and-wifi-on-screen.md
