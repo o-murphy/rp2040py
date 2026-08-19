@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-19
+
 ### Added
 - `boards/0xcb_helios.py` - the 0xCB Helios (same vendor/product family as `0xcb_gemini.py`) as a
   `--board-spec` target: `LEDMock(gpio=17)` + `Ws2812(gpio=25)` + `BootselButton`, 16 MiB flash,
@@ -62,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What remains open on that survey is the CircuitPython-only addable list (37 boards, of which
   `waveshare_rp2040_one`/`waveshare_rp2040_tiny` are now done) and everything gated behind a
   missing `ExternalDevice`.
+
+### Fixed
+- `firmware_specs.json`'s pinned MicroPython `1.29.0-preview.*` builds for `pico`/`pico_w` had
+  gone stale - micropython.org only serves a rolling window of the most recent nightly/preview
+  builds and had pruned the ones this project had pinned (`.678`/`.673`/`.657`/`.627`), 404ing CI's
+  `Test MicroPython Releases` / `1.29.0-preview` job (`Could not find firmware image for --board
+  pico: 1.29.0-preview` - `retrieve()`'s tag resolution correctly picked the newest pinned entry,
+  but that entry no longer existed upstream). Re-ran `uv run scripts/fetch_firmware.py` to add the
+  four current preview builds (`.697`-`.731`); older entries are left in place (harmless - version
+  resolution always picks the newest match), same as any other version-history refresh here.
 
 ## [0.3.0rc2] - 2026-08-18
 
@@ -1463,7 +1475,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...v0.3.0
 [0.3.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...v0.3.0rc2
 [0.3.0rc1]: https://github.com/o-murphy/rp2040py/compare/v0.2.5...v0.3.0rc1
 [0.2.5]: https://github.com/o-murphy/rp2040py/compare/v0.2.4...v0.2.5

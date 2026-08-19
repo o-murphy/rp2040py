@@ -26,7 +26,11 @@
           "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/RPI_PICO-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
           "1.29.0-preview.673.g06bcfd5b74": "https://micropython.org/resources/firmware/RPI_PICO-20260802-v1.29.0-preview.673.g06bcfd5b74.uf2",
           "1.29.0-preview.657.gf013bb5195": "https://micropython.org/resources/firmware/RPI_PICO-20260730-v1.29.0-preview.657.gf013bb5195.uf2",
-          "1.29.0-preview.627.g8250ff1c11": "https://micropython.org/resources/firmware/RPI_PICO-20260726-v1.29.0-preview.627.g8250ff1c11.uf2"
+          "1.29.0-preview.627.g8250ff1c11": "https://micropython.org/resources/firmware/RPI_PICO-20260726-v1.29.0-preview.627.g8250ff1c11.uf2",
+          "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/RPI_PICO-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+          "1.29.0-preview.718.g2e3304a128": "https://micropython.org/resources/firmware/RPI_PICO-20260816-v1.29.0-preview.718.g2e3304a128.uf2",
+          "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/RPI_PICO-20260813-v1.29.0-preview.707.g1827631282.uf2",
+          "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO-20260812-v1.29.0-preview.697.g2aa39667b4.uf2"
         },
         "layout": {
           "fs_start": "0xa0000",
@@ -35,7 +39,7 @@
         }
       },
       "pico_w": {
-        "default_tag": "1.21.0",
+        "default_tag": "1.23.0",
         "fw": {
           "1.28.0": "https://micropython.org/resources/firmware/RPI_PICO_W-20260406-v1.28.0.uf2",
           "1.27.0": "https://micropython.org/resources/firmware/RPI_PICO_W-20251209-v1.27.0.uf2",
@@ -53,7 +57,11 @@
           "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/RPI_PICO_W-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
           "1.29.0-preview.673.g06bcfd5b74": "https://micropython.org/resources/firmware/RPI_PICO_W-20260802-v1.29.0-preview.673.g06bcfd5b74.uf2",
           "1.29.0-preview.657.gf013bb5195": "https://micropython.org/resources/firmware/RPI_PICO_W-20260730-v1.29.0-preview.657.gf013bb5195.uf2",
-          "1.29.0-preview.627.g8250ff1c11": "https://micropython.org/resources/firmware/RPI_PICO_W-20260726-v1.29.0-preview.627.g8250ff1c11.uf2"
+          "1.29.0-preview.627.g8250ff1c11": "https://micropython.org/resources/firmware/RPI_PICO_W-20260726-v1.29.0-preview.627.g8250ff1c11.uf2",
+          "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/RPI_PICO_W-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+          "1.29.0-preview.718.g2e3304a128": "https://micropython.org/resources/firmware/RPI_PICO_W-20260816-v1.29.0-preview.718.g2e3304a128.uf2",
+          "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/RPI_PICO_W-20260813-v1.29.0-preview.707.g1827631282.uf2",
+          "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO_W-20260812-v1.29.0-preview.697.g2aa39667b4.uf2"
         },
         "layout": {
           "fs_start": "0x12c000",
