@@ -62,12 +62,12 @@ from rp2040py.utils.logging import LogLevel
 
 _DEMO_CODE = Path(__file__).parent / "cp_wifi_lcd_demo.py"
 _DEFAULT_IMAGE = "10.2.1"
-# The CIRCUITPY drive on a Pico W under CircuitPython: 2 MiB of flash minus this board's
-# `CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` of 0x180000 (its `firmware_size` override of 1532K, plus
-# 4 KiB of NVM - the audit in docs/records/0035, and the `fs_start` its firmware_specs.json entry
-# already carries). Half of what the Waveshare board's own 0x100000 leaves, hence not a constant
-# shared with mkfat12's default.
-_VOLUME_BYTES = 0x200000 - 0x180000
+# The Pico W's real flash part: `EXTERNAL_FLASH_DEVICES = "W25Q16JVxQ"` in the board's own
+# mpconfigboard.mk, i.e. 2 MiB - and what CircuitPython itself reads back out of the chip's JEDEC
+# id to size the drive (`supervisor_flash_get_block_count()` = `(_flash_size - drive start) /
+# 512`). The CIRCUITPY volume is therefore this minus `fs_start`, which is where the drive begins;
+# taking that from the resolved layout rather than repeating the number keeps the two in step.
+_FLASH_BYTES = 2 * 1024 * 1024
 
 
 def board_with(on_frame: "object") -> BoardSpec:
@@ -110,7 +110,7 @@ def main() -> None:
             fat12.write_bytes(
                 build_image(
                     {"code.py": args.code.read_bytes()},
-                    volume_bytes=_VOLUME_BYTES,
+                    volume_bytes=_FLASH_BYTES - board.layout.fs_start,
                     image_bytes=board.layout.fs_blocksize * board.layout.fs_blockcount,
                 )
             )

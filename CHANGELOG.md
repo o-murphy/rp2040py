@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `demo/mkfat12.py` - builds (and reads back) the CIRCUITPY FAT12 image CircuitPython auto-runs
+  `boot.py`/`code.py` from, with no host dependencies. The CircuitPython counterpart of the
+  `mklittlefs` subcommand / `demo/mklittlefs_dump.py`, and it exists because the MicroPython trick
+  those use - let the firmware write its own filesystem over the raw REPL - has no CircuitPython
+  equivalent: CircuitPython refuses to write CIRCUITPY while USB is attached, so the host has to
+  lay the bytes down itself.
+- `demo/lcd_run.py --code/--boot/--fat12/--dump-fs` plus `demo/cp_lcd_demo.py` - guest
+  CircuitPython code on the Waveshare RP2040-LCD-0.96, and reading the drive back afterwards.
+  What the resulting screenshots show: `code.py` output *does* reach the panel (it is
+  CircuitPython's console on that board), while `boot.py` output never can - CircuitPython sends
+  it to `boot_out.txt`, which is what `--dump-fs` is for.
+- `demo/wifi_lcd_run.py` + `demo/cp_wifi_lcd_demo.py` - a Pico W with an ST7735S wired to it,
+  showing a real `wifi.radio.connect()` and the DHCP address on the panel. The Waveshare LCD board
+  cannot do this at all: it has no CYW43439, so its CircuitPython build ships no `wifi` module.
+  See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
+
+### Fixed
+- CircuitPython's `pico_w` filesystem offset: `0x180000` -> `0x181000`. The board carries **two**
+  different firmware sizes in two different files - `link.ld`'s `firmware_size = 1532k` sizes the
+  linker's section, while `mpconfigboard.mk`'s `-DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` is what
+  `CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` is computed from - and the offset here was derived from
+  the first. A `--fat12` image was therefore invisible to the firmware, which silently reformatted
+  the drive instead of mounting it (and `--dump-fs` read back the wrong region). Confirmed by
+  scanning the whole emulated flash for the volume CircuitPython itself writes: it lands at
+  `0x181000`, sized exactly `(2 MiB - 0x181000) / 512` sectors. `pico` is unaffected. See
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5,
+  and the appended correction in
+  [docs/records/0035](docs/records/0035-board-aware-fs-flash-offset.md).
+
 ## [0.3.0] - 2026-08-19
 
 ### Added

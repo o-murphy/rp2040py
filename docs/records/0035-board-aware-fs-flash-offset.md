@@ -205,3 +205,20 @@ pass - flagged as a new, separate open item in 0027 rather than pursued here.
   v1.28.0, current CircuitPython/Kaluma `main`/`master`).
 - The still-open `[PIO1] clkDivRestart not implemented` stall noted above - real root cause not
   yet investigated.
+
+## Correction (2026-08-19)
+
+**`pico_w`'s CircuitPython `fs_start` recorded here was wrong: `0x180000`, actually `0x181000`.**
+The audit above read the drive start off `boards/raspberry_pi_pico_w/link.ld`
+(`firmware_size = 1532k`), but that file sizes the *linker's* section only. The C macro the drive
+start is computed from is set separately, in the same board's `mpconfigboard.mk`
+(`CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'`), so
+`CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` = 1536K + 4K = `0x181000`. Two firmware sizes, two files,
+and only one of them governs the filesystem.
+
+Found (and live-confirmed by scanning the whole emulated flash for the volume the firmware itself
+writes) while building the CircuitPython WiFi-on-a-panel demo - see
+[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 for the evidence and the fix.
+This record's own first open question, above, is exactly the class of thing that turned out to
+bite. `pico` is unaffected: it overrides neither size, so the 1020K + 4K default this record
+derived stands.

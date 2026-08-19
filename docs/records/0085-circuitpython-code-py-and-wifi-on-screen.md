@@ -1,7 +1,7 @@
 # 0085. CircuitPython `code.py`/`boot.py` on the LCD board, and where a WiFi screenshot has to come from
 
-- Status: **Implemented (2026-08-19)** for the `code.py`/`boot.py` half; the WiFi-on-screen half is
-  recorded below with its own result.
+- Status: **Implemented (2026-08-19).** Both halves answered, with screenshots; a wrong
+  CircuitPython `fs_start` for `pico_w` found and fixed along the way (finding 5).
 - Conceived: 2026-08-19
 - Related: [0056](0056-st7735s-waveshare-lcd-board.md) (the `St7735s` device and the LCD board file
   these screenshots come from), [0027](0027-cyw43-wifi.md) and
@@ -115,7 +115,17 @@ auto-initialises, so there is nothing to just *point* `--code` at. What does exi
   display itself.
 
 `demo/wifi_lcd_run.py` composes exactly that: the built-in `pico_w` spec plus one more
-`ExternalDevice`, with `demo/cp_wifi_lcd_demo.py` as `code.py`.
+`ExternalDevice`, with `demo/cp_wifi_lcd_demo.py` as `code.py`. It works - the panel ends up
+showing a real join, with the address the emulator's own DHCP server handed out:
+
+    wifi test
+    mac ok
+    connected: True
+    ip 10.0.0.2
+
+(and `gw 10.0.0.1` on the next line, once the terminal scrolls). So the answer to the original
+question is yes, but only on a board that has a radio at all: the screenshot shows the connection
+because the console is on the panel, exactly as it is on the Waveshare board.
 
 ### Why guest-built displays still get the console
 
@@ -137,6 +147,64 @@ before the console, so it is genuinely every write, not just `print()`.
 The consequence for screenshots: nothing is on the panel until the guest's `BusDisplay`
 constructor runs, so the boot banner (and `boot.py`, per finding 2) is already past by then. The
 first frame is the first `print()` after that line.
+
+### Finding 5: the Pico W's CIRCUITPY offset was wrong here (0x180000 -> 0x181000)
+
+Building the WiFi demo turned up a real bug in this project's own board data. The symptom: the
+Pico W run produced **zero frames**, and neither the `--code` file nor a `boot_out.txt` came back
+out of `--dump-fs`. Asking the firmware itself settled it:
+
+    rp2040py micropython --circuitpython --board pico_w --image 10.2.1 --fat12 tiny.img \
+        -c "print('CODEPY:', open('/code.py').read()[:40])"
+
+    CODEPY: print("Hello World!")
+
+That is CircuitPython's *own* default `code.py`: the image was invisible to the firmware, which
+found no filesystem where it looks and silently reformatted the drive. Scanning the whole
+emulated flash after a blank boot for FAT boot sectors says where "where it looks" actually is:
+
+    FAT boot sector at 0x181000: oem=b'MSDOS5.0' totsec16=1016 spf=3 label=b'NO NAME    '
+
+0x181000, not the 0x180000 `firmware_specs.json` carried - and `totsec16 = 1016` is exactly
+`(2 MiB - 0x181000) / 512`, so the whole geometry is consistent with that start and no other.
+
+The cause is a genuine trap in CircuitPython's own build system, and
+[0035](0035-board-aware-fs-flash-offset.md)'s audit fell into it: this board has **two** different
+firmware sizes, in two different files, and the drive start is computed from the one that does not
+appear in the linker script.
+
+- `ports/raspberrypi/boards/raspberry_pi_pico_w/link.ld`: `firmware_size = 1532k` - sizes the
+  linker's own section, and is what 0035 read.
+- `ports/raspberrypi/boards/raspberry_pi_pico_w/mpconfigboard.mk`:
+  `CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` - and *this* is what
+  `CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` (`ports/raspberrypi/mpconfigport.h`:
+  `CIRCUITPY_FIRMWARE_SIZE + CIRCUITPY_INTERNAL_NVM_SIZE`) is built from.
+
+1536K + 4K = 0x181000. Fixed in `scripts/fetch_firmware.py`'s `_CIRCUITPYTHON_FLASH_LAYOUT` and in
+the generated `firmware_specs.json`; `pico` is unaffected (it overrides neither, so the default
+1020K + 4K = 0x100000 stands, which the Waveshare board's own runs here confirm independently).
+The same command that diagnosed it confirms the fix - the firmware now reads back the image's own
+file instead of one it wrote itself, and creates only `boot_out.txt` beside it rather than a whole
+fresh drive:
+
+    CODEPY: print("MARKER code.py ran")
+    LISTDIR ['code.py', 'boot_out.txt']
+
+Why it survived until now: nothing had ever put a filesystem image on a Pico W under
+CircuitPython. The CYW43 tests ([0027](0027-cyw43-wifi.md)/[0048](0048-cyw43-nat-reflector.md))
+push their script over the raw REPL and never touch the drive, and CI's CircuitPython jobs use
+`--expect-text` on the boot banner. A wrong `fs_start` is invisible to every one of those - it only
+shows up the moment something writes or reads the drive, which is what `--code`/`--dump-fs` do.
+
+The value holds for every tag this project tracks, so one per-board number stays correct:
+`mpconfigboard.mk` carries the same `(1536 * 1024)` in 8.0.2, 9.2.9, 10.0.0 and 10.2.1 (checked
+individually). That also settles, for this board and this constant, the "are these stable across
+version tags?" question [0035](0035-board-aware-fs-flash-offset.md) left open.
+
+Still unverified the same way, and deliberately not touched here: MicroPython's own `pico_w`
+`fs_start` (`0x12c000`). It is derived from a single source (`MICROPY_HW_FLASH_STORAGE_BYTES =
+848K`, 2 MiB - 0xd4000) with no linker/C split to get wrong, and CI exercises `--littlefs` only on
+plain `pico`.
 
 ### `auto_refresh` is not affordable here
 
@@ -175,6 +243,7 @@ matrix's `wlan` flag for 10.2.1 is a separate, deliberate change and is **not** 
 - 2026-08-19: `demo/mkfat12.py`, `demo/lcd_run.py`'s `--code`/`--boot`/`--fat12`/`--dump-fs`,
   `demo/cp_lcd_demo.py` and findings 1-4 landed, with a screenshot of guest `code.py` output on
   the panel and a `boot_out.txt` read back out of a dumped drive. `demo/wifi_lcd_run.py` +
-  `demo/cp_wifi_lcd_demo.py` landed alongside them, verified at the console level (the guest code
-  runs cleanly on a Pico W under 10.2.1 - display constructed, no traceback, `connected: True`,
-  `ip 10.0.0.2`), with the on-panel screenshot itself still outstanding.
+  `demo/cp_wifi_lcd_demo.py` landed alongside them.
+- 2026-08-19: the Pico W run produced no frames at all until finding 5's wrong `fs_start` was
+  found and fixed; with `0x181000` it draws the join on the panel, and
+  `demo/screenshots/wifi-lcd-circuitpython-connected.png` is that frame.

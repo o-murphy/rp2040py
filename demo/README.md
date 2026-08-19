@@ -68,6 +68,24 @@ The two runs also drive the panel through *different* orientations (`MADCTL` `0x
 with transposed window offsets); both come out upright because the emulated controller applies
 that mapping - see [record 0056](../docs/records/0056-st7735s-waveshare-lcd-board.md).
 
+### `wifi_lcd_run.py` - a WiFi join, on the panel
+
+The same ST7735S, wired to a **Pico W** instead of being soldered to a Waveshare board - so the
+run has both an emulated CYW43439 and an emulated panel, and `code.py` builds the display itself
+(a Pico W's `board_init()` builds none):
+
+```sh
+uv run --with pillow python demo/wifi_lcd_run.py --screenshot out
+```
+
+<img src="screenshots/wifi-lcd-circuitpython-connected.png" width="480" alt="ST7735S showing 'wifi test / mac ok / connected: True / ip 10.0.0.2'">
+
+That IP comes from the emulator's own DHCP server, over the NAT bridge
+([record 0048](../docs/records/0048-cyw43-nat-reflector.md)); the panel scrolls one more line
+afterwards to show the gateway. Expect it to be slow - the CYW43's PIO/gSPI path is the heaviest
+thing in this emulator, which is also why the guest code refreshes the display by hand instead of
+leaving `auto_refresh` on.
+
 ### `eink_run.py` - Waveshare 2.9″ e-Paper (G), 128×296
 
 ```sh

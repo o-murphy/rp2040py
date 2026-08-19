@@ -119,10 +119,15 @@ _KALUMA_FLASH_LAYOUT = {
 # - raspberry_pi_pico: default firmware_size = 1020K (link-rp2040.ld, no board override) ->
 #   0x10000000 + 1020K + 4096 = 0x10100000, i.e. offset 0x100000 (matches this project's
 #   pre-existing, apparently-already-correct-for-plain-pico constant).
-# - raspberry_pi_pico_w: overrides firmware_size = 1532K (boards/raspberry_pi_pico_w/link.ld,
-#   "Must be accompanied by a linker script change" per mpconfigboard.mk's own comment - the CYW43
-#   driver/lwIP stack needs the extra room, same underlying reason as MicroPython's) ->
-#   0x10000000 + 1532K + 4096 = 0x10180000, offset 0x180000.
+# - raspberry_pi_pico_w: 0x181000, **not** the 0x180000 its `link.ld` implies. That file's
+#   `firmware_size = 1532k` sizes the *linker's* section; the C macro the drive start is computed
+#   from is set separately, and to a different number - `boards/raspberry_pi_pico_w/
+#   mpconfigboard.mk` carries `CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'`, so
+#   `CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` = 1536K + 4096 = offset 0x181000. Live-confirmed by
+#   scanning the whole emulated flash after a blank boot: CircuitPython's own volume lands at
+#   0x181000 with `totsec16 = 1016`, which is exactly (2MB - 0x181000) / 512. The 0x180000 this
+#   table carried until 2026-08-19 made a `--fat12` image invisible to the firmware, which then
+#   silently reformatted the drive - see docs/records/0085.
 # fs_blockcount left at the existing 512 for both boards (unlike MicroPython's, which genuinely
 # shrinks on pico_w) - rp2040py's own emulated flash buffer is 16MB (_rp2040.py), far bigger than
 # either board's real 2MB chip, so a generous fixed region past the real firmware's end doesn't
@@ -130,7 +135,7 @@ _KALUMA_FLASH_LAYOUT = {
 # correctness (matching where real firmware's own compiled code actually ends).
 _CIRCUITPYTHON_FLASH_LAYOUT = {
     "pico": {"fs_start": "0x100000", "fs_blockcount": 512, "fs_blocksize": 4096},
-    "pico_w": {"fs_start": "0x180000", "fs_blockcount": 512, "fs_blocksize": 4096},
+    "pico_w": {"fs_start": "0x181000", "fs_blockcount": 512, "fs_blocksize": 4096},
 }
 
 
