@@ -190,6 +190,11 @@ wrong `0x180000` in this project's own specs until 2026-08-19; see
 [record 0085](../records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 for how it
 presented (a `--fat12` image the firmware silently ignored, then reformatted over).
 
+The table covers CircuitPython's classic `ports/raspberrypi` builds. Its **Zephyr-based** builds
+(slugs ending `_zephyr`) size their regions from Zephyr's own partition table at runtime, so none
+of the above applies to them - see [record 0066](../records/0066-board-support-expansion.md)'s note,
+which also records that no such image has been made to boot here yet.
+
 Getting it wrong is silent, so verify it on a real boot rather than by reading alone: `--dump-fs`
 should return an image the firmware itself wrote, and `-c "import os; print(os.statvfs('/'))"`
 should report the geometry you expect.

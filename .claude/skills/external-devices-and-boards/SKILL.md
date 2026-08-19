@@ -40,6 +40,10 @@ which cost a silent drive reformat):
   `mpconfigboard.mk` says `(1536 * 1024)`, and the drive follows the mk. Audited 2026-08-19: no
   board under `boards/` overrides it at all, so every one of them is the `0x100000` default - if a
   new board's `mpconfigboard.mk` *does* carry the flag, that is the number to use.
+  Not applicable to CircuitPython's **Zephyr-based** builds (slugs ending `_zephyr`), where
+  `ports/zephyr-cp/mpconfigport.h` says the sizes come "at runtime from the Zephyr partition
+  table" - source those from the board's devicetree `fixed-partitions` instead
+  ([record 0066](../../../docs/records/0066-board-support-expansion.md)'s note on them).
 - **Kaluma**: `targets/rp2/boards/<board>/board.h`'s `KALUMA_BINARY_MAX` plus
   `KALUMA_PROG_SECTOR_BASE`/`_COUNT`, cross-checked against `board.js`'s own `new Flash(base,
   count)`.
