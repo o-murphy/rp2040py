@@ -34,6 +34,21 @@ def _run(*args: str) -> "subprocess.CompletedProcess[str]":
     )
 
 
+def _read(image: Path, name: str) -> bytes:
+    """`--read` as raw bytes. Deliberately not `text=True` like `_run()`: on Windows that would
+    translate the newlines on the way out and compare something other than what is in the image -
+    which is how these tests passed on Linux and failed on the windows-latest leg of the
+    pre-commit matrix, before mkfat12 was fixed to write bytes to stdout."""
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--base", str(image), "--read", name],
+        capture_output=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
 def _build(tmp_path: Path, *files: str, extra: "list[str] | None" = None) -> Path:
     output = tmp_path / "circuitpy.img"
     result = _run("--output", str(output), *files, *(extra or []))
@@ -42,8 +57,10 @@ def _build(tmp_path: Path, *files: str, extra: "list[str] | None" = None) -> Pat
 
 
 def _write(tmp_path: Path, name: str, text: str) -> Path:
+    # newline="": no platform translation, so the bytes that land in the image are the bytes
+    # written here on every OS - the same reason _read() below stays in binary.
     path = tmp_path / name
-    path.write_text(text)
+    path.write_text(text, newline="")
     return path
 
 
@@ -100,9 +117,7 @@ def test_files_round_trip_under_their_own_and_renamed_paths(tmp_path):
     assert entries[b"CODE    PY "][1] == len(code.read_bytes())
 
     for name, source in (("code.py", code), ("boot.py", boot)):
-        result = _run("--base", str(output), "--read", name)
-        assert result.returncode == 0, result.stderr
-        assert result.stdout == source.read_text()
+        assert _read(output, name) == source.read_bytes()
 
 
 def test_rewriting_a_file_replaces_it_rather_than_duplicating_it(tmp_path):
@@ -113,7 +128,18 @@ def test_rewriting_a_file_replaces_it_rather_than_duplicating_it(tmp_path):
     result = _run("--output", str(output), "--base", str(output), f"{second}=code.py")
     assert result.returncode == 0, result.stderr
     assert list(_root_entries(output.read_bytes())) == [b"CODE    PY "]
-    assert _run("--base", str(output), "--read", "code.py").stdout == second.read_text()
+    assert _read(output, "code.py") == second.read_bytes()
+
+
+def test_content_survives_byte_for_byte_including_crlf(tmp_path):
+    # The regression test for the Windows-only failure above, made to fail everywhere rather than
+    # only where stdout translates newlines: `--read` decoding to text mangled *two* things - CRLF
+    # (visible only on Windows) and any byte that isn't valid UTF-8 (visible everywhere, via
+    # errors="replace"). A faithful reader returns the file's bytes on every platform.
+    source = tmp_path / "crlf.py"
+    source.write_bytes(b"print('a')\r\nprint('b')\n\rtrail\xff\xfe\x80ing")
+    output = _build(tmp_path, f"{source}=code.py")
+    assert _read(output, "code.py") == source.read_bytes()
 
 
 def test_a_name_that_needs_a_long_filename_entry_is_refused(tmp_path):
