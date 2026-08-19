@@ -353,7 +353,7 @@
           "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.9.uf2"
         },
         "layout": {
-          "fs_start": "0x180000",
+          "fs_start": "0x181000",
           "fs_blockcount": 512,
           "fs_blocksize": 4096
         }

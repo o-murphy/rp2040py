@@ -331,9 +331,11 @@ def main(argv: "list[str] | None" = None) -> None:
         source, _, name = item.partition("=")
         path = Path(source)
         files[name or path.name] = path.read_bytes()
-    args.output.write_bytes(
-        build_image(files, base=args.base, volume_bytes=args.volume_bytes, image_bytes=args.image_bytes)
-    )
+    try:
+        image = build_image(files, base=args.base, volume_bytes=args.volume_bytes, image_bytes=args.image_bytes)
+    except ValueError as exc:  # an 8.3-impossible name, a full volume, a mis-sized region
+        parser.error(str(exc))
+    args.output.write_bytes(image)
     print(f"{args.output}: {', '.join(f'{n} ({len(c)} bytes)' for n, c in files.items()) or 'empty volume'}")
 
 
