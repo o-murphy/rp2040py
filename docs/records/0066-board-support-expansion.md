@@ -6,10 +6,10 @@
   [0068](0068-waveshare-rp2040-zero-board.md)-[0071](0071-adafruit-qtpy-rp2040-board.md) and
   [0073](0073-garatronic-pybstick26-rp2040-board.md)-[0080](0080-sparkfun-promicro-board.md), each
   row below pointing at its own record. Every other checklist here is untouched apart from the
-  CircuitPython-only addable list (37 boards, **3 done** as of
+  CircuitPython-only addable list (37 boards, **4 done** as of
   [0081](0081-waveshare-rp2040-one-board.md)/[0082](0082-waveshare-rp2040-tiny-board.md)/
-  [0083](0083-0xcb-gemini-board.md)); everything gated behind a missing `ExternalDevice` remains
-  otherwise as surveyed.
+  [0083](0083-0xcb-gemini-board.md)/[0084](0084-0xcb-helios-board.md)); everything gated behind a
+  missing `ExternalDevice` remains otherwise as surveyed.
 - Conceived: 2026-08-18
 - Related: 0059 (`BoardSpec` firmware resolution - the mechanism any of these boards would use),
   0049 (external device authoring docs / the promotion checklist a board file clears), 0062
@@ -164,7 +164,12 @@ further out than the two lists above simply because more has to be built first; 
       [0083](0083-0xcb-gemini-board.md)** - the first board file here with an identifier-unsafe
       name (`0xcb_gemini` starts with a digit), so it documents only the `--board-spec path:ATTR`
       form and states outright that the dotted `module.path:ATTR` form cannot exist for it.
-- [ ] `0xcb_helios` - LED + a single-wire RGB pin that looks WS2812-compatible (not fully confirmed)
+- [x] `0xcb_helios` - LED (GPIO17) + WS2812 (GPIO25), 16 MiB. **Done, see
+      [0084](0084-0xcb-helios-board.md)** - the "not fully confirmed" flag above is now settled:
+      the pico-sdk board header's `PICO_DEFAULT_WS2812_PIN 25` confirms the RGB pin genuinely is
+      WS2812-class, since CircuitPython's own port source alone never says so. Live boot shows the
+      plain LED driven as CircuitPython's status indicator and the RGB LED *not* driven at all -
+      the reverse of every other WS2812 board here.
 - [ ] `42keebs_frood` - LED
 - [ ] `8086_rp2040_interfacer` - button + 3 plain LEDs
 - [ ] `8086_usb_interposer` - button + 5 plain LEDs (the USB-host pins are passthrough/ADC only, no

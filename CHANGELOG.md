@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `boards/0xcb_helios.py` - the 0xCB Helios (same vendor/product family as `0xcb_gemini.py`) as a
+  `--board-spec` target: `LEDMock(gpio=17)` + `Ws2812(gpio=25)` + `BootselButton`, 16 MiB flash,
+  CircuitPython-only. Closes a gap [docs/records/0066](docs/records/0066-board-support-expansion.md)
+  flagged as "not fully confirmed" - CircuitPython's own port source never states what protocol the
+  RGB pin speaks, but the pico-sdk board header's `PICO_DEFAULT_WS2812_PIN 25` settles it. Live boot
+  shows the plain LED driven as CircuitPython's own status indicator (16 toggles) while the WS2812
+  is *not* driven at boot at all (0 frames) - the reverse of every other WS2812 board here. See
+  [docs/records/0084](docs/records/0084-0xcb-helios-board.md).
 - `boards/0xcb_gemini.py` - the 0xCB Gemini (a split-mechanical-keyboard RP2040 mainboard) as a
   `--board-spec` target: `Ws2812(gpio=16)` + `BootselButton`, 16 MiB flash, CircuitPython-only. The
   third board taken off [docs/records/0066](docs/records/0066-board-support-expansion.md)'s

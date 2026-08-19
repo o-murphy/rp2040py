@@ -278,6 +278,7 @@ is live-boot-verified against real firmware:
 | [waveshare_rp2040_one](../../boards/waveshare_rp2040_one.py) | CircuitPython only | WS2812 only (GPIO16), 4 MiB - a one-family board whose `pins.c` exposes no `LED`, `BUTTON`, `SPI` or `I2C` at all, all four confirmed against the running firmware |
 | [waveshare_rp2040_tiny](../../boards/waveshare_rp2040_tiny.py) | CircuitPython only | WS2812 only (GPIO16), 2 MiB - the narrowest pin breakout of any example (GP0-16 + GP26-29 only), and the one board whose plain-Pico `--image` fallback is electrically exact rather than a compromise |
 | [0xcb_gemini](../../boards/0xcb_gemini.py) | CircuitPython only | WS2812 only (GPIO16), 16 MiB - the first example with an identifier-unsafe module name (starts with a digit), so only the `--board-spec path:ATTR` form works, not the dotted-module one |
+| [0xcb_helios](../../boards/0xcb_helios.py) | CircuitPython only | plain LED (GPIO17) *and* a separate WS2812 (GPIO25), 16 MiB - the only example where the WS2812 is *not* driven as CircuitPython's boot status indicator (the plain LED is instead); confirmed a real WS2812 via the pico-sdk board header, since CircuitPython's own port source alone didn't say |
 
 Named after the firmware's own board id, case-normalized (`weactstudio` for MicroPython's
 `ports/rp2/boards/WEACTSTUDIO`) - which is what keeps every number in a board file checkable
