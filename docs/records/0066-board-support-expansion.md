@@ -218,10 +218,17 @@ further out than the two lists above simply because more has to be built first; 
 Grouped by missing chip where several boards share one - building that one device unblocks all of
 them at once, same as the Ethernet-PHY case above. Board count and split (single-device vs. 2+)
 comes from re-counting this record's own list against the source survey, not restated from the
-agent's own summary tally verbatim - the two differ by a few (53 vs. a stated 56 here, 37 vs. 38 in
-the addable list above), almost certainly a grouped-row counting slip on one side or the other, not
-re-verified against source. Not a blocker for using this as a checklist, since every row is still an
-independently checkable claim.
+agent's own original summary tally verbatim - the two differed by a few when this record was
+written (53 vs. an originally-stated 56 here, 37 vs. 38 in the addable list above), almost
+certainly a grouped-row counting slip in that first tally rather than in the checklist itself.
+**Re-verified 2026-08-19 by recounting every row/board name in both CircuitPython-only checklists
+against this record's own header claims and [0000-TRACKER.md](0000-TRACKER.md)'s summary line**:
+the checklist as written is internally consistent - addable-now-CircuitPython-only is genuinely 37
+boards, this section is genuinely 50 boards across 34 rows (18 in the five "shared across 2+" rows,
+17 single-board single-device rows, 15 across the twelve "needs 2+" rows, three of which name two
+boards each) - and both match the tracker's own `49 addable / 59 needs-device / 128 total` exactly.
+The "53/56" and "37/38" numbers above are kept as the historical reason the recount happened, not
+as a live discrepancy.
 
 Shared across 2+ boards:
 
@@ -248,9 +255,16 @@ Single board, single device:
 - [ ] `challenger_rp2040_lora` - RFM95W LoRa radio
 - [ ] `challenger_rp2040_lte` - u-blox SARA cellular modem
 - [ ] `challenger_rp2040_subghz` - RFM69HCW sub-GHz radio
-- [ ] `hack_club_sprig` - an "ST7735R"-family TFT (Adafruit's own library name) - possibly the same
-      silicon as this project's existing `St7735s` (Sitronix ST7735S), possibly a distinct part;
-      worth checking exact compatibility before assuming either way
+- [ ] `hack_club_sprig` - an "ST7735R"-family TFT (Adafruit's own library name). **Checked
+      2026-08-19**: `board.c`'s init sequence (copied from `Adafruit_CircuitPython_ST7735R`) uses
+      exactly the command opcodes `St7735s` already decodes (`SWRESET`/`SLPOUT`/`INVOFF`/`MADCTL`/
+      `COLMOD=0x05`/`CASET`/`RASET`/`RAMWR`/`DISPON`) - genuinely the same protocol/silicon family,
+      not "possibly". **Not a drop-in reuse anyway**: the panel is 160x128 (vs. Waveshare's
+      160x80, already a constructor parameter, fine) but the vendor firmware's own baseline
+      `MADCTL` is `0xC0` (MY|MX) where Waveshare's is `0xA8` (MY|MV) - `St7735s._panel_position()`'s
+      final glass-orientation transform is a hardcoded constant derived for the MV-set case, not
+      parameterized, so it would mis-orient this board's image. Needs a real `St7735s` code change
+      (parameterize that transform) before this board is addable, not a new device class
 - [ ] `hxr_sao_dmm` - I2C OLED (chip unconfirmed, likely SSD1306-family)
 - [ ] `odt_rpga_feather` - Lattice iCE40-family FPGA
 - [ ] `pimoroni_motor2040` - motor driver (same class the robot boards above need)
