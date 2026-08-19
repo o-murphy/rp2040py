@@ -347,3 +347,39 @@ the boards on these checklists overrides the default).
 A wrong value here is silent: the firmware just formats its own drive where it expects one, and
 nothing errors. So the live-boot check a new board gets should read the filesystem back
 (`--dump-fs`, or `-c "import os; print(os.statvfs('/'))"`), not only the banner.
+
+## Note (2026-08-19): CircuitPython's Zephyr-based RP2040 builds are not in any checklist above
+
+This record's board lists were built from CircuitPython's classic (`ports/raspberrypi`) board set.
+Upstream now also ships **Zephyr-based** builds for RP2040 boards, under slugs that do not share
+the classic prefix - which is why a `bin/raspberry_pi_pico*` search misses them entirely:
+
+- `raspberrypi_rpi_pico_zephyr` (circuitpython.org/board/raspberrypi_rpi_pico_zephyr/)
+- `adafruit_feather_rp2040_zephyr` (circuitpython.org/board/adafruit_feather_rp2040_zephyr/)
+
+Both exist at 10.2.0 and 10.2.1 in the S3 bucket, and each ships a `.elf` alongside the `.uf2`.
+
+They are **not** a device-count question like every row above, and belong with "Flagged: not a
+device-count problem at all". Two reasons:
+
+- **Different software underneath.** `ports/zephyr-cp/README.md` says it plainly: "This is an
+  initial port of CircuitPython onto Zephyr. **We intend on migrating all existing boards onto
+  Zephyr.** To start, we'll only support new boards." So this is not one more board to add - it is
+  a second CircuitPython implementation on the same silicon, with Zephyr's own startup, drivers and
+  USB stack between the emulator and anything recognisable. Long-horizon, it is also a risk to
+  every board file here, since upstream intends the classic port to be replaced.
+- **The flash layout rule does not apply.** `ports/zephyr-cp/mpconfigport.h` carries
+  `CIRCUITPY_INTERNAL_NVM_SIZE 1` with the comment "NVM size is determined at runtime from the
+  Zephyr partition table" - so `fs_start` is not
+  `CIRCUITPY_FIRMWARE_SIZE + 4096` on these builds; it comes from Zephyr's devicetree
+  `fixed-partitions`. Anyone adding one has to source it from there, not from the rule in
+  [0035](0035-board-aware-fs-flash-offset.md)/the skill.
+
+**Does such an image run here? Unresolved, and worth its own investigation.** Measured
+2026-08-19: `rp2040py micropython --circuitpython --board pico --image
+adafruit-circuitpython-raspberrypi_rpi_pico_zephyr-en_US-10.2.1.uf2 --tcp-port 8766 --expect-text
+"CircuitPython"` loads the image and runs, but emits **no console output at all within 7 minutes**,
+where the classic 10.2.1 build prints its banner in well under one. Slow-but-progressing versus
+genuinely stuck was not established - that needs the same kind of tracing
+[0035](0035-board-aware-fs-flash-offset.md) and [0050](0050-qspi-pad-reset-values.md) used, not a
+longer timeout.
