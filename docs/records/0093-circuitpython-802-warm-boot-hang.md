@@ -209,3 +209,46 @@ CircuitPython boot is when it is mounting (or formatting) CIRCUITPY.
 3. Only then decide whether the defect is the reset (resetting something boot2 does not restore)
    or the XIP/SSI model itself.
 
+## 2026-08-20 (later still): boot2 completes, SSI is innocent, and the spin touches no peripheral
+
+Following the plan above, in order - and the suspicion in step 2 turned out to be **wrong**, which
+is the useful part.
+
+**Which blocks the warm boot talks to at all** (counted per peripheral, over 40 s of being stuck):
+
+    SSI@18000        read 136, write 98
+    XIP_CTRL@14000   read 4,   write 4
+    WATCHDOG@40058   read 3,   write 2
+    USB@50110        0
+
+**But that SSI traffic is not a spin - it is boot2, and it completes.** The last SSI exchange while
+stuck is byte-for-byte the sequence a cold boot ends on:
+
+    wr BAUDR=0x4 | wr CTRLR0=0x00070000 | wr SSIENR=1 | wr DR0=0x35 | wr DR0=0x35 | rd SR=0xe
+    | rd DR0=0xff | rd DR0=0x02 | wr SSIENR=0 | wr CTRLR0=0x005f0300 | wr SPI_CTRLR0=0x00002221
+    | wr SSIENR=1 | wr DR0=0xeb | wr DR0=0xa0 | rd SR=0xe | rd DR0=0x02 | wr SSIENR=0
+    | wr SPI_CTRLR0=0xa0002022 | wr SSIENR=1
+
+That is `boot2_w25q080`: read status register 2 (`0x35`), configure quad I/O (`0xeb`), then hand
+the flash to XIP continuous-read mode (`SPI_CTRLR0=0xa0002022`). It runs, it finishes, and XIP
+works afterwards - the warm boot goes on executing from flash (`0x100378xx`, `0x1006f1xx`), which
+it could not do otherwise. **So the XIP/SSI model is not the defect, and step 2's hypothesis is
+dead.**
+
+**What is left is a spin that touches nothing.** While stuck, the pc cycles through a handful of
+flash addresses plus SRAM (`0x100378b2`, `0x100378ac`, `0x1006f118`, `0x200034fe`), IPSR is **0**
+(thread mode, so not inside a fault or interrupt handler), simulated time advances, and essentially
+no MMIO happens - a few hundred accesses in 40 s, all of them the boot2 sequence above. A loop with
+no peripheral reads in it is waiting on **memory**, not on hardware: a flag some interrupt should
+have set, or a value it expects the previous stage to have left behind.
+
+That reframes the search away from "which register do we model wrong" and towards "which write
+does the warm boot not see". Worth trying next, in this order:
+
+1. Disassemble the SRAM routine at `0x200034fe` (dump `mcu.sram` around it - the bytes are not in
+   the `.uf2`) and the flash loop at `0x100378ac`, which together are the whole spin.
+2. Check whether an interrupt is *pending but never taken* - `core.pending_interrupts` vs
+   `enabled_interrupts` while stuck. `PPB.reset()` runs on every reset path, so NVIC enables are
+   cleared; if firmware re-enables them by a route we do not model, an ISR-set flag never moves.
+3. Only then go back to the register level.
+
