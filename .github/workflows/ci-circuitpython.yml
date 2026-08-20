@@ -106,6 +106,13 @@ jobs:
         if: ${{ matrix.wlan && matrix.hard_reset }}
         run: timeout 10m uv run --no-dev -- python tests/chip_reset_run.py --cyw43 --image ${{ matrix.tag }}
 
+      # 0088 section 1, the sharper half: CircuitPython *does* expose DTR as guest state
+      # (`supervisor.runtime.serial_connected` is TinyUSB's `tud_cdc_n_connected()`, i.e. the DTR
+      # bit), so the guest samples it while the host drops the line underneath it. Needs no
+      # `hard_reset` gate - nothing here resets the chip.
+      - name: Test CircuitPython CDC control lines ${{ matrix.tag }}
+        run: timeout 10m uv run --no-dev -- python tests/control_lines_run.py --circuitpython --image ${{ matrix.tag }}
+
       # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step (33s measured
       # locally, 2026-08-16), and soft-failing for
       # the same reason: it opens a real TCP connection and a real DNS query to the internet

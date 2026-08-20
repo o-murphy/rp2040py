@@ -1,8 +1,10 @@
 # 0065. `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI
 
-- Status: **Not root-caused — closed as dormant.** Single occurrence (2026-08-14); not reproduced
-  in any of the ~85 subsequent `Pre-commit` workflow runs through 2026-08-18, including the small
-  number that needed a retry for unrelated reasons. Reopen if it recurs.
+- Status: **Closed (2026-08-20), not root-caused.** Was "closed as dormant" from 2026-08-18;
+  closed outright on the maintainer's call, since it has not recurred in CI and no further
+  investigation or extra testing is planned. Single CI occurrence (2026-08-14) plus one local
+  sighting under load (2026-08-20, see the last section); not reproduced in any `Pre-commit`
+  workflow run since. Reopen if it recurs.
 - Conceived: 2026-08-14 · Closed: 2026-08-18
 - Related: none - confirmed unrelated to the same session's 0040/0044 work (see the folded-in note
   below)
@@ -150,3 +152,11 @@ whenever the machine is busy enough, which is exactly what a shared CI runner is
 path; the load it ran under is the whole difference. Still not root-caused, and still closed
 dormant - this is one more data point for whoever picks it up, plus a cheap local repro recipe:
 run the suite while a couple of `rp2040py micropython --image <tag>` boots are in flight.
+
+## Closed - 2026-08-20 (maintainer's call)
+
+Moved out of the tracker's "In progress / Proposed" section and into "Implemented": the flake has
+not come back in CI, and no further testing is being scheduled for it. Nothing above is retracted -
+the two CI failure shapes, the local-under-load sighting and the repro recipe all stand, and this
+record stays the place to start if it ever surfaces again. What changes is only that it is no
+longer open work: it is closed without a root cause, deliberately.
