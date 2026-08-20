@@ -122,6 +122,27 @@ class RPADC(BasePeripheral):
         # For scheduling multi-shot ADC capture
         self.multi_shot_alarm = self.rp2040.clock.create_alarm(self._on_multi_shot_alarm)
 
+    def reset(self) -> None:
+        """Registers, the FIFO and both sample alarms, back to power-on (0089 Phase 5).
+
+        `channel_values` is deliberately kept: it is the *analog input* a caller wired to the pins,
+        not chip state - resetting the RP2040 does not change the voltage on ADC0. `on_adc_read` is
+        wiring for the same reason."""
+        self.cs = 0
+        self.fcs = 0
+        self.clock_div = 0
+        self.int_enable = 0
+        self.int_force = 0
+        self.result = 0
+        self.busy = False
+        self.err = False
+        self.current_channel = 0
+        self.fifo.reset()
+        self.sample_alarm.cancel()
+        self.multi_shot_alarm.cancel()
+        self._update_dma()
+        self.rp2040.set_interrupt(IRQ.ADC_FIFO, False)
+
     def _default_on_adc_read(self, channel: int) -> None:
         self.current_channel = channel
         self.sample_alarm.schedule(self.sample_time * 1000)

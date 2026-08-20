@@ -350,6 +350,36 @@ class RPPIO(BasePeripheral):
         new_value = ((self.pin_directions & ~mask) | ((value << first_pin) & mask)) & 0x3FFFFFFF
         self.pin_directions = new_value
 
+    def reset(self) -> None:
+        """The whole block back to power-on (0089 Phase 5): instruction memory, the four state
+        machines, the IRQ flags and the pacing state.
+
+        Instruction memory is cleared deliberately - `PIO_INSTR_MEM` is RAM on real silicon and
+        does not survive a reset, which is exactly why firmware re-uploads its programs on the way
+        back up. `_run_task` is left alone: it only exists on the no-owning-`Simulator` fallback
+        path (see `__init__`), where it is the caller's loop, not chip state."""
+        for machine in self.machines:
+            machine.reset()
+        self.instructions = [0] * 32
+        self.stopped = True
+        self.cycle_fp = 0
+        self.next_due_fp = NEVER_DUE
+        self.backlog_drops = 0
+        self.fdebug = 0
+        self.tx_stall = 0
+        self.rx_stall = 0
+        self.input_sync_bypass = 0
+        self.irq = 0
+        self.pin_values = 0
+        self.pin_directions = 0
+        self.old_pin_values = 0
+        self.old_pin_directions = 0
+        self.irq0_int_enable = 0
+        self.irq0_int_force = 0
+        self.irq1_int_enable = 0
+        self.irq1_int_force = 0
+        self.check_interrupts()
+
     def check_interrupts(self) -> None:
         first_irq = self.first_irq
         self.rp2040.set_interrupt(first_irq, bool(self.irq0_int_status))

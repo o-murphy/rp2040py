@@ -65,6 +65,30 @@ class RPClocks(BasePeripheral):
         self.rtc_ctrl = 0
         self.rtc_div = 0x100
 
+    def reset(self) -> None:
+        """Every CLK_*_CTRL/DIV back to its power-on value (0089 Phase 5) - `0x100`, i.e. a
+        divisor of 1.0 in the block's 8.8 fixed-point encoding, which is what construction uses."""
+        self.gpout0_ctrl = 0
+        self.gpout0_div = 0x100
+        self.gpout1_ctrl = 0
+        self.gpout1_div = 0x100
+        self.gpout2_ctrl = 0
+        self.gpout2_div = 0x100
+        self.gpout3_ctrl = 0
+        self.gpout3_div = 0x100
+        self.ref_ctrl = 0
+        self.ref_div = 0x100
+        self.peri_ctrl = 0
+        self.peri_div = 0x100
+        self.usb_ctrl = 0
+        self.usb_div = 0x100
+        self.sys_ctrl = 0
+        self.sys_div = 0x100
+        self.adc_ctrl = 0
+        self.adc_div = 0x100
+        self.rtc_ctrl = 0
+        self.rtc_div = 0x100
+
     def read_uint32(self, offset: int) -> int:
         if offset == CLK_GPOUT0_CTRL:
             return self.gpout0_ctrl & 0b100110001110111100000

@@ -400,8 +400,14 @@ Two practical notes both runners now encode, learned the hard way:
   ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 4) - the pattern to copy if
   you ever need a device that acts on the *chip* rather than on a pin. Note what it implies: while
   RUN is held low nothing executes at all, and no simulated time passes.
-- **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
+- **`ExternalDevice`'s surface is attach-only - and a device still sees a chip reset.** There's no
+  `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See
   [record 0049](../records/0049-external-device-authoring-docs.md) for the open question this
-  leaves.
+  leaves. The reason it is survivable is worth knowing, though: a real external chip is not wired
+  to the RP2040's reset either - it sees one only through whatever GPIO the firmware drives. So the
+  emulated equivalent is a **listener on that pin**, not a callback on the protocol. `Cyw43439`
+  is the worked example: it listens on `WL_ON` and drops its bus to power-on state when the line
+  falls, which is exactly what happens once a chip reset releases the pads
+  ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 5 and its D7).

@@ -102,6 +102,37 @@ class GPIOPin:
 
         self._listeners: set[GPIOPinListener] = set()
 
+    def reset(self, io=True, pads=True) -> None:
+        """Return this pin's *registers* to their power-on values - `IO_BANK0.GPIOn_CTRL`,
+        `PADS_BANK0.GPIOn` and the three IRQ masks - leaving everything about what is wired to the
+        pin alone (docs/records/0089-one-reset-for-every-trigger.md Phase 5).
+
+        That split is the whole contract, and it is not an approximation: on silicon a chip reset
+        releases the pad, but it does not unsolder the LED, and a button still held down is still
+        held. So `_listeners` (every attached `ExternalDevice`), `_raw_input_value` and `_driven`
+        (whatever is externally driving the pin) survive; only the chip's own side is restored.
+
+        `_last_state` is recomputed *after* the registers are back, so the next
+        `check_for_updates()` compares against the post-reset level rather than firing a spurious
+        edge for a transition the pin never made.
+
+        `io`/`pads` split the two halves because `RESETS` does: `IO_BANK0` and `PADS_BANK0` are
+        separate bits a guest can select independently via `RESETS.WDSEL` (0089's D5). A `GPIOPin`
+        merges both - `ctrl` is the IO half, `pad_value` the PADS half - so the flags are what keeps
+        that merge from over-resetting.
+
+        QSPI pads are the one exception this method cannot handle alone: `PADS_QSPI` has different
+        per-pad reset values (record 0050), applied by `RP2040.__init__`/`RP2040.reset()` right
+        after this call, the same way construction does it."""
+        if io:
+            self.ctrl = 0x1F
+            self.irq_enable_mask = 0
+            self.irq_force_mask = 0
+            self.irq_status = 0
+        if pads:
+            self.pad_value = 0b0110110
+        self._last_value = self.value
+
     @property
     def raw_interrupt(self) -> bool:
         return bool((self.irq_status & self.irq_enable_mask) | self.irq_force_mask)

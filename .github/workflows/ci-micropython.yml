@@ -154,6 +154,14 @@ jobs:
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
+      # 0089's Phase 5: a pad the guest left driving must be released by machine.reset(). Also
+      # proves the WDSEL model end to end - the firmware's own watchdog_reboot() is what selects
+      # the domains, and the check fails if it selected none.
+      - name: Test MicroPython chip reset releases pads ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/chip_reset_run.py --pads --image ${{ matrix.micropython_version.tag }}
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
       - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }}
         run: |
           . scripts/ci-common.sh

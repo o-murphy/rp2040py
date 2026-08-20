@@ -188,6 +188,32 @@ class RPI2C(BasePeripheral):
         self.int_enable = 0
         self._spikelen = 0x07
 
+    def reset(self) -> None:
+        """Registers, FIFOs and the bus state machine, back to power-on (0089 Phase 5). The five
+        `on_*` callbacks are wiring - whatever is on the bus - and are left alone."""
+        self._state = I2CState.IDLE
+        self._busy = False
+        self._stop = False
+        self._pending_restart = False
+        self._first_byte = False
+        self._rx_fifo.reset()
+        self._tx_fifo.reset()
+        self.enable = 0
+        self.rx_threshold = 0
+        self.tx_threshold = 0
+        self.control = IC_SLAVE_DISABLE | IC_RESTART_EN | (I2CSpeed.FAST_MODE << SPEED_SHIFT) | MASTER_MODE
+        self.ss_clock_high_period = 0x0028
+        self.ss_clock_low_period = 0x002F
+        self.fs_clock_high_period = 0x0006
+        self.fs_clock_low_period = 0x000D
+        self.target_address = 0x55
+        self.slave_address = 0x55
+        self.abort_source = 0
+        self.int_raw = 0
+        self.int_enable = 0
+        self._spikelen = 0x07
+        self.rp2040.set_interrupt(self.irq, False)
+
     @property
     def int_status(self) -> int:
         return self.int_raw & self.int_enable
