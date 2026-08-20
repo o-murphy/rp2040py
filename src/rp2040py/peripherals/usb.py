@@ -444,26 +444,12 @@ class RPUSBController(BasePeripheral):
                 double_buffer = bool(control & USB_CTRL_DOUBLE_BUF)
                 interrupt = bool(control & USB_CTRL_INTERRUPT_PER_TRANSFER)
 
-            if double_buffer and (value >> USB_BUF1_SHIFT) & USB_BUF_CTRL_AVAILABLE:
-                buffer_length = (value >> USB_BUF1_SHIFT) & USB_BUF_CTRL_LEN_MASK
-                buffer_offset = self._get_endpoint_buffer_offset(endpoint, buffer_out) + USB_BUF1_OFFSET
-                self.debug(
-                    f"Start USB transfer, endPoint={endpoint}, "
-                    f"direction={'out' if buffer_out else 'in'} "
-                    f"buffer={buffer_offset:x} length={buffer_length}"
-                )
-                value &= ~(USB_BUF_CTRL_AVAILABLE << USB_BUF1_SHIFT)
-                _set_uint32_le(self.rp2040.usb_dpram, offset, value)
-                if buffer_out:
-                    if self.on_endpoint_read:
-                        self.on_endpoint_read(endpoint, buffer_length)
-                else:
-                    value &= ~(USB_BUF_CTRL_FULL << USB_BUF1_SHIFT)
-                    _set_uint32_le(self.rp2040.usb_dpram, offset, value)
-                    buffer = bytes(self.rp2040.usb_dpram[buffer_offset : buffer_offset + buffer_length])
-                    self._indicate_buffer_ready(endpoint, False)
-                    self.endpoint_write_alarms[endpoint].schedule(buffer, self.write_delay_microseconds * 1000)
-
+            # Buffer 0 first, then buffer 1 - the order the hardware transfers them, and the
+            # order the host must see them in. They used to run the other way round, which put a
+            # 116-byte raw-REPL response on the wire as [second packet, first packet] and split a
+            # traceback across the protocol's own \x04 boundary; it showed up as MicroPython
+            # 1.19.1 failing tests/hard_reset_run.py while every other version passed, because
+            # only a response long enough to need both buffers can expose it.
             buffer_length = value & USB_BUF_CTRL_LEN_MASK
             buffer_offset = self._get_endpoint_buffer_offset(endpoint, buffer_out)
             self.debug(
@@ -483,6 +469,26 @@ class RPUSBController(BasePeripheral):
                 if interrupt or not double_buffer:
                     self._indicate_buffer_ready(endpoint, False)
                 self.endpoint_write_alarms[endpoint].schedule(buffer, self.write_delay_microseconds * 1000)
+
+            if double_buffer and (value >> USB_BUF1_SHIFT) & USB_BUF_CTRL_AVAILABLE:
+                buffer_length = (value >> USB_BUF1_SHIFT) & USB_BUF_CTRL_LEN_MASK
+                buffer_offset = self._get_endpoint_buffer_offset(endpoint, buffer_out) + USB_BUF1_OFFSET
+                self.debug(
+                    f"Start USB transfer, endPoint={endpoint}, "
+                    f"direction={'out' if buffer_out else 'in'} "
+                    f"buffer={buffer_offset:x} length={buffer_length}"
+                )
+                value &= ~(USB_BUF_CTRL_AVAILABLE << USB_BUF1_SHIFT)
+                _set_uint32_le(self.rp2040.usb_dpram, offset, value)
+                if buffer_out:
+                    if self.on_endpoint_read:
+                        self.on_endpoint_read(endpoint, buffer_length)
+                else:
+                    value &= ~(USB_BUF_CTRL_FULL << USB_BUF1_SHIFT)
+                    _set_uint32_le(self.rp2040.usb_dpram, offset, value)
+                    buffer = bytes(self.rp2040.usb_dpram[buffer_offset : buffer_offset + buffer_length])
+                    self._indicate_buffer_ready(endpoint, False)
+                    self.endpoint_write_alarms[endpoint].schedule(buffer, self.write_delay_microseconds * 1000)
 
     def endpoint_read_done(self, endpoint: int, buffer: bytes | bytearray, delay: int | None = None) -> None:
         if delay is None:
