@@ -252,6 +252,11 @@ class RPUSBController(BasePeripheral):
         # Device mode callbacks
         self.on_usb_enabled: Callable[[], None] | None = None
         self.on_reset_received: Callable[[], None] | None = None
+        # Fired by `RP2040.enter_reset()`, on every chip-level reset. It is what lets the *chip*
+        # own a reset without knowing what is attached to its USB: `USBCDC` installs its own
+        # state-clearing here (docs/records/0057-run-pin-reset-hook.md's option B), instead of the
+        # device layer having to remember to reset both halves in the right order.
+        self.on_reset: Callable[[], None] | None = None
         self.on_endpoint_write: Callable[[int, bytes | bytearray], None] | None = None
         self.on_endpoint_read: Callable[[int, int], None] | None = None
 
@@ -522,9 +527,13 @@ class RPUSBController(BasePeripheral):
     def reset(self) -> None:
         """Callbacks (on_usb_enabled etc.), the alarm objects themselves, and read/write_delay
         tuning are left alone - only the register/transaction state a real RESETS-block reset
-        would clear. Used by USBCDC.reset() (RPWatchdog.on_watchdog_trigger's live device reset -
-        see base_device.py), where this controller object survives the reset in place rather than
-        being reconstructed, unlike a fresh boot where a new one is simply constructed instead."""
+        would clear. This controller object survives the reset in place rather than being
+        reconstructed, unlike a fresh boot where a new one is simply constructed instead.
+
+        Does **not** fire `on_reset` - `RP2040.enter_reset()` does, unconditionally. Deliberate:
+        this block is only reset when `RESETS.WDSEL` selects it, but a chip reset drops the device
+        off the host's bus either way, and that guarantee (0089's `hard_reset()`, which
+        `ahard_reset()` waits on) must not become conditional on what a guest wrote to WDSEL."""
         self._addr_endp = 0
         self._main_ctrl = 0
         self._int_raw = 0

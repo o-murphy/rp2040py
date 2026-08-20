@@ -81,7 +81,16 @@ class RPWatchdog(BasePeripheral):
         self.alarm.enable = False
 
     def _default_watchdog_trigger(self) -> None:
-        self.rp2040.logger.warning(self.name, "Watchdog triggered, but no reset handler provided")
+        """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this
+        hook: reset the chip.
+
+        It used to log "no reset handler provided" and leave the guest spinning forever waiting for
+        a reset that never came - correct only while the sequence lived in `BaseDevice`, which a
+        bare `RP2040` has no access to. It does not any more (0057's option B), so the honest
+        default is to do it: `rp2040py run` builds a bare `RP2040` + `USBCDC` and a guest calling
+        `machine.reset()` there used to hang."""
+        self.rp2040.enter_reset(from_watchdog=True)
+        self.rp2040.leave_reset()
 
     def reset(self) -> None:
         """Clear the reset-cause bookkeeping this block carries across a reboot: REASON and the
