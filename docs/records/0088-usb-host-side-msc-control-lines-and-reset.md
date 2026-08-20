@@ -122,3 +122,14 @@ Three options, in the order I would weigh them:
 | 1200-bps-touch reset | absent, **and no firmware here honours it** | needs a firmware that opts in, plus bootrom USB-device emulation to be meaningful |
 | host-driven board reset | only the guest's own `machine.reset()` path | [0057](0057-run-pin-reset-hook.md)'s reset hook - the cheap, useful one |
 | CIRCUITPY as a drive | `--dump-fs` gives the same bytes | convenience wrapper; MSC only for fidelity, opt-in, mutually exclusive with [0087] |
+
+## Note (2026-08-20): where a reset from this side would land
+
+[0089](0089-one-reset-for-every-trigger.md) collects every reset trigger in the tree - the guest's
+watchdog write, a bare Ctrl-D at the raw-REPL prompt, a host API call, and [0057]'s RUN pin - and
+proposes one owner per level (soft = firmware-side, hard = the emulator's). A 1200-bps-touch reset,
+if it were ever implemented, is a fifth trigger and belongs on the same hard-reset owner rather
+than growing its own sequence. This record's own finding stands unchanged: rp2 defines neither
+`MICROPY_HW_USB_CDC_1200BPS_TOUCH` nor `..._DTR_RTS_BOOTLOADER` and CircuitPython has no such
+handler, so there is nothing here to trigger it with. The note is about shape, not schedule.
+

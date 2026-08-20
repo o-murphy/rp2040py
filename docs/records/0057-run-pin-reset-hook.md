@@ -181,3 +181,12 @@ there, so a RESET button still has nothing to call. Worth designing the two toge
 reset lands first without this record in view, a RUN-pin model will have to work around whatever
 shape it took.
 
+Since written, that has become its own design record: [0089](0089-one-reset-for-every-trigger.md)
+treats the RESET button as one of four triggers that must share a single hard-reset owner, proposes
+the watchdog's own downward-hook precedent (`BaseDevice.__init__` installing an implementation onto
+an MCU-owned object) as the answer to the placement half above, and writes down two questions this
+record had not stated: that RUN is a *level* (a held button holds the chip in reset, so a
+fire-and-forget `reset()` is the wrong shape), and that `RP2040.reset()` today resets only
+`core`/`pwm`/`dma`/`ppb` - not SRAM, not `spi`/`i2c`/`pio`/`clocks`/`timer`/`adc`/`uart` - which a
+RESET button is the trigger most likely to expose.
+
