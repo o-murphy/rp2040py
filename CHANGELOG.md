@@ -75,6 +75,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 ### Fixed
+- **A watchdog reset ignored `PSM.WDSEL`/`RESETS.WDSEL`.** `RP2040.reset()` grew a `from_watchdog`
+  parameter and the whole WDSEL model behind it, and `BaseDevice.hard_reset()` never passed it - so
+  every device-level reset took the "reset everything" path regardless of what the guest selected.
+  A parameter with a default is a silent seam: the unit tests called `RP2040.reset()` directly and
+  the live test drove the device path, and neither could see the two were not connected.
+- **A RESET button held down left the emulated device on the USB bus.** A real board held in RESET
+  is gone from the host, not idle. `RP2040` now fires `on_run_pin_held` on the falling edge as well,
+  and `BaseDevice.hard_reset()` splits into `_enter_reset()`/`_leave_reset()` - the press runs the
+  first, the release the second, and every other trigger runs both back to back, so there is still
+  one owner of the sequence.
+- **The TIMER did not restart across a reset.** It read the simulation clock, which is shared with
+  USB SOF and every other peripheral and must not be rewound; it now keeps its own epoch, so guest
+  `time.ticks_ms()`/`time.monotonic()` starts over after a reset, as on silicon.
 - README said CircuitPython **8.0.2** was the default firmware; it has been **10.2.1** since the
   default tag was bumped in `firmware_specs.json`. The 8.0.2 row in CI is now documented as what it
   actually is - a boot-only check of the oldest supported release, deliberately not running the

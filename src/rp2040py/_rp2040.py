@@ -256,6 +256,7 @@ class RP2040:
         # holding nothing but `attach(rp2040)`'s RP2040 can still reach the full device-level
         # sequence (which includes `cdc.reset()`, unreachable from here).
         self._run_pin_low = False
+        self.on_run_pin_held: Callable[[], None] = self._default_run_pin_held
         self.on_run_pin_reset: Callable[[], None] = self._default_run_pin_reset
 
         self.reset()
@@ -263,6 +264,9 @@ class RP2040:
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    def _default_run_pin_held(self) -> None:
+        self.logger.warning(LOG_NAME, "RUN pin pulled low, but no reset handler provided")
 
     def _default_run_pin_reset(self) -> None:
         self.logger.warning(LOG_NAME, "RUN pin released, but no reset handler provided")
@@ -274,9 +278,18 @@ class RP2040:
         return self._run_pin_low
 
     def set_run_pin(self, *, low: bool) -> None:
-        """Drive the RUN pin, as a RESET button does. `low=True` holds the chip in reset (nothing
-        executes, no simulated time passes); `low=False` releases it, which is the edge that
-        actually performs the reset-and-boot sequence via `on_run_pin_reset`.
+        """Drive the RUN pin, as a RESET button does. **Both edges do something**, because on
+        silicon both do:
+
+        - `low=True` (press) fires `on_run_pin_held`: the chip enters reset. It stops executing
+          (nothing runs, no simulated time passes), its registers go to their reset values, and it
+          drops off the USB bus - a real board held in reset is *gone* from the host, not merely
+          idle.
+        - `low=False` (release) fires `on_run_pin_reset`: the chip leaves reset and boots.
+
+        An earlier version fired only on release, which left the emulated device enumerated for the
+        whole hold - visible to any host watching enumeration state, and the one fidelity gap
+        docs/records/0089's Phase 4 knowingly shipped.
 
         Idempotent per level - re-driving the level already present is not an edge and fires
         nothing, matching a switch that is simply still held. With no hook installed (a bare
@@ -290,7 +303,9 @@ class RP2040:
         if low == self._run_pin_low:
             return
         self._run_pin_low = low
-        if not low:
+        if low:
+            self.on_run_pin_held()
+        else:
             self.on_run_pin_reset()
 
     @property

@@ -59,7 +59,6 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0091] ESP32-C3 port feasibility | idea only, nothing proposed - the harness reuses and the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers, and no C3 claim in it is source-verified yet
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
-- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **All phases landed** (2026-08-20; Phase 3 built then dropped as unwanted), open only for the record's own "Known gaps" - a held RESET stays enumerated, no awaitable button reset, `xosc`/`rosc` and the TIMER count still unreset, and CircuitPython 8.0.2 still does not come back ([0093])
 - [ ] [0088] USB host side: mass storage, CDC control lines, and reset | measured, nothing built - `usb/cdc.py` is a CDC consumer, not a host; a 1200-bps-touch reset would do nothing on rp2; MSC is mutually exclusive with [0087]. Its "host-driven board reset" row is closed by [0089]'s Phase 2
 - [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built; rejected [0086], and its restart step is unblocked since [0089] - `ahard_reset()` for a hard one, one line of `aexec()` for a soft one
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
@@ -71,6 +70,8 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | **Closed dormant, not root-caused** (2026-08-18; one local sighting 2026-08-20, so not CI-specific, and there is now a repro recipe)
 
 ### Implemented
+
+- [x] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **all phases landed and its own Known gaps closed** (2026-08-20; Phase 3 built then dropped as unwanted); one hard-reset owner behind four triggers, WDSEL-gated like hardware, live-verified on both firmware families. Closing the gaps found that Phase 5's WDSEL model was never reached from the device layer. What is left is decisions, not defects; 8.0.2 is [0093]
 
 - [x] [0057] RESET button / RUN pin reset hook on `RP2040` | **closed in full by [0089]'s Phase 4** - `run_pin_low`/`set_run_pin()` + an `on_run_pin_reset` hook, a held-in-reset state in both batch loops, and `ResetButton` on three boards; live-verified on both firmware families
 

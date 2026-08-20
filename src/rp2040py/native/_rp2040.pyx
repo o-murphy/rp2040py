@@ -261,6 +261,7 @@ cdef class RP2040:
         # RUN pin / RESET button (0089 Phase 4) - see _rp2040.py's identical fields for the full
         # rationale, including the schematic that makes a press a level rather than a pulse.
         self._run_pin_low = False
+        self.on_run_pin_held = self._default_run_pin_held
         self.on_run_pin_reset = self._default_run_pin_reset
 
         self.reset()
@@ -268,6 +269,9 @@ cdef class RP2040:
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    def _default_run_pin_held(self):
+        self.logger.warning(LOG_NAME, "RUN pin pulled low, but no reset handler provided")
 
     def _default_run_pin_reset(self) -> None:
         self.logger.warning(LOG_NAME, "RUN pin released, but no reset handler provided")
@@ -279,13 +283,16 @@ cdef class RP2040:
         return self._run_pin_low
 
     def set_run_pin(self, *, low: bool) -> None:
-        """Drive the RUN pin, as a RESET button does: `low=True` holds the chip in reset,
-        `low=False` releases it and that edge fires `on_run_pin_reset`. Idempotent per level.
+        """Drive the RUN pin, as a RESET button does. Both edges fire: `low=True` (press) fires
+        `on_run_pin_held` - the chip enters reset and drops off the USB bus - and `low=False`
+        (release) fires `on_run_pin_reset`, which boots it. Idempotent per level.
         See _rp2040.py's twin for the full contract - the two must not drift."""
         if low == self._run_pin_low:
             return
         self._run_pin_low = low
-        if not low:
+        if low:
+            self.on_run_pin_held()
+        else:
             self.on_run_pin_reset()
 
     @property

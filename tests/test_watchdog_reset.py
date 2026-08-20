@@ -197,11 +197,27 @@ def test_hard_reset_defaults_to_the_run_pin(tmp_path):
     assert _chip_reset(device) == HAD_RUN
 
 
+def test_holding_the_run_pin_enters_reset_and_drops_off_the_usb_bus(tmp_path):
+    """The press, not the release, is when the chip enters reset - a real board held in RESET is
+    *gone* from the host, not idle. An earlier version fired only on release, which left the
+    emulated device enumerated for the whole hold (0089's Phase 4 shipped that as a known gap and
+    closed it the same day)."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.cdc._initialized = True
+
+    device.mcu.set_run_pin(low=True)
+
+    assert device.cdc._initialized is False, "held in reset, but still on the USB bus"
+    assert device.mcu.core.pc != 0x2000_1234, "held in reset, but the core kept its state"
+    assert _chip_reset(device) == HAD_RUN, "the cause is recorded on entry, not on release"
+
+
 def test_releasing_the_run_pin_runs_the_full_device_level_reset(tmp_path):
-    """0089's Phase 4/D3: `BaseDevice.__init__` installs its own `hard_reset()` into
-    `mcu.on_run_pin_reset`, the same downward hook it already uses for the watchdog. Without that
-    wiring an `ExternalDevice` - which only ever gets `attach(rp2040)` - could restart the chip but
-    never `cdc.reset()`, leaving the host console stale."""
+    """0089's Phase 4/D3: `BaseDevice.__init__` installs its own reset into the MCU-owned hooks,
+    the same downward wiring it already uses for the watchdog. Without it an `ExternalDevice` -
+    which only ever gets `attach(rp2040)` - could restart the chip but never `cdc.reset()`,
+    leaving the host console stale."""
     device = _make_device(tmp_path)
     device.mcu.core.pc = 0x2000_1234
     device.mcu.flash[0x100] = 0x42
@@ -209,13 +225,31 @@ def test_releasing_the_run_pin_runs_the_full_device_level_reset(tmp_path):
     usb_ctrl_before = device.mcu.usb_ctrl
 
     device.mcu.set_run_pin(low=True)
-    assert device.mcu.core.pc == 0x2000_1234, "the hold must not reset anything by itself"
     device.mcu.set_run_pin(low=False)
 
     assert device.mcu.core.pc == FLASH_START_ADDRESS
     assert device.mcu.flash[0x100] == 0x42
     assert device.cdc._initialized is False
     assert device.mcu.usb_ctrl is usb_ctrl_before
+
+
+def test_a_watchdog_reset_reaches_the_wdsel_gated_path(tmp_path):
+    """`RP2040.reset()` grew `from_watchdog` in 0089's Phase 5 - and `hard_reset()` did not pass it,
+    so the device-level watchdog path silently kept resetting *everything* regardless of what the
+    guest selected. Found while splitting the reset in two; this is the regression test.
+
+    With no WDSEL bit set, a watchdog reset must leave the peripherals alone."""
+    device = _make_device(tmp_path)
+    device.mcu.uart[0]._interrupt_mask = 0xFF
+
+    _trigger_watchdog(device)
+
+    assert device.mcu.uart[0]._interrupt_mask == 0xFF, "watchdog reset ignored WDSEL"
+
+    device.mcu.psm.write_uint32(0x08, 0x1FFFC)  # what pico-sdk's watchdog_reboot() writes
+    _trigger_watchdog(device)
+
+    assert device.mcu.uart[0]._interrupt_mask == 0
 
 
 def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_path):
