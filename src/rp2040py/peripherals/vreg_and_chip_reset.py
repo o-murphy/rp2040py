@@ -42,6 +42,20 @@ class RPVREGAndChipReset(BasePeripheral):
         self.bod = _BOD_RESET
         self.chip_reset = HAD_POR
 
+    def record_reset_cause(self, flag: int) -> None:
+        """Record which chip-level reset just happened, in CHIP_RESET's read-only status flags.
+
+        `flag` is one of HAD_POR / HAD_RUN / HAD_PSM_RESTART, and they are mutually exclusive -
+        the register reports the *last* reset, so recording one clears the other two. A watchdog
+        reboot records nothing at all (it leaves CHIP_RESET alone, which is what lets firmware tell
+        the two apart - see docs/records/0089-one-reset-for-every-trigger.md §1.3).
+
+        PSM_RESTART_FLAG is preserved rather than rewritten: it is the one writable bit here, owned
+        by the debugger/bootrom write-1-to-clear handshake below (record 0050), not by this.
+        """
+        assert flag in (HAD_POR, HAD_RUN, HAD_PSM_RESTART), f"not a CHIP_RESET cause flag: 0x{flag:x}"
+        self.chip_reset = (self.chip_reset & PSM_RESTART_FLAG) | flag
+
     def read_uint32(self, offset: int) -> int:
         if offset == VREG:
             return self.vreg

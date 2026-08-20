@@ -14,6 +14,7 @@ same as `Simulator.execute()`'s own contract - one extra line, no silent deadloc
 import asyncio
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from enum import Enum, auto
 from os import PathLike
 from pathlib import Path
 from typing import TypeVar
@@ -21,16 +22,42 @@ from typing import TypeVar
 from rp2040py.boards import BoardSpec, build_rp2040_from_spec
 from rp2040py.device.load_flash import load_uf2
 from rp2040py.memory_map import FLASH_START_ADDRESS
+from rp2040py.peripherals.vreg_and_chip_reset import HAD_POR, HAD_RUN
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
-__all__ = ("DEFAULT_TIMEOUT", "BaseDevice")
+__all__ = ("DEFAULT_TIMEOUT", "BaseDevice", "ResetCause")
 
 DEFAULT_TIMEOUT = 30.0
 
 _T = TypeVar("_T")
+
+
+class ResetCause(Enum):
+    """Why a chip-level reset happened - what `hard_reset()` records so the firmware coming back up
+    can report it (`machine.reset_cause()` on MicroPython, `microcontroller.cpu.reset_reason` on
+    CircuitPython).
+
+    The three are genuinely different signatures in hardware, not labels on one event
+    (docs/records/0089-one-reset-for-every-trigger.md §1.3):
+
+    - `WATCHDOG` - the guest reset itself, via the watchdog's TRIGGER bit (`machine.reset()`,
+      `microcontroller.reset()`, `mpremote reset`) or a watchdog timeout. The watchdog block keeps
+      its own REASON/SCRATCH bookkeeping across it, and CHIP_RESET is left alone; both firmwares
+      read that as WDT/SOFTWARE/WATCHDOG.
+    - `RUN_PIN` - the RESET button pulling RUN low, and the default for a host-side reset (0089's
+      D4: what "reset the board" corresponds to physically). Clears the watchdog's REASON/scratch
+      and sets CHIP_RESET.HAD_RUN; firmware reads PWRON/RESET_PIN.
+    - `POWER_ON` - a power cycle/brown-out. Same clearing, but CHIP_RESET.HAD_POR - which is also
+      the state a freshly constructed device already starts in, so nothing needs to ask for it
+      today.
+    """
+
+    POWER_ON = auto()
+    RUN_PIN = auto()
+    WATCHDOG = auto()
 
 
 async def _await(future: "Future[_T]", timeout: "float | None") -> _T:
@@ -78,10 +105,14 @@ class BaseDevice:
         shortcuts) writes the watchdog's TRIGGER bit to force a hardware reset - without this,
         RPWatchdog's default handler just logs a warning and the emulated CPU spins forever
         waiting for a reset that never happens. One of `hard_reset()`'s callers, not a second
-        implementation of it (docs/records/0089-one-reset-for-every-trigger.md)."""
-        self.hard_reset()
+        implementation of it (docs/records/0089-one-reset-for-every-trigger.md).
 
-    def hard_reset(self) -> None:
+        `cause=WATCHDOG` covers both ways to get here - a deliberate `watchdog_reboot()` and a real
+        timeout - because RPWatchdog has already written the REASON bit that tells them apart
+        (FORCE vs TIMER) by the time it calls this."""
+        self.hard_reset(cause=ResetCause.WATCHDOG)
+
+    def hard_reset(self, *, cause: ResetCause = ResetCause.RUN_PIN) -> None:
         """Chip-level reset: restart the RP2040 with flash preserved and drop off the USB bus,
         the way a real RUN-pin reset or a guest's own `machine.reset()` does.
 
@@ -97,10 +128,28 @@ class BaseDevice:
         deliberately leaves `on_device_connected` wired, so it fires again on the next enumeration
         - which is what makes an awaitable host-initiated form possible later (0089 Phase 2).
         `_started` stays True across this: a reset is explicitly not a second `start()`.
+
+        `cause` is what the firmware coming back up will report from `machine.reset_cause()` /
+        `microcontroller.cpu.reset_reason` - see `ResetCause` for the three signatures and why the
+        default is the RUN pin rather than "whatever the last watchdog write left behind".
         """
         self.mcu.reset(preserve_flash=True)
+        # After mcu.reset(), not before: today `RP2040.reset()` touches neither the watchdog nor
+        # VREG_AND_CHIP_RESET, but 0089's Phase 5 widens it to the blocks a real reset covers - at
+        # which point a cause recorded first would be wiped by the very reset it describes.
+        self._record_reset_cause(cause)
         self.mcu.core.pc = FLASH_START_ADDRESS
         self.cdc.reset()
+
+    def _record_reset_cause(self, cause: ResetCause) -> None:
+        """0089 §1.3's table, in three lines. A watchdog reboot is the *absence* of bookkeeping:
+        the watchdog block survives its own reset with REASON (and `watchdog_enable()`'s SCRATCH[4]
+        magic) intact, and CHIP_RESET is untouched, so firmware sees WDT/SOFTWARE/WATCHDOG exactly
+        as it does on silicon."""
+        if cause is ResetCause.WATCHDOG:
+            return
+        self.mcu.watchdog.reset()
+        self.mcu.vreg_and_chip_reset.record_reset_cause(HAD_RUN if cause is ResetCause.RUN_PIN else HAD_POR)
 
     async def _aconnect(self, timeout: "float | None") -> None:
         connected = asyncio.Event()

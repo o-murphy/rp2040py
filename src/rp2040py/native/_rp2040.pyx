@@ -169,6 +169,11 @@ cdef class RP2040:
         ]
         self.usb_ctrl = RPUSBController(self, "USB")
         self.watchdog = RPWatchdog(self, "WATCHDOG_BASE")
+        # Named, not just an entry in `peripherals` below: BaseDevice.hard_reset() has to
+        # record *which* reset just happened in CHIP_RESET (0089 Phase 1), the same way it
+        # reaches self.watchdog for REASON - a dict lookup by base address would work but
+        # would be the only such reach-in in the tree.
+        self.vreg_and_chip_reset = RPVREGAndChipReset(self, "VREG_AND_CHIP_RESET_BASE")
         self.spi = [
             RPSPI(self, "SPI0", IRQ.SPI0, ISPIDMAChannels(rx=DREQChannel.DREQ_SPI0_RX, tx=DREQChannel.DREQ_SPI0_TX)),
             RPSPI(self, "SPI1", IRQ.SPI1, ISPIDMAChannels(rx=DREQChannel.DREQ_SPI1_RX, tx=DREQChannel.DREQ_SPI1_TX)),
@@ -204,7 +209,7 @@ cdef class RP2040:
             0x40058: self.watchdog,
             0x4005C: RP2040RTC(self, "RTC_BASE"),
             0x40060: UnimplementedPeripheral(self, "ROSC_BASE"),
-            0x40064: RPVREGAndChipReset(self, "VREG_AND_CHIP_RESET_BASE"),
+            0x40064: self.vreg_and_chip_reset,
             0x4006C: RPTBMAN(self, "TBMAN_BASE"),
             0x50000: self.dma,
             0x50110: self.usb_ctrl,
