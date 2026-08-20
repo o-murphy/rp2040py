@@ -106,10 +106,19 @@ async def run(image: str, circuitpython: bool) -> int:
     board = resolve_board_spec("pico", family, image)
     print(f"Loading uf2 image {board.image}")
 
-    async with MicroPythonDevice(board=board, circuitpython=circuitpython) as device:
+    # astart() explicitly, not `async with`: the context manager boots with BaseDevice's default
+    # 30s timeout, which is not the budget the rest of this script runs on. Measured 2026-08-20:
+    # a CircuitPython pico_w boot is ~27s, so that default left a three-second margin and CI
+    # eventually lost the coin flip on it (a red "CYW43 comes back after a chip reset" whose
+    # traceback was a boot timeout, not a reset failure).
+    device = MicroPythonDevice(board=board, circuitpython=circuitpython)
+    await device.astart(timeout=TIMEOUT)
+    try:
         exit_code = await (_circuitpython(device) if circuitpython else _micropython(device))
         if exit_code:
             return exit_code
+    finally:
+        device.stop()
 
     print("CONTROL LINES TEST PASSED.")
     return 0
