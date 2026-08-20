@@ -452,11 +452,25 @@ prompts on MicroPython v1.23.0 and CircuitPython 10.2.1, demonstrating D2 end to
 Ctrl-D restarts the VM without re-running `main.py`; a friendly-prompt one re-runs it), with the
 chip's reset cause unchanged across it. All of it was removed again.
 
-**The capability itself never went anywhere, which is why dropping it costs nothing:** a soft reset
-is bytes the firmware already answers, from any of the paths that already exist - a user pressing
-Ctrl-D in the console, `mpremote connect ... soft-reset` (documented as working, no emulator-side
-reset involved), or the guest's own `machine.soft_reset()`. What was dropped is only a host-side
-convenience wrapper for asking.
+**The capability itself never went anywhere, which is why dropping it costs nothing** - the
+maintainer's own argument: *"ми можемо це прямо через exec/mpremote зробити"*. A soft reset is bytes
+the firmware already answers, from paths that all already exist: a user pressing Ctrl-D in the
+console, `mpremote connect ... soft-reset` (documented as working, no emulator-side reset involved),
+or simply asking the guest to do it to itself over the raw REPL we already have.
+
+That last one was measured 2026-08-20, because "just exec it" had an obvious way to go wrong - the
+VM restarts *mid-exec*, so the call could plausibly never see its own terminator - and it does not:
+
+```python
+await device.aexec("import machine\nmachine.soft_reset()")  # MicroPython v1.23.0
+await device.aexec("import supervisor\nsupervisor.reload()")  # CircuitPython 10.2.1
+```
+
+Both **return cleanly** (`stdout=b''`, `stderr=b''`), and the next `aexec()` on the same console
+reports `NameError` for a global set before the call - i.e. the VM really did restart, the raw REPL
+came back, and the runner's own Ctrl-C/Ctrl-A on the following exec resynchronises it. No
+emulator-side support, no wrapper, no waiting logic. Which is precisely why a `SoftResetRunner`
+would have been a second way to do something the device API could already express in one line.
 
 *Consequence for [0087]:* its restart step goes back to those paths, or to `ahard_reset()` (Phase 2,
 built) - it no longer waits on anything here.
