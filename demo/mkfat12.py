@@ -40,8 +40,10 @@ both. That library is declared in this script's own PEP 723 dependencies, so
 installs it for this script alone - the project itself takes no dependency on it, and the 8.3 path
 keeps working under a plain `python demo/mkfat12.py` with nothing installed at all. Which route a
 build takes is decided per image, not per file, since two writers on one volume would mean this
-one walking LFN chains it does not implement (docs/records/0086 has the plan for making this a
-real, declared dependency and a `mkfat12` CLI subcommand).
+one walking LFN chains it does not implement. Making that a declared dependency plus a `mkfat12`
+CLI subcommand was proposed in docs/records/0086 and **rejected** (2026-08-20): per
+docs/records/0087 the firmware writes its own CIRCUITPY over the raw REPL, so anything needing an
+LFN chain or a subdirectory goes that way instead. This file keeps the offline 8.3 job.
 
 Two ways to get the volume geometry right, since `--fat12` images are loaded raw into flash and
 CircuitPython only mounts what its own driver recognises:

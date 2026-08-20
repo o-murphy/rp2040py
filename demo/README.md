@@ -23,8 +23,12 @@ the emulator loads as flash content (see `mkfat12.py`) instead of being pushed o
 so it hands those images to `pyfatfs` - declared in that script's own PEP 723 header, so
 `uv run --script demo/mkfat12.py ...` installs it for that script alone and the project itself
 takes no dependency on it. [Record 0086](../docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md)
-is the plan for making that a real optional dependency plus a `mkfat12` CLI subcommand, and the
-survey of the libraries that could back it.
+proposed making that a real optional dependency plus a `mkfat12` CLI subcommand and was
+**rejected** (2026-08-20), library survey and all: per
+[record 0087](../docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) the
+firmware can write its own CIRCUITPY over the raw REPL, so long names and subdirectories come out
+of CircuitPython's FatFS instead of a host-side writer. This file's 8.3 builder stays - it is what
+a test or a fast `--code` run uses, since the firmware route costs a format-from-blank boot.
 
 ## What the display demos actually produce
 

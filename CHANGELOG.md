@@ -25,10 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implements the VFAT/LFN entry chains and directories this file deliberately does not. `pyfatfs`
   is declared in that script's own PEP 723 header rather than in `pyproject.toml`, so
   `uv run --script demo/mkfat12.py ...` installs it for that script alone and the project takes no
-  dependency on it; the 8.3 path still needs nothing installed at all. See
-  [docs/records/0086](docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md) for the plan to
-  make it a real optional dependency plus a `mkfat12` CLI subcommand, and the survey of the
-  libraries that could back it.
+  dependency on it; the 8.3 path still needs nothing installed at all.
+  [docs/records/0086](docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md) proposed making
+  it a real optional dependency plus a `mkfat12` CLI subcommand; that is **rejected** (2026-08-20)
+  and the record keeps its library survey as the answer to a question no longer being asked - see
+  [docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md),
+  where the firmware writes CIRCUITPY itself over the raw REPL and long names and subdirectories
+  come from its own FatFS.
 - `demo/wifi_lcd_run.py` + `demo/cp_wifi_lcd_demo.py` - a Pico W with an ST7735S wired to it,
   showing a real `wifi.radio.connect()` and the DHCP address on the panel. The Waveshare LCD board
   cannot do this at all: it has no CYW43439, so its CircuitPython build ships no `wifi` module.
