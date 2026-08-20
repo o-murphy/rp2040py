@@ -18,6 +18,7 @@ what covers 0057's own parity requirement: the RUN level exists in both `_rp2040
 import pytest
 
 from rp2040py.external.reset_button import ResetButton
+from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.simulator import Simulator
 
 
@@ -93,18 +94,22 @@ def test_re_driving_the_same_level_is_not_an_edge(rp2040_factory):
     assert fired == [1]
 
 
-def test_releasing_run_with_no_hook_installed_is_logged_not_raised(rp2040_factory):
-    """A bare `RP2040` outside a `BaseDevice` has no way to reach the USB half of a reset, so the
-    default handler declines rather than half-resetting the chip - the same shape
-    `RPWatchdog._default_watchdog_trigger` already uses."""
+def test_pressing_run_with_no_hook_installed_resets_the_chip(rp2040_factory):
+    """A bare `RP2040` outside a `BaseDevice` resets itself.
+
+    It used to log "no reset handler provided" and keep running, because the USB half of a reset
+    was only reachable from the device layer. `RP2040.enter_reset()`/`leave_reset()` own the whole
+    sequence now (0057's option B), so declining would be the wrong default: a RESET button on a
+    board file, or `rp2040py run`'s bare chip, would silently do nothing."""
     rp2040 = rp2040_factory()
-    warnings = []
-    rp2040.logger.warning = lambda name, message: warnings.append(message)
+    rp2040.core.pc = 0x10001234
+    rp2040.pwm.write_uint32(0x00, 0x1F)  # any block that a reset must clear
 
     rp2040.set_run_pin(low=True)
-    rp2040.set_run_pin(low=False)
+    assert rp2040.pwm.read_uint32(0x00) == 0, "pressing RUN must reset the chip's blocks"
 
-    assert any("RUN pin" in message for message in warnings)
+    rp2040.set_run_pin(low=False)
+    assert rp2040.core.pc == FLASH_START_ADDRESS, "releasing RUN must boot it"
 
 
 # -- 2. held in reset, in the batch loop --------------------------------------------------------

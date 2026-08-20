@@ -201,6 +201,12 @@ class USBCDC:
         self.usb.on_reset_received = _on_reset_received
         self.usb.on_endpoint_write = _on_endpoint_write
         self.usb.on_endpoint_read = _on_endpoint_read
+        # Whenever the controller is reset - by a chip-level reset or directly - this host side
+        # clears itself. Installed downward, like the four hooks above, so the *chip* can own a
+        # reset without knowing a CDC exists (0057's option B): before this, only `BaseDevice`
+        # knew both halves had to be reset together, and anything holding a bare `RP2040` reset
+        # the chip and left the console stale.
+        self.usb.on_reset = self._on_controller_reset
 
     def _cdc_set_control_line_state(self, value: int | None = None, interface_number: int | None = None) -> None:
         if value is None:
@@ -286,9 +292,22 @@ class USBCDC:
         self.tx_fifo.push(data)
 
     def reset(self) -> None:
-        """For RPWatchdog.on_watchdog_trigger's live device reset (see base_device.py) - `self.usb`
-        (the RP2040 object's own usb_ctrl) is reset in place rather than reconstructed, since this
-        object holds a direct reference to it that must stay valid across the reset."""
+        """Reset this host side *and* the controller it drives.
+
+        `self.usb` (the RP2040 object's own usb_ctrl) is reset in place rather than reconstructed,
+        since this object holds a direct reference to it that must stay valid across the reset.
+        The host-side clearing itself lives in `_on_controller_reset()`, which a chip-level reset
+        reaches directly through `usb_ctrl.on_reset` without going through this method at all."""
+        self._on_controller_reset()
+        self.usb.reset()
+
+    def _on_controller_reset(self) -> None:
+        """Installed on `usb_ctrl.on_reset`; runs whenever the controller is reset, from wherever.
+
+        Everything here is host-side bookkeeping about a device that has just dropped off the bus:
+        enumeration state, the endpoints found in its descriptors, the control lines it was
+        asserting. `on_device_connected` and `on_serial_data` are deliberately *not* cleared - they
+        are wiring, and the re-enumeration that follows a reset is what fires them again."""
         self.tx_fifo.reset()
         self._initialized = False
         self._descriptors_size = None
@@ -302,4 +321,3 @@ class USBCDC:
         self._control_line_state = 0
         self._line_coding = LineCoding()
         self._pending_line_coding = None
-        self.usb.reset()

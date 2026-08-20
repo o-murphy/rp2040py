@@ -168,16 +168,18 @@ class BaseDevice:
         the same day): pressing RESET does all of this and *stays* there, and the release is what
         runs `_leave_reset()`. Every other trigger - the watchdog, the host API - has no held
         phase, so `hard_reset()` above simply runs both halves back to back."""
-        self.mcu.reset(preserve_flash=True, from_watchdog=cause is ResetCause.WATCHDOG)
-        # After mcu.reset(), not before: 0089's Phase 5 widened it to the blocks a real reset
-        # covers, so a cause recorded first would be wiped by the very reset it describes.
+        self.mcu.enter_reset(from_watchdog=cause is ResetCause.WATCHDOG)
+        # After the chip reset, not before: 0089's Phase 5 widened it to the blocks a real reset
+        # covers, so a cause recorded first would be wiped by the very reset it describes. The
+        # host side of the USB link resets itself through `usb_ctrl.on_reset` (0057's option B) -
+        # this method no longer has to remember `cdc.reset()`, and nor does anything else.
         self._record_reset_cause(cause)
-        self.cdc.reset()
 
     def _leave_reset(self) -> None:
         """Release the chip: point the core at flash's entry point and let it run. The other half
-        of `_enter_reset()`; see there for why the two are separable."""
-        self.mcu.core.pc = FLASH_START_ADDRESS
+        of `_enter_reset()`; see there for why the two are separable. The sequence itself lives on
+        `RP2040` now - this is the device layer's name for it."""
+        self.mcu.leave_reset()
 
     def _record_reset_cause(self, cause: ResetCause) -> None:
         """0089 §1.3's table, in three lines. A watchdog reboot is the *absence* of bookkeeping:
