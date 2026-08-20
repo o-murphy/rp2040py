@@ -215,6 +215,21 @@ class Timer32PeriodicAlarm:
             cycle_delta = top + 1 - cycle_delta
 
         cycles_to_alarm = cycle_delta & 0xFFFFFFFF
+        if not cycles_to_alarm:
+            # "Now" is not a future alarm. Rescheduling at a zero delta livelocks the clock: the
+            # callback fires again at the same instant, forever, inside a single `tick()` - the
+            # counter never advances, so simulated time stops for the whole chip.
+            #
+            # Reachable whenever the counter is *sitting on* the target as this reschedules, which
+            # is exactly what `_handle_alarm()` does right after firing. The watchdog is the case
+            # that found it (`target = 0`, DECREMENT, `top = 0xFFFFFFFF`): a timeout froze the
+            # emulator instead of resetting the chip, and MicroPython 1.16/1.17 reach it from
+            # `machine.reset()` itself, because pico-sdk 1.2.0's `_watchdog_enable()` reboots by
+            # loading a 50 ms timeout rather than writing CTRL.TRIGGER (added in a later SDK).
+            #
+            # A counter that is already at the target reaches it again one full wrap later, which
+            # is what the hardware does and what this schedules.
+            cycles_to_alarm = top + 1
         nanos_to_alarm = timer.to_nanos(cycles_to_alarm)
         self._clock_alarm.schedule(nanos_to_alarm)
 
