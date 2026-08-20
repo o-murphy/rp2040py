@@ -252,3 +252,47 @@ does the warm boot not see". Worth trying next, in this order:
    cleared; if firmware re-enables them by a route we do not model, an ISR-set flag never moves.
 3. Only then go back to the register level.
 
+## Correction (2026-08-20): the spin *is* polling a peripheral - the TIMER
+
+The section above says the stuck loop "reads no peripheral at all". **That is wrong, and the error
+was in the instrumentation, not the emulator**: the per-block counter watched SSI, XIP_CTRL, USB
+and the watchdog, and the TIMER (`0x40054`) was not on the list - so its hundreds of thousands of
+reads were counted as zero.
+
+Disassembling the flash half of the spin says what it actually is:
+
+    0x100378aa  ldr r1, [r2, #0x24]   ; TIMERAWH
+    0x100378ac  cmp r1, r3
+    0x100378ae  bne 0x100378b6
+    0x100378b0  ldr r1, [r2, #0x28]   ; TIMERAWL
+    0x100378b2  cmp r1, r4
+    0x100378b4  blo 0x100378aa        ; loop until the 64-bit time reaches the target
+
+That is pico-sdk's `busy_wait_until()` / `time_reached()` on `TIMERAWH`/`TIMERAWL`, which is a
+perfectly ordinary thing for firmware to be doing - so "it is waiting on memory" was the wrong
+inference too. Both corrections come from the same missing watch entry.
+
+### What the timer actually does after a reset: it restarts, and it runs
+
+| | TIMERAW | simulated clock |
+|---|---|---|
+| cold boot, sampled | 0.347 s → 0.697 s → 1.034 s | identical |
+| cold boot, at enumeration | **2.323 s** | 2.32 s |
+| after the reset | 0.069 s → 0.418 s → 0.779 s → 1.119 s | 2.39 s → 3.44 s |
+
+So the TIMER restarts from zero (0089's Phase 5 follow-up made it do exactly that) and then
+advances in step with the simulation clock. Nothing is frozen.
+
+### And that kills the "it is just slow" theory too
+
+Given a **900-second** budget instead of the usual 120, the warm boot reaches **13+ seconds of
+guest time** - five times what a cold boot needs to enumerate - and still does not come up. Its pc
+by then is in SRAM (`0x200038a8`, `0x200039ee`, `0x20003826`), cycling through a range rather than a
+tight three-instruction loop.
+
+So the state of the investigation is: **the warm boot completes boot2, keeps XIP working, keeps
+time running, and then loops inside a routine in SRAM for as long as it is given.** The next step
+is unchanged and now unavoidable - disassemble `0x20003780..0x20003a80` out of the emulator's SRAM
+(the bytes are whatever the firmware copied there, so they are not in the `.uf2`) and read what
+that loop is waiting for.
+
