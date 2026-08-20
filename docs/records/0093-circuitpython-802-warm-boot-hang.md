@@ -296,3 +296,39 @@ is unchanged and now unavoidable - disassemble `0x20003780..0x20003a80` out of t
 (the bytes are whatever the firmware copied there, so they are not in the `.uf2`) and read what
 that loop is waiting for.
 
+## 2026-08-20 (final for today): it is wild execution into blank SRAM
+
+Dumped the 768 bytes of SRAM the warm boot keeps executing in (`0x20003780..0x20003a80`, taken out
+of the emulator after 75 s of being stuck - those bytes are not in the `.uf2`, so this is the only
+way to see them) and disassembled it.
+
+**66 of the 768 bytes are non-zero.** The "hot" addresses decode as `movs r0, r0` - because
+`0x0000` *is* that instruction. The warm boot is not sitting in a routine that waits for something.
+It is sliding through **blank memory**: a NOP sled, which is what an ARM core does with zeroed RAM
+until it hits a word that decodes into a branch.
+
+That also explains the flash addresses that looked like a loop. Disassembled, they are ordinary
+library code, hot because everything uses them:
+
+- `0x1006f100..0x1006f13a` - the SDK's hardware-divider helper. It saves and restores
+  `DIV_UDIVIDEND`/`DIV_UDIVISOR`/`DIV_QUOTIENT`/`DIV_REMAINDER` (SIO `+0x60/0x64/0x70/0x74`) around
+  a call and spins on `DIV_CSR` (`+0x78`) bit 0 with `ldr r5,[r6,#0x78]; lsrs r5,r5,#1; blo` - the
+  READY wait.
+- `0x100378aa..0x100378b4` - `busy_wait_until()`, as the correction above established.
+
+So the shape of the failure is: **normal firmware code → a jump through a pointer that lands in
+blank RAM → a NOP sled → back into flash → round again**. Not a deadlock on a peripheral; a wild
+branch, which is the failure mode [0035](0035-board-aware-fs-flash-offset.md) is about and which
+this record's own "Related" line already pointed at.
+
+**The one thing left to catch is the wild jump itself**: the flash instruction immediately before
+the pc first enters SRAM. Today's traces sample every 0.5 ms of simulated time, which is ~60 000
+instructions - far too coarse to name it. The way to get it is a much finer alarm (10 us, ~1 250
+instructions) recording *transitions* only: keep the previous pc, and when the current one is in
+SRAM and the previous was in flash, record the pair. That names the call site, and the call site
+names what it read to get the address.
+
+Worth stating for whoever does that: the value it jumps to is very likely something the reset left
+in a place a cold boot fills in - which brings this back to `_enter_reset()`'s scope, but from the
+other end than the last three attempts.
+
