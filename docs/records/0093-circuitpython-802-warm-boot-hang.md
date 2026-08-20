@@ -332,3 +332,30 @@ Worth stating for whoever does that: the value it jumps to is very likely someth
 in a place a cold boot fills in - which brings this back to `_enter_reset()`'s scope, but from the
 other end than the last three attempts.
 
+### The jump, caught
+
+Re-run with a 10 us alarm recording only flash->SRAM transitions (the recipe above), first one on
+the warm boot:
+
+    transition #1: flash 0x100378b2 -> SRAM 0x20000250, at simulated 2.5230 s
+
+`0x100378b2` is inside `busy_wait_until()` - the `cmp r1, r4` of the TIMER wait loop. So the wild
+branch happens **on the way out of that wait**, not on the way in, and it lands at `0x20000250`:
+low SRAM, in the region a firmware puts its relocated vector table and `.ramfunc` copies, and one
+that this image evidently never filled (the dump above is blank there).
+
+Two caveats to carry forward rather than lose:
+
+- 10 us is still ~1 250 instructions, so `0x100378b2` is "the last place it was seen", not
+  provably the instruction that branched. The next refinement is 1 us plus the core registers -
+  `lr` and `sp` at the transition name the caller and let the stack be read back.
+- A return-out-of-a-wait going wild has a small set of causes worth checking in order: a corrupted
+  return address on the stack, an exception taken with a vector table that points into unpopulated
+  RAM (`PPB.reset()` zeroes `VTOR` on every reset path - if the firmware's re-relocation does not
+  happen, every vector reads as blank RAM), or a `.ramfunc` pointer resolved before the copy that
+  fills it.
+
+The middle one is the first to test, because it is the one this project's reset path can plausibly
+break: `VTOR` is reset by us, and what refills it is firmware code that a cold boot runs and a warm
+boot may not reach in the same order.
+
