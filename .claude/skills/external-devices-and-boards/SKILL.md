@@ -79,6 +79,13 @@ the script's own module docstring before using it on an unfamiliar board.
      high/low - that would mask a firmware bug the device exists to exercise).
    - [`src/rp2040py/external/bootsel_button.py`](../../../src/rp2040py/external/bootsel_button.py)
      - a button on a non-GPIO pad (`GPIO_QSPI_SS`), identical across every RP2040 board.
+   - [`src/rp2040py/external/reset_button.py`](../../../src/rp2040py/external/reset_button.py) -
+     a device that acts on the **chip** rather than on a pin: RESET pulls the RUN pin, which is not
+     a GPIO and has no pad, so it goes through `RP2040.set_run_pin()` plus the `on_run_pin_reset`
+     hook `BaseDevice` installs its own hard reset into. Also the template for **any device pressed
+     while the simulation is running**: every level change goes through `schedule_threadsafe()`,
+     since 0030 forbids touching engine-room state from another thread (`BootselButton` gets away
+     with a direct write only because it is pressed before `start_execution()`).
    - [`src/rp2040py/external/ws2812.py`](../../../src/rp2040py/external/ws2812.py) - decodes a
      pulse-width protocol from nothing but GPIO edge timestamps; the model for any one-wire/timing-
      coded protocol (DHT11/22, IR, servo PWM).
@@ -156,6 +163,11 @@ Match the test to what actually needs proving - these are additive, not alternat
    - [`tests/test_led_mock.py`](../../../tests/test_led_mock.py) - the minimal shape: a
      `_drive_gpio_high()` helper flips SIO's `GPIO_OUT`/`GPIO_OE` bits and calls
      `pin.check_for_updates()`, then asserts the device's resulting state.
+   - [`tests/test_reset_button.py`](../../../tests/test_reset_button.py) - a device driven at
+     runtime: assert the level change was **scheduled and not yet applied** (a recording fake in
+     place of `Simulator`), which is the difference a direct call would erase. Same file covers the
+     third execution state a held RESET introduces - a recurring alarm fires 0 times while the chip
+     is held and >0 once released.
    - [`tests/test_ws2812.py`](../../../tests/test_ws2812.py) - real-timing protocols: build test
      waveforms from a **real driver's own published timings** (a specific PIO program's cycle
      counts at its real clock), never round numbers - "testing against upstream's own numbers is

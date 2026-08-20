@@ -33,6 +33,7 @@ the same reason applies.
 | WiFi (Pico W / CYW43439, `--board pico_w`) — scan/join against the built-in fake AP | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> |
 | …and real network access through its NAT bridge (guest TCP/UDP → host sockets) | ✅ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> |
 | BOOTSEL button (`external/bootsel_button.py`, both boards) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| RESET button (`external/reset_button.py`) and host-side `device.ahard_reset()` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Waveshare 2.9″ e-Paper (`Epd2in9G` external device) | ✅ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> |
 | GDB server (`run`, TCP port 3333) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `--tcp-port` (socket REPL, `socket://host:port`) | ✅ | ✅ | ✅ | ✅ | ✅ <sup>[[7]](#fn7)</sup> | ✅ <sup>[[7]](#fn7)</sup> |

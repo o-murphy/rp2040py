@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CircuitPython 10.2.1, both now in CI (`tests/reset_button_run.py`).
   [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 4, closing
   [docs/records/0057](docs/records/0057-run-pin-reset-hook.md).
+- `docs/reference/mpremote.md` gained a "Soft reset: raw prompt vs friendly prompt" section: a
+  soft reset restarts the VM but **does not** re-run `main.py`/`code.py` unless the Ctrl-D is sent
+  at the *friendly* prompt - measured on both firmware families, and the thing to know before
+  reaching for `mpremote soft-reset` to run a script you just uploaded.
 - `demo/mkfat12.py` - builds (and reads back) the CIRCUITPY FAT12 image CircuitPython auto-runs
   `boot.py`/`code.py` from, with no host dependencies, and without booting anything - which is what
   makes it usable from a test, from CI, and as `--code`/`--boot`'s implementation. (It was

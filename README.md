@@ -590,14 +590,21 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   second, independent USB-CDC-console JS runtime for RP2040 - unrelated to rp2040js despite both
   being JS) all boot and run against this emulator; a built-in GDB server (`--gdb`) works against
   any of them.
-- **`machine.reset()`/`machine.bootloader()` actually reset the device**: rp2040js's own
+- **A real chip reset, from every trigger that has one**: rp2040js's own
   `RPWatchdog.onWatchdogTrigger` (`src/peripherals/watchdog.ts`) defaults to logging "Watchdog
   triggered, but no reset handler provided" and does nothing else - the emulated CPU spins forever
-  waiting for a reset that never happens. rp2040py's `RPWatchdog.on_watchdog_trigger` performs a
-  real in-place reset (CPU core, PWM/DMA/USB-CDC peripheral state) and jumps back to flash's entry
-  point, preserving flash/filesystem content and every externally-referenced peripheral object's
-  identity - `mpremote reset`/`mpremote bootloader` (the latter performs the same reset rather than
-  entering actual BOOTSEL mode, which isn't implemented) both return promptly instead of hanging.
+  waiting for a reset that never happens. Here `machine.reset()`/`machine.bootloader()` work, and
+  they are one caller of a single reset owner rather than the only path: a **RESET button**
+  (`external/reset_button.py` - a real RUN-pin level, so holding it holds the chip in reset) and a
+  host-side **`device.ahard_reset()`** reach the same sequence. What that sequence covers is the
+  blocks a real reset covers - pads, IO, SIO, clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB - gated by
+  `PSM.WDSEL`/`RESETS.WDSEL` exactly as hardware gates them, so a GPIO the guest left driving is
+  released and WiFi comes back up on a Pico W. Flash/filesystem content and every
+  externally-referenced peripheral object's identity survive (the reset is in place, never a
+  reconstruction), and the firmware reports the right `machine.reset_cause()` /
+  `microcontroller.cpu.reset_reason` for the trigger that actually fired. `mpremote reset`/
+  `mpremote bootloader` (the latter performs the same reset rather than entering actual BOOTSEL
+  mode, which isn't implemented) both return promptly instead of hanging.
 - **Configurable bootrom revision** (`--bootrom b0`/`b1`/`b2`, or a local `.elf`/`.bin`) - see
   [Bootrom revisions](#bootrom-revisions) below - auto-downloaded and cached the same way firmware
   images are. rp2040js ships exactly one hardcoded bootrom build (`demo/bootrom.ts`, revision B1),
