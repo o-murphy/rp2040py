@@ -91,9 +91,11 @@ works.
 3. **Document the mpremote story** (in `docs/mpremote.md`, which already exists for the
    `socket://` bug): `exec`/`run`/`eval`/`repl` work against CircuitPython; `fs *` does not, and
    why. Worth stating explicitly so nobody re-derives it.
-4. **Optional, cosmetic**: move the post-boot handshake difference out of
+4. ~~**Optional, cosmetic**: move the post-boot handshake difference out of
    `if not args.circuitpython` in the CLI and onto the device/family, so the CLI stops branching on
-   a firmware flag it otherwise doesn't care about.
+   a firmware flag it otherwise doesn't care about.~~ **Done (2026-08-20)** as
+   [0089](0089-one-reset-for-every-trigger.md)'s Phase 0.1, where it stopped being optional -
+   `MicroPythonDevice._post_boot_handshake()`.
 
 ## Constraints whoever builds this has to keep
 

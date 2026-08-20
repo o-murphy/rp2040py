@@ -111,6 +111,24 @@ class MicroPythonDevice(BaseDevice):
     # start_async()/exec_async() calls made back-to-back queue behind each other instead of
     # racing.
 
+    def _post_boot_handshake(self) -> None:
+        """Nudge the just-enumerated firmware into a usable prompt, per family.
+
+        MicroPython prints its prompt only in response to a newline, so a host that attaches after
+        the banner has already gone by sees nothing until it sends one. CircuitPython instead
+        auto-runs `code.py` on boot and prints its prompt only once that finishes (or is
+        interrupted), so the equivalent nudge there is Ctrl-C.
+
+        Lives here, on the device and keyed on the firmware family, rather than in
+        `cli/__init__.py` after `astart()` (where it used to be): a device-level reset has to
+        re-run it and cannot reach into the CLI for it - 0089's Phase 0.1, and [0087]'s item 4.
+        """
+        if self.circuitpython:
+            self.cdc.send_serial_byte(3)  # Ctrl-C
+        else:
+            self.cdc.send_serial_byte(ord("\r"))
+            self.cdc.send_serial_byte(ord("\n"))
+
     async def _aconnect(self, timeout: "float | None") -> None:
         async with self._repl_lock:
             connected = asyncio.Event()
@@ -121,6 +139,7 @@ class MicroPythonDevice(BaseDevice):
                 await self.simulator.wait_for(connected, timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
+            self._post_boot_handshake()
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails

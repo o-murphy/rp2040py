@@ -188,3 +188,52 @@ def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image)
     with pytest.raises(RawReplError):
         second.result(timeout=5)
     assert third.result(timeout=5) == (b"3\r\n", b"")
+
+
+# -- post-boot handshake (docs/records/0089-one-reset-for-every-trigger.md, Phase 0.1) ----------
+# Moved here from cli/__init__.py's `_micropython_async()`, which used to send these bytes itself
+# after `astart()` returned: a device-level reset has to re-run the handshake and cannot reach
+# into the CLI for it.
+
+
+def _record_sent_bytes(device, monkeypatch) -> bytearray:
+    sent = bytearray()
+    monkeypatch.setattr(device.cdc, "send_serial_byte", sent.append)
+    return sent
+
+
+def test_post_boot_handshake_sends_a_newline_for_micropython(garbage_image, monkeypatch):
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    device._post_boot_handshake()
+
+    assert bytes(sent) == b"\r\n"
+
+
+def test_post_boot_handshake_sends_ctrl_c_for_circuitpython(garbage_image, monkeypatch):
+    """CircuitPython auto-runs code.py on boot and only prints its prompt once that finishes or is
+    interrupted - a newline would be swallowed by the running script."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image), circuitpython=True)
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    device._post_boot_handshake()
+
+    assert bytes(sent) == b"\x03"
+
+
+def test_connect_runs_the_post_boot_handshake_after_enumeration(garbage_image, monkeypatch):
+    """...and only after: the nudge is a reply to a device that's already on the bus, so sending it
+    any earlier would drop it into a USBCDC that isn't initialized yet."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    def _fake_start_execution() -> None:
+        assert bytes(sent) == b"", "handshake sent before the device enumerated"
+        device.cdc.on_device_connected()
+
+    monkeypatch.setattr(device.simulator, "start_execution", _fake_start_execution)
+
+    asyncio.run(device._aconnect(timeout=5))
+
+    assert bytes(sent) == b"\r\n"

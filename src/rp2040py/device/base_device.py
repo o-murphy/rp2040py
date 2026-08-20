@@ -77,10 +77,27 @@ class BaseDevice:
         """A real `machine.reset()`/`machine.bootloader()` (mpremote's `reset`/`bootloader`
         shortcuts) writes the watchdog's TRIGGER bit to force a hardware reset - without this,
         RPWatchdog's default handler just logs a warning and the emulated CPU spins forever
-        waiting for a reset that never happens. Mirrors `_aconnect()`'s own cold-boot sequence
-        (reset then jump straight to flash's entry point), but preserving flash content and
-        resetting mcu/cdc in place rather than replacing them - external code (this object's own
-        self.cdc) holds a direct reference to mcu.usb_ctrl that must stay valid."""
+        waiting for a reset that never happens. One of `hard_reset()`'s callers, not a second
+        implementation of it (docs/records/0089-one-reset-for-every-trigger.md)."""
+        self.hard_reset()
+
+    def hard_reset(self) -> None:
+        """Chip-level reset: restart the RP2040 with flash preserved and drop off the USB bus,
+        the way a real RUN-pin reset or a guest's own `machine.reset()` does.
+
+        **The one owner of the hard-reset sequence** (0089): every trigger - the watchdog's
+        TRIGGER bit above, a RESET button/RUN pin, a host-side API call - routes here rather than
+        growing its own variant of these three lines. Mirrors `_aconnect()`'s own cold-boot
+        sequence (reset then jump straight to flash's entry point), but preserving flash content
+        and resetting mcu/cdc in place rather than replacing them - external code (this object's
+        own self.cdc) holds a direct reference to mcu.usb_ctrl that must stay valid.
+
+        Synchronous and fire-and-forget by design: it is called from inside an emulated register
+        write (the watchdog path), where there is nothing to await and nobody waiting. `cdc.reset()`
+        deliberately leaves `on_device_connected` wired, so it fires again on the next enumeration
+        - which is what makes an awaitable host-initiated form possible later (0089 Phase 2).
+        `_started` stays True across this: a reset is explicitly not a second `start()`.
+        """
         self.mcu.reset(preserve_flash=True)
         self.mcu.core.pc = FLASH_START_ADDRESS
         self.cdc.reset()

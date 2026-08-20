@@ -98,3 +98,22 @@ def test_watchdog_reason_register_reports_force_after_trigger(tmp_path):
     _trigger_watchdog(device)
 
     assert device.mcu.watchdog.read_uint32(REASON) == FORCE
+
+
+def test_hard_reset_called_directly_runs_the_same_sequence(tmp_path):
+    """The watchdog hook is one caller of `BaseDevice.hard_reset()`, not the only way to reach it
+    (docs/records/0089-one-reset-for-every-trigger.md, Phase 0.2) - a RUN pin/RESET button and a
+    host-side API call are the others, and they must get this exact sequence rather than their own
+    variant of it."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.mcu.flash[0x100] = 0x42
+    device.cdc._initialized = True
+    usb_ctrl_before = device.mcu.usb_ctrl
+
+    device.hard_reset()
+
+    assert device.mcu.core.pc == FLASH_START_ADDRESS
+    assert device.mcu.flash[0x100] == 0x42
+    assert device.cdc._initialized is False
+    assert device.mcu.usb_ctrl is usb_ctrl_before
