@@ -50,6 +50,27 @@ class RPXOSC(BasePeripheral):
         self._stable = False
         self._is_dormant = False
 
+    def reset(self) -> None:
+        """Back to power-on: disabled, not stable, not dormant.
+
+        Gated on `PSM.WDSEL`'s **XOSC** bit by `RP2040.reset()`, which reproduces the hardware
+        split exactly rather than approximating it: pico-sdk's `watchdog_reboot()` selects
+        "everything apart from ROSC and XOSC" - the oscillators clock the reset logic and the
+        booting CPU, so stopping them mid-reboot would stop the chip's own clock - while a
+        RUN-pin/power-on reset has no such exemption and does reset this block.
+
+        Restoring construction state is also exactly the state a cold boot starts from here, which
+        is what makes this safe: firmware re-runs `xosc_init()` either way, and this model becomes
+        stable the instant it is enabled (see `write_uint32()` below)."""
+        self._ctrl = 0
+        self._status = 0
+        self._dormant = 0
+        self._startup = 0
+        self._count = 0
+        self._enabled = False
+        self._stable = False
+        self._is_dormant = False
+
     def read_uint32(self, offset: int) -> int:
         if offset == XOSC_CTRL:
             return self._ctrl

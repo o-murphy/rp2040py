@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `BaseDevice.hard_reset()` splits into `_enter_reset()`/`_leave_reset()` - the press runs the
   first, the release the second, and every other trigger runs both back to back, so there is still
   one owner of the sequence.
+- **`XOSC` survived a power-on reset.** It is a `PSM.WDSEL` domain, so the gate that already
+  existed gets both paths right once the block has a `reset()`: excluded from a watchdog reboot
+  (pico-sdk clears that bit deliberately - the oscillators clock the reset itself) and reset by a
+  RUN-pin/power-on one, as on silicon.
 - **The TIMER did not restart across a reset.** It read the simulation clock, which is shared with
   USB SOF and every other peripheral and must not be rewound; it now keeps its own epoch, so guest
   `time.ticks_ms()`/`time.monotonic()` starts over after a reset, as on silicon.

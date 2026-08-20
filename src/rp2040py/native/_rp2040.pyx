@@ -46,7 +46,7 @@ from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.ppb import RPPPB
-from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP
+from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.peripherals.pwm import RPPWM
 from rp2040py.peripherals.reset import (
     RESET_ADC,
@@ -215,6 +215,7 @@ cdef class RP2040:
         self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
         self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
         self.ssi = RPSSI(self, "SSI")
+        self.xosc = RPXOSC(self, "XOSC_BASE")
 
         self.peripherals = {
             0x14000: self.xip_ctrl,
@@ -228,7 +229,7 @@ cdef class RP2040:
             0x40018: RPIO(self, "IO_QSPI_BASE", pins=self.qspi),
             0x4001C: self.pads_bank0,
             0x40020: self.pads_qspi,
-            0x40024: RPXOSC(self, "XOSC_BASE"),
+            0x40024: self.xosc,
             0x40028: UnimplementedPeripheral(self, "PLL_SYS_BASE"),
             0x4002C: UnimplementedPeripheral(self, "PLL_USB_BASE"),
             0x40030: self.busctrl,
@@ -373,11 +374,21 @@ cdef class RP2040:
           resetting in place safe for the `ExternalDevice`s and the `USBCDC` holding references
           into this object.
 
-        What is still *not* reset: `xosc`/`rosc` (deliberately - both are excluded by
-        `watchdog_reboot()` itself, and neither is modelled beyond its registers), and the TIMER's
-        count, which reads from the simulation clock rather than from this block. `SYSCFG`/
-        `SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at all, so
-        `BasePeripheral`'s default no-op is their correct implementation.
+        What is still *not* reset, split by why:
+
+        - **`rosc`** - nothing to reset. It is an `UnimplementedPeripheral` with no state at all.
+        - **`xosc`** - not a special case at all any more: it is a `PSM.WDSEL` domain like SIO and
+          CLOCKS, so the existing gate gets it exactly right on both paths. `watchdog_reboot()`
+          selects "everything apart from ROSC and XOSC" - the oscillators produce the clock the
+          reset logic and the booting CPU run on, and stopping them mid-reboot would stop the
+          chip's own clock - while a RUN-pin/power-on reset has no such exemption and does reset it.
+        - **The TIMER's count** - it reads the simulation clock, which is shared with USB SOF and
+          every other peripheral's alarms and must not be rewound. The block keeps its own epoch
+          instead, so the count does restart; what is not modelled is anything else reading that
+          clock noticing.
+
+        `SYSCFG`/`SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at
+        all, so `BasePeripheral`'s default no-op is their correct implementation.
         """
         cdef unsigned char[:] filler
         if from_watchdog:
@@ -459,6 +470,11 @@ cdef class RP2040:
         # SYSCFG/SYSINFO/TBMAN have RESETS bits too and are deliberately not called: they hold no
         # instance state at all (read-only chip identity), so `BasePeripheral`'s default no-op is
         # the correct implementation rather than a gap. Checked, not assumed.
+        if psm_wdsel & WDSEL_XOSC:
+            # Only ever selected on a RUN-pin/power-on reset: `watchdog_reboot()` clears this bit
+            # deliberately, because the oscillators clock the reset itself. `rosc` has no
+            # counterpart here - it is an UnimplementedPeripheral with no state to restore.
+            self.xosc.reset()
         if psm_wdsel & WDSEL_XIP:
             # The XIP domain is a PSM bit, not a RESETS one - there is no RESETS_RESET_XIP or
             # _SSI. Both halves of it reset together, as they do on silicon.

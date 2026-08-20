@@ -13,7 +13,7 @@ Both `RP2040` twins are covered by the suite running under `RP2040PY_SKIP_CYTHON
 """
 
 from rp2040py.gpio_pin import FUNCTION_SIO
-from rp2040py.peripherals.psm import WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP
+from rp2040py.peripherals.psm import WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.peripherals.reset import RESET_UART0
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 
@@ -269,3 +269,25 @@ def test_resetting_ssi_re_syncs_chip_select_from_the_pin(rp2040_factory):
     from rp2040py.gpio_pin import GPIOPinState
 
     assert rp2040.ssi._cs_asserted == (rp2040.qspi[1].value == GPIOPinState.LOW)
+
+
+def test_xosc_resets_on_a_power_on_but_not_on_a_watchdog_reboot(rp2040_factory):
+    """The one place where honouring WDSEL is the *whole* behaviour rather than an optimisation.
+    pico-sdk's `watchdog_reboot()` selects "everything apart from ROSC and XOSC" because the
+    oscillators clock the reset logic and the booting CPU; a RUN-pin/power-on reset has no such
+    exemption. Both halves are asserted here because getting only one right looks identical in
+    every test that does not check the other."""
+    rp2040 = rp2040_factory()
+
+    # what firmware does: enable the crystal, which this model makes stable immediately
+    rp2040.xosc.write_uint32(0x00, 0xFAB << 12)
+    assert rp2040.xosc._enabled and rp2040.xosc._stable
+
+    rp2040.psm.write_uint32(0x08, 0x1FFFC)  # watchdog_reboot()'s own value: XOSC/ROSC excluded
+    rp2040.reset(preserve_flash=True, from_watchdog=True)
+    assert rp2040.xosc._enabled, "a watchdog reboot must not stop the oscillator clocking it"
+
+    rp2040.reset(preserve_flash=True)  # a RUN-pin/power-on reset selects everything
+    assert not rp2040.xosc._enabled
+    assert not rp2040.xosc._stable
+    assert WDSEL_XOSC & 0x1FFFC == 0, "the bit watchdog_reboot() clears, spelled out"
