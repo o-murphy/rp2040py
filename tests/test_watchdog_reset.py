@@ -20,7 +20,19 @@ from rp2040py.peripherals.vreg_and_chip_reset import (
     HAD_RUN,
     PSM_RESTART_FLAG,
 )
-from rp2040py.peripherals.watchdog import CTRL, FORCE, REASON, SCRATCH4, TIMER, TRIGGER
+from rp2040py.peripherals.watchdog import (
+    CTRL,
+    ENABLE,
+    FORCE,
+    LOAD,
+    REASON,
+    SCRATCH4,
+    TICK,
+    TICK_ENABLE,
+    TIMER,
+    TRIGGER,
+)
+from rp2040py.rp2040 import RP2040
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -285,3 +297,33 @@ def test_recording_a_cause_leaves_the_debugger_owned_psm_restart_flag_alone(tmp_
     device.hard_reset(cause=ResetCause.RUN_PIN)
 
     assert _chip_reset(device) == HAD_RUN | PSM_RESTART_FLAG
+
+
+# --- the watchdog *timeout* path, which is a different trigger from TRIGGER -------------------
+
+
+def test_a_watchdog_timeout_fires_once_and_lets_the_clock_move_on():
+    """A timeout must reset the chip, not freeze it.
+
+    `Timer32PeriodicAlarm` re-armed itself at a **zero** delta after firing (counter sitting on
+    `target = 0`, DECREMENT, `top = 0xFFFFFFFF`), so the callback fired forever at one instant
+    inside a single `clock.tick()` and simulated time stopped for the whole chip.
+
+    This is the reset path MicroPython 1.16/1.17 take for `machine.reset()` itself: pico-sdk
+    1.2.0's `_watchdog_enable()` turns `watchdog_reboot(0, SRAM_END, 0)` into "load a 50 ms
+    timeout and enable", where a later SDK writes `CTRL.TRIGGER` instead (which
+    `test_watchdog_reason_register_reports_force_after_trigger` covers). Without the fix this
+    test does not fail - it hangs.
+    """
+    mcu = RP2040()
+    fired: list[float] = []
+    mcu.watchdog.on_watchdog_trigger = lambda: fired.append(mcu.clock.micros)
+
+    mcu.watchdog.write_uint32(TICK, 12 | TICK_ENABLE)
+    mcu.watchdog.write_uint32(LOAD, 50 * 1000 * 2)  # the SDK's 50 ms, counted at 2 MHz
+    mcu.watchdog.write_uint32(CTRL, ENABLE)  # ...and deliberately no TRIGGER
+
+    mcu.clock.tick(100_000_000)  # 100 ms - twice the timeout
+
+    assert fired == [50_000.0]  # once, at 50 ms, and the clock kept going
+    assert mcu.watchdog.read_uint32(REASON) == TIMER
