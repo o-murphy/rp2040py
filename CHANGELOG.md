@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The USB CDC control lines can be changed at runtime.** `BaseDevice.set_control_lines(dtr=...,
+  rts=...)` and `set_line_coding(baud_rate, ...)` (plus `USBCDC`'s own methods and `dtr`/`rts`/
+  `control_line_state`/`line_coding` read-backs) - until now DTR/RTS were asserted once at the end
+  of enumeration and could never move again. Guest-visible where the firmware exposes it:
+  CircuitPython's `supervisor.runtime.serial_connected` *is* the DTR bit, and dropping the line
+  makes the guest see the console go away, live-verified on 10.2.1. Every CDC class request is now
+  addressed the way the CDC PSTN spec (and a real host) addresses it - an **interface** recipient
+  with `wIndex` naming the CDC control interface - instead of the device recipient TinyUSB was
+  merely tolerating. The line coding is sent but guest-invisible on both firmware families here
+  (neither exposes it to Python), and the 1200-bps touch remains deliberately unbuilt.
+  [docs/records/0088](docs/records/0088-usb-host-side-msc-control-lines-and-reset.md).
 - **A chip reset now resets the chip.** `RP2040.reset()` covered `core`/`pwm`/`dma`/`ppb` only;
   it now covers the pads and IO, SIO, the clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL and
   the XIP domain (`XIP_CTRL` + `SSI`) - and it

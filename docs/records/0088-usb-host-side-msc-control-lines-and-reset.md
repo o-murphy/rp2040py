@@ -1,8 +1,11 @@
 # 0088 - The host side of the emulated USB stack: mass storage, control lines, and reset
 
-- Status: **Documented, measured, nothing implemented.** Three separate questions that all land in
-  the same 161-line file (`usb/cdc.py`), written up together because they share one root: what our
-  side of the USB link actually pretends to be.
+- Status: **Closed (2026-08-20).** Was "documented, measured, nothing implemented"; the two
+  control-line gaps this record left open are now built and live-verified (see the closing section
+  at the end), the reset question was closed by [0089](0089-one-reset-for-every-trigger.md)'s
+  Phase 2, and mass storage / the 1200-bps touch are closed as **rejected**, not deferred. Three
+  separate questions that all land in the same file (`usb/cdc.py`), written up together because
+  they share one root: what our side of the USB link actually pretends to be.
 - Sibling of [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) (the raw-REPL half
   of the same investigation); the mass-storage section here is the constraint that record ends on.
 - Touches [0057](0057-run-pin-reset-hook.md) (a reset hook on `RP2040`, proposed, not built).
@@ -159,3 +162,58 @@ Maintainer's decision, so the three questions this record holds together now spl
   `SET_LINE_CODING` are still absent, and the recipient/`wIndex` correction in section 1 is still
   the thing to fix if that surface is ever added. They are simply not on any critical path now that
   the 1200-bps touch is not being built.
+
+## Closing (2026-08-20): the control lines are movable now, and what that measured
+
+Built, in `usb/cdc.py` plus a thin pass-through on `BaseDevice`:
+
+- **`USBCDC.set_control_lines(dtr=..., rts=...)`** and `BaseDevice.set_control_lines()` - the "no
+  caller/API/flag" half of section 1's table. Plus read-back properties (`dtr`, `rts`,
+  `control_line_state`) which report *what this host last sent*, since nothing here can ask the
+  firmware what it thinks the lines are.
+- **`USBCDC.set_line_coding(baud_rate, ...)`** / `BaseDevice.set_line_coding()` and a `LineCoding`
+  NamedTuple - `SET_LINE_CODING` (0x20) with its EP0 OUT data stage answered from
+  `_on_endpoint_read()`, which is the first control request here that has a data stage at all.
+- **The recipient/`wIndex` correction section 1 asked for.** Every CDC class request now goes out
+  as `recipient=INTERFACE` with `wIndex` naming the CDC *communications* interface, found by a new
+  `extract_control_interface_number()` (class 0x02, the sibling of the class 0x0A data interface
+  `extract_endpoint_numbers()` already looked for). It is 0 in every descriptor set in
+  `tests/test_cdc.py` - MicroPython, CircuitPython, the pico-sdk and the Arduino core alike - so
+  the wire value is unchanged and the *recipient* is the real fix.
+- `USBCDC.reset()` clears all of it: a chip off the bus asserts nothing, and the re-enumeration
+  re-asserts DTR/RTS through the same path a first boot uses.
+
+**Threading:** both device-level methods are fire-and-forget onto the engine-room loop
+(`schedule_threadsafe()`, [0030](0030-external-device-concurrency.md)'s rule, the shape
+`ResetButton` uses). Deliberately no awaitable form: the effect is guest state, so what proves it
+landed is asking the guest, not a Future on this side.
+
+### What the live verification found
+
+`tests/control_lines_run.py` (both families, wired into both CI workflows):
+
+- **CircuitPython 10.2.1 sees DTR move.** The guest samples `supervisor.runtime.serial_connected`
+  in a loop while the host drops the line underneath it: `SAMPLES 50 10` - 10 samples reading
+  `False` inside the window, `True` on both sides of it. This is the first direct evidence in this
+  tree that a *runtime* control-line change reaches the firmware, where section 1 could only show
+  the once-at-enumeration assertion arriving.
+- **Neither family exposes the line coding to Python**, which section 1 did not know: CircuitPython
+  10.2.1 answers `AttributeError: 'Serial' object has no attribute 'baudrate'` for
+  `usb_cdc.console.baudrate`, and MicroPython has no equivalent at all. TinyUSB keeps the value for
+  `tud_cdc_n_get_line_coding()`, which nothing here calls. So `SET_LINE_CODING` is guest-invisible
+  today and is kept for spec completeness and for whatever future firmware or 1200-bps-touch
+  caller would read it - **not** because anything currently consumes it. The console this project
+  actually hands to a user is a TCP socket or a PTY, where a baud rate has no meaning either.
+- **MicroPython 1.17 and 1.23.0**: the console survives a DTR/RTS change and a line-coding change.
+  That is all that is checkable there, and it is the regression that would matter - enumeration
+  sends the same request on every boot, so the recipient change had to not break it.
+
+### What stays unbuilt, and is now closed rather than open
+
+- **Mass storage (option A) and the 1200-bps touch: rejected**, per this record's own 2026-08-20
+  update. Option B (`--dump-fs`) stays the answer for seeing CIRCUITPY, option C (usbip) stays not
+  recommended.
+- **Host-driven board reset: built elsewhere** - 0089's Phase 2 (`BaseDevice.ahard_reset()`).
+- **No CLI flag** for the control lines. The device API is the surface; a `--drop-dtr`-style flag
+  has no caller asking for it, and the console the CLI exposes is a socket/PTY where the host end
+  has no control lines to mirror anyway.
