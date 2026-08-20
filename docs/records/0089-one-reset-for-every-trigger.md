@@ -1,6 +1,6 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phases 0-1 landed (2026-08-20); Phases 2-6 not started.** Design settled and the
+- Status: **Phases 0-2 landed (2026-08-20); Phases 3-6 not started.** Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -9,7 +9,8 @@
   originally written; **"Resolution (2026-08-20)" below is the current state** - it answers the
   "Not decided here" list, lays out a six-phase implementation plan, and carries an appendix of
   live measurements against real MicroPython v1.23.0 and CircuitPython 10.2.1 firmware. Mass
-  storage (USB MSC / the bootrom's UF2 mode) is explicitly **out of scope** - see section 5 there.
+  storage (USB MSC / the bootrom's UF2 mode) is **rejected, not deferred** - the CLI and device API
+  already cover what it would be for; see section 5 there.
 - Related: [0087] (needs a restart after writing CIRCUITPY over the REPL - its immediate consumer),
   [0057](0057-run-pin-reset-hook.md) (the RESET button / RUN pin, blocked on exactly this),
   [0088](0088-usb-host-side-msc-control-lines-and-reset.md) (the USB host side, where a 1200-bps
@@ -419,7 +420,7 @@ both already measured working in the Appendix, so these are regression tests, no
 
 *Closes:* [0057]'s "what does `WATCHDOG.REASON` read after a RUN reset?".
 
-### Phase 2 - the host-initiated hard reset
+### Phase 2 - the host-initiated hard reset - **done (2026-08-20)**
 
 2.1 `BaseDevice.hard_reset_async()`/`ahard_reset()` per 2.1: `_repl_lock`, `hard_reset()`,
 await re-enumeration, re-run 0.1's handshake.
@@ -509,11 +510,28 @@ saying that this means `main.py` does *not* re-run.
 6.2 `docs/reference/external-devices-and-boards.md` + the skill: `ResetButton` as a worked example.
 6.3 This record's status, and the tracker rows for [0057]/[0087]/[0088].
 
-## 5. Out of scope: mass storage (maintainer's decision, 2026-08-20)
+## 5. Rejected, not merely deferred: mass storage (maintainer's decision, 2026-08-20)
 
-**No MSC, no USB-device emulation, no bootrom UF2 mode - not now.** It needs a mass-storage class
-implementation *and* an emulated USB device controller, it is high-complexity, and it is not a
-priority. Three consequences, so nothing in this plan silently assumes otherwise:
+**No MSC, no USB-device emulation, no bootrom UF2 mode.** It needs a mass-storage class
+implementation *and* an emulated USB device controller, and it is high-complexity - but the
+deciding argument is not cost, it is that **the use cases MSC exists for are already covered here,
+by paths that are better for an emulator anyway** (maintainer, 2026-08-20):
+
+- **Replacing the firmware**: `--image`/`resolve_board_spec()` load a UF2 directly into emulated
+  flash. On real hardware you drag a `.uf2` onto RPI-RP2 because that is the only channel a bare
+  chip offers; here the channel is the constructor argument, and no bootloader has to be entered
+  to use it.
+- **Replacing the bootrom**: `--bootrom` / `bootrom_words=`, which MSC could not do at all.
+- **Putting files on the device's filesystem**: `mklittlefs`/`mkfat12` build an image up front, and
+  [0087] showed the guest can *write its own* CIRCUITPY over the raw REPL - a route that exists
+  precisely because nothing here claims the MSC interface.
+- **Driving the board like a host tool would**: `mpremote` works against this emulator over the
+  raw REPL (`docs/reference/mpremote.md`), including `exec`/`run`/`fs` for MicroPython - no
+  mass-storage or "UF2 mode" step involved.
+
+So MSC would add a second, harder way to do things the CLI and the device API already do. Treat it
+as decided rather than pending; a future need would have to argue from a case none of the above
+covers. Three consequences, so nothing in this plan silently assumes otherwise:
 
 - **`machine.bootloader()` keeps its documented approximation** - a plain hard reset rather than
   entering the bootrom's USB mass-storage mode ([0088], `docs/reference/mpremote.md`).
@@ -657,12 +675,34 @@ Cheap lessons from the probes, all of which cost a run to learn:
 ### Phase 0 - done (2026-08-20)
 
 **0.1 - the post-boot handshake moved onto the device/family.**
-`MicroPythonDevice._post_boot_handshake()` (`device/mp_device.py`) sends `\r\n` for MicroPython
-and Ctrl-C for CircuitPython, keyed on `self.circuitpython`, and `_aconnect()` calls it *after*
-the enumeration wait. `cli/__init__.py`'s `_micropython_async()` lost its own
+`MicroPythonDevice._post_boot_handshake()` (`device/mp_device.py`) sends the prompt nudge, and
+`_aconnect()` calls it *after* the enumeration wait. (It sent `\r\n` for MicroPython and Ctrl-C
+for CircuitPython when first written - see the correction below, which is why it no longer
+branches at all.) `cli/__init__.py`'s `_micropython_async()` lost its own
 `if not args.circuitpython:` block - the CLI no longer branches on a firmware flag it otherwise
 doesn't care about, and Phase 2's reset path now has a handshake it can re-run without reaching
 into the CLI. Also closes [0087]'s item 4.
+
+**Correction (2026-08-20, later the same day): the nudge is a bare newline for *both* families,
+not `\r\n` vs Ctrl-C** - measured, decided and written up as its own record,
+[0090](0090-post-boot-nudge-is-a-newline.md), since it governs every device connect rather than
+anything about reset. The CLI's split was carried over unexamined; Ctrl-C only ever helps on an
+*idle* REPL, and both firmwares auto-run a script:
+
+| | MicroPython v1.23.0 | CircuitPython 8.0.2 |
+|---|---|---|
+| nudge against a running `main.py`/`code.py`, Ctrl-C | `KeyboardInterrupt` in it, drops to the REPL | kills it (`Code done running.`), and does not reach a prompt either |
+| same, newline | script keeps printing | script keeps printing |
+| nudge with no script running | prompt | banner + `>>>`, byte-identical to Ctrl-C's |
+
+So Ctrl-C bought nothing the newline does not, and cost the running script. Concretely it would
+have broken the three `--littlefs ... --expect-text` jobs in `ci-micropython.yml`, *and* it was a
+live regression from 0.1 itself for CircuitPython: `demo/lcd_run.py --code` boots a `code.py` and
+never used to receive any nudge at all, so moving the CLI's Ctrl-C onto every device connect would
+have interrupted it at enumeration. Attaching to a board must not disturb what it is doing; a user
+who wants to interrupt can still type Ctrl-C into the console. Both CI commands re-verified live
+afterwards (`--expect-text "Adafruit CircuitPython"` on 8.0.2 and 10.2.1, `--expect-text "Hello,
+MicroPython!"` with a littlefs image).
 
 One deliberate behaviour change beyond the CLI: the nudge now goes out on *every*
 `MicroPythonDevice` connect, including the library/exec-only paths that previously never sent it.
@@ -740,6 +780,56 @@ as its answer says, ahead of the RUN pin that will pull them (Phase 4).
 
 *Not touched:* Phases 2-6. There is still no host-side entry point, no soft-reset API, no RUN pin,
 and `RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`.
+
+### Phase 2 - done (2026-08-20)
+
+**2.1 `BaseDevice.hard_reset_async()`/`ahard_reset()`** (`cause=ResetCause.RUN_PIN` by default, D4):
+arm the enumeration Event, `hard_reset()`, wait for the device to come back, re-run the family's
+post-boot handshake. `MicroPythonDevice` overrides only the lock - `async with self._repl_lock:
+await super()._ahard_reset(...)` - so a host reset queues behind an `aexec()` in flight instead of
+interleaving with it, while the guest-triggered path keeps taking no lock at all.
+
+**2.2 `_aconnect()`'s halves are now shared, not copied.** `_arm_enumeration()` (wire a fresh Event
+to `cdc.on_device_connected` *before* whatever triggers the boot) and `_await_enumeration()` (wait,
+translate the timeout) serve both the cold boot and the reset. `MicroPythonDevice._aconnect()`
+shrank to the same lock-wrapper shape (`await super()._aconnect(timeout)`) instead of re-stating
+the body, and `_post_boot_handshake()` gained a no-op base so both paths can call it unconditionally
+- Kaluma, which deliberately gets no nudge, inherits the no-op.
+
+**2.3** `_started` stays `True` across a reset, and `start_async()` keeps raising - asserted.
+
+*Tests:* six new ones in `tests/test_device.py` (reset before start raises; the wait ends with the
+handshake re-sent; the default cause is the RUN pin; a device that never comes back raises
+TimeoutError rather than hanging; a reset is not a second start; a reset queues behind whatever
+holds the REPL lock), plus the live-boot driver **`tests/hard_reset_run.py`**, now a CI step on
+both workflows: reset, re-enumerate, `aexec()` works, a variable set before the reset is gone
+(`NameError`), and the firmware reports the right cause.
+
+*Measured, both families, and one of them settles an open question:*
+
+| | MicroPython v1.23.0 | CircuitPython 10.2.1 |
+|---|---|---|
+| re-enumerates, raw REPL usable | yes | yes (~20 s) |
+| guest RAM gone (`marker` -> `NameError`) | yes | yes |
+| cause after a host reset | `machine.reset_cause() == PWRON_RESET` | **`microcontroller.ResetReason.RESET_PIN`** |
+
+That last cell is what the Appendix listed under "What was not measured" - CircuitPython's
+`reset_reason` after a host-side reset was derived from a register dump, never read. It is now read,
+and it is `RESET_PIN`, exactly as D4 predicted.
+
+*One firmware does not come back, and it is not a regression:* **CircuitPython 8.0.2 never
+re-enumerates after a hard reset** here - it re-boots and then spins in SRAM (measured
+`pc` looping in `0x20003500`-`0x200039e0`, no console output, >120 s), where 9.2.9 and 10.2.1 both
+come back in ~20 s. Reproduced identically with `cause=ResetCause.WATCHDOG`, i.e. with Phases 1-2's
+bookkeeping skipped entirely, so it predates all of this work. Same family of gap as the Appendix's
+point 5 (pads and peripherals survive a reset that should clear them) and therefore Phase 5's
+problem; `ci-circuitpython.yml` gates the hard-reset step on `hard_reset: true` for 9.2.9/10.2.1
+and says so in a comment rather than quietly skipping 8.0.2.
+
+*Closes:* [0087]'s hard-reset fallback; [0088]'s "host-driven board reset" row.
+
+*Not touched:* Phases 3-6 - no soft-reset entry point, no RUN pin, and `RP2040.reset()` still
+covers only `core`/`pwm`/`dma`/`ppb`.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 import pytest
 
@@ -37,17 +38,16 @@ def _mp_args(**overrides):
 
 class _FakeMicroPythonDevice:
     """Stands in for MicroPythonDevice so _cmd_micropython can be driven end-to-end without
-    booting a real emulator or touching the network - only the littlefs/fat12/circuitpython
-    wiring passed into the constructor and the raw-REPL exec() result matter for these tests."""
+    booting a real emulator or touching the network - only the filesystem/circuitpython wiring
+    passed into the constructor and the raw-REPL exec() result matter for these tests."""
 
     last_kwargs: "dict | None" = None
     last_bootrom_words: "list | None" = None
 
-    def __init__(self, *, board, littlefs=None, fat12=None, circuitpython=False, bootrom_words=None, log_level=None):
+    def __init__(self, *, board, filesystem=None, circuitpython=False, bootrom_words=None, log_level=None):
         _FakeMicroPythonDevice.last_kwargs = {
             "image": board.image,
-            "littlefs": littlefs,
-            "fat12": fat12,
+            "filesystem": filesystem,
             "circuitpython": circuitpython,
         }
         _FakeMicroPythonDevice.last_bootrom_words = bootrom_words
@@ -85,8 +85,7 @@ def test_micropython_mode_loads_littlefs_not_fat12(tmp_path, fake_device):
     assert exc_info.value.code == 0
     assert fake_device.last_kwargs == {
         "image": "fixed-image.uf2",
-        "littlefs": "littlefs.img",
-        "fat12": None,
+        "filesystem": Path("littlefs.img"),
         "circuitpython": False,
     }
 
@@ -94,7 +93,8 @@ def test_micropython_mode_loads_littlefs_not_fat12(tmp_path, fake_device):
 def test_circuitpython_mode_loads_fat12_not_littlefs(tmp_path, fake_device):
     # Regression test: refactoring the littlefs/fat12 path-resolution logic into a single
     # `if not args.circuitpython` branch used to gate *both* assignments on it, so fat12.img was
-    # silently never loaded in --circuitpython mode even when it existed on disk.
+    # silently never loaded in --circuitpython mode even when it existed on disk. Still worth
+    # asserting now that the two collapsed into one `filesystem` argument picked by family.
     (tmp_path / "fat12.img").write_bytes(b"")
 
     with pytest.raises(SystemExit) as exc_info:
@@ -103,8 +103,7 @@ def test_circuitpython_mode_loads_fat12_not_littlefs(tmp_path, fake_device):
     assert exc_info.value.code == 0
     assert fake_device.last_kwargs == {
         "image": "fixed-image.uf2",
-        "littlefs": None,
-        "fat12": "fat12.img",
+        "filesystem": Path("fat12.img"),
         "circuitpython": True,
     }
 
@@ -116,8 +115,7 @@ def test_micropython_mode_skips_missing_littlefs_image(fake_device):
         cli._cmd_micropython(_mp_args(circuitpython=False, littlefs="littlefs.img"))
 
     assert fake_device.last_kwargs is not None
-    assert fake_device.last_kwargs["littlefs"] is None
-    assert fake_device.last_kwargs["fat12"] is None
+    assert fake_device.last_kwargs["filesystem"] is None
 
 
 def test_circuitpython_mode_skips_missing_fat12_image(fake_device):
@@ -125,8 +123,7 @@ def test_circuitpython_mode_skips_missing_fat12_image(fake_device):
         cli._cmd_micropython(_mp_args(circuitpython=True, fat12="fat12.img"))
 
     assert fake_device.last_kwargs is not None
-    assert fake_device.last_kwargs["littlefs"] is None
-    assert fake_device.last_kwargs["fat12"] is None
+    assert fake_device.last_kwargs["filesystem"] is None
 
 
 def test_micropython_littlefs_and_fat12_are_mutually_exclusive(caplog, fake_device):
@@ -138,6 +135,32 @@ def test_micropython_littlefs_and_fat12_are_mutually_exclusive(caplog, fake_devi
 
     assert exc_info.value.code == 1
     assert "mutually exclusive" in caplog.text
+    assert fake_device.last_kwargs is None
+
+
+def test_littlefs_is_rejected_in_circuitpython_mode(caplog, fake_device):
+    """The filesystem format follows the firmware family (MicroPython reads littlefs,
+    CircuitPython reads FAT12), so the wrong flag is an error rather than something quietly
+    ignored - which is how a --fat12 run without --circuitpython used to boot with no filesystem
+    at all and no hint as to why."""
+    (Path.cwd() / "littlefs.img").write_bytes(b"")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(circuitpython=True, littlefs="littlefs.img"))
+
+    assert exc_info.value.code == 1
+    assert "--littlefs is a MicroPython filesystem" in caplog.text
+    assert fake_device.last_kwargs is None
+
+
+def test_fat12_is_rejected_without_circuitpython(caplog, fake_device):
+    (Path.cwd() / "fat12.img").write_bytes(b"")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._cmd_micropython(_mp_args(circuitpython=False, fat12="fat12.img"))
+
+    assert exc_info.value.code == 1
+    assert "--fat12 is a CircuitPython filesystem" in caplog.text
     assert fake_device.last_kwargs is None
 
 

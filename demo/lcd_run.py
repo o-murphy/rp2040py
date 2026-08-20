@@ -254,7 +254,9 @@ def main() -> None:
     # around for the run. A `--fat12` given without `--code`/`--boot` is passed through untouched.
     with tempfile.TemporaryDirectory() as tmp:
         fat12 = _circuitpy_image(args, board, Path(tmp) / "circuitpy.img")
-        device = MicroPythonDevice(board=board, circuitpython=args.circuitpython, fat12=fat12, log_level=LogLevel.ERROR)
+        device = MicroPythonDevice(
+            board=board, circuitpython=args.circuitpython, filesystem=fat12, log_level=LogLevel.ERROR
+        )
     # Not the 30s default: a `--code`/`--boot` image is a *freshly formatted* CIRCUITPY, and
     # CircuitPython lays down its own boot_out.txt/lib/.fseventsd on such a volume before it
     # brings USB up - measured past 30s in emulation, where the same board with an

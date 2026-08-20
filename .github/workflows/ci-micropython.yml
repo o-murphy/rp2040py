@@ -138,6 +138,14 @@ jobs:
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
+      # 0089's Phase 2: the *host* side of a reset. Drives the device API rather than a guest
+      # script, because what needs proving is that ahard_reset() waited for the re-enumeration -
+      # then checks the guest lost its RAM and reports the reset it actually was.
+      - name: Test MicroPython host-initiated hard reset ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/hard_reset_run.py --image ${{ matrix.micropython_version.tag }}
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
       - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }}
         run: |
           . scripts/ci-common.sh

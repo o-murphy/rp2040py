@@ -249,7 +249,9 @@ verification".
   USB mass-storage write path (`supervisor/shared/usb/usb_msc_flash.c`), which nothing here drives,
   and `run_repl()` holds `autoreload_suspend(AUTORELOAD_SUSPEND_REPL)` for the whole session. The
   restart therefore has to be asked for explicitly - it will not happen on its own.
-- **The hard reset stays the fallback it always was, and is no longer needed for this route.** It
+- **The hard reset stays the fallback it always was, and is no longer needed for this route.**
+  (It does now exist as an awaitable host-side call - `ahard_reset()`, 0089's Phase 2, landed
+  2026-08-20 - so "fallback" stopped meaning "unbuilt".) It
   also comes with a caveat this record should know about: after a hard reset on a Pico W,
   CircuitPython currently fails to re-initialise the CYW43439 (0089's Appendix, point 5), so a
   route that restarts by hard-resetting would lose WiFi. A soft reset does not touch it.
