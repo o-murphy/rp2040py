@@ -383,3 +383,18 @@ where the classic 10.2.1 build prints its banner in well under one. Slow-but-pro
 genuinely stuck was not established - that needs the same kind of tracing
 [0035](0035-board-aware-fs-flash-offset.md) and [0050](0050-qspi-pad-reset-values.md) used, not a
 longer timeout.
+
+
+## Note (2026-08-20): the RESET button every board on these lists has
+
+Orthogonal to which boards are addable, but it accumulates with them: three board files already
+say the RESET button is **not modelled** (`boards/vcc_gnd_yd_rp2040/__init__.py`,
+`boards/waveshare_rp2040_lcd_0_96/__init__.py`, `boards/weactstudio/__init__.py`), and every board
+still on the checklists above has one, because it is not a board feature at all - it is the
+RP2040's RUN pin. So this is the one gap that does *not* shrink as the lists get worked through.
+
+It now has a plan rather than a per-board apology: [0089](0089-one-reset-for-every-trigger.md)'s
+Phase 4 (a RUN level on `RP2040`, `BaseDevice` installing the hard reset into it downward, and an
+`external/reset_button.py` with `press()`/`release()`), on top of [0057](0057-run-pin-reset-hook.md).
+Once that lands, a RESET button is one more entry in a board's `extras` and needs no new analysis
+per board - the same way `Ws2812`/`LEDMock`/`KeyMock` became free after their first board.

@@ -190,3 +190,34 @@ fire-and-forget `reset()` is the wrong shape), and that `RP2040.reset()` today r
 `core`/`pwm`/`dma`/`ppb` - not SRAM, not `spi`/`i2c`/`pio`/`clocks`/`timer`/`adc`/`uart` - which a
 RESET button is the trigger most likely to expose.
 
+
+## Update (2026-08-20): this record's remaining half is now planned, in 0089
+
+[0089](0089-one-reset-for-every-trigger.md)'s "Resolution" section turns its design into a
+six-phase plan, and **Phase 4 is this record, in full**. What it settles, so nothing above stays an
+open question:
+
+- **Placement (option A) and semantics (option C), together, not one instead of the other.**
+  `RP2040` grows a RUN *level* plus a hook; `BaseDevice.__init__` installs its own hard reset into
+  that hook, exactly the way it already installs `_on_watchdog_trigger` onto
+  `mcu.watchdog.on_watchdog_trigger`. So an `ExternalDevice` with only `attach(rp2040)` reaches the
+  full sequence, and a held RESET button really holds the chip - the batch loop
+  (`_execute_batch.py` and its native port) gains the "held in reset" state option C priced, since
+  the schematic in the addendum above makes a press a level rather than a pulse.
+- **`WATCHDOG.REASON` after a RUN reset: `0`, and `CHIP_RESET` reads `HAD_RUN`.** Read out of
+  pico-sdk and CircuitPython source (`ports/raspberrypi/common-hal/microcontroller/Processor.c`:
+  *"Check watchdog after chip reset since watchdog doesn't clear chip_reset, while chip_reset
+  clears the watchdog"*), so `machine.reset_cause()` must read `1` (`PWRON`) and
+  `microcontroller.cpu.reset_reason` must read `RESET_PIN` - the exact misreport this record warned
+  about, now with a table to implement against (0089 section 1.3).
+- **Does a RESET button need a fuller `RP2040.reset()`: yes, and it is 0089's Phase 5**, scoped by
+  what the SDK itself asks for (`psm_hw->wdsel = PSM_WDSEL_BITS & ~(ROSC | XOSC)` - "reset
+  everything apart from ROSC and XOSC"). SRAM stays uncleared, deliberately: a PSM reset resets the
+  SRAM controllers, not the array.
+- **Do attached `ExternalDevice`s need a reset callback: no.** A real board's external chip is not
+  wired to RUN - it only sees a reset through the GPIO the firmware drives (`WL_ON`, a display's
+  `RES`). Resetting the pads in Phase 5 is what reproduces that; `ExternalDevice`'s attach-only
+  surface stays as it is.
+- **BOOTSEL held across a RESET** stays unreachable in effect, because mass storage and the
+  bootrom's USB mode are explicitly out of scope (0089 section 5, maintainer's decision). Phase 4's
+  hook contract must still not preclude it.

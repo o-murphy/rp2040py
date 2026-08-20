@@ -221,3 +221,38 @@ reach a `BaseDevice`, and the sequence cannot simply move onto `RP2040` because 
 constructed by `BaseDevice` and the reference only points one way (`USBCDC.usb` -> `usb_ctrl`).
 Worth designing together if the hard-reset fallback is ever taken.
 
+
+## Update (2026-08-20): both blocking questions answered, measured
+
+The two "unverified, and blocking" items above - whether CircuitPython's soft reboot re-runs
+`code.py`, and whether writing `code.py` from the REPL trips auto-reload - were answered against
+real CircuitPython 10.2.1 (and MicroPython v1.23.0 for contrast) booted in this emulator. Full
+transcripts and method: [0089](0089-one-reset-for-every-trigger.md)'s "Appendix: live
+verification".
+
+- **A bare Ctrl-D at the *raw* prompt does NOT re-run `code.py`** - in either family. It restarts
+  the VM, prints `OK\r\nsoft reboot\r\n`, and comes straight back to a raw prompt. Both
+  firmwares' main loops re-run the startup script only when `pyexec_mode_kind ==
+  PYEXEC_MODE_FRIENDLY_REPL` (CircuitPython's `main.c` around `run_repl()`/`run_code_py()`,
+  MicroPython's `ports/rp2/main.c`), and Ctrl-D at the raw prompt leaves that mode set to RAW.
+  MicroPython's `main.py` behaves identically, verified with a filesystem boot counter rather than
+  console output.
+- **So the flow above needs a Ctrl-B first**: raw -> friendly, *then* Ctrl-D. Measured working end
+  to end - `code.py` rewritten over the raw REPL, then a friendly-prompt soft reset, and the
+  console shows `soft reboot` -> `code.py output:` -> the **new** file's output. This is why 0089's
+  `asoft_reset()` takes a `rerun_startup_scripts` flag rather than being one gesture; this record's
+  route passes `True`.
+- **Writing `code.py` from the REPL does not auto-reload.** Ten seconds of idle console after the
+  write produced nothing. Source agrees twice over: `autoreload_trigger()` is only called from the
+  USB mass-storage write path (`supervisor/shared/usb/usb_msc_flash.c`), which nothing here drives,
+  and `run_repl()` holds `autoreload_suspend(AUTORELOAD_SUSPEND_REPL)` for the whole session. The
+  restart therefore has to be asked for explicitly - it will not happen on its own.
+- **The hard reset stays the fallback it always was, and is no longer needed for this route.** It
+  also comes with a caveat this record should know about: after a hard reset on a Pico W,
+  CircuitPython currently fails to re-initialise the CYW43439 (0089's Appendix, point 5), so a
+  route that restarts by hard-resetting would lose WiFi. A soft reset does not touch it.
+
+Item 4 of "What to build from this" (move the post-boot handshake onto the device/family) also
+stops being optional: it is 0089's Phase 0.1, because a device-level reset cannot reach into the
+CLI for it. Item 1 (`demo/mkfat12_dump.py`) and item 2 (the context-manager flow) are unblocked as
+written, once 0089's Phase 3 gives them a soft-reset entry point.
