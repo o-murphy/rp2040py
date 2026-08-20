@@ -1,6 +1,7 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phases 0-2 landed (2026-08-20); Phases 3-6 not started.** Design settled and the
+- Status: **Phases 0-2 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20); Phases
+  4-6 not started.** Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -292,7 +293,7 @@ re-enumeration (the waiting half of `_aconnect()`), then re-runs the family's po
 Only this form can await anything - a guest-triggered reset has nobody waiting and must stay
 fire-and-forget, which is why the split is at the entry point and not inside the sequence.
 
-### 2.2 Soft reset - `MicroPythonDevice`
+### 2.2 Soft reset - `MicroPythonDevice` (**dropped 2026-08-20 - see Phase 3**)
 
 ```
 MicroPythonDevice.soft_reset_async(*, rerun_startup_scripts=False, timeout) -> Future[None]
@@ -327,7 +328,8 @@ from the device API, and one owner behind each.
 `exec_async()`/`aexec()`. No blocking `reset()` facade, for the same reason `base_device.py`'s
 module docstring gives for having no blocking `start()`.
 
-**D2 - the soft reset needs a mode, and the default is mpremote's.** Measured (Appendix, point 1) and
+**D2 - the soft reset needs a mode, and the default is mpremote's.** (The *finding* stands and is
+what Phase 6.1 documents; the API it was deciding for was dropped - see Phase 3.) Measured (Appendix, point 1) and
 confirmed in source: a bare Ctrl-D at the **raw** prompt restarts the VM but does
 **not** re-run `main.py`/`code.py`, in *both* families; only a Ctrl-D at the **friendly** prompt
 does. So `asoft_reset()` defaults to `rerun_startup_scripts=False` - what every existing tool means
@@ -437,7 +439,29 @@ boot output (point 4).
 
 *Closes:* [0087]'s hard-reset fallback; [0088]'s "host-driven board reset" row.
 
-### Phase 3 - the host-initiated soft reset
+### Phase 3 - the host-initiated soft reset - **dropped (maintainer, 2026-08-20)**
+
+**Not wanted as an API** (maintainer's call): *"мені не треба окремий soft reset в API - мені аби
+треба правильно працював `machine.reset()`"*. The plan below is kept as written, because its
+*findings* (D2, and the transcripts in the Appendix) are what `docs/reference/mpremote.md` documents
+in Phase 6.1 - but no `SoftResetRunner`, no `asoft_reset()`, and nothing on the device API.
+
+It was built and live-verified before being dropped, which is worth recording so the decision is
+read as a scope call rather than a failure: a `SoftResetRunner` beside `RawReplRunner` drove both
+prompts on MicroPython v1.23.0 and CircuitPython 10.2.1, demonstrating D2 end to end (a raw-prompt
+Ctrl-D restarts the VM without re-running `main.py`; a friendly-prompt one re-runs it), with the
+chip's reset cause unchanged across it. All of it was removed again.
+
+**The capability itself never went anywhere, which is why dropping it costs nothing:** a soft reset
+is bytes the firmware already answers, from any of the paths that already exist - a user pressing
+Ctrl-D in the console, `mpremote connect ... soft-reset` (documented as working, no emulator-side
+reset involved), or the guest's own `machine.soft_reset()`. What was dropped is only a host-side
+convenience wrapper for asking.
+
+*Consequence for [0087]:* its restart step goes back to those paths, or to `ahard_reset()` (Phase 2,
+built) - it no longer waits on anything here.
+
+*Original plan, unbuilt:*
 
 3.1 A `SoftResetRunner` beside `RawReplRunner` (or a flag on it - the runner is 130 lines and its
 state machine is `await_prompt`/`await_ok`/`stdout`/`stderr`, none of which fits "send Ctrl-D,
