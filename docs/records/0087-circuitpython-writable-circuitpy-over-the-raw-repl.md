@@ -256,6 +256,11 @@ verification".
   CircuitPython currently fails to re-initialise the CYW43439 (0089's Appendix, point 5), so a
   route that restarts by hard-resetting would lose WiFi. A soft reset does not touch it.
 
+**Update 2026-08-20:** 0089's Phase 3 (a soft-reset entry point on the device API) was **dropped**
+as unwanted, so this route's restart step is whichever already-working path suits the caller - a
+Ctrl-D at the console, `mpremote soft-reset`, the guest's own `machine.soft_reset()` - or
+`ahard_reset()`, which Phase 2 did build. Nothing here is blocked on the emulator any more.
+
 Item 4 of "What to build from this" (move the post-boot handshake onto the device/family) also
 stops being optional: it is 0089's Phase 0.1, because a device-level reset cannot reach into the
 CLI for it. Item 1 (`demo/mkfat12_dump.py`) and item 2 (the context-manager flow) are unblocked as
