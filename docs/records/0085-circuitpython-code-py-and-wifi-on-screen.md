@@ -302,9 +302,10 @@ What follows from that:
 Step 3 of [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)'s sequencing is
 "rework the demo half on top of whatever 0087 and 0086 settle on". Both have now settled:
 [0086](0086-fat12-library-and-a-mkfat12-subcommand.md) is **rejected**, and 0087's route is
-in-process (`aexec()` writes the files, a host-side `device.areset()` restarts the chip with flash
-preserved, `--dump-fs` optional). The mechanism, its missing `areset()`, and its prerequisite live
-in 0087; what changes *here* is the demo surface.
+in-process: `aexec()` writes the files, then a **soft** reset (a bare Ctrl-D at the raw-REPL
+prompt - firmware-side, already supported, no emulator reset and no USB re-enumeration) makes the
+firmware re-run `code.py`, with `--dump-fs` optional. The mechanism and what is still missing for
+it live in 0087; what changes *here* is the demo surface.
 
 ### `--code`/`--boot` keep building an offline image by default
 

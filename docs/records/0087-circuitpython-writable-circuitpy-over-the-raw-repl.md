@@ -153,69 +153,67 @@ CIRCUITPY image with long names or subdirectories, which promotes this record's 
 questions - auto-reload on writing `code.py`, and whether the write cache needs an explicit flush
 before `--dump-fs` - from "worth checking" to blocking on anything built from it.
 
-## The shape item 2 should take (2026-08-20): context manager + `aexec()` + a host-side reset
+## The shape item 2 should take (2026-08-20): context manager + `aexec()` + a **soft** reset
 
 Proposed by the maintainer, documented here rather than built. It replaces the "two separate
-`rp2040py` runs with an image passed between them" reading of item 2 above, and is strictly
-cheaper.
+`rp2040py` runs with an image passed between them" reading of item 2 above.
 
-### Why a reset removes the round trip entirely
+### The restart is already supported, and it is a soft reset
 
-`BaseDevice._on_watchdog_trigger()` (`device/base_device.py`) already performs a live reset as
-`mcu.reset(preserve_flash=True)` / `core.pc = FLASH_START_ADDRESS` / `cdc.reset()`. The first
-argument is the point: **emulated flash survives**, so the CIRCUITPY the firmware just wrote over
-the REPL is still there after the restart. `tests/test_watchdog_reset.py` already asserts both
-halves that matter (`..._preserves_flash_content`, `..._resets_usb_cdc_enumeration_state`).
+Not a chip reset and not an emulator feature - the firmware's own. `docs/reference/mpremote.md`
+lists `mpremote connect ... soft-reset` / **Ctrl-D at the raw-REPL prompt** as working, with the
+note "handled entirely by firmware's own soft-reset code - **no emulator-side reset needed**", and
+`tests/test_mpremote_integration.py`'s fake device models exactly that byte
+(`enter_raw_repl(soft_reset=True)`, mpremote's default): a bare Ctrl-D at the prompt, before any
+raw-paste probe, answered with `soft reboot\r\n` and a fresh banner.
 
-So there is no need to `--dump-fs` an image and boot a second process with `--fat12`. One process:
+That is the whole restart this route needs. A soft reset does not touch flash at all - so the
+CIRCUITPY the firmware just wrote over the REPL is trivially still there - and it does not
+re-enumerate USB, so the console connection stays up across it.
 
     async with MicroPythonDevice(board=board, circuitpython=True) as device:
         await device.aexec(write_script)   # storage.remount(rw) + open()/write() per file
-        await device.areset()              # <- the piece that does not exist yet
-        ...                                # CircuitPython auto-runs code.py; collect frames
+        await device.asoft_reset()         # <- bare Ctrl-D at the prompt; see below
+        ...                                # firmware re-runs code.py; collect frames
 
-`--dump-fs` becomes optional - for *keeping* the image, not for making the flow work.
+`--dump-fs` is then optional - for *keeping* the image, not for making the flow work.
 
-### Almost all of that already exists
+### What is actually missing (much less than a reset API)
 
-`MicroPythonDevice` has `__aenter__`/`__aexit__` and `aexec()`/`exec_async()`/`aexec_file()`.
-The one missing piece is a public reset. Four things it has to get right, all visible in the
-current code:
+`MicroPythonDevice` already has `__aenter__`/`__aexit__` and `aexec()`/`exec_async()`/
+`aexec_file()`. What it has no way to express is **a bare Ctrl-D at the prompt**:
+`RawReplRunner._on_start()` sends Ctrl-C, Ctrl-C, Ctrl-A, and its `CTRL_D` is only ever the
+*terminator* appended to source (`self._queue(bytes(self._source) + bytes([CTRL_D]))`) or the
+end-of-output marker in the reply. The soft-reset byte is reachable today only through the
+mpremote path, not from the device API.
 
-- It cannot be a second `astart()`: `start_async()` raises on `self._started`.
-- It must take `self._repl_lock`, the same lock `_aconnect()` and `_aexec()` use, so a reset
-  cannot interleave with an exec in flight.
-- Its body is `_on_watchdog_trigger()`'s three lines plus the *waiting* half of
-  `MicroPythonDevice._aconnect()` (fresh `on_device_connected` event, `simulator.wait_for`) -
-  **without** `simulator.start_execution()`, which is already running.
-- `cdc.reset()` invalidates the host's console state, so whatever `RawReplRunner` needs to be
-  re-primed has to happen after re-enumeration, not before.
+So the work is a small runner (or a flag on the existing one) that enters raw REPL, sends Ctrl-D,
+and waits for `soft reboot` + the banner - not a chip reset, not re-enumeration, and **not** item 4:
+because USB never drops, the post-boot handshake difference the CLI carries is irrelevant to this
+path. Item 4 stays what it says it is - optional and cosmetic.
 
-### This promotes item 4 from cosmetic to prerequisite
+### Unverified, and the reason the hard reset is not dead
 
-Item 4 above ("move the post-boot handshake off the CLI onto the device/family") is listed as
-optional. It stops being optional here. The CircuitPython-vs-MicroPython handshake lives in
-`cli/__init__.py`'s `_micropython_async()` as a bare `if not args.circuitpython:` around
-`cdc.send_serial_byte(...)` - **after** `await device.astart()`. A reset needs that same handshake
-performed again, and a `device.areset()` cannot reach into the CLI to get it. Either the handshake
-moves onto the device/family first, or `areset()` silently returns a device the caller cannot talk
-to.
+No local CircuitPython checkout here, so per the 3g rule this has to be read from real source
+before anything is built on it: **whether CircuitPython's soft reboot re-runs `code.py`** the way
+MicroPython's re-runs `main.py`. If it does, the flow above is complete. If it does not, the
+fallback is the hard reset - `BaseDevice._on_watchdog_trigger()`
+(`mcu.reset(preserve_flash=True)` / `core.pc = FLASH_START_ADDRESS` / `cdc.reset()`, with
+`tests/test_watchdog_reset.py` covering flash preservation and CDC state) - and *that* path does
+need a public entry point, a re-enumeration wait, and item 4 done first, since the console drops.
 
-### Relation to [0057](0057-run-pin-reset-hook.md)
+Related: the auto-reload question in "Constraints" may make even the soft reset unnecessary for the
+`--code` case, if writing `code.py` reloads on its own or on leaving the raw REPL. Worth answering
+in the same pass, from the same source.
 
-0057's stated blocker is that nothing can perform the third step (`cdc.reset()` and the host-side
-re-enumeration that must follow it), so a RESET button doing only the first two would leave a
-stale REPL - "strictly worse than the honest 'not modelled'". A public device-level reset is
-exactly that missing step. It does **not** resolve 0057 on its own: that record's other half is
-that an `ExternalDevice` gets `attach(rp2040)` and cannot reach the `BaseDevice` at all. Worth
-designing the two together rather than adding a reset that 0057 then has to work around.
+### One placement note, for [0057](0057-run-pin-reset-hook.md)
 
-### Still unverified, and now less load-bearing
-
-Doing the reset from the host removes the dependency on *how a guest triggers one* - there is no
-local CircuitPython checkout here to confirm that `microcontroller.reset()` reaches the watchdog
-TRIGGER bit the way MicroPython's `machine.reset()` does, and with a host-side API nothing has to.
-The auto-reload question from "Constraints" stays open and is worth answering first anyway: if
-writing `code.py` from the REPL reloads on its own (or on leaving the raw REPL), the explicit
-reset may be redundant for the `--code` case, though not for the general one.
+Independent of which restart this route uses. The full hard reset exists exactly once in the tree,
+is private, and hangs off `BaseDevice` - not off `RP2040`. `RP2040.reset(preserve_flash=)` resets
+registers and core only; the USB half lives in `USBCDC.reset()`/`RPUSBController.reset_device()`;
+`RPReset`/`RPPSM`/`RPVregAndChipReset` are guest-visible register blocks, not a host-side action.
+0057's blocker is exactly that placement: an `ExternalDevice` gets `attach(rp2040)` and cannot
+reach a `BaseDevice`, and the sequence cannot simply move onto `RP2040` because `USBCDC` is
+constructed by `BaseDevice` and the reference only points one way (`USBCDC.usb` -> `usb_ctrl`).
+Worth designing together if the hard-reset fallback is ever taken.
 
