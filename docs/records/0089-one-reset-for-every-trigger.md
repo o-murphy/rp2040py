@@ -1,11 +1,14 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Done (2026-08-20)** - every phase landed except Phase 3, which was built, live-verified
-  and then dropped on the maintainer's call (a soft reset needs no API of its own). Open only for
-  the "Known gaps" each phase wrote down against itself, listed in the Progress log: the emulated
-  device stays enumerated while RUN is held, a button-driven reset has no awaitable form, several
-  register blocks still have no `reset()` of their own, and CircuitPython 8.0.2 still does not
-  re-enumerate after a chip reset (Phase 5 was expected to fix that and did not). Design settled and the
+- Status: **Done and closed (2026-08-20)** - every phase landed except Phase 3, which was built,
+  live-verified and then dropped on the maintainer's call (a soft reset needs no API of its own).
+  Each phase's own "Known gaps" were then worked back through: the last unreset register blocks,
+  the device staying enumerated while RUN is held, and the TIMER not restarting are all closed (see
+  the Progress log's two follow-up sections, one of which found a real bug - Phase 5's WDSEL model
+  was never actually reached from the device layer). What remains are **decisions, not defects**:
+  `xosc`/`rosc` are deliberately not reset, the core is deliberately reset on every path, and a
+  button-driven reset deliberately has no awaitable form. CircuitPython 8.0.2's failure to
+  re-enumerate is tracked separately in [0093](0093-circuitpython-802-warm-boot-hang.md). Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -980,7 +983,8 @@ returns nothing, so a board file cannot hand its constructed `ResetButton` back 
   the bus the moment the chip is held; here `cdc.reset()` only runs as part of the release, since
   `hard_reset()` is one sequence and 0089 chose the release as its trigger. Visible only to a host
   watching enumeration state during a hold, and not worth splitting the one owner of the reset in
-  two.
+  two. **Closed the same day - see "Closing the two fidelity gaps" below, where splitting it turned
+  out to be three lines and to uncover a real bug.**
 - **A button-driven reset has no awaitable form.** `press()`/`release()` are fire-and-forget by
   nature; a caller that needs to *wait* for the board to come back uses `ahard_reset()` (Phase 2),
   which is the same reset with a host-side trigger. `tests/reset_button_run.py` therefore reaches
@@ -1078,6 +1082,7 @@ CI gate stays. Comment corrected in the workflow rather than left to mislead the
   day - see the follow-up below.**
 - **The TIMER's count** does not restart, because it reads from the simulation clock rather than
   from the block. A real `TIMER` restarts from zero. Unchanged by this phase, now written down.
+  **Closed the same day - see below.**
 - **CircuitPython 8.0.2**, above.
 
 *Not touched:* Phase 6 - the documentation pass.
@@ -1142,6 +1147,55 @@ The first half is still true; the second stopped being true in Phase 4.1, when t
 own `reset()`. Checked before changing it: 26 classes inherit `BasePeripheral`, exactly one
 implementer does not, and it has the method. Worth stating what this does **not** buy - it cannot
 *find* a missing reset, because the base-class default satisfies it trivially.
+
+### Closing the two fidelity gaps (2026-08-20)
+
+Phases 4 and 5 each shipped one thing that was *wrong* rather than merely unbuilt, which is what
+kept this record's tracker row open under the "a merged PR does not mean the idea is done" rule.
+Both are now closed, and closing the first one found a bug.
+
+**1. A held RESET now takes the chip off the USB bus.** `RP2040` gained a second hook,
+`on_run_pin_held`, fired on the *falling* edge beside the existing `on_run_pin_reset` on the
+rising one, and `BaseDevice.hard_reset()` split into the two halves the hardware actually has:
+
+- `_enter_reset(cause)` - registers to their reset values, the cause recorded, `cdc.reset()`.
+- `_leave_reset()` - point the core at flash's entry point and let it run.
+
+A press runs the first, a release runs the second, and every other trigger (watchdog, host API)
+runs both back to back - so there is still exactly one owner of the sequence, which was the
+objection to splitting it. A board held in RESET is now *gone* from the host rather than idle, and
+the core is in its reset state rather than frozen mid-instruction (visible in
+`tests/reset_button_run.py`'s output: the frozen PC is now the reset PC).
+
+**The bug this uncovered.** Writing `_enter_reset()` meant looking at the `mcu.reset()` call it
+inherited - and it was `self.mcu.reset(preserve_flash=True)`, with **no `from_watchdog`**. Phase 5
+added that parameter and the whole `PSM.WDSEL`/`RESETS.WDSEL` model behind it, and then never
+passed it from the device layer: every device-level reset, watchdog included, silently took the
+"reset everything" path. Phase 5's own live check passed *for the wrong reason*, and only its unit
+tests (which call `RP2040.reset()` directly) ever exercised the gated path. Fixed, and
+`tests/test_watchdog_reset.py::test_a_watchdog_reset_reaches_the_wdsel_gated_path` is the
+regression test - a watchdog reset with no WDSEL bit set must now leave the peripherals alone.
+
+Worth naming the general lesson, because this project has hit it before: a parameter with a default
+is a silent seam. The unit tests exercised `RP2040.reset(from_watchdog=True)` and the live test
+exercised the device path, and neither could see that the two were not connected.
+
+**2. The TIMER restarts from zero.** `RPTimer` gained `_epoch_nanos` and a `_micros()` helper that
+every read *and* every alarm arming goes through, so the two cannot disagree about "now";
+`reset()` moves the epoch to the current instant rather than rewinding the simulation clock (which
+is shared with USB SOF, every other peripheral's alarms and the engine room, and must not move).
+Guest code now sees `time.ticks_ms()`/`time.monotonic()` start over after a reset, which is what
+silicon does and what made this a fidelity gap rather than a detail.
+
+Re-verified live after both changes, since this is still the reset path: `chip_reset_run.py --pads`
+(MicroPython v1.23.0, the watchdog path - and now genuinely WDSEL-gated, with the firmware's own
+`PSM.WDSEL = 0x1fffc` doing the selecting), `reset_button_run.py` (the RUN pin, both edges) and
+`chip_reset_run.py --cyw43` (CircuitPython 10.2.1, WiFi back up after the reset). 803 unit tests
+pass on both builds.
+
+*What is left against this record:* `xosc`/`rosc` are deliberately not reset, the core is
+deliberately reset on every path, and a button-driven reset deliberately has no awaitable form
+(use `ahard_reset()`). All three are decisions, not defects - so the row can close.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

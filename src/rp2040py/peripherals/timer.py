@@ -57,6 +57,10 @@ class RPTimer(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._paused = False
+        # Simulated-time origin for this block's own count, so `reset()` can restart it from zero
+        # the way real silicon does - `clock.nanos` is the *simulation's* time base and is never
+        # reset (USB SOF, every other peripheral's alarms and the engine room all share it).
+        self._epoch_nanos: float = 0.0
         self.alarms = [
             RPTimerAlarm(ALARM_0, self.clock.create_alarm(lambda: self._fire_alarm(0))),
             RPTimerAlarm(ALARM_1, self.clock.create_alarm(lambda: self._fire_alarm(1))),
@@ -72,10 +76,12 @@ class RPTimer(BasePeripheral):
         reset - the emulated equivalent of a timer that kept counting through a power cut. The
         `RPTimerAlarm` objects themselves stay, since the clock holds them.
 
-        The timer's own count is not reset: it reads from `clock.nanos`, which is the simulation's
-        time base rather than this block's state. A real `TIMER` does restart from zero, so this is
-        a known deviation - shared with every other reset path here, and unchanged by this phase.
+        The count restarts from zero, as a real `TIMER` does: `_epoch_nanos` moves to now rather
+        than the simulation clock being rewound. Guest code therefore sees `time.ticks_ms()` /
+        `time.monotonic()` start over after a reset, which is the observable that made this a
+        fidelity gap rather than a detail.
         """
+        self._epoch_nanos = self.clock.nanos
         self._latched_time_high = 0
         self._int_raw = 0
         self._int_enable = 0
@@ -92,8 +98,14 @@ class RPTimer(BasePeripheral):
     def int_status(self) -> int:
         return (self._int_raw & self._int_enable) | self._int_force
 
+    def _micros(self) -> float:
+        """This block's own count, in microseconds since its epoch - not the simulation's clock.
+        Every read *and* every alarm arming goes through here, so the two cannot disagree about
+        what "now" is (an alarm is armed as `target - now`, relative)."""
+        return (self.clock.nanos - self._epoch_nanos) / 1000
+
     def read_uint32(self, offset: int) -> int:
-        time = self.clock.nanos / 1000
+        time = self._micros()
 
         if offset == TIMEHR:
             return self._latched_time_high
@@ -142,7 +154,7 @@ class RPTimer(BasePeripheral):
         if offset in ALARM_REGS:
             alarm_index = (offset - ALARM0) // 4
             alarm = self.alarms[alarm_index]
-            delta_micros = _to_uint32(value - self.clock.nanos / 1000)
+            delta_micros = _to_uint32(value - self._micros())
             alarm.armed = True
             alarm.target_micros = value
             alarm.clock_alarm.schedule(delta_micros * 1000)

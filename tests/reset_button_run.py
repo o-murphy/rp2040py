@@ -65,7 +65,9 @@ async def run(image: str, circuitpython: bool) -> int:
         # The observable that only a real "held in reset" produces: the core stops dead. A running
         # chip - even a fully idle one parked in WFI - moves its PC constantly as timer/USB
         # interrupts fire, so two reads this far apart matching is not something an executing
-        # emulator can fake.
+        # emulator can fake. The value printed is the *reset* PC, not wherever the guest happened
+        # to be: pressing RESET now enters reset rather than merely freezing (0089 Phase 4's own
+        # known gap, closed - the device also drops off the USB bus for the duration).
         pc_before = device.mcu.core.pc
         await asyncio.sleep(HOLD_SECONDS)
         pc_after = device.mcu.core.pc

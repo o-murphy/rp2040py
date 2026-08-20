@@ -102,6 +102,7 @@ class BaseDevice:
         # above (0089's D3): an `ExternalDevice` only ever gets `attach(rp2040)`, so without this
         # a RESET button could reach `mcu.reset()` but never `cdc.reset()` - a restarted chip
         # with a stale host-side console, which is worse than not modelling the button at all.
+        self.mcu.on_run_pin_held = self._on_run_pin_held
         self.mcu.on_run_pin_reset = self._on_run_pin_reset
         self._started = False
 
@@ -117,14 +118,23 @@ class BaseDevice:
         (FORCE vs TIMER) by the time it calls this."""
         self.hard_reset(cause=ResetCause.WATCHDOG)
 
-    def _on_run_pin_reset(self) -> None:
-        """A RESET button letting the RUN pin go (`external/reset_button.py`) - one of
-        `hard_reset()`'s callers, not a second implementation of it (0089 Phase 4).
+    def _on_run_pin_held(self) -> None:
+        """RUN pulled low - a RESET button pressed and *held* (`external/reset_button.py`).
 
-        Only the *release* gets here: while the button was down the chip was already held in reset
-        by `execute_batch()` (`mcu.run_pin_low`), executing nothing. This is the boot half, and it
-        is the one trigger for which `cause=RUN_PIN` is literal rather than a stand-in."""
-        self.hard_reset(cause=ResetCause.RUN_PIN)
+        The chip enters reset here rather than on the release: registers go to their reset values
+        and the device drops off the USB bus, because a real board held in reset is gone from the
+        host, not idle. `execute_batch()` separately stops executing anything while
+        `mcu.run_pin_low` (0089 Phase 4), so nothing runs on the way back out either.
+
+        Not a second implementation of `hard_reset()` - it is that method's first half."""
+        self._enter_reset(ResetCause.RUN_PIN)
+
+    def _on_run_pin_reset(self) -> None:
+        """RUN released - the edge that boots the chip, and `hard_reset()`'s second half.
+
+        `cause` was already recorded by `_on_run_pin_held()`; this is the one trigger for which
+        `RUN_PIN` is literal rather than a stand-in."""
+        self._leave_reset()
 
     def hard_reset(self, *, cause: ResetCause = ResetCause.RUN_PIN) -> None:
         """Chip-level reset: restart the RP2040 with flash preserved and drop off the USB bus,
@@ -147,13 +157,27 @@ class BaseDevice:
         `microcontroller.cpu.reset_reason` - see `ResetCause` for the three signatures and why the
         default is the RUN pin rather than "whatever the last watchdog write left behind".
         """
-        self.mcu.reset(preserve_flash=True)
-        # After mcu.reset(), not before: today `RP2040.reset()` touches neither the watchdog nor
-        # VREG_AND_CHIP_RESET, but 0089's Phase 5 widens it to the blocks a real reset covers - at
-        # which point a cause recorded first would be wiped by the very reset it describes.
+        self._enter_reset(cause)
+        self._leave_reset()
+
+    def _enter_reset(self, cause: ResetCause) -> None:
+        """Put the chip *into* reset: registers to their reset values, the cause recorded, and the
+        device off the USB bus. Everything except starting execution again.
+
+        Split out because the RUN pin genuinely has two edges (0089 Phase 4's own known gap, closed
+        the same day): pressing RESET does all of this and *stays* there, and the release is what
+        runs `_leave_reset()`. Every other trigger - the watchdog, the host API - has no held
+        phase, so `hard_reset()` above simply runs both halves back to back."""
+        self.mcu.reset(preserve_flash=True, from_watchdog=cause is ResetCause.WATCHDOG)
+        # After mcu.reset(), not before: 0089's Phase 5 widened it to the blocks a real reset
+        # covers, so a cause recorded first would be wiped by the very reset it describes.
         self._record_reset_cause(cause)
-        self.mcu.core.pc = FLASH_START_ADDRESS
         self.cdc.reset()
+
+    def _leave_reset(self) -> None:
+        """Release the chip: point the core at flash's entry point and let it run. The other half
+        of `_enter_reset()`; see there for why the two are separable."""
+        self.mcu.core.pc = FLASH_START_ADDRESS
 
     def _record_reset_cause(self, cause: ResetCause) -> None:
         """0089 §1.3's table, in three lines. A watchdog reboot is the *absence* of bookkeeping:
