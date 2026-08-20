@@ -127,3 +127,29 @@ The order these four records get worked in, decided with the maintainer rather t
    whatever 0087 and 0086 settle on, rather than on the premise it was written under.
 4. **[0088](0088-usb-host-side-msc-control-lines-and-reset.md)** - the USB host side last, since
    mass storage is mutually exclusive with 1 and nothing above depends on it.
+
+## Update (2026-08-20): 0086 rejected, and what that does to the sequencing above
+
+Step 2 of the sequencing resolved, by maintainer decision rather than by analysis here:
+[0086](0086-fat12-library-and-a-mkfat12-subcommand.md) is **rejected in full** - no FAT12 library
+dependency, no `mkfat12` CLI subcommand. This record's finding is why: with the firmware writing
+its own volume, LFN chains and subdirectories are correct by construction, which was the only
+thing a host-side library was ever needed for.
+
+Two things in the text above should be read in that light:
+
+- "the trade [0086] now hinges on" (end of Constraints) is settled the other way round from how
+  that sentence expects: the cost argument did not pick a library, it split the two routes by job.
+  `demo/mkfat12.py`'s **8.3 builder stays** - `demo/lcd_run.py` measures a format-from-blank boot
+  past 30s, `--read` has no counterpart here, and `tests/test_demo_mkfat12.py` is 170 lines of
+  offline assertions - while everything needing long names or subdirectories goes through this
+  record's route.
+- The sequencing list therefore reads: 1. this record (still unbuilt), 2. ~~0086~~ rejected,
+  3. [0085](0085-circuitpython-code-py-and-wifi-on-screen.md), 4.
+  [0088](0088-usb-host-side-msc-control-lines-and-reset.md).
+
+Item 1 of "What to build from this" (`demo/mkfat12_dump.py`) is now the *only* planned route to a
+CIRCUITPY image with long names or subdirectories, which promotes this record's two unverified
+questions - auto-reload on writing `code.py`, and whether the write cache needs an explicit flush
+before `--dump-fs` - from "worth checking" to blocking on anything built from it.
+

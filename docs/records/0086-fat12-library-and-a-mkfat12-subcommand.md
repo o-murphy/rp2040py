@@ -1,9 +1,12 @@
 # 0086 - A FAT12 library dependency, and a `mkfat12` CLI subcommand
 
-- Status: **Proposed. Nothing here is implemented, and deliberately so** - the demo-level half
-  landed in [0085](0085-circuitpython-code-py-and-wifi-on-screen.md), and this record is the plan
-  for the parts that need an API decision first (what the optional dependency looks like in
-  `pyproject.toml`, and what the CLI surface is).
+- Status: **Rejected (2026-08-20)** - both halves, the optional FAT12 library dependency *and* the
+  `mkfat12` CLI subcommand. Decided by the maintainer, not derived here; the library survey below
+  lost its premise once [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) showed
+  the firmware can write its own filesystem. See "Rejected (2026-08-20)" at the end for what
+  replaces it and what deliberately survives. Everything above that section is kept as written,
+  including the survey - it is still the accurate answer to "which FAT12 library would we take",
+  the question is just no longer being asked.
 - Depends on: [0085] (`demo/mkfat12.py`, the hand-rolled 8.3 builder this would grow past),
   [0010](0010-littlefs-dump-fs.md)/`mklittlefs` (the shape a CLI subcommand should mirror).
 
@@ -123,3 +126,66 @@ Nothing here is obviously right, which is exactly why this record is a plan and 
   little more) and take no dependency at all. That keeps `demo/mkfat12.py`'s "needs nothing
   installed" property, which is the whole reason it exists, and is the only option whose cost is
   bounded by code we own.
+
+## Rejected (2026-08-20)
+
+Neither of the "two things to build" gets built. The record stays for its survey and its
+measurements; nothing in it is scheduled.
+
+### Why
+
+The plan above rests on one premise: that long names (`settings.toml`) and subdirectories
+(`lib/greeter.py`) need a host-side FAT12 writer, and that a hand-rolled 8.3 builder therefore has
+to grow into either a dependency or ~40 lines of LFN code. [0087] removed that premise. The guest
+can `storage.remount("/", readonly=False)` in this emulator and write its own volume over the raw
+REPL, and the writer is then CircuitPython's own FatFS - so LFN chains and directory entries come
+out correct by construction, from the same code a real board runs. There is nothing left for a
+library to do that the firmware does not already do better.
+
+The consequence for each option in "Where that leaves the choice": `pyfatfs`'s legacy chain and
+`setuptools` pin, `FATtools`'s GPLv3 against this project's MIT, `PyFAT12`'s broken packaging, and
+the fourth option's ~40 lines of hand-written LFN - none of them has to be weighed any more.
+
+### What replaces it
+
+The two-run flow, whose host-side half is [0087]'s item 1 (`demo/mkfat12_dump.py`, still unbuilt):
+
+1. boot with a blank flash region - CircuitPython formats CIRCUITPY itself, as
+   `demo/lcd_run.py`'s `_circuitpy_image()` already documents - run a generated raw-REPL script
+   that remounts read-write and writes each file with plain `open()`/`write()`, and dump the
+   result with `--dump-fs`;
+2. boot again with that image as `--fat12`, which is the run that actually demonstrates anything.
+
+### What survives, deliberately
+
+**`demo/mkfat12.py`'s pure-Python 8.3 builder stays**, for the same reason the section above said
+it would, now with the numbers attached:
+
+- **The first run of that flow is the most expensive boot this project has.** `demo/lcd_run.py`
+  raises its start timeout past the 30s default specifically because a freshly formatted CIRCUITPY
+  has CircuitPython laying down `boot_out.txt`/`lib`/`.fseventsd` before it brings USB up -
+  "measured past 30s in emulation", where the same board with an already-populated drive
+  enumerates well inside it. Fine to pay once to produce an image; not fine per `--code` in an
+  edit-run loop.
+- **`--read NAME` has no counterpart on the dump route.** Pulling `boot_out.txt` back out of an
+  existing image is reading, and the firmware route only writes.
+- **`tests/test_demo_mkfat12.py` is 170 lines of offline assertions** - fresh-volume geometry
+  against what real firmware formats, padding as erased flash, byte-for-byte round-trips including
+  CRLF. A test cannot pay boot time, which is the constraint [0087] already states.
+
+### Left open, decided nowhere yet
+
+Whether to *delete* the `pyfatfs` branch inside `demo/mkfat12.py` (`_build_with_pyfatfs`,
+`_read_with_pyfatfs`, and that file's PEP 723 block) now that the dump route covers what it was
+for. Rejecting this record does not decide that, and the branch is not currently costing the
+project a declared dependency.
+
+### Constraint this hands to [0088]
+
+Rejecting the host-side writer makes [0087]'s route the only way to write CIRCUITPY from the guest,
+so [0087]'s mutual-exclusion constraint hardens: any USB mass-storage implementation takes
+`blockdev_lock` and makes `storage.remount()` raise exactly as on hardware, and must therefore stay
+opt-in permanently rather than becoming a default.
+
+[0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
+[0088]: 0088-usb-host-side-msc-control-lines-and-reset.md
