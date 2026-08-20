@@ -18,7 +18,6 @@ from rp2040py.peripherals.usb import (
 )
 from rp2040py.rp2040 import RP2040
 
-
 USB_BASE = 0x50110000
 
 

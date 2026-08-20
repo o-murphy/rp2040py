@@ -102,3 +102,37 @@ phase runs at **~131 ms of simulated time per wall-second** in the native build 
 real time) because a busy-wait has no WFI for `execute_batch()`'s idle jump to exploit. Budget
 accordingly, and prefer bounded windows with a clear success criterion over "wait and see" - a
 900-second run tells you nothing a 45-second one with the right probe does not.
+
+## 2026-08-20: three emulator bugs found on the same path - and 8.0.2 still does not come back
+
+Chasing the CI reds that 0089's Phase 1/2 steps produced turned up three real defects in the
+emulator, all on the reset path this record lives on. Two of them fixed MicroPython, **none of
+them fixed 8.0.2**, and that is the useful part: the shape this record describes is not any of
+them.
+
+1. **`Timer32PeriodicAlarm` re-armed at a zero delta.** A watchdog *timeout* fired forever at one
+   instant inside a single `clock.tick()`, so simulated time stopped. MicroPython 1.16/1.17 reach
+   `machine.reset()` through that path (pico-sdk 1.2.0 reboots by loading a 50 ms timeout rather
+   than writing `CTRL.TRIGGER`), so those two versions never reset at all.
+2. **Double-buffered USB endpoint writes went out in the wrong order** (buffer 1 before buffer 0),
+   scrambling any response longer than 64 bytes.
+3. **`SIE_STATUS.CONNECTED` was a latch rather than a level.** pico-sdk's own
+   `rp2040_usb_device_enumeration_fix()` busy-waits on that bit from inside a timer alarm
+   (`TIMER_IRQ_3`, IPSR 19 - confirmed by disassembling the stuck image), while TinyUSB's ISR
+   clears the connect status from the other side. After a chip reset the two race the wrong way
+   round, the bit never comes back, and the firmware spins there forever: the device re-enumerates
+   as far as `SET_ADDRESS` and then answers nothing. **This is a genuine
+   "never comes back after a reset" mechanism** - the same sentence as this record's title - and
+   it is now fixed.
+
+**Measured after all three: `tests/hard_reset_run.py --circuitpython --image 8.0.2` still fails
+with `TimeoutError: did not complete within 120.0s` on `ahard_reset()`.** MicroPython 1.16, 1.17
+and 1.19.1 pass the equivalent checks.
+
+So this record stays open, and one plausible hypothesis is now ruled out rather than merely
+untested: 8.0.2's failure is not the enumeration-fix deadlock, not the alarm freeze, and not the
+packet reordering. What has *not* been checked since the fixes is whether the failure signature
+moved - it is worth re-running the instrumentation that found the above (a `SIE_STATUS` poll trace
+plus the core's `pc`/IPSR while it hangs) against 8.0.2 specifically, since the tooling now exists
+and the three known-bad mechanisms are out of the way.
+
