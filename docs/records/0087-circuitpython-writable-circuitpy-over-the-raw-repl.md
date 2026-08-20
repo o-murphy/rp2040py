@@ -265,3 +265,70 @@ Item 4 of "What to build from this" (move the post-boot handshake onto the devic
 stops being optional: it is 0089's Phase 0.1, because a device-level reset cannot reach into the
 CLI for it. Item 1 (`demo/mkfat12_dump.py`) and item 2 (the context-manager flow) are unblocked as
 written, once 0089's Phase 3 gives them a soft-reset entry point.
+
+
+## Update (2026-08-20): item 1 rejected, item 2 re-pathed, and two paragraphs above that went stale
+
+Maintainer decision, plus the bookkeeping that 0089's Phase 3 being dropped and
+[0057](0057-run-pin-reset-hook.md)'s option B landing leave behind.
+
+### Item 1 (`demo/mkfat12_dump.py`) is **rejected** - nothing new to build
+
+The reason is not that the route is wrong; it is that the route no longer needs a file of its own.
+Everything the item described is reachable from pieces that already exist, by two paths:
+
+- **Over the REPL, in one live session**: write the files with `storage.remount('/',
+  readonly=False)` + `open()`/`write()`, then restart - which is item 2's flow, and the whole point
+  of the "Update (2026-08-20): both blocking questions answered" section above. The image is not the
+  deliverable there; the *running* firmware with those files is.
+- **`--dump-fs` + an analogue of `demo/mklittlefs_dump.py`**, when the image itself is wanted.
+  `--dump-fs` already dumps the right region for either family - `MicroPythonDevice.
+  dump_flash_image()` branches on `self.circuitpython` into `dump_circuitpython_flash_image()`,
+  which reads `layout.fs_start`/`fs_blocksize`/`fs_blockcount` exactly as the littlefs one does.
+  What is left over is `mklittlefs_dump.generate_script()`, whose CircuitPython delta is two lines
+  of prologue (`import storage; storage.remount('/', readonly=False)`) and one renamed entry point
+  (`code.py`, not `main.py`) - an option on the existing generator if anyone ever wants it, not a
+  second demo. It is not being built now either: nothing in the tree currently needs a FAT12 image
+  with long names or subdirectories, and the 8.3 builder (`demo/mkfat12.py`) keeps its own job for
+  everything that cannot pay boot time.
+
+So the "Update (2026-08-20): 0086 rejected" section's line - *"Item 1 ... is now the only planned
+route to a CIRCUITPY image with long names or subdirectories"* - stops being a plan for a file and
+becomes a statement about a **composition**: REPL write + `--dump-fs`. The two questions it
+promoted to blocking are correspondingly re-scoped: auto-reload was measured (it does not fire),
+and **the write-cache flush question is still open and still blocks the `--dump-fs` half** - both
+measured runs read files back afterwards, which is itself what calls `port_internal_flash_flush()`.
+Whoever takes that half answers it first; the pure-REPL path above never touches it, because
+nothing reads the flash image at all.
+
+### Item 2 gets the restart path the record kept deferring
+
+`demo/lcd_run.py`'s `--code`/`--boot` "push over the REPL" mode is still unbuilt, but its missing
+piece is no longer missing. The record asked for "a small runner (or a flag on the existing one)
+that enters raw REPL, sends Ctrl-D, and waits for `soft reboot` + the banner", then 0089's Phase 3
+built that and it was dropped as unwanted. What the flow uses instead - all of it already working:
+
+| restart | how | re-runs `code.py`? |
+|---|---|---|
+| friendly-prompt soft reset | Ctrl-B, then Ctrl-D | **yes** - measured above; this is the one the flow wants |
+| raw-prompt Ctrl-D | what `RawReplRunner` can express today | no - VM restarts, `PYEXEC_MODE_RAW` stays set |
+| `mpremote connect ... soft-reset` | [reference/mpremote.md](../reference/mpremote.md) | as above, raw prompt |
+| the guest asking for it | `supervisor.reload()` (CircuitPython) / `machine.soft_reset()` | yes |
+| `await device.ahard_reset()` | 0089's Phase 2 | yes, but the console re-enumerates, and on a Pico W CircuitPython loses the CYW43439 (0089's Appendix, point 5) |
+
+The cheapest shape for the demo is therefore one `aexec()` that ends in `supervisor.reload()`, not
+a new device API - the guest can ask for its own restart, and this route is already sending it
+code.
+
+### Two paragraphs above are now wrong, and are superseded here rather than edited
+
+- **"One placement note, for [0057]"** says the hard-reset sequence "cannot simply move onto
+  `RP2040` because `USBCDC` is constructed by `BaseDevice` and the reference only points one way".
+  That was true when written and is not any more: 0057's **option B** landed 2026-08-20 -
+  `RP2040.enter_reset()`/`leave_reset()` own the sequence, and the host side is notified through
+  `usb_ctrl.on_reset`, a callback `USBCDC` installs into itself. The note's conclusion ("worth
+  designing together") is what happened.
+- **The record's closing line** - *"unblocked as written, once 0089's Phase 3 gives them a
+  soft-reset entry point"* - contradicts the paragraph directly above it, which already records
+  Phase 3 as dropped. Read it as: **unblocked, full stop**, with the restart taken from the table
+  in this section.
