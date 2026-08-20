@@ -86,6 +86,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 ### Fixed
+- **A watchdog *timeout* froze the chip instead of resetting it.** `Timer32PeriodicAlarm`
+  re-armed at a zero delta whenever the counter sat on its target - which is exactly what happens
+  right after it fires - so the callback ran forever at one instant inside a single `clock.tick()`
+  and simulated time stopped for the whole chip. Measured: six watchdog triggers, all at
+  50000.0 us, none returning to the caller. Any guest that lets a `machine.WDT(timeout=...)` lapse
+  hit this; it surfaced as MicroPython 1.16/1.17 never coming back from `machine.reset()`, because
+  pico-sdk 1.2.0's `_watchdog_enable()` reboots by loading a 50 ms timeout where later SDKs write
+  `CTRL.TRIGGER` (the only path this emulator handled).
+- **Double-buffered USB endpoint writes went out back-to-front.** When the firmware armed both
+  halves in one buffer-control write, buffer 1 was transferred before buffer 0, so any response
+  longer than one 64-byte packet reached the host in the wrong order. It split a raw-REPL answer
+  across the protocol's own `\x04` marker - visible as MicroPython 1.19.1 failing a reset check
+  with a message its own output disproved.
+- **`SIE_STATUS.CONNECTED` was a latch, so a chip reset could strand the USB link.** The bit says a
+  host is on the other end of the bus, and pico-sdk's `rp2040_usb_device_enumeration_fix()`
+  busy-waits on it from inside a timer alarm; modelling it as write-once-clear-forever meant
+  TinyUSB's ISR could take it away permanently and leave the firmware spinning there with the
+  emulator running. It is now a level, with `INTR_DEV_CONN_DIS` coming off a separate event latch
+  so a permanently-true level cannot re-raise the interrupt. This is what kept a reset from ever
+  completing on MicroPython 1.16/1.17. CircuitPython 8.0.2 still does not come back
+  ([docs/records/0093](docs/records/0093-circuitpython-802-warm-boot-hang.md)) - measured after the
+  fix, so that record's cause is a different one.
 - **A watchdog reset ignored `PSM.WDSEL`/`RESETS.WDSEL`.** `RP2040.reset()` grew a `from_watchdog`
   parameter and the whole WDSEL model behind it, and `BaseDevice.hard_reset()` never passed it - so
   every device-level reset took the "reset everything" path regardless of what the guest selected.
