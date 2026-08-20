@@ -60,6 +60,24 @@ class Interpolator:
 
         self.update()
 
+    def reset(self) -> None:
+        """Back to power-on state, in place - `SIO`'s two interpolators are plain registers and a
+        chip reset clears them (0089 Phase 5). In place rather than reconstructed so anything
+        holding `sio.interp0`/`interp1` keeps a live reference."""
+        self.accum0 = 0
+        self.accum1 = 0
+        self.base0 = 0
+        self.base1 = 0
+        self.base2 = 0
+        self.ctrl0 = 0
+        self.ctrl1 = 0
+        self.result0 = 0
+        self.result1 = 0
+        self.result2 = 0
+        self.smresult0 = 0
+        self.smresult1 = 0
+        self.update()
+
     def update(self) -> None:
         n = self._index
         ctrl0 = InterpolatorConfig(self.ctrl0)

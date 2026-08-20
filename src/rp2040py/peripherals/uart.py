@@ -82,6 +82,22 @@ class RPUART(BasePeripheral):
         self.on_byte: Callable[[int], None] | None = None
         self.on_baud_rate_change: Callable[[int], None] | None = None
 
+    def reset(self) -> None:
+        """Registers and the RX FIFO, back to power-on (0089 Phase 5).
+
+        `on_byte`/`on_baud_rate_change` are **not** touched: they are what a host-side consumer
+        (the CLI's UART console, a test) wired to this block, and resetting the chip does not
+        unplug the cable. Same rule everywhere in this phase - a reset resets registers, not
+        wiring."""
+        self._ctrl_register = RXE | TXE
+        self._line_ctrl_register = 0
+        self.rx_fifo.reset()
+        self._interrupt_mask = 0
+        self._interrupt_status = 0
+        self._int_divisor = 0
+        self._frac_divisor = 0
+        self.rp2040.set_interrupt(self.irq, False)
+
     @property
     def enabled(self) -> bool:
         return bool(self._ctrl_register & UARTEN)

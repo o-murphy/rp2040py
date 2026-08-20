@@ -46,9 +46,29 @@ from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.ppb import RPPPB
-from rp2040py.peripherals.psm import RPPSM
+from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO
 from rp2040py.peripherals.pwm import RPPWM
-from rp2040py.peripherals.reset import RPReset
+from rp2040py.peripherals.reset import (
+    RESET_ADC,
+    RESET_DMA,
+    RESET_I2C0,
+    RESET_I2C1,
+    RESET_IO_BANK0,
+    RESET_IO_QSPI,
+    RESET_PADS_BANK0,
+    RESET_PADS_QSPI,
+    RESET_PIO0,
+    RESET_PIO1,
+    RESET_PWM,
+    RESET_SPI0,
+    RESET_SPI1,
+    RESET_TIMER,
+    RESET_UART0,
+    RESET_UART1,
+    RESET_USBCTRL,
+    RESETS_BITS_MASK,
+    RPReset,
+)
 from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.spi import RPSPI, ISPIDMAChannels
 from rp2040py.peripherals.ssi import RPSSI
@@ -181,18 +201,27 @@ cdef class RP2040:
 
         self.logger = ConsoleLogger(LogLevel.DEBUG, True)
 
+        # Named, not just entries in `peripherals` below - see _rp2040.py's identical block for
+        # why reset() needs each of them by name (0089 Phase 5).
+        self.clocks = RPClocks(self, "CLOCKS_BASE")
+        self.resets = RPReset(self, "RESETS_BASE")
+        self.psm = RPPSM(self, "PSM_BASE")
+        self.pads_bank0 = RPPADS(self, "PADS_BANK0_BASE", "bank0")
+        self.pads_qspi = RPPADS(self, "PADS_QSPI_BASE", "qspi")
+        self.timer = RPTimer(self, "TIMER_BASE")
+
         self.peripherals = {
             0x14000: RPXIPCtrl(self, "XIP_CTRL_BASE"),
             0x18000: RPSSI(self, "SSI"),
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: RP2040SysCfg(self, "SYSCFG"),
-            0x40008: RPClocks(self, "CLOCKS_BASE"),
-            0x4000C: RPReset(self, "RESETS_BASE"),
-            0x40010: RPPSM(self, "PSM_BASE"),
+            0x40008: self.clocks,
+            0x4000C: self.resets,
+            0x40010: self.psm,
             0x40014: RPIO(self, "IO_BANK0_BASE"),
             0x40018: RPIO(self, "IO_QSPI_BASE", pins=self.qspi),
-            0x4001C: RPPADS(self, "PADS_BANK0_BASE", "bank0"),
-            0x40020: RPPADS(self, "PADS_QSPI_BASE", "qspi"),
+            0x4001C: self.pads_bank0,
+            0x40020: self.pads_qspi,
             0x40024: RPXOSC(self, "XOSC_BASE"),
             0x40028: UnimplementedPeripheral(self, "PLL_SYS_BASE"),
             0x4002C: UnimplementedPeripheral(self, "PLL_USB_BASE"),
@@ -205,7 +234,7 @@ cdef class RP2040:
             0x40048: self.i2c[1],
             0x4004C: self.adc,
             0x40050: self.pwm,
-            0x40054: RPTimer(self, "TIMER_BASE"),
+            0x40054: self.timer,
             0x40058: self.watchdog,
             0x4005C: RP2040RTC(self, "RTC_BASE"),
             0x40060: UnimplementedPeripheral(self, "ROSC_BASE"),
@@ -301,18 +330,119 @@ cdef class RP2040:
         self._bootrom[: len(bootrom_data)] = materialized
         self.reset()
 
-    def reset(self, *, preserve_flash: bool = False) -> None:
-        # preserve_flash=True is for a live reset (RPWatchdog.on_watchdog_trigger, via a real
-        # machine.reset()/machine.bootloader()) - see _rp2040.py's reset() docstring.
+    def reset(self, *, preserve_flash: bool = False, from_watchdog: bool = False) -> None:
+        """Reset the chip: the core, and every block the reset actually covers.
+
+        `preserve_flash=True` is for a live reset (a RESET button, a guest `machine.reset()`, a
+        host-side `hard_reset()`) - unlike the construction-time/`load_bootrom()` calls, that must
+        not erase the firmware/filesystem currently running from flash.
+
+        `from_watchdog=True` is what makes this faithful rather than blunt
+        (docs/records/0089-one-reset-for-every-trigger.md, D5 and Phase 5). A RUN-pin or power-on
+        reset covers everything; a **watchdog** reset covers only what the guest selected, via two
+        registers this emulator previously stored without acting on:
+
+        - `PSM.WDSEL` - power-manager domains (SIO, CLOCKS, the RESETS controller itself, ...).
+        - `RESETS.WDSEL` - individual peripheral blocks.
+
+        The indirect route is the one that does the work in practice: pico-sdk's
+        `watchdog_reboot()` sets `PSM.WDSEL` to "everything apart from ROSC and XOSC" and never
+        touches `RESETS.WDSEL`, so the peripherals are reset because the **RESETS controller** is,
+        and its own reset state holds every peripheral in reset. Both routes are honoured below.
+
+        Two things deliberately survive every path:
+
+        - **SRAM** (0089's D6): a PSM reset resets the SRAM *controllers*, not the array, and
+          firmware re-initialises what it relies on. `bootrom` likewise - it is ROM.
+        - **Wiring, everywhere.** Each block's own `reset()` restores registers but not callbacks,
+          GPIO listeners, DMA/DREQ identity or analog inputs: a chip reset does not unsolder the
+          LED, unplug the UART consumer or change the voltage on ADC0. That split is what makes
+          resetting in place safe for the `ExternalDevice`s and the `USBCDC` holding references
+          into this object.
+
+        What is still *not* reset, and is a known gap rather than a decision: `xosc`/`rosc`
+        (deliberately - both are excluded by `watchdog_reboot()` itself, and neither is modelled
+        beyond its registers), the RTC, `busctrl`/`syscfg`/`sysinfo`/`tbman`/`ssi`/`xip_ctrl`
+        (register blocks with no `reset()` of their own yet), and the TIMER's count, which reads
+        from the simulation clock rather than from this block.
+        """
         cdef unsigned char[:] filler
+        if from_watchdog:
+            psm_wdsel = self.psm.wdsel
+            resets_wdsel = self.resets.wdsel
+            if psm_wdsel & WDSEL_RESETS:
+                # The RESETS controller itself is in the watchdog's reset domain, and a reset
+                # RESETS block holds every peripheral in reset - so selecting it selects them all,
+                # regardless of what RESETS.WDSEL says. This is the path a real machine.reset()
+                # takes.
+                resets_wdsel = RESETS_BITS_MASK
+        else:
+            psm_wdsel = PSM_BITS_MASK
+            resets_wdsel = RESETS_BITS_MASK
+
+        # The core is reset on every path, including a watchdog reset that selected no PSM domain
+        # at all. Deliberate, and the one place this is knowingly broader than the hardware: with
+        # PROC0 unselected the emulated CPU would otherwise keep running into the reset it just
+        # asked for, which is the exact hang `BaseDevice._on_watchdog_trigger()` exists to prevent
+        # (it predates this phase). Revisit only with a firmware that actually depends on it.
         self.core.reset()
-        self.pwm.reset()
-        self.dma.reset()
         self.ppb.reset()
+
+        if psm_wdsel & WDSEL_SIO:
+            self.sio.reset()
+        if psm_wdsel & WDSEL_CLOCKS:
+            self.clocks.reset()
+
+        if resets_wdsel & RESET_IO_BANK0:
+            for pin in self.gpio:
+                pin.reset(pads=False)
+        if resets_wdsel & RESET_PADS_BANK0:
+            for pin in self.gpio:
+                pin.reset(io=False)
+            self.pads_bank0.reset()
+        if resets_wdsel & RESET_IO_QSPI:
+            for qspi_pin in self.qspi:
+                qspi_pin.reset(pads=False)
+        if resets_wdsel & RESET_PADS_QSPI:
+            for qspi_pin in self.qspi:
+                qspi_pin.reset(io=False)
+            # PADS_QSPI does not share BANK0's reset value - GPIO_QSPI_SS's pull-up is what holds
+            # the flash deselected and what makes BOOTSEL readable (record 0050). Re-applied here
+            # exactly as __init__ does it, right after the generic pad reset above.
+            for qspi_pin, pad_reset in zip(self.qspi, QSPI_PAD_RESET_VALUES):
+                qspi_pin.pad_value = pad_reset
+            self.pads_qspi.reset()
+
+        if resets_wdsel & RESET_PWM:
+            self.pwm.reset()
+        if resets_wdsel & RESET_DMA:
+            self.dma.reset()
+        if resets_wdsel & RESET_ADC:
+            self.adc.reset()
+        if resets_wdsel & RESET_TIMER:
+            self.timer.reset()
+        if resets_wdsel & RESET_UART0:
+            self.uart[0].reset()
+        if resets_wdsel & RESET_UART1:
+            self.uart[1].reset()
+        if resets_wdsel & RESET_SPI0:
+            self.spi[0].reset()
+        if resets_wdsel & RESET_SPI1:
+            self.spi[1].reset()
+        if resets_wdsel & RESET_I2C0:
+            self.i2c[0].reset()
+        if resets_wdsel & RESET_I2C1:
+            self.i2c[1].reset()
+        if resets_wdsel & RESET_PIO0:
+            self.pio[0].reset()
+        if resets_wdsel & RESET_PIO1:
+            self.pio[1].reset()
+        if resets_wdsel & RESET_USBCTRL:
+            self.usb_ctrl.reset()
+
         if not preserve_flash:
             filler = bytearray(b"\xff" * len(self._flash))
             self._flash[:] = filler
-
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int offset

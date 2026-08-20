@@ -64,6 +64,30 @@ class RPTimer(BasePeripheral):
             RPTimerAlarm(ALARM_3, self.clock.create_alarm(lambda: self._fire_alarm(3))),
         ]
 
+    def reset(self) -> None:
+        """Registers and all four alarms, back to power-on (0089 Phase 5).
+
+        `clock_alarm.cancel()` is the load-bearing line: a scheduled alarm that survived would fire
+        into freshly-reset registers and raise an interrupt for a deadline the guest set before the
+        reset - the emulated equivalent of a timer that kept counting through a power cut. The
+        `RPTimerAlarm` objects themselves stay, since the clock holds them.
+
+        The timer's own count is not reset: it reads from `clock.nanos`, which is the simulation's
+        time base rather than this block's state. A real `TIMER` does restart from zero, so this is
+        a known deviation - shared with every other reset path here, and unchanged by this phase.
+        """
+        self._latched_time_high = 0
+        self._int_raw = 0
+        self._int_enable = 0
+        self._int_force = 0
+        self._paused = False
+        for alarm in self.alarms:
+            alarm.clock_alarm.cancel()
+            alarm.armed = False
+            alarm.target_micros = 0
+        for irq in TIMER_INTERRUPTS:
+            self.rp2040.set_interrupt(irq, False)
+
     @property
     def int_status(self) -> int:
         return (self._int_raw & self._int_enable) | self._int_force

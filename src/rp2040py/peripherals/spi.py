@@ -97,6 +97,26 @@ class RPSPI(BasePeripheral):
         self._update_dma_tx()
         self._update_dma_rx()
 
+    def reset(self) -> None:
+        """Registers and both FIFOs, back to power-on (0089 Phase 5). `on_transmit` is wiring - a
+        device on the bus - and survives, as does `irq`/`dreq` identity.
+
+        The two `_update_dma_*()` calls are not bookkeeping: DREQ state is published *into* the DMA
+        block, so clearing the control registers without re-publishing would leave DMA believing
+        this peripheral still wants service."""
+        self.rx_fifo.reset()
+        self.tx_fifo.reset()
+        self._busy = False
+        self._control0 = 0
+        self._control1 = 0
+        self._dma_control = 0
+        self._clock_divisor = 0
+        self._int_raw = 0
+        self._int_enable = 0
+        self._update_dma_tx()
+        self._update_dma_rx()
+        self.rp2040.set_interrupt(self.irq, False)
+
     @property
     def int_status(self) -> int:
         return self._int_raw & self._int_enable

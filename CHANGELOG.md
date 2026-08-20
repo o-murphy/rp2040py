@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A chip reset now resets the chip.** `RP2040.reset()` covered `core`/`pwm`/`dma`/`ppb` only;
+  it now covers the pads and IO, SIO, the clocks, UART/SPI/I2C/PIO/TIMER/ADC and USB - and it
+  honours `PSM.WDSEL`/`RESETS.WDSEL`, so a *watchdog* reset covers exactly what the guest selected
+  while a RUN-pin/power-on reset covers everything (bit positions from pico-sdk's own
+  `hardware/regs/psm.h`/`resets.h`). Two consequences visible to firmware, both live-verified: an
+  LED left on across `machine.reset()` now goes dark, and CircuitPython on a Pico W can bring WiFi
+  back up after a hard reset - the latter also needing `Cyw43439` to model **`WL_ON`**
+  (`CYW43_DEFAULT_PIN_WL_REG_ON`), so the emulated chip sees the power cycle its driver assumes.
+  The rule every new `reset()` follows: registers are reset, wiring is not - callbacks, GPIO
+  listeners, DREQ identity and analog inputs survive, because a chip reset does not unsolder
+  anything. [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 5.
 - `ResetButton` (`rp2040py.external.reset_button`) - the RESET button, as an `ExternalDevice`, and
   with it the **RUN pin** as a real level on `RP2040` (`run_pin_low`/`set_run_pin()` plus an
   `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into). RUN is not a GPIO and has

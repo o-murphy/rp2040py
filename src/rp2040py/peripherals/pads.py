@@ -28,6 +28,12 @@ class RPPADS(BasePeripheral):
         self._first_pad_register = QSPI_FIRST if bank == "qspi" else GPIO_FIRST
         self._last_pad_register = QSPI_LAST if bank == "qspi" else GPIO_LAST
 
+    def reset(self) -> None:
+        """`VOLTAGE_SELECT`, the only state this block owns itself - the per-pad registers live on
+        the `GPIOPin`s and are reset by `GPIOPin.reset()` (0089 Phase 5). `bank` and the two
+        register bounds are construction-time identity, not state."""
+        self.voltage_select = 0
+
     def get_pin_from_offset(self, offset: int):
         gpio_index = (offset - self._first_pad_register) >> 2
         if self.bank == "qspi":

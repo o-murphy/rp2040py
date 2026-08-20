@@ -1,7 +1,7 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phases 0-2 and 4 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20);
-  Phases 5-6 not started.** Design settled and the
+- Status: **Phases 0-2, 4 and 5 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20);
+  Phase 6 not started.** Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -519,7 +519,7 @@ executes while it is held.
 
 *Closes:* [0057] in full.
 
-### Phase 5 - the fuller chip reset
+### Phase 5 - the fuller chip reset - **done (2026-08-20)**
 
 5.1 Extend `RP2040.reset()` to the blocks a real reset covers, honouring `PSM.WDSEL`/`RESETS.WDSEL`
 where the guest set them (D5): `io`/`pads`/`sio` (so GPIO returns to inputs - D7's fidelity fix),
@@ -988,6 +988,94 @@ returns nothing, so a board file cannot hand its constructed `ResetButton` back 
 *Not touched:* Phases 5-6 - `RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`, so the
 Appendix's point-5 gaps (a pad left driving, CircuitPython's CYW43 not coming back on a Pico W) are
 unchanged and remain the sharpest argument for Phase 5.
+
+### Phase 5 - done (2026-08-20)
+
+The phase this plan was phased *for*: it changes what an existing, working reset does. Both
+observables this record wrote down in advance as failing now pass live, and one prediction it made
+turned out to be wrong.
+
+**5.1 `RP2040.reset()` grows, and honours WDSEL** (both twins). The signature gains
+`from_watchdog`, and the model is the two-level one the hardware actually has:
+
+- **RUN pin / power-on**: everything.
+- **Watchdog**: only what the guest selected - `PSM.WDSEL` for power-manager domains (SIO, CLOCKS,
+  ...) and `RESETS.WDSEL` for individual peripheral blocks. Both registers were already *stored*
+  and never acted on; both now are, as real `@property`s rather than cross-class private reads.
+
+The route that does the work in practice is the indirect one, and it is worth stating because it
+is not obvious from D5's quote alone: pico-sdk's `watchdog_reboot()` sets `PSM.WDSEL` and **never
+touches `RESETS.WDSEL`**. The peripherals get reset because `PSM_WDSEL_RESETS` resets the RESETS
+*controller*, whose own reset state holds every peripheral in reset. Measured live, not inferred:
+during a real `machine.reset()` the firmware writes `PSM.WDSEL = 0x1fffc`, i.e. exactly
+"everything apart from ROSC and XOSC". Every bit position used here comes from pico-sdk's own
+`hardware/regs/psm.h` and `hardware/regs/resets.h` (0027's 3g rule), cited in `psm.py`/`reset.py`
+next to the constants.
+
+**What got a `reset()`, and the rule they all follow.** New in-place `reset()` methods on `GPIOPin`
+(split `io=`/`pads=`, because `IO_BANK0` and `PADS_BANK0` are separate RESETS bits), `RPSIO`,
+`Interpolator`, `RPPADS`, `RPUART`, `RPSPI`, `RPI2C`, `RPTimer`, `RPADC`, `RPClocks`, `RPPIO` and
+`StateMachine` - the last two in both twins as well.
+
+The rule, and it is the design content of this phase: **a reset resets registers, not wiring.**
+Callbacks (`on_byte`, `on_transmit`, the five I2C `on_*`), `GPIOPin` listeners, DREQ identity,
+alarm objects and `ADC.channel_values` all survive, because a chip reset does not unsolder the LED,
+unplug the UART consumer or change the voltage on ADC0. That is also what makes resetting *in
+place* safe for the `ExternalDevice`s and the `USBCDC` holding references into these objects - the
+same doctrine `hard_reset()` already had at the device level. `tests/test_chip_reset.py` asserts it
+directly, because a reset that cleared wiring would silently detach every device on the board while
+every register assertion still passed.
+
+`BasePeripheral` gained a documented no-op `reset()` (correct for read-only identity blocks like
+`SYSINFO`/`TBMAN`) - but deliberately **not** the `Peripheral` Protocol, which is the *bus*
+contract and is also implemented by `native/_pio.pyx`'s `cdef class`, which cannot inherit the base.
+
+**5.2 SRAM stays untouched** (D6), asserted.
+
+**Observable 1 - a pad left driving is released.** Live, MicroPython v1.23.0: a guest drives GPIO15
+high (`FUNCSEL=0x5, OE=1`, pin reads HIGH), calls `machine.reset()`, and comes back with
+`FUNCSEL=0x1f, OE=0, pad=0x36` - an LED left on goes dark, which is what silicon does.
+
+**Observable 2 - CircuitPython brings the CYW43439 back up on a Pico W.** This is where D7's own
+note ("resetting the pads is necessary but not sufficient") proved exactly right, and where a first
+attempt at this phase looked like it had passed and had not:
+
+| | before Phase 5 | pads reset only | pads + `WL_ON` |
+|---|---|---|---|
+| `[CYW43] Failed to start CYW43` | yes | **still yes** | no |
+| `wifi.radio.mac_address` | `00:00:00:00:00:00` | **still all zeros** | `00:10:18:00:00:02` |
+
+The middle column is the lesson: the firmware still *prints a MAC* when the chip is dead, so a
+check that only asserted "the probe produced output" passed while the emulation was still broken.
+`tests/chip_reset_run.py` asserts both halves.
+
+What closed it: `Cyw43439` now models **`WL_ON`** - `CYW43_DEFAULT_PIN_WL_REG_ON 23u`, "gpio pin to
+power up the cyw43 chip", from pico-sdk's own `boards/pico_w.h` - and drops `GSPIBus` back to its
+power-on state on that pin's falling edge (`GSPIBus.power_off()`, wiring preserved: `_data_pin` and
+`nat_bridge` survive, since cutting a regulator does not unsolder the chip). This is D7 working as
+designed rather than an exception to it: the external chip sees the reset **through the GPIO
+firmware drives**, exactly as the record argued, and `ExternalDevice` needed no new protocol method.
+
+*One prediction that did not survive.* `ci-circuitpython.yml` said CircuitPython **8.0.2**'s failure
+to re-enumerate after a chip reset was "almost certainly the peripheral/pad state a real reset
+clears and 0089's Phase 5 will". Re-measured after this phase: it still does not come back
+(`ahard_reset()` times out at 120 s). So Phase 5 is not the fix, the cause is still unknown, and the
+CI gate stays. Comment corrected in the workflow rather than left to mislead the next reader.
+
+*Known gaps, deliberately left:*
+
+- **The core is reset on every path**, including a watchdog reset that selected no PSM domain at
+  all. Broader than the hardware, and the one place this phase knowingly is: with PROC0 unselected
+  the emulated CPU would run on into the reset it just requested, which is the hang
+  `BaseDevice._on_watchdog_trigger()` exists to prevent. Written on `RP2040.reset()` itself.
+- **Still unreset**: `xosc`/`rosc` (deliberately - `watchdog_reboot()` excludes them too), the RTC,
+  and `busctrl`/`syscfg`/`sysinfo`/`tbman`/`ssi`/`xip_ctrl`, which have no `reset()` of their own
+  yet. Named in `RP2040.reset()`'s docstring rather than left to be discovered.
+- **The TIMER's count** does not restart, because it reads from the simulation clock rather than
+  from the block. A real `TIMER` restarts from zero. Unchanged by this phase, now written down.
+- **CircuitPython 8.0.2**, above.
+
+*Not touched:* Phase 6 - the documentation pass.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md
