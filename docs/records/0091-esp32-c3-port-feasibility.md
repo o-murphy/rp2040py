@@ -122,3 +122,77 @@ But it is not a "port" - it is a second chip sharing a harness that currently ha
 so the abstraction epic comes first. And if the motivation were ever "WiFi on a cheaper chip",
 C3 is the *worse* target despite the hardware saying the opposite - because here, an external
 radio with a derivable bus protocol is a feature.
+
+
+## Addendum (2026-08-20): would a C3 emulator run *faster*, and two claims now sourced
+
+Asked as a follow-up to this record: RV32IMC is a simpler, more regular ISA than Thumb-2 - would
+emulating it beat the Cortex-M0+? Answered here rather than in chat because the reasoning leans
+entirely on numbers this project already measured.
+
+**Verdict: no, and end-to-end it would very likely be slower. Speed is not a reason to build this.**
+
+*Per instruction: a wash.* RISC-V decodes more regularly (fixed field positions), but the C
+extension means variable length - checking the low two bits before every fetch, and 32-bit
+instructions that can sit at 2-byte alignment. Roughly cancels out.
+
+*Per unit of useful work: RV32IMC modestly ahead.* Two reasons, and the first matters more than it
+looks. **32 registers against ARMv6-M's effective eight** means fewer spills, and a spill here is
+not a register move - it is a call into `read_uint32`/`write_uint32` with its range-compare chain,
+which is one of the most expensive things this emulator does. Second, the **M extension has
+hardware divide**; the M0+ has none, so a dividing guest either runs a software routine or goes
+through the RP2040's SIO divider (which `sio.py` models with real per-access work).
+
+*End-to-end - time to a usable REPL - C3 loses*, and this is the half that decides it:
+
+- **The ROM cannot be skipped.** This emulator starts at `FLASH_START_ADDRESS` and never runs the
+  RP2040 bootrom's boot path at all. On C3 the flash window does not exist until the second-stage
+  bootloader programs the MMU, so there is nowhere to jump to - the ROM runs, for real. That is the
+  same blocker as "Gap 1" above, seen from the performance side.
+- **Heavier firmware** on the way up, and **160 MHz against 125** - 28% more instructions for the
+  same wall-clock fidelity.
+
+*And the ISA is not where the time goes anyway.* [0013](0013-cython-core.md) measured the batch
+loop itself at **43-47% of profiled time even with a fully native CPU core and bus** - which is why
+[0034](0034-execute-batch-native-port.md) ported it. That cost is ISA-independent. The harness
+dominates; changing the guest architecture moves a smaller lever than changing the host loop did.
+
+### XIP versus MMU, priced
+
+The one place a C3 port pays on the hottest path in the emulator - every instruction fetch goes
+through `read_uint16()`. Today that is a range compare, an AND, and a buffer read: all four XIP
+mirrors fold onto one array by masking, and [0052](0052-xip-ctrl-registers.md) models `XIP_CTRL`'s
+registers and no cache at all, so there is zero per-access bookkeeping.
+
+A C3 needs `page = (addr - window) >> 16; phys = table[page] * 64K + (addr & 0xFFFF)` instead. But
+this is **engineering, not a wall**: instruction fetch has enormous locality, so caching the last
+translation makes the common case a single "same page?" compare, and a flat 256-entry array (16 MB
+/ 64 KB) indexed by page number gets it to about the cost of the mask. The cache itself needs no
+model, by 0052's own argument - reads return flash contents either way; only invalidation on flash
+*writes* would need care, and reads and writes already share one array here.
+
+So the MMU is a real tax that can be engineered down to near parity. What cannot be engineered away
+is the boot-sequencing dependency above.
+
+### Two claims from this record, now actually sourced
+
+The Confidence section says every C3 claim here is unsourced general knowledge. Two are no longer:
+
+- **GDMA exists** - `SOC_GDMA_SUPPORTED 1` / `SOC_AHB_GDMA_SUPPORTED 1`, plus `SOC_AES_GDMA`,
+  `SOC_SHA_GDMA`, `SOC_ADC_DMA_SUPPORTED`, in ESP-IDF's own
+  `components/soc/esp32c3/include/soc/soc_caps.h`. Worth recording because the API reference has
+  **no public GDMA page** for C3 (IDF exposes it through the private `esp_private/gdma.h` and drives
+  it from the SPI/I2S/crypto drivers), so "no DMA driver documented" reads like "no DMA" and is not.
+- **RMT exists and PIO does not** - "Remote Control Transceiver (RMT)" is in the C3 peripheral API
+  index; nothing PIO-shaped is.
+
+Method worth reusing for the rest of this record: `soc_caps.h` per target is the cheapest
+authoritative answer to "does this chip have X", and it is one `gh api` call.
+
+*One correction to the PIO row above, while here:* dropping PIO removes a real cost, but a smaller
+one than the raw profile suggests. The ~55% of profiled time PIO once took was a window where it was
+actively driving CYW43's gSPI; since [0063](0063-pio-clkdiv-and-delay-cycles.md) an idle PIO costs a
+single integer compare per instruction. What disappears on C3 is the peak under load, not a
+standing tax - and it disappears twice over, since an on-die radio means there is no bit-banged bus
+to decode at all.
+
