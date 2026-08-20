@@ -32,7 +32,14 @@ GPIO = 15
 async def run_pads(image: str) -> int:
     board = resolve_board_spec("pico", MICROPYTHON, image)
     print(f"Loading uf2 image {board.image}")
-    async with MicroPythonDevice(board=board) as device:
+    # astart() explicitly, not `async with`: the context manager boots with BaseDevice's default
+    # 30s timeout, which is not the budget the rest of this script runs on. Measured 2026-08-20:
+    # a CircuitPython pico_w boot is ~27s, so that default left a three-second margin and CI
+    # eventually lost the coin flip on it (a red "CYW43 comes back after a chip reset" whose
+    # traceback was a boot timeout, not a reset failure).
+    device = MicroPythonDevice(board=board)
+    await device.astart(timeout=TIMEOUT)
+    try:
         mcu = device.mcu
         await device.aexec(f"from machine import Pin\np = Pin({GPIO}, Pin.OUT)\np.on()", timeout=TIMEOUT)
         pin = mcu.gpio[GPIO]
@@ -63,6 +70,9 @@ async def run_pads(image: str) -> int:
         if fsel != 0x1F or oe:
             print("FAILED: the pad kept driving across the reset")
             return 1
+    finally:
+        device.stop()
+
     print("PAD RESET TEST PASSED.")
     return 0
 
@@ -71,7 +81,14 @@ async def run_cyw43(image: str) -> int:
     board = resolve_board_spec("pico_w", CIRCUITPYTHON, image)
     print(f"Loading uf2 image {board.image}")
     probe = "import wifi\nprint('mac', wifi.radio.mac_address)"
-    async with MicroPythonDevice(board=board, circuitpython=True) as device:
+    # astart() explicitly, not `async with`: the context manager boots with BaseDevice's default
+    # 30s timeout, which is not the budget the rest of this script runs on. Measured 2026-08-20:
+    # a CircuitPython pico_w boot is ~27s, so that default left a three-second margin and CI
+    # eventually lost the coin flip on it (a red "CYW43 comes back after a chip reset" whose
+    # traceback was a boot timeout, not a reset failure).
+    device = MicroPythonDevice(board=board, circuitpython=True)
+    await device.astart(timeout=TIMEOUT)
+    try:
         stdout, stderr = await device.aexec(probe, timeout=TIMEOUT)
         print(f"before reset: {stdout!r}")
         if b"mac" not in stdout:
@@ -91,6 +108,9 @@ async def run_cyw43(image: str) -> int:
         if b"mac b'\\x00\\x00\\x00\\x00\\x00\\x00'" in stdout or b"mac" not in stdout:
             print(f"FAILED: WiFi came back with a null MAC, i.e. not really up: {stdout!r} {stderr!r}")
             return 1
+    finally:
+        device.stop()
+
     print("CYW43-AFTER-RESET TEST PASSED.")
     return 0
 
