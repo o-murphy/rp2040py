@@ -162,6 +162,16 @@ jobs:
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
+      # 0088 section 1: the CDC control lines can be changed after enumeration, not only asserted
+      # once during it. MicroPython exposes neither DTR/RTS nor the line coding to Python
+      # (`tud_cdc_line_state_cb()` only arms its TX flush delay), so what this guards is the
+      # regression that would matter - the requests are accepted and the console survives them,
+      # on the same request path every boot's enumeration uses.
+      - name: Test MicroPython CDC control lines ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/control_lines_run.py --image ${{ matrix.micropython_version.tag }}
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
       - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }}
         run: |
           . scripts/ci-common.sh

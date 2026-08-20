@@ -275,6 +275,32 @@ class BaseDevice:
         self.simulator.bind_loop()
         await _await(self.start_async(timeout), timeout)
 
+    def set_control_lines(self, *, dtr: bool, rts: bool) -> None:
+        """Assert or drop the CDC control lines (DTR/RTS) on the emulated USB link.
+
+        The host half of what a terminal does when it opens or closes the port, and guest-visible:
+        CircuitPython's `supervisor.runtime.serial_connected` and MicroPython's TX-flush arming
+        both follow DTR (0088 section 1). Enumeration already asserts both, so this is only for
+        *changing* them afterwards.
+
+        Fire-and-forget, and handed to the engine-room loop rather than applied inline, because it
+        poke*s* emulated registers from whatever thread the caller happens to be on - 0030's rule,
+        the same one `ResetButton` follows. There is deliberately no awaitable form: the request's
+        effect is guest state, so what proves it landed is asking the guest, not a Future here.
+        """
+        self.simulator.schedule_threadsafe(lambda: self.cdc.set_control_lines(dtr=dtr, rts=rts))
+
+    def set_line_coding(self, baud_rate: int, *, stop_bits: int = 0, parity: int = 0, data_bits: int = 8) -> None:
+        """Send CDC `SET_LINE_CODING` - baud rate, stop bits, parity, data bits.
+
+        Emulated USB: the baud rate is guest-visible state, not a wire speed, and nothing here
+        moves faster or slower for it. Same threading contract as `set_control_lines()`; see
+        `USBCDC.set_line_coding()` for why the 1200-bps touch is not a reset trigger in this tree.
+        """
+        self.simulator.schedule_threadsafe(
+            lambda: self.cdc.set_line_coding(baud_rate, stop_bits=stop_bits, parity=parity, data_bits=data_bits)
+        )
+
     def stop(self) -> None:
         """Halt the emulator. Safe to call even if `astart()`/`start_async()` was never called -
         synchronous and non-blocking (a plain flag flip - see `Simulator.stop()`), so there's no
