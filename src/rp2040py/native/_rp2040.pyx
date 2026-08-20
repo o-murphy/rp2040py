@@ -267,15 +267,46 @@ cdef class RP2040:
 
         self.reset()
 
+    def enter_reset(self, *, from_watchdog: bool = False) -> None:
+        """Put the chip *into* reset: every block this reset covers goes to its reset values, and
+        the USB controller's `on_reset` fires so whatever is attached to the bus clears itself.
+
+        The chip-level half of a reset, owned by the chip (0057's option B). See _rp2040.py's twin for the full rationale - the two
+        must not drift. `BaseDevice` used to
+        run this sequence itself, which meant anything holding a bare `RP2040` - the `run`
+        subcommand, a board file, an `ExternalDevice` that only ever gets `attach(rp2040)` - could
+        reset the chip and leave the host side of the USB link stale. What the device layer still
+        owns is the *cause* bookkeeping and the awaitable form, both of which need things this
+        object does not have.
+
+        `from_watchdog` picks the WDSEL-gated domain set; see `reset()`. The `on_reset`
+        notification is **not** gated by it: the USB block is only register-reset when WDSEL
+        selects it, but a chip reset drops the device off the host's bus either way, and
+        `hard_reset()`'s guarantee (0089) must not become conditional on what a guest wrote there.
+        Does not start execution again - `leave_reset()` is that, and the RUN pin needs the two
+        separable because a held button stays in the first."""
+        self.reset(preserve_flash=True, from_watchdog=from_watchdog)
+        if self.usb_ctrl.on_reset:
+            self.usb_ctrl.on_reset()
+
+    def leave_reset(self) -> None:
+        """Release the chip: point the core at flash's entry point, where the bootrom would have
+        left it, and let it run. The other half of `enter_reset()`."""
+        self.core.pc = FLASH_START_ADDRESS
+
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
 
     def _default_run_pin_held(self):
-        self.logger.warning(LOG_NAME, "RUN pin pulled low, but no reset handler provided")
+        """RUN pulled low with nothing installed over it: the chip resets itself. See
+        _rp2040.py's twin."""
+        self.enter_reset()
 
     def _default_run_pin_reset(self) -> None:
-        self.logger.warning(LOG_NAME, "RUN pin released, but no reset handler provided")
+        """RUN released with nothing installed over it: the chip boots. The counterpart of
+        `_default_run_pin_held()`."""
+        self.leave_reset()
 
     @property
     def run_pin_low(self):
