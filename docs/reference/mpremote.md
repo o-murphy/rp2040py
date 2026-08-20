@@ -168,7 +168,7 @@ combination outside what CI can assume either):
 | `mpremote connect ... fs cp/ls/cat/mkdir/rmdir/rm/touch/tree/sha256sum ...` | ✅ | `fs cp` over `socket://` is covered by an automated test. |
 | `mpremote connect ... mount ./local_dir` | ✅ | Including running a script straight out of the mounted directory. |
 | `mpremote connect ... repl` (bare interactive REPL) | ✅ over `--pty`; ✅ over `--tcp-port` via `rp2040py mpremote` | The real `mpremote` binary crashes over `--tcp-port`'s `socket://` transport - see "What doesn't work" below - unless run through `rp2040py mpremote` (see "mpremote proxy" above), which patches around it. |
-| `mpremote connect ... soft-reset` / Ctrl-D at the raw-REPL prompt | ✅ | Handled entirely by firmware's own soft-reset code - no emulator-side reset needed. |
+| `mpremote connect ... soft-reset` / Ctrl-D at the raw-REPL prompt | ✅ | Handled entirely by firmware's own soft-reset code - no emulator-side reset needed. **It restarts the VM but does not re-run `main.py`/`code.py`** - see "Soft reset: raw prompt vs friendly prompt" below. |
 | `mpremote connect ... resume` | ✅ | |
 | `mpremote connect ... rtc` | ✅ | |
 | `mpremote connect ... reset` | ✅ | Triggers a real device reset (see below) - reconnect with a fresh `mpremote` invocation afterward, same as a real board re-enumerating over USB. |
@@ -177,10 +177,48 @@ combination outside what CI can assume either):
 
 `reset`/`bootloader` are implemented by `RPWatchdog.on_watchdog_trigger` (wired up in
 `BaseDevice`): `machine.reset()`/`machine.bootloader()` write the watchdog's TRIGGER bit on real
-hardware, which now resets the emulated CPU core and USB-CDC enumeration state in place and jumps
+hardware, which resets the emulated CPU core and USB-CDC enumeration state in place and jumps
 back to flash's entry point - preserving flash/filesystem content and every externally-referenced
 peripheral object identity (no reconstruction), rather than leaving the emulated CPU spinning
 forever (the behavior before this was implemented).
+
+That handler is now one caller of a single hard-reset owner rather than the only reset path
+([record 0089](../records/0089-one-reset-for-every-trigger.md)). The others, reaching the same
+sequence: a **RESET button** (`external/reset_button.py` - `press()` holds the chip in reset,
+`release()` boots it), and a **host-side** `device.ahard_reset()`/`hard_reset_async()`. Since that
+record's Phase 5 the reset also covers what a real one covers - pads, IO, SIO, clocks and the
+peripheral blocks, gated by `PSM.WDSEL`/`RESETS.WDSEL` exactly as hardware gates them - so a GPIO
+the guest left driving is released, and the firmware reports the right `machine.reset_cause()`
+for the trigger that actually fired.
+
+### Soft reset: raw prompt vs friendly prompt
+
+A soft reset restarts the VM without resetting the chip, and **which prompt it is sent at decides
+whether the startup script re-runs**. Measured against real MicroPython v1.23.0 and CircuitPython
+10.2.1, byte for byte (0089's Appendix, point 1) - both families behave identically:
+
+| Ctrl-D sent at... | firmware prints | `main.py`/`code.py` re-runs? |
+| --- | --- | --- |
+| the **raw** prompt (what `mpremote soft-reset` does) | `OK`, then `MPY: soft reboot` / `soft reboot`, then the raw banner | **no** |
+| the **friendly** prompt | `MPY: soft reboot` / `soft reboot`, then the script's own output | **yes** |
+
+This matches both firmwares' source: `pyexec_raw_repl()` answers an empty line + Ctrl-D with `OK`
+and `PYEXEC_FORCED_EXIT`, and the main loop only re-runs the startup script when
+`pyexec_mode_kind == PYEXEC_MODE_FRIENDLY_REPL`.
+
+So `mpremote soft-reset` is not a way to re-run a script you just uploaded. To do that from the
+device API, ask the guest to restart itself and let the *firmware* decide - one line, no
+emulator-side support (measured: both return cleanly and the console stays usable):
+
+```python
+await device.aexec("import machine\nmachine.soft_reset()")  # MicroPython
+await device.aexec("import supervisor\nsupervisor.reload()")  # CircuitPython
+```
+
+There is deliberately **no** `asoft_reset()` on the device API: a soft reset is bytes the firmware
+already answers, from paths that all already exist, so a second way to express it was built,
+verified and then dropped (0089's Phase 3). A *hard* reset - which does re-run everything, because
+the chip reboots - is `ahard_reset()`.
 
 ## What doesn't work
 

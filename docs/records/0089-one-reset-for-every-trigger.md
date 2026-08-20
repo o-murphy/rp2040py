@@ -1,7 +1,11 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phases 0-2, 4 and 5 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20);
-  Phase 6 not started.** Design settled and the
+- Status: **Done (2026-08-20)** - every phase landed except Phase 3, which was built, live-verified
+  and then dropped on the maintainer's call (a soft reset needs no API of its own). Open only for
+  the "Known gaps" each phase wrote down against itself, listed in the Progress log: the emulated
+  device stays enumerated while RUN is held, a button-driven reset has no awaitable form, several
+  register blocks still have no `reset()` of their own, and CircuitPython 8.0.2 still does not
+  re-enumerate after a chip reset (Phase 5 was expected to fix that and did not). Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -540,7 +544,7 @@ changes what an existing, working reset does. It is also the phase that makes D7
 merely reasonable - until the pads reset, "the firmware re-drives its external devices on the way
 up" is a claim the CYW43 measurement contradicts.
 
-### Phase 6 - documentation
+### Phase 6 - documentation - **done (2026-08-20)**
 
 6.1 `docs/reference/mpremote.md`: the `reset`/`soft-reset` rows gain the raw-vs-friendly
 distinction (D2) - today they say "handled entirely by firmware's own soft-reset code" without
@@ -1076,6 +1080,33 @@ CI gate stays. Comment corrected in the workflow rather than left to mislead the
 - **CircuitPython 8.0.2**, above.
 
 *Not touched:* Phase 6 - the documentation pass.
+
+### Phase 6 - done (2026-08-20)
+
+**6.1 `docs/reference/mpremote.md`.** Its `soft-reset` row said the firmware handles it and stopped
+there, which is true and misleading: a new "Soft reset: raw prompt vs friendly prompt" section now
+carries D2's measured table (both families, byte for byte) and states the consequence plainly -
+`mpremote soft-reset` restarts the VM but **does not** re-run `main.py`/`code.py`, so it is not a
+way to run a script you just uploaded. The one-line `aexec()` alternative is written out, together
+with why there is deliberately no `asoft_reset()` (Phase 3). The `reset`/`bootloader` paragraph now
+names all three triggers rather than only the watchdog one, and says what Phase 5 widened.
+
+**6.2 `docs/reference/external-devices-and-boards.md` + the skill.** A "When the device acts on the
+chip, not on a pin" section built around `ResetButton`, with its `attach()`/`press()`/`release()`
+trimmed to the shape worth copying and the three things that shape is *for*: a press is a level not
+a pulse, `schedule_threadsafe()` is mandatory for anything driven while the simulation runs, and the
+device does not perform the reset (the hook does). It closes with the answer to "how does an
+attached device see a chip reset" - it does not get a callback, it watches the GPIO firmware drives,
+`Cyw43439`/`WL_ON` being the worked example (D7 + Phase 5). The skill gained the matching template
+row and a testing row pointing at `tests/test_reset_button.py`'s "scheduled but not yet applied"
+assertion.
+
+**6.3 Statuses.** This record's own, above, and the tracker rows for [0057] (closed in full by
+Phase 4), [0087] and [0088].
+
+*What this phase deliberately did not do:* re-explain the reset design in the reference docs. The
+records carry the reasoning; the reference docs get the parts a *user* needs - what a command does,
+and what shape to copy.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

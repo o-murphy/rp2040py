@@ -160,13 +160,21 @@ the future.
 `peripherals/watchdog.py`'s `RPWatchdog.on_watchdog_trigger` (defaulted to
 `_default_watchdog_trigger`, overridden by `BaseDevice.__init__` for both `MicroPythonDevice` and
 `KalumaDevice`) performs a real in-place device reset when `machine.reset()`/`machine.bootloader()`
-write the `CTRL` register's `TRIGGER` bit: `CortexM0Core.reset()` (sp/pc/cycles plus
-interrupt/exception state, both the pure-Python and `rp2040py.native` Cython ports),
-`RPPWM.reset()`/`RPDMA.reset()`, and `USBCDC.reset()`/`RPUSBController.reset()` all run, then
-execution jumps back to flash's entry point - `RP2040.reset(preserve_flash=True)`, a new parameter
-(existing callers unaffected, still wipe flash by default). Every externally-referenced peripheral
-object (notably `mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct
-reference to) keeps its identity rather than being reconstructed.
+write the `CTRL` register's `TRIGGER` bit, then execution jumps back to flash's entry point -
+`RP2040.reset(preserve_flash=True)`, a parameter added for this (construction-time callers
+unaffected, still wipe flash by default). Every externally-referenced peripheral object (notably
+`mcu.usb_ctrl`, which `BaseDevice.cdc = USBCDC(mcu.usb_ctrl)` holds a direct reference to) keeps
+its identity rather than being reconstructed.
+
+Since [record 0089](../records/0089-one-reset-for-every-trigger.md) that handler is **one caller of
+one owner**, not the only reset path - a RESET button (`external/reset_button.py`, a real RUN-pin
+level) and a host-side `device.ahard_reset()` reach the same sequence - and what the sequence
+covers grew from `core`/`pwm`/`dma`/`ppb` to what a real reset covers: the pads and IO, SIO, the
+clocks, UART/SPI/I2C/PIO/TIMER/ADC and USB, gated by `PSM.WDSEL`/`RESETS.WDSEL` the way hardware
+gates them. Two consequences worth knowing when comparing against upstream, since neither is
+modelled there at all: a GPIO the guest left driving is released by a reset, and the firmware reads
+back the reset *cause* the trigger actually had (`machine.reset_cause()` /
+`microcontroller.cpu.reset_reason`).
 
 Confirmed directly against upstream's `src/peripherals/watchdog.ts`: its `RPWatchdog` has the
 identical register layout (`CTRL`/`LOAD`/`REASON`/`SCRATCH0-7`/`TICK`) and the same `TRIGGER`-bit

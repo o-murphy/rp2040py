@@ -71,6 +71,53 @@ richer end of the same spectrum) and `Cyw43439` build on - `rp2040.gpio[n]` for 
 or the relevant peripheral object (`rp2040.spi[n]`, ...) for anything else your device needs to
 watch or drive.
 
+### When the device acts on the chip, not on a pin
+
+`ResetButton` (`external/reset_button.py`) is the worked example for the case `attach(rp2040)` does
+*not* obviously cover: the RESET button pulls the RP2040's **RUN** pin, which is not a GPIO, is not
+memory-mapped, and has no pad, no pull configuration and no register. There is nothing in
+`rp2040.gpio[n]` to grab.
+
+The answer is a level plus a hook on `RP2040` itself, and it is worth copying if you ever model
+something at chip level ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 4):
+
+```python
+def attach(self, rp2040: "RP2040") -> None:
+    self._rp2040 = rp2040  # no initial drive: the board's own pull-up holds RUN high
+
+
+def press(self) -> None:  # RUN low - the chip stops executing and stays stopped
+    self._drive(True)
+
+
+def release(self) -> None:  # RUN high - *this* edge resets and boots the chip
+    self._drive(False)
+
+
+def _drive(self, low: bool) -> None:
+    mcu = self._mcu
+    mcu.schedule_threadsafe(lambda: mcu.set_run_pin(low=low))
+```
+
+Three things in that shape are the point:
+
+- **A press is a level, not a pulse.** The board grounds RUN for as long as the button is held, so
+  `press()` holds the chip in reset (nothing executes, no simulated time passes) and `release()` is
+  what boots it. A single `reset()` method would model a tap and quietly lie about a hold.
+- **`schedule_threadsafe()`, not a direct call.** Unlike `BootselButton` - pressed before
+  `start_execution()` - a RESET button is pressed *while the simulation runs*, from whatever thread
+  the caller is on. An `ExternalDevice` may not touch engine-room state from another thread
+  ([record 0030](../records/0030-external-device-concurrency.md)); this is the mechanism for that, and
+  it applies to any device a human drives at runtime.
+- **The device does not perform the reset.** `RP2040.on_run_pin_reset` is a hook `BaseDevice`
+  installs its own hard reset into - so the device reaches the full sequence, including the USB
+  half (`cdc.reset()`) it could never reach on its own.
+
+The same pattern answers "how does an attached device see a chip reset". It does not get a
+callback - it sees the GPIO the firmware drives, exactly as on real hardware. `Cyw43439` listens on
+`WL_ON` and drops its bus to power-on state when that line falls, which is what happens once a
+reset releases the pads (0089's D7 and Phase 5).
+
 Attaching your own device to an existing board (scenario 1 above) needs no new library code -
 `demo/eink_run.py` is a complete worked example:
 
