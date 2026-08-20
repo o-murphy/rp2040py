@@ -14,18 +14,21 @@ appended verbatim to that record as an `## Appendix: folded-in working note ...`
 records still cite the pre-fold-in `docs/tasks/<name>.md` paths - the tracker's "Conventions"
 section maps each one to the record that now carries it.
 
-Two records track the active work - check both before assuming what's done:
+**What is currently being worked on is not listed here - read the tracker.** Its
+"In progress / Proposed" section is the only maintained answer, newest first, so the top rows are
+the active work; "Implemented" below it is everything already landed. A summary duplicated into
+this file would go stale within a session or two, which is exactly what happened to the one that
+used to sit here (it still named 0026/0027 as "the active work" long after both closed).
 
-- [docs/records/0026-main-thread-asyncio.md](docs/records/0026-main-thread-asyncio.md) - engine-room
-  concurrency model. **Done**, all 5 phases landed and verified.
-- [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) - CYW43439/Pico W WiFi emulation.
-  In progress: steps 0-3g done and live-boot-verified against real MicroPython Pico W firmware
-  (v1.23.0/v1.28.0); step 4 (bridging to a real network) not started. The record's own header
-  states exactly which step is current - don't assume this summary stays accurate as work
-  continues.
+From there, drill down rather than infer:
 
-Records keep a "Progress log"/inline status markers per phase/step - read those rather than
-assuming from the filename alone whether something landed.
+- Each record's own header carries its `Status:` line, and multi-phase records keep a
+  "Progress log" plus inline per-phase/step status markers. Read those - a filename, a merged
+  commit, or a `[x]` in the tracker does not tell you which phase is current.
+- A `[ ]` row can still mean "code shipped, record has open gaps against itself" (the tracker's
+  Conventions section says so explicitly) - so check the record before treating a row as unstarted.
+- `docs/tasks/` only exists while some investigation is still open; an absent directory means
+  there are none, not that something is missing.
 
 ## Verification
 
