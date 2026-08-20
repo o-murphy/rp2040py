@@ -1,6 +1,6 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phase 0 landed (2026-08-20); Phases 1-6 not started.** Design settled and the
+- Status: **Phases 0-1 landed (2026-08-20); Phases 2-6 not started.** Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -404,7 +404,7 @@ and later from the reset path; the CLI keeps working unchanged.
 
 *Closes:* [0087] item 4. *Unblocks:* Phases 1-4.
 
-### Phase 1 - reset-cause fidelity
+### Phase 1 - reset-cause fidelity - **done (2026-08-20)**
 
 1.1 `RPWatchdog` grows a `reset()` (clears `_reason` and `scratch_data`) - what a chip-level reset
 does to it, and nothing else does.
@@ -689,6 +689,57 @@ out now arrives from `astart()` alone.
 
 *Not touched:* everything in Phases 1-6. No `ResetCause`, no host-side entry point, no RUN pin, and
 `RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`.
+
+### Phase 1 - done (2026-08-20)
+
+**1.1 `RPWatchdog.reset()`** clears `_reason` and the eight scratch registers - and is deliberately
+*not* called on the watchdog's own path, which is the whole point: on silicon the watchdog block
+survives a watchdog reboot, which is why REASON is readable afterwards at all and why
+`watchdog_enable()`'s `0x6ab73121` in SCRATCH[4] lives long enough for
+`watchdog_enable_caused_reboot()` to tell a timeout from a deliberate reboot. Scoped to the
+reset-*cause* state; the block's timer/alarm/tick enables stay Phase 5's business.
+
+**1.2 `RPVREGAndChipReset.record_reset_cause(flag)`** sets exactly one of `HAD_POR`/`HAD_RUN`/
+`HAD_PSM_RESTART` (they report the *last* reset, so they are mutually exclusive) and preserves
+`PSM_RESTART_FLAG`, which belongs to the bootrom's write-1-to-clear handshake from [0050].
+
+**1.3 `ResetCause`** (`POWER_ON`/`RUN_PIN`/`WATCHDOG`, exported from `rp2040py.device`) plus
+`BaseDevice.hard_reset(*, cause=ResetCause.RUN_PIN)` applying §1.3's table:
+`_on_watchdog_trigger()` passes `WATCHDOG` (record nothing - the absence *is* the signature),
+everything else clears the watchdog and records a chip-level cause. The recording happens *after*
+`mcu.reset()`, so Phase 5's wider `RP2040.reset()` cannot later wipe the cause it just set.
+
+One structural change this needed: **`RP2040` now names `vreg_and_chip_reset`** (both twins -
+`_rp2040.py` and `native/_rp2040.pyx`), instead of constructing it anonymously inside the
+`peripherals` dict, so `hard_reset()` reaches it the same way it already reaches `mcu.watchdog`
+rather than looking a peripheral up by base address. No `.pxd`/`.pyi` change needed (the native
+class already carries a `__dict__`), but the extension does have to be rebuilt - `uv sync
+--reinstall` - since pre-commit's own `uv sync` does not rebuild an editable native package on a
+`.pyx` edit.
+
+*Tests:* seven new unit tests in `tests/test_watchdog_reset.py` covering every row of §1.3's table
+(fresh device = `HAD_POR`/`REASON=0`; watchdog keeps `FORCE`/`TIMER` + the SCRATCH[4] magic and
+leaves `CHIP_RESET` alone; RUN pin clears both and sets `HAD_RUN`; the default is the RUN pin;
+`POWER_ON` records `HAD_POR`; `PSM_RESTART_FLAG` survives all of it).
+
+*Live-boot verified,* and now permanent CI steps rather than one-off probes:
+
+- `tests/micropython/main-reset-cause.py` (a new littlefs image in `ci-micropython.yml`, run with
+  `--expect-text "RESET CAUSE OK"` across the whole version x runtime matrix) boots, sees
+  `PWRON_RESET`, calls `machine.reset()`, and must come back reporting `WDT_RESET`. Measured here
+  on MicroPython v1.23.0: `reset_cause() == 3`, with `CHIP_RESET` still `0x100` (`HAD_POR`) and
+  `REASON == 0x2` (`FORCE`) - the §1.3 row exactly. It prints in a loop, because `main.py` runs
+  before USB enumerates and a single print at boot is gone before any host attaches.
+- `tests/circuitpython/main-reset-cause.py` (new step in `ci-circuitpython.yml`, all three tags)
+  asserts `microcontroller.cpu.reset_reason is ResetReason.POWER_ON` over the raw REPL. Measured
+  here on CircuitPython 8.0.2. Power-on only: a `microcontroller.reset()` would drop USB mid-exec
+  with nothing waiting for the re-enumeration until Phase 2.
+
+*Closes:* [0057]'s "what does `WATCHDOG.REASON` read after a RUN reset?" - the registers now behave
+as its answer says, ahead of the RUN pin that will pull them (Phase 4).
+
+*Not touched:* Phases 2-6. There is still no host-side entry point, no soft-reset API, no RUN pin,
+and `RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

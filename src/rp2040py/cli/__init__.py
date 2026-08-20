@@ -573,10 +573,14 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
 
     _logger.info("Loading uf2 image: %s", board.image)
     _maybe_exit_after_fetch(args, image_path=Path(board.image), bootrom_source=args.bootrom)
-    littlefs = (
-        args.littlefs if not args.circuitpython and args.littlefs is not None and Path(args.littlefs).exists() else None
-    )
-    fat12 = args.fat12 if args.circuitpython and args.fat12 is not None and Path(args.fat12).exists() else None
+
+    littlefs = None
+    fat12 = None
+
+    if args.circuitpython:
+        fat12 = args.fat12 if args.fat12 and Path(args.fat12).exists() else None
+    else:
+        littlefs = args.littlefs if args.littlefs and Path(args.littlefs).exists() else None
 
     if littlefs is not None:
         _logger.info("Loading littlefs image: %s", littlefs)

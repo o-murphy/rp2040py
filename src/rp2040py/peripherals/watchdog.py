@@ -83,6 +83,25 @@ class RPWatchdog(BasePeripheral):
     def _default_watchdog_trigger(self) -> None:
         self.rp2040.logger.warning(self.name, "Watchdog triggered, but no reset handler provided")
 
+    def reset(self) -> None:
+        """Clear the reset-cause bookkeeping this block carries across a reboot: REASON and the
+        eight scratch registers.
+
+        Deliberately *not* called on the watchdog's own reset path. On real silicon the watchdog
+        block is not reset by a watchdog reboot - which is exactly why REASON still reads back the
+        bit that caused it, and why `watchdog_enable()`'s `0x6ab73121` magic in SCRATCH[4] survives
+        long enough for `watchdog_enable_caused_reboot()` to tell a timeout from a deliberate
+        `watchdog_reboot()`. A RUN-pin/power-on reset does reset the block, and CircuitPython
+        relies on the difference (`Processor.c`: "watchdog doesn't clear chip_reset, while
+        chip_reset clears the watchdog"). See docs/records/0089-one-reset-for-every-trigger.md
+        §1.3 for the full per-trigger table.
+
+        Scoped to the reset-*cause* state on purpose: the timer/alarm/tick enables this block also
+        owns are part of 0089's Phase 5 (the fuller `RP2040.reset()`), not of Phase 1.
+        """
+        self._reason = 0
+        self.scratch_data = [0] * 8
+
     def read_uint32(self, offset: int) -> int:
         if offset == CTRL:
             return (

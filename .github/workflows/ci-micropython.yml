@@ -45,6 +45,9 @@ jobs:
       - name: Create flash read/write test filesystem
         run: uv run rp2040py mklittlefs -o littlefs-flash-rw.img tests/micropython/main-flash-rw.py --main main-flash-rw.py
 
+      - name: Create reset-cause test filesystem
+        run: uv run rp2040py mklittlefs -o littlefs-reset-cause.img tests/micropython/main-reset-cause.py --main main-reset-cause.py
+
       - name: Upload littlefs images
         uses: actions/upload-artifact@v7
         with:
@@ -53,6 +56,7 @@ jobs:
             littlefs.img
             littlefs-spi.img
             littlefs-flash-rw.img
+            littlefs-reset-cause.img
           retention-days: 1
 
   test-micropython:
@@ -122,6 +126,15 @@ jobs:
 
       - name: Test MicroPython flash read/write ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
         run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs-flash-rw.img --expect-text "FLASH RW OK"
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
+      # docs/records/0089-one-reset-for-every-trigger.md's Phase 1: the guest boots, sees
+      # PWRON_RESET, calls machine.reset(), and must come back reporting WDT_RESET - i.e. the
+      # emulator kept the watchdog's own REASON across the reboot it caused, and did not forge a
+      # chip-level cause. A guest that never got PWRON first would reset-loop until this times out.
+      - name: Test MicroPython reset cause ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py micropython --image ${{ matrix.micropython_version.tag }} --littlefs littlefs-reset-cause.img --expect-text "RESET CAUSE OK"
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 

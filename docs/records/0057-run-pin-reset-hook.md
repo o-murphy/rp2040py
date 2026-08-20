@@ -209,7 +209,10 @@ open question:
   *"Check watchdog after chip reset since watchdog doesn't clear chip_reset, while chip_reset
   clears the watchdog"*), so `machine.reset_cause()` must read `1` (`PWRON`) and
   `microcontroller.cpu.reset_reason` must read `RESET_PIN` - the exact misreport this record warned
-  about, now with a table to implement against (0089 section 1.3).
+  about, now with a table to implement against (0089 section 1.3). **Implemented 2026-08-20** as
+  0089's Phase 1: `RPWatchdog.reset()`, `RPVREGAndChipReset.record_reset_cause()` and
+  `BaseDevice.hard_reset(cause=ResetCause.RUN_PIN)` already produce exactly these register values -
+  what is still missing for this record is the RUN pin that pulls them (0089's Phase 4).
 - **Does a RESET button need a fuller `RP2040.reset()`: yes, and it is 0089's Phase 5**, scoped by
   what the SDK itself asks for (`psm_hw->wdsel = PSM_WDSEL_BITS & ~(ROSC | XOSC)` - "reset
   everything apart from ROSC and XOSC"). SRAM stays uncleared, deliberately: a PSM reset resets the

@@ -11,9 +11,16 @@ import dataclasses
 import struct
 
 from rp2040py.boards import BOARDS
+from rp2040py.device.base_device import ResetCause
 from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.memory_map import FLASH_START_ADDRESS
-from rp2040py.peripherals.watchdog import CTRL, TRIGGER
+from rp2040py.peripherals.vreg_and_chip_reset import (
+    CHIP_RESET,
+    HAD_POR,
+    HAD_RUN,
+    PSM_RESTART_FLAG,
+)
+from rp2040py.peripherals.watchdog import CTRL, FORCE, REASON, SCRATCH4, TIMER, TRIGGER
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -117,3 +124,94 @@ def test_hard_reset_called_directly_runs_the_same_sequence(tmp_path):
     assert device.mcu.flash[0x100] == 0x42
     assert device.cdc._initialized is False
     assert device.mcu.usb_ctrl is usb_ctrl_before
+
+
+# -- reset cause (docs/records/0089-one-reset-for-every-trigger.md §1.3, Phase 1) ---------------
+# The table every trigger has to satisfy, because both firmwares expose it to user code
+# (`machine.reset_cause()` on MicroPython, `microcontroller.cpu.reset_reason` on CircuitPython).
+# WATCHDOG_MAGIC is what pico-sdk's `watchdog_enable()` writes to SCRATCH[4] and
+# `watchdog_enable_caused_reboot()` checks, i.e. how CircuitPython tells a timeout (WATCHDOG) from
+# a deliberate `watchdog_reboot()` (SOFTWARE) - both of which set REASON.
+WATCHDOG_MAGIC = 0x6AB73121
+
+
+def _chip_reset(device: MicroPythonDevice) -> int:
+    return device.mcu.vreg_and_chip_reset.read_uint32(CHIP_RESET)
+
+
+def test_a_fresh_device_reads_as_a_power_on_reset(tmp_path):
+    device = _make_device(tmp_path)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_watchdog_reset_keeps_its_own_reason_and_scratch_and_leaves_chip_reset_alone(tmp_path):
+    """The watchdog block is not reset by a watchdog reboot on real silicon - that is what makes
+    REASON readable afterwards at all, and what keeps watchdog_enable()'s magic alive long enough
+    to distinguish a timeout from a deliberate reboot."""
+    device = _make_device(tmp_path)
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    _trigger_watchdog(device)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == FORCE
+    assert device.mcu.watchdog.read_uint32(SCRATCH4) == WATCHDOG_MAGIC
+    assert _chip_reset(device) == HAD_POR  # unchanged - a watchdog reset does not touch it
+
+
+def test_watchdog_timeout_reports_timer_not_force(tmp_path):
+    device = _make_device(tmp_path)
+
+    device.mcu.watchdog.alarm.callback()  # what Timer32PeriodicAlarm fires on a missed feed()
+
+    assert device.mcu.watchdog.read_uint32(REASON) == TIMER
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_run_pin_reset_clears_the_watchdog_and_records_had_run(tmp_path):
+    """A RUN-pin reset resets the watchdog block too, so firmware must *not* keep reading the
+    previous watchdog reboot's REASON and misreport why it came up - 0057's own open question."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_RUN
+
+
+def test_hard_reset_defaults_to_the_run_pin(tmp_path):
+    """0089's D4: a host-side "reset the board" is what pressing RESET corresponds to physically,
+    and the alternative - leaving REASON at whatever the last watchdog write set - makes the guest
+    report stale history instead of this reset."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)
+
+    device.hard_reset()
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert _chip_reset(device) == HAD_RUN
+
+
+def test_power_on_reset_records_had_por(tmp_path):
+    device = _make_device(tmp_path)
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    device.hard_reset(cause=ResetCause.POWER_ON)
+
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_recording_a_cause_leaves_the_debugger_owned_psm_restart_flag_alone(tmp_path):
+    """PSM_RESTART_FLAG is the block's one writable bit, cleared by the bootrom's write-1-to-clear
+    handshake (record 0050) - a reset cause must not forge or clear it."""
+    device = _make_device(tmp_path)
+    device.mcu.vreg_and_chip_reset.chip_reset |= PSM_RESTART_FLAG
+
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    assert _chip_reset(device) == HAD_RUN | PSM_RESTART_FLAG

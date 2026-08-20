@@ -63,6 +63,14 @@ jobs:
       - name: Test CircuitPython ${{ matrix.tag }} boots
         run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --expect-text "Adafruit CircuitPython"
 
+      # The CircuitPython half of 0089's Phase 1 reset-cause check (ci-micropython.yml has the
+      # other). Power-on only: this runs over the raw REPL, so a microcontroller.reset() would drop
+      # USB mid-exec with nothing waiting for the re-enumeration until 0089's Phase 2. It still
+      # guards the row that matters most here - CHIP_RESET.HAD_POR with a clear WATCHDOG.REASON is
+      # what makes a fresh boot report POWER_ON rather than a stale SOFTWARE/WATCHDOG.
+      - name: Test CircuitPython reset reason ${{ matrix.tag }}
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} tests/circuitpython/main-reset-cause.py
+
       # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step (33s measured
       # locally, 2026-08-16), and soft-failing for
       # the same reason: it opens a real TCP connection and a real DNS query to the internet
