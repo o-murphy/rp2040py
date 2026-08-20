@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **A chip reset now resets the chip.** `RP2040.reset()` covered `core`/`pwm`/`dma`/`ppb` only;
-  it now covers the pads and IO, SIO, the clocks, UART/SPI/I2C/PIO/TIMER/ADC and USB - and it
+  it now covers the pads and IO, SIO, the clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL and
+  the XIP domain (`XIP_CTRL` + `SSI`) - and it
   honours `PSM.WDSEL`/`RESETS.WDSEL`, so a *watchdog* reset covers exactly what the guest selected
   while a RUN-pin/power-on reset covers everything (bit positions from pico-sdk's own
   `hardware/regs/psm.h`/`resets.h`). Two consequences visible to firmware, both live-verified: an
@@ -18,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`CYW43_DEFAULT_PIN_WL_REG_ON`), so the emulated chip sees the power cycle its driver assumes.
   The rule every new `reset()` follows: registers are reset, wiring is not - callbacks, GPIO
   listeners, DREQ identity and analog inputs survive, because a chip reset does not unsolder
-  anything. [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 5.
+  anything. `Peripheral` (the Protocol typing `RP2040.peripherals`) and `BasePeripheral` both grew
+  `reset()` as part of this, the latter as a documented no-op default - correct for read-only
+  identity blocks like `SYSINFO`/`TBMAN`, which are the only ones left using it.
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 5.
 - `ResetButton` (`rp2040py.external.reset_button`) - the RESET button, as an `ExternalDevice`, and
   with it the **RUN pin** as a real level on `RP2040` (`run_pin_low`/`set_run_pin()` plus an
   `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into). RUN is not a GPIO and has
@@ -71,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 ### Fixed
+- README said CircuitPython **8.0.2** was the default firmware; it has been **10.2.1** since the
+  default tag was bumped in `firmware_specs.json`. The 8.0.2 row in CI is now documented as what it
+  actually is - a boot-only check of the oldest supported release, deliberately not running the
+  reset tests, because 8.0.2 never re-enumerates after a chip reset in this emulator
+  ([docs/records/0093](docs/records/0093-circuitpython-802-warm-boot-hang.md), open: 9.2.9 and
+  10.2.1 both pass the same script, so the boundary is 8.x vs 9.x).
 - CircuitPython's `pico_w` filesystem offset: `0x180000` -> `0x181000`. The board carries **two**
   different firmware sizes in two different files - `link.ld`'s `firmware_size = 1532k` sizes the
   linker's section, while `mpconfigboard.mk`'s `-DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` is what

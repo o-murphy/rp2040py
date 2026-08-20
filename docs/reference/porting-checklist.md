@@ -170,7 +170,8 @@ Since [record 0089](../records/0089-one-reset-for-every-trigger.md) that handler
 one owner**, not the only reset path - a RESET button (`external/reset_button.py`, a real RUN-pin
 level) and a host-side `device.ahard_reset()` reach the same sequence - and what the sequence
 covers grew from `core`/`pwm`/`dma`/`ppb` to what a real reset covers: the pads and IO, SIO, the
-clocks, UART/SPI/I2C/PIO/TIMER/ADC and USB, gated by `PSM.WDSEL`/`RESETS.WDSEL` the way hardware
+clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL and the XIP domain (`XIP_CTRL` + `SSI`),
+gated by `PSM.WDSEL`/`RESETS.WDSEL` the way hardware
 gates them. Two consequences worth knowing when comparing against upstream, since neither is
 modelled there at all: a GPIO the guest left driving is released by a reset, and the firmware reads
 back the reset *cause* the trigger actually had (`machine.reset_cause()` /

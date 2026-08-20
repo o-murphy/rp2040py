@@ -46,6 +46,15 @@ class RPXIPCtrl(BasePeripheral):
         self.stream_addr = 0
         self.stream_ctr = 0
 
+    def reset(self) -> None:
+        """The XIP domain, which is a `PSM.WDSEL` bit rather than a `RESETS` one - there is no
+        `RESETS_RESET_XIP` (0089 Phase 5). No cache is modelled here on purpose
+        (docs/records/0052-xip-ctrl-registers.md), so there is nothing to flush: these three
+        registers are the block."""
+        self.ctrl = _CTRL_RESET
+        self.stream_addr = 0
+        self.stream_ctr = 0
+
     def read_uint32(self, offset: int) -> int:
         if offset == CTRL:
             return self.ctrl
