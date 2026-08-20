@@ -359,3 +359,42 @@ The middle one is the first to test, because it is the one this project's reset 
 break: `VTOR` is reset by us, and what refills it is firmware code that a cold boot runs and a warm
 boot may not reach in the same order.
 
+## Correction (2026-08-20, second): low SRAM is fine, and 0x20000250 is real code
+
+Two hypotheses from the sections above are now dead by measurement, both of them mine.
+
+**VTOR is relocated identically on both boots.** Instrumenting writes to it:
+
+    cold: firmware writes VTOR = 0x10000100, then VTOR = 0x20000000
+    WARM: firmware writes VTOR = 0x10000100, then VTOR = 0x20000000
+
+So "the warm boot never re-relocates the vector table" is wrong, and with it the reasoning that
+`PPB.reset()` zeroing VTOR is what breaks this.
+
+**And low SRAM is populated after the reset, byte for byte.** Comparing `0x20000000..0x20000400`:
+
+| | non-zero bytes | `[0x20000250]` | vectors |
+|---|---|---|---|
+| cold boot | 812 / 1024 | `1b88 9847 8046 fff7 33ff b847 a847 fff7` | sp=`0x20042000` reset=`0x100001f7` |
+| after the reset | 808 / 1024 | **identical** | **identical** |
+
+So the jump the previous section caught - flash `0x100378b2` into SRAM `0x20000250` - is not a wild
+branch at all: `0x20000250` is real, correctly-copied code on both boots (`ldrh r3,[r3]; blx r3;
+mov r8,r0; …` - a trampoline that calls through registers). The firmware is *supposed* to go there.
+
+**What survives from the blank-SRAM finding** is narrower than it was written: the region actually
+dumped blank was `0x20003780..0x20003a80`, and the pc samples proven to be inside it are
+`0x200038a8`, `0x2000398c`, `0x200039ee` and `0x20003a00`. `0x200034fe` and `0x20003826`, also
+sampled, are *below* that window and were never dumped - so they are unproven either way.
+
+So the corrected picture is: the warm boot calls legitimate RAM code at `0x20000250`, that code
+calls through registers (`blx r3`/`blx r7`/`blx r4`), and execution *later* ends up in a genuinely
+blank region a few kilobytes further up. The wild branch is **downstream of `0x20000250`**, inside
+that trampoline, and the thing to catch is the register it calls through.
+
+**Next step, precisely:** the same 10 us transition capture, but triggering on the pc entering
+`0x20003400..0x20003a80` (the blank window) rather than SRAM in general, and recording `lr`, `sp`
+and the low registers at that moment. That names which pointer was zero - and *that* is the value
+whose provenance decides whether this record ends in the emulator's reset path or in 8.x's own
+startup ordering.
+
