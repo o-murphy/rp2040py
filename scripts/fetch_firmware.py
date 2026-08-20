@@ -256,7 +256,7 @@ def _fetch_bootrom() -> "dict[str, str]":
 # `_merge_boards()` sees for the first time (`_apply_board_layout()`'s `setdefault`); an existing
 # board's committed `default_tag` is never overwritten by a later run.
 _MICROPYTHON_DEFAULT_TAG = "1.21.0"
-_CIRCUITPYTHON_DEFAULT_TAG = "8.0.2"
+_CIRCUITPYTHON_DEFAULT_TAG = "10.2.1"
 _KALUMA_DEFAULT_TAG = "1.2.1"
 
 
