@@ -1,8 +1,13 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Proposed - design only, nothing implemented (2026-08-20).** Asked for while working
-  through [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)'s restart step: a
-  reset that behaves the same no matter who asks for it.
+- Status: **Planned - design settled, phased plan written, nothing implemented (2026-08-20).**
+  Asked for while working through
+  [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)'s restart step: a reset that
+  behaves the same no matter who asks for it. The first half of this record is the design as
+  originally written; **"Resolution (2026-08-20)" below is the current state** - it answers the
+  "Not decided here" list, lays out a six-phase implementation plan, and carries an appendix of
+  live measurements against real MicroPython v1.23.0 and CircuitPython 10.2.1 firmware. Mass
+  storage (USB MSC / the bootrom's UF2 mode) is explicitly **out of scope** - see section 5 there.
 - Related: [0087] (needs a restart after writing CIRCUITPY over the REPL - its immediate consumer),
   [0057](0057-run-pin-reset-hook.md) (the RESET button / RUN pin, blocked on exactly this),
   [0088](0088-usb-host-side-msc-control-lines-and-reset.md) (the USB host side, where a 1200-bps
@@ -158,6 +163,492 @@ it needs the two owners above to exist, and the CDC side to pick one.
 - **Unverified, needed before building on the soft path**: whether CircuitPython's soft reboot
   re-runs `code.py` the way MicroPython's re-runs `main.py`. There is no local CircuitPython
   checkout here, so per the 3g rule it has to be read from real source, not assumed.
+
+
+---
+
+# Resolution (2026-08-20): the phased plan, and every open question answered
+
+Everything above is the design as first written. This half turns it into an implementation plan,
+answers the "Not decided here" list rather than leaving it open, and folds in the three records
+whose own reset sections were pointing here - [0087] (a restart after writing CIRCUITPY),
+[0088] (the USB host side), [0057] (the RESET button / RUN pin) - plus
+[0066](0066-board-support-expansion.md), whose board-expansion work keeps producing boards whose
+RESET button is written down as "not modelled" (`boards/vcc_gnd_yd_rp2040/__init__.py`,
+`boards/waveshare_rp2040_lcd_0_96/__init__.py`, `boards/weactstudio/__init__.py`).
+
+**Still nothing implemented.** This section is a plan and a set of decisions, per this repo's
+"document vs. implement" rule; the code changes it describes need their own go-ahead. What *was*
+done for it is verification: every claim below is either read out of real upstream firmware source
+at the exact version this project runs, or measured against real firmware booted in this emulator -
+see "Appendix: live verification" at the end, which is where the two questions that used to block
+[0087] are answered.
+
+## 1. The bar: "exactly like a real controller"
+
+The framing that makes this tractable is that a reset is not one event with a switch on it. It is
+**two events** (a firmware VM restart and a chip restart), reachable from **five triggers**, and
+each combination has an observable signature on real hardware that firmware already exposes to
+user code. "Works like a real controller" means those signatures match - not merely that the board
+comes back up.
+
+### 1.1 The two levels, restated with what firmware sees
+
+| | **soft reset** (VM) | **hard reset** (chip) |
+|---|---|---|
+| implemented by | the firmware itself | the emulator |
+| what restarts | the MicroPython/CircuitPython VM | the RP2040 |
+| flash | untouched | preserved (`preserve_flash=True`) |
+| RAM | VM heap re-initialised; SRAM array not cleared | same (see 4.5 - SRAM is not cleared on hardware either) |
+| USB | stays enumerated | drops, must re-enumerate |
+| `machine.reset_cause()` / `microcontroller.cpu.reset_reason` | **unchanged** - no reset happened at chip level | changes, per 1.3 |
+| host's REPL connection | survives | invalid until re-enumeration |
+
+### 1.2 The five triggers, and the level each one is
+
+| # | trigger | initiated by | reaches the emulator as | level |
+|---|---|---|---|---|
+| 1 | `machine.reset()` / `microcontroller.reset()` (and mpremote `reset`/`bootloader`) | guest | a write to `WATCHDOG.CTRL.TRIGGER` | hard |
+| 2 | bare Ctrl-D at a REPL prompt (mpremote `soft-reset`) | host, over CDC | nothing - firmware-internal | soft |
+| 3 | a host API call (`Device.a*reset()`) | host | **does not exist yet** | either, caller picks |
+| 4 | RESET button / RUN pin | an `ExternalDevice` | **does not exist yet** ([0057]) | hard |
+| 5 | 1200-bps touch over CDC | host, over CDC | **out of scope** - no firmware here honours it ([0088]) | hard, if it ever exists |
+
+Trigger 1 is the only one that is *already* correct end to end, and it is correct because it goes
+through real firmware code: `machine.reset()` on rp2 is
+`ports/rp2/modmachine.c`'s `mp_machine_reset()` -> `watchdog_reboot(0, SRAM_END, 0)`, and
+CircuitPython's `microcontroller.reset()` is `ports/raspberrypi/supervisor/port.c`'s `reset_cpu()`
+-> the *same* `watchdog_reboot(0, SRAM_END, 0)` (both read at the versions this project runs;
+CircuitPython additionally calls `filesystem_flush()` first, in
+`ports/raspberrypi/common-hal/microcontroller/__init__.c`'s `common_hal_mcu_reset()`). With
+`delay_ms == 0`, pico-sdk's `_watchdog_enable()` takes the branch
+`hw_set_bits(&watchdog_hw->ctrl, WATCHDOG_CTRL_TRIGGER_BITS)` - so the TRIGGER bit this emulator
+already handles is literally the path both firmwares take, not an approximation of it.
+
+### 1.3 Reset cause: the signature each trigger has to leave
+
+This is the part "one reset for every trigger" was missing, and it is the sharpest definition of
+"exactly like a real controller" available, because both firmwares expose it to user code.
+
+Read from source (pico-sdk 2.1.1 `hardware_watchdog/watchdog.c`,
+`hardware/regs/vreg_and_chip_reset.h`; CircuitPython 10.2.1
+`ports/raspberrypi/common-hal/microcontroller/Processor.c`; MicroPython v1.23.0
+`ports/rp2/modmachine.c`):
+
+- `watchdog_caused_reboot()` is just `watchdog_hw->reason != 0`; `watchdog_enable_caused_reboot()`
+  additionally requires `scratch[4] == 0x6ab73121`, the magic only `watchdog_enable()` writes (a
+  `watchdog_reboot()` writes `0` there instead). That is how CircuitPython tells a *deliberate
+  reboot* (`SOFTWARE`) from a *watchdog timeout* (`WATCHDOG`) - both set `REASON`.
+- CircuitPython checks `CHIP_RESET` first and the watchdog last, with the comment
+  "*Check watchdog after chip reset since watchdog doesn't clear chip_reset, while chip_reset
+  clears the watchdog*". So: a RUN-pin reset **clears `WATCHDOG.REASON`**; a watchdog reset
+  **leaves `CHIP_RESET` alone**.
+- `CHIP_RESET.HAD_RUN` (bit 16, `RO`) is documented as "Last reset was from the RUN pin",
+  `HAD_POR` (bit 8, `RO`) as "power-on reset or brown-out".
+
+Which gives the table every trigger has to satisfy, and which the tests in each phase assert:
+
+| after... | `WATCHDOG.REASON` | `WATCHDOG.SCRATCH[4]` | `CHIP_RESET` | `machine.reset_cause()` | `microcontroller.cpu.reset_reason` |
+|---|---|---|---|---|---|
+| power-on (fresh `BaseDevice`) | `0` | `0` | `HAD_POR` | `1` (`PWRON`) | `POWER_ON` |
+| `machine.reset()`/`microcontroller.reset()` | `FORCE` | `0` | unchanged | `3` (`WDT`) | `SOFTWARE` |
+| a watchdog *timeout* (`WDT.feed()` missed) | `TIMER` | `0x6ab73121` | unchanged | `3` (`WDT`) | `WATCHDOG` |
+| RUN pin / RESET button | **`0`** | **`0`** | **`HAD_RUN`** | `1` (`PWRON`) | `RESET_PIN` |
+| host API hard reset | as the RUN pin (see D4) | | | | |
+
+Today the emulator gets the first three rows right *by accident of omission* - `RP2040.reset()`
+does not touch `watchdog` or `vreg_and_chip_reset`, so `REASON` survives exactly as hardware
+survives it, and `CHIP_RESET` stays `HAD_POR` forever. Rows 4 and 5 are what needs new code: a
+RUN-pin reset that leaves `REASON` set would make firmware **misreport why it rebooted**, which is
+[0057]'s own "what does `WATCHDOG.REASON` read after a RUN reset?" question, now with a full
+answer instead of a warning.
+
+## 2. One owner per level, and what each trigger calls
+
+### 2.1 Hard reset - `BaseDevice`
+
+```
+BaseDevice.hard_reset(*, cause: ResetCause = ResetCause.RUN_PIN) -> None
+```
+
+Synchronous, fire-and-forget, safe to call from inside a register write. The body is today's
+`_on_watchdog_trigger()` (`mcu.reset(preserve_flash=True)` / `core.pc = FLASH_START_ADDRESS` /
+`cdc.reset()`) plus the `cause` bookkeeping from 1.3. Callers:
+
+- `_on_watchdog_trigger()` -> `hard_reset(cause=ResetCause.WATCHDOG)` (leaves `REASON` as the
+  guest's own write set it);
+- the RUN-pin hook -> `hard_reset(cause=ResetCause.RUN_PIN)`;
+- the awaitable host-side wrapper below.
+
+```
+BaseDevice.hard_reset_async(timeout) -> Future[None]      # and: async ahard_reset(timeout)
+```
+
+The host-initiated form: takes `MicroPythonDevice._repl_lock`, calls `hard_reset()`, awaits
+re-enumeration (the waiting half of `_aconnect()`), then re-runs the family's post-boot handshake.
+Only this form can await anything - a guest-triggered reset has nobody waiting and must stay
+fire-and-forget, which is why the split is at the entry point and not inside the sequence.
+
+### 2.2 Soft reset - `MicroPythonDevice`
+
+```
+MicroPythonDevice.soft_reset_async(*, rerun_startup_scripts=False, timeout) -> Future[None]
+async MicroPythonDevice.asoft_reset(*, rerun_startup_scripts=False, timeout) -> None
+```
+
+On `MicroPythonDevice`, not `BaseDevice`: a soft reset is a *property of a Python REPL firmware*,
+and `KalumaDevice` shares no such protocol. No chip reset, no re-enumeration, no handshake problem,
+because USB never drops.
+
+`rerun_startup_scripts` is not a convenience flag - it is the difference between the two things
+real firmware does, and the Appendix measures both (see D2 for why the default is `False`).
+
+### 2.3 The trigger x level matrix, once the two owners exist
+
+| trigger | soft | hard |
+|---|---|---|
+| from the interpreter (guest code) | `raise SystemExit` / Ctrl-D semantics - firmware's own, nothing to build | `machine.reset()` -> TRIGGER bit -> `hard_reset(WATCHDOG)` (**works today**) |
+| from mpremote / CDC bytes | `soft-reset` = bare Ctrl-D -> firmware's own (**works today**) | mpremote `reset` = `exec machine.reset()` -> same path as above (**works today**) |
+| from the host API | `asoft_reset()` (**Phase 3**) | `ahard_reset()` (**Phase 2**) |
+| from an `ExternalDevice` (RESET button) | n/a - RUN is not a VM concept | `hard_reset(RUN_PIN)` via the RUN pin (**Phase 4**) |
+
+The point worth keeping: **"reset over CDC" needs no new emulator mechanism at all.** Both cells in
+its row are bytes on a link that already works. What is missing is only a way to *ask* for them
+from the device API, and one owner behind each.
+
+## 3. Decisions (answering "Not decided here")
+
+**D1 - `reset()`, `areset()`, or both: both, split by level, following the house pattern.**
+`hard_reset()` (sync, no waiting) + `hard_reset_async()`/`ahard_reset()` for the host-side one, and
+`soft_reset_async()`/`asoft_reset()` for the soft one - matching `start_async()`/`astart()` and
+`exec_async()`/`aexec()`. No blocking `reset()` facade, for the same reason `base_device.py`'s
+module docstring gives for having no blocking `start()`.
+
+**D2 - the soft reset needs a mode, and the default is mpremote's.** Measured (Appendix, point 1) and
+confirmed in source: a bare Ctrl-D at the **raw** prompt restarts the VM but does
+**not** re-run `main.py`/`code.py`, in *both* families; only a Ctrl-D at the **friendly** prompt
+does. So `asoft_reset()` defaults to `rerun_startup_scripts=False` - what every existing tool means
+by "soft reset", and what `mpremote soft-reset` does - and [0087]'s flow passes `True`.
+
+**D3 - what a RUN-pin model hangs off: a level on `RP2040`, with `BaseDevice` installing the
+implementation downward.** `RP2040` grows a RUN level (`run_pin_low` + a hook), and
+`BaseDevice.__init__` points that hook at its own `hard_reset(cause=RUN_PIN)` - the exact shape it
+already uses for `self.mcu.watchdog.on_watchdog_trigger = self._on_watchdog_trigger`, so no new
+plumbing *concept* appears, and an `ExternalDevice` that only has `attach(rp2040)` can still reach
+the full sequence. This picks [0057]'s option A for *placement* and its option C for *semantics*,
+which is what "exactly like a real controller" forces: 0057's own addendum has the schematic
+(`3V3 -[R12 10k]- RUN`, switch to GND, no series resistor), so a press is a **level**, not a pulse.
+A held RESET button holds the chip in reset and the release is what boots it (Phase 4).
+
+**D4 - a host API hard reset behaves as the RUN pin.** `ResetCause.RUN_PIN` is the default for
+`hard_reset()`/`ahard_reset()` because the physical thing a host-side "reset the board" corresponds
+to is someone pressing RESET, and because the alternative (leaving `REASON` at whatever the last
+watchdog write left) makes the guest misreport its own boot reason - measured, see Appendix, point 3:
+today's sequence leaves the registers byte-identical to a power-on (`REASON=0`, `SCRATCH=[0]*8`,
+`CHIP_RESET=HAD_POR`), so a fresh boot reports `PWRON`/`POWER_ON` and a session where the guest
+already called `machine.reset()` reports `WDT` - i.e. it reports *stale history*, not this reset,
+and never the `RESET_PIN` a real board's RESET button would.
+
+**D5 - `RP2040.reset()` grows, but in a later phase and by domain, not all at once.** Today it
+resets `core`/`pwm`/`dma`/`ppb` only. A real reset covers far more, and the SDK says exactly how
+much: `_watchdog_enable()` writes `psm_hw->wdsel = PSM_WDSEL_BITS & ~(ROSC | XOSC)` before
+triggering - "reset everything apart from ROSC and XOSC", including the `RESETS` block itself,
+which in turn holds every peripheral in reset until firmware releases it. So the target is
+"everything except the two oscillators", the emulator already *stores* both `PSM.WDSEL` and
+`RESETS.WDSEL` without acting on them (`peripherals/psm.py`, `peripherals/reset.py`), and the
+faithful implementation is to honour what the guest itself selected. Phase 5, last, because it is
+the change most likely to break a live boot and the least likely to be missed until then.
+
+**D6 - SRAM is not cleared, and that is correct.** A PSM reset resets the SRAM *controllers*, not
+the array; contents are undefined-but-typically-preserved on hardware, and firmware re-initialises
+everything it relies on. Keep `preserve_flash=True`'s current behaviour of leaving `sram` alone,
+and stop listing it as a fidelity gap.
+
+**D7 - attached `ExternalDevice`s get no reset callback, because a real board's don't.** An
+external chip is not wired to RUN; it sees a reset only through whatever GPIO the firmware drives
+(the CYW43439's `WL_ON`, a display's `RES` line). The right fidelity fix is therefore **not** a new
+protocol method on `ExternalDevice` - it is Phase 5 resetting the pads/IO to their reset state, so
+those lines drop the way they do on hardware and firmware's own re-init sequence is what brings the
+device back. This closes the question 0057 raised and 0049 tracks, without widening
+`ExternalDevice`'s attach-only surface.
+
+One implication to cost into Phase 5 rather than discover in it: `external/cyw43/` models no power
+pin at all (nothing in it mentions `WL_ON`), so resetting the pads is necessary but not sufficient
+- the CYW43439 model also has to *react* to that line dropping by returning to its power-on state.
+The Appendix (point 5) measures what happens without it: CircuitPython on a Pico W cannot bring
+WiFi back up after a hard reset.
+
+**D8 - mass storage stays out of scope, deliberately** (maintainer's call, 2026-08-20). See
+section 5.
+
+## 4. The phased plan
+
+Each phase is independently shippable and independently verifiable. Phase order is
+prerequisite-driven, not importance-driven.
+
+### Phase 0 - prerequisites, no behaviour change
+
+0.1 **Move the post-boot handshake onto the device/family** ([0087]'s item 4, which stops being
+"optional, cosmetic" here). `cli/__init__.py`'s `_micropython_async()` currently does
+`if not args.circuitpython: cdc.send \r\n else: cdc.send Ctrl-C` *after* `await device.astart()`.
+A device-level reset cannot reach into the CLI for it, so any host-initiated hard reset would come
+back to a console the CLI has already finished setting up. Move it to a
+`MicroPythonDevice._post_boot_handshake()` keyed on `self.circuitpython`, called from `_aconnect()`
+and later from the reset path; the CLI keeps working unchanged.
+
+0.2 **Make the hard-reset sequence a method.** `BaseDevice.hard_reset()`, with
+`_on_watchdog_trigger()` reduced to a one-line caller. Pure refactor -
+`tests/test_watchdog_reset.py` keeps passing as-is, plus one new test calling the method directly.
+
+*Closes:* [0087] item 4. *Unblocks:* Phases 1-4.
+
+### Phase 1 - reset-cause fidelity
+
+1.1 `RPWatchdog` grows a `reset()` (clears `_reason` and `scratch_data`) - what a chip-level reset
+does to it, and nothing else does.
+1.2 `RPVREGAndChipReset` grows a way to record the cause (`HAD_POR` / `HAD_RUN` / `HAD_PSM_RESTART`
+exclusive of each other, `PSM_RESTART_FLAG` untouched).
+1.3 `ResetCause` enum + `BaseDevice.hard_reset(cause=...)` applying 1.3's table.
+
+*Tests:* unit tests over the register values per cause (no firmware needed, the
+`tests/test_watchdog_reset.py` pattern); live-boot assertions that `machine.reset_cause()` reads
+`1`/`3` and `microcontroller.cpu.reset_reason` reads `POWER_ON`/`SOFTWARE` in the right places -
+both already measured working in the Appendix, so these are regression tests, not exploration.
+
+*Closes:* [0057]'s "what does `WATCHDOG.REASON` read after a RUN reset?".
+
+### Phase 2 - the host-initiated hard reset
+
+2.1 `BaseDevice.hard_reset_async()`/`ahard_reset()` per 2.1: `_repl_lock`, `hard_reset()`,
+await re-enumeration, re-run 0.1's handshake.
+2.2 Factor `_aconnect()`'s waiting half so the reset path and the boot path share it rather than
+growing a second copy (`MicroPythonDevice._aconnect()` is already an override of
+`BaseDevice._aconnect()` differing only by the lock).
+2.3 Note in passing: `_started` stays `True` across a reset - a reset is explicitly *not* a second
+`start()`, and `start_async()` must keep raising if called again.
+
+*Tests:* live-boot, both firmwares - reset, re-enumerate, `aexec()` still works, and a variable set
+before the reset is gone. The Appendix already ran exactly this against today's private sequence
+(point 5), so the expected results are known - including the one trap: assert on state, not on
+boot output (point 4).
+
+*Closes:* [0087]'s hard-reset fallback; [0088]'s "host-driven board reset" row.
+
+### Phase 3 - the host-initiated soft reset
+
+3.1 A `SoftResetRunner` beside `RawReplRunner` (or a flag on it - the runner is 130 lines and its
+state machine is `await_prompt`/`await_ok`/`stdout`/`stderr`, none of which fits "send Ctrl-D,
+expect a reboot banner", so a sibling is probably cleaner).
+3.2 `rerun_startup_scripts=False`: Ctrl-C, Ctrl-C, Ctrl-A, wait for the raw banner, Ctrl-D, expect
+`OK\r\n`, then `soft reboot`, then the raw banner again. Ends parked at the raw prompt.
+3.3 `rerun_startup_scripts=True`: additionally Ctrl-B first (raw -> friendly), then Ctrl-D at the
+friendly prompt; expect `soft reboot`, then the startup script's own output, then the friendly
+banner.
+3.4 Match on the substring `soft reboot`, not the whole line: MicroPython prints
+`MPY: soft reboot`, CircuitPython prints `soft reboot`.
+
+*Tests:* a fake-device unit test in the shape `tests/test_mpremote_integration.py` already uses,
+plus live-boot on both firmwares (both transcripts are in the Appendix, byte for byte).
+
+*Closes:* [0087]'s "the device API has no way to send that byte".
+
+### Phase 4 - RESET button / RUN pin
+
+4.1 **`RP2040` grows the RUN level** - in all three twins (`_rp2040.py`, `native/_rp2040.pyx`,
+`native/_rp2040.pyi`), per [0057]'s "Cost of touching `RP2040` at all".
+4.2 **The batch loop learns "held in reset"**: `execute_batch()` (both `_execute_batch.py` and the
+native port) skips instruction execution while RUN is low. This is the new execution state 0057
+option C priced - distinct from `core.waiting` (which still services alarms and is cleared by an
+IRQ) and from `simulator.stopped` (which ends the engine room). It is the whole reason a held
+RESET button is not the same as a tap.
+4.3 **`BaseDevice.__init__` installs the hook downward** (D3), next to the watchdog line it already
+has.
+4.4 **`external/reset_button.py`**, `press()`/`release()`/`click()`, going through
+`rp2040.schedule_threadsafe()` - 0030's rule, and unlike `BootselButton` this one is pressed
+*while running* by definition.
+4.5 **Boards**: attach it where the omission is currently written down -
+`vcc_gnd_yd_rp2040`, `waveshare_rp2040_lcd_0_96`, `weactstudio` - and update those three "Not
+modelled" notes. New boards from [0066]'s remaining checklists then get a RESET button for free.
+Follow `.claude/skills/external-devices-and-boards/`'s checklist for the device and the board edits.
+
+*Tests:* per 0057's own testing plan (hook fires once per release, reaches the MCU on the engine
+room, parity between both `RP2040` twins), plus a live-boot integration test: set `x = 1`, press and
+release RESET, confirm re-enumeration and that `x` is gone; and a held-RESET test that nothing
+executes while it is held.
+
+*Closes:* [0057] in full.
+
+### Phase 5 - the fuller chip reset
+
+5.1 Extend `RP2040.reset()` to the blocks a real reset covers, honouring `PSM.WDSEL`/`RESETS.WDSEL`
+where the guest set them (D5): `io`/`pads`/`sio` (so GPIO returns to inputs - D7's fidelity fix),
+`uart`, `spi`, `i2c`, `pio`, `timer`, `adc`, `clocks`, leaving `xosc`/`rosc` alone on the watchdog
+path.
+5.2 SRAM stays untouched (D6).
+
+*Tests:* the live-boot bar, both firmwares, after **each** trigger. Two observables are already
+measured and failing today (Appendix, point 5), so this phase has its regression tests written for
+it in advance: an LED left on across `machine.reset()` must go dark (the pad currently keeps
+`FUNCSEL=0x5, OE=1, OUT=1` where a power-on pad reads `FUNCSEL=0x1f, OE=0, IE=0`), and
+**CircuitPython on a Pico W must be able to bring the CYW43439 back up after a hard reset** - it
+currently cannot, filling the console with the firmware's own `[CYW43] Failed to start CYW43`,
+because nothing resets the pads carrying `WL_ON` and the chip therefore never sees a power cycle.
+
+*Risk note:* this phase is the reason the plan is phased at all. Phases 1-4 are additive; this one
+changes what an existing, working reset does. It is also the phase that makes D7 true rather than
+merely reasonable - until the pads reset, "the firmware re-drives its external devices on the way
+up" is a claim the CYW43 measurement contradicts.
+
+### Phase 6 - documentation
+
+6.1 `docs/reference/mpremote.md`: the `reset`/`soft-reset` rows gain the raw-vs-friendly
+distinction (D2) - today they say "handled entirely by firmware's own soft-reset code" without
+saying that this means `main.py` does *not* re-run.
+6.2 `docs/reference/external-devices-and-boards.md` + the skill: `ResetButton` as a worked example.
+6.3 This record's status, and the tracker rows for [0057]/[0087]/[0088].
+
+## 5. Out of scope: mass storage (maintainer's decision, 2026-08-20)
+
+**No MSC, no USB-device emulation, no bootrom UF2 mode - not now.** It needs a mass-storage class
+implementation *and* an emulated USB device controller, it is high-complexity, and it is not a
+priority. Three consequences, so nothing in this plan silently assumes otherwise:
+
+- **`machine.bootloader()` keeps its documented approximation** - a plain hard reset rather than
+  entering the bootrom's USB mass-storage mode ([0088], `docs/reference/mpremote.md`).
+- **Trigger 5 (the 1200-bps touch) is not built.** [0088]'s finding stands: `ports/rp2` defines
+  neither `MICROPY_HW_USB_CDC_1200BPS_TOUCH` nor `MICROPY_HW_USB_CDC_DTR_RTS_BOOTLOADER`, and
+  CircuitPython has no `tud_cdc_line_state_cb` on that path, so there is nothing here to trigger
+  even if the host half existed. If it is ever built it is a *caller* of `hard_reset()`, not a
+  sixth behaviour.
+- **BOOTSEL held across a RESET stays unreachable in effect.** `BootselButton` can hold
+  `GPIO_QSPI_SS` low and Phase 4 makes the reset real, so the *combination* becomes expressible -
+  but with no bootrom USB mode to enter, the emulator will keep jumping to `FLASH_START_ADDRESS`.
+  Phase 4's hook contract must not make the other behaviour impossible later (0057's own
+  requirement); it does not need to implement it.
+
+This also keeps [0087]'s writable-CIRCUITPY route intact by construction: that route works
+*because* nothing claims the MSC interface, and nothing here changes that.
+
+
+## Appendix: live verification (2026-08-20)
+
+Run against the two firmware images the maintainer supplied, booted in this emulator on
+`--board pico_w`: **MicroPython v1.23.0** (`RPI_PICO_W-20240602-v1.23.0.uf2`) and
+**CircuitPython 10.2.1** (`adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.2.1.uf2`). Probe
+scripts were scratch-only - nothing in the tree changed - and drove the CDC console byte by byte
+(`cdc.send_serial_byte()` + an `on_serial_data` capture), because a bare Ctrl-D at the prompt is
+not expressible through `RawReplRunner` today, which is Phase 3's whole point.
+
+### What was confirmed
+
+**1. Both families behave identically at both prompts, and the raw prompt does *not* re-run the
+startup script.** The transcripts, byte for byte:
+
+| | MicroPython v1.23.0 | CircuitPython 10.2.1 |
+|---|---|---|
+| Ctrl-D at the **raw** prompt | `OK\r\nMPY: soft reboot\r\nraw REPL; CTRL-B to exit\r\n>` | `OK\r\nsoft reboot\r\nraw REPL; CTRL-B to exit\r\n>` |
+| `main.py`/`code.py` re-run? | **no** | **no** |
+| Ctrl-D at the **friendly** prompt | `\r\nMPY: soft reboot\r\nMAIN-RAN-v1\r\n` + banner | `soft reboot` + `code.py output:` + `CODE-RAN-v2` + `Code done running.` |
+| `main.py`/`code.py` re-run? | **yes** | **yes** |
+
+Matching the source exactly: both firmwares' `pyexec_raw_repl()` answer an empty line + Ctrl-D with
+`OK\r\n` and `PYEXEC_FORCED_EXIT`, and both main loops then re-run the startup script **only** if
+`pyexec_mode_kind == PYEXEC_MODE_FRIENDLY_REPL` (`ports/rp2/main.c` for MicroPython, `main.c`'s
+`for(;;)` around `run_repl()`/`run_code_py()` for CircuitPython). Ctrl-D at the raw prompt leaves
+that mode set to RAW, so the firmware restarts its VM and comes straight back to a raw prompt.
+
+The MicroPython half was re-verified **without relying on console output at all**, since output can
+be lost (point 4): `main.py` incremented a counter in its own littlefs, and the counter was read
+back over the REPL afterwards. Cold boot -> `1`; after a raw-prompt soft reset -> still `1`; after
+a friendly-prompt soft reset -> `2`.
+
+*Consequence:* this is why D2 exists. [0087]'s flow (write `code.py` over the REPL, then restart so
+it runs) needs the **friendly-prompt** variant - `asoft_reset()`'s default alone would not have
+re-run anything, and the failure would have looked like "the write didn't take".
+
+**2. A REPL-written `code.py` does not auto-reload** (CircuitPython). Rewriting `/code.py` through
+`storage.remount('/', readonly=False)` + `open()` from the raw REPL, then idling 10 s with the
+console captured, produced **zero** output - no reload, no re-run. Source agrees, twice over:
+`autoreload_trigger()` is called from the USB **mass-storage** write-completion path
+(`supervisor/shared/usb/usb_msc_flash.c`), which this emulator never drives, and `run_repl()`
+calls `autoreload_suspend(AUTORELOAD_SUSPEND_REPL)` for the whole REPL session anyway.
+
+*Consequence:* [0087]'s two "unverified, and blocking" questions are both answered - the restart
+has to be asked for explicitly, and it is a soft reset at the friendly prompt.
+
+**3. The reset-cause table in section 1.3 is real, and today's emulator already gets three rows
+right.** Measured:
+
+| measured | MicroPython `machine.reset_cause()` | CircuitPython `microcontroller.cpu.reset_reason` |
+|---|---|---|
+| cold boot | `1` (PWRON) | `microcontroller.ResetReason.POWER_ON` |
+| after the guest's own `machine.reset()` / `microcontroller.reset()` | `3` (WDT) | `microcontroller.ResetReason.SOFTWARE` |
+| after today's host-side sequence, from a fresh boot | `1` (PWRON) | `POWER_ON` (derived: the register dump below is what the firmware reads, and it is byte-identical to a cold boot) |
+
+The register dump right after today's host-side sequence: `WATCHDOG.REASON=0`,
+`WATCHDOG.SCRATCH=[0]*8`, `CHIP_RESET=0x100` (`HAD_POR`) - i.e. **indistinguishable from a
+power-on**, and *not* what a RESET button leaves (`REASON=0`, `CHIP_RESET=HAD_RUN` ->
+`RESET_PIN`). In a session where the guest had already called `machine.reset()`, the same host-side
+sequence reports `3` (WDT) instead, because `REASON` is never cleared - it reports stale history.
+That is D4's evidence: the host-side reset has to *say* what it is.
+
+**4. Console output produced before the host re-enumerates is lost - on a hard reset, and on a cold
+boot.** `main.py`/`code.py` output printed during the boot that follows a hard reset never reached
+the capture, while everything after the console came up did. This is not an emulator defect: the
+firmware only flushes CDC once DTR is asserted (`shared/tinyusb/mp_usbd_cdc.c`'s
+`tud_cdc_line_state_cb()` arming `cdc_connected_flush_delay`; TinyUSB's `tud_cdc_n_connected()`
+being literally the DTR bit), which is exactly what a real board does to a terminal that is
+re-opening the port. CircuitPython's *later* boot chatter did arrive
+(`Auto-reload is on...` / `Press any key to enter the REPL. Use CTRL-D to reload.`).
+
+*Consequence for Phase 2:* `ahard_reset()` must promise "re-enumerated, console usable", **not**
+"you will see the boot banner". Its tests must assert on VM state (a variable is gone, a
+filesystem counter advanced) rather than on boot output - the four `FAIL`s in the raw probe logs
+are all this artifact, not behaviour differences.
+
+**5. Today's hard-reset sequence works, and its limits are exactly where section 3 predicted.**
+It re-enumerates (0.0-4.5 s wall), the raw REPL works immediately afterwards (`print(1 + 1)` ->
+`2`), flash survives, and the firmware really does re-boot (the littlefs boot counter advanced).
+Two gaps showed up, both Phase 5's:
+
+- **GPIO pads survive a reset.** A guest drove GPIO15 high (`FUNCSEL=0x5`, `OE=1`, `OUT=1`); after
+  the reset sequence - and after the firmware had re-booted - the pad still read
+  `FUNCSEL=0x5, OE=1, OUT=1`, where a freshly constructed `RP2040` reads
+  `FUNCSEL=0x1f, OE=0, IE=0`. On hardware the pin stops driving; here an LED left on stays on.
+- **CircuitPython cannot bring the CYW43439 back up after a hard reset.** The re-boot itself
+  completed (status bar, `Auto-reload is on...`, the REPL prompt hint), then the console filled
+  with `[CYW43] Failed to start CYW43`, repeatedly. The string is in the CircuitPython image
+  itself (confirmed with `strings` on the `.uf2`), so this is the firmware's own re-init failing -
+  the emulated chip never sees a power cycle, because nothing resets the pads that carry `WL_ON`
+  and the gSPI/PIO state is left mid-flight. Same root cause as the pad finding, and the sharpest
+  argument that Phase 5 is not cosmetic: on a Pico W, "reset the board" currently costs you WiFi
+  until the process is restarted.
+
+MicroPython does not hit this, because it only brings the CYW43 up when the guest asks
+(`network.WLAN(...)`); a Pico W under MicroPython execs fine after the same reset.
+
+### What was not measured
+
+- **CircuitPython's `reset_reason` after today's host-side sequence** was derived, not read: the
+  probe was stopped while waiting out one of point 4's unobservable-boot-output timeouts. The
+  derivation is direct (the register dump is identical to a cold boot's, and cold boot was measured
+  as `POWER_ON`), but it is worth asserting for real in Phase 1's tests.
+- **Nothing about the RUN pin**, since none of it exists yet - Phase 4's numbers can only come from
+  Phase 4.
+- **`machine.bootloader()`**, whose approximation is unchanged and out of scope (section 5).
+
+### Test-writing notes for whoever builds this
+
+Cheap lessons from the probes, all of which cost a run to learn:
+
+- **Drive `machine.reset()` from the friendly REPL, not the raw one.** Bytes sent at a raw prompt
+  are buffered as *source* until a Ctrl-D, so `machine.reset()` typed there simply never runs (one
+  probe silently measured nothing at all because of this).
+- **`aexec()` leaves the device parked in the raw REPL** and sets `cdc.on_serial_data = None` on
+  its way out (`BaseReplRunner.stop()`), so a capture has to be re-installed after every `aexec()`.
+- **Assert on state, not on console output** - see point 4.
+- **`on_device_connected` survives `cdc.reset()`**, which is what makes a re-enumeration wait
+  possible; re-arm it with a fresh `asyncio.Event` before each reset.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

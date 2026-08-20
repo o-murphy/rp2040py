@@ -133,3 +133,26 @@ than growing its own sequence. This record's own finding stands unchanged: rp2 d
 `MICROPY_HW_USB_CDC_1200BPS_TOUCH` nor `..._DTR_RTS_BOOTLOADER` and CircuitPython has no such
 handler, so there is nothing here to trigger it with. The note is about shape, not schedule.
 
+
+## Update (2026-08-20): mass storage is out of scope; the reset half is planned
+
+Maintainer's decision, so the three questions this record holds together now split cleanly:
+
+- **Mass storage (option A above) is not planned.** It needs an MSC class *and* a device-mode USB
+  controller model; high complexity, no current priority. Option **B** (`--dump-fs`, the same bytes
+  a host would be served) stays the answer for *seeing* CIRCUITPY, and [0087]'s writable-CIRCUITPY
+  route stays valid by construction, since it works precisely because nothing here claims the MSC
+  interface. Option C (usbip) stays not recommended.
+- **The 1200-bps touch is therefore not worth building either**, and this record's own finding is
+  still why: rp2 defines neither `MICROPY_HW_USB_CDC_1200BPS_TOUCH` nor
+  `..._DTR_RTS_BOOTLOADER`, CircuitPython has no `tud_cdc_line_state_cb` on that path, and the
+  destination (`reset_usb_boot()` -> the bootrom's UF2 mass-storage mode) is exactly the emulation
+  being declined above. If it is ever built it is a *caller* of the hard-reset owner, not a
+  behaviour of its own.
+- **"Host-driven board reset" - the cheap, useful one this record recommended - is now
+  [0089](0089-one-reset-for-every-trigger.md)'s Phase 2**, with the reset-cause fidelity it needs
+  in Phase 1 and [0057]'s RUN pin in Phase 4. Nothing in it depends on this record's USB work.
+- **The DTR/RTS gaps stay open and unscheduled**: runtime control-line changes and
+  `SET_LINE_CODING` are still absent, and the recipient/`wIndex` correction in section 1 is still
+  the thing to fix if that surface is ever added. They are simply not on any critical path now that
+  the 1200-bps touch is not being built.
