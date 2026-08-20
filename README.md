@@ -240,9 +240,9 @@ To run the CircuitPython demo, follow the directions above for MicroPython but a
 rp2040py micropython --circuitpython
 ```
 
-and start the CircuitPython REPL! As with MicroPython, the firmware (**8.0.2** by default) is
+and start the CircuitPython REPL! As with MicroPython, the firmware (**10.2.1** by default) is
 downloaded automatically on first use; a different version or a local file can be given via
-`--image` (e.g. `--image 10.2.1` or a path to an already-downloaded UF2). The rest of the experience
+`--image` (e.g. `--image 8.0.2` or a path to an already-downloaded UF2). The rest of the experience
 is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc). Filesystem support
 (a FAT12 image, not littlefs) and WiFi both work here too - see
 [Filesystem support](#filesystem-support) and [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
@@ -597,7 +597,8 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   they are one caller of a single reset owner rather than the only path: a **RESET button**
   (`external/reset_button.py` - a real RUN-pin level, so holding it holds the chip in reset) and a
   host-side **`device.ahard_reset()`** reach the same sequence. What that sequence covers is the
-  blocks a real reset covers - pads, IO, SIO, clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB - gated by
+  blocks a real reset covers - pads, IO, SIO, clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL
+  and the XIP domain - gated by
   `PSM.WDSEL`/`RESETS.WDSEL` exactly as hardware gates them, so a GPIO the guest left driving is
   released and WiFi comes back up on a Pico W. Flash/filesystem content and every
   externally-referenced peripheral object's identity survive (the reset is in place, never a

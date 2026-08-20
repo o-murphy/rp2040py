@@ -54,11 +54,12 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | **open, not root-caused** (2026-08-20) - the boundary is 8.x vs 9.x (9.2.9/10.2.1 both pass); ruled out SRAM survival, the reset-cause registers, slowness and any peripheral poll; a cold boot never enters the SRAM region it gets stuck in
 - [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause already exists; what is missing is a trigger a device can call and a decision on SRAM/USB/attached devices
 - [ ] [0091] ESP32-C3 port feasibility | idea only, nothing proposed - the harness reuses and the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers, and no C3 claim in it is source-verified yet
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
-- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **All phases landed** (2026-08-20; Phase 3 built then dropped as unwanted), open only for the record's own "Known gaps" - a held RESET stays enumerated, no awaitable button reset, some register blocks still unreset, CircuitPython 8.0.2 still does not come back
+- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **All phases landed** (2026-08-20; Phase 3 built then dropped as unwanted), open only for the record's own "Known gaps" - a held RESET stays enumerated, no awaitable button reset, `xosc`/`rosc` and the TIMER count still unreset, and CircuitPython 8.0.2 still does not come back ([0093])
 - [ ] [0088] USB host side: mass storage, CDC control lines, and reset | measured, nothing built - `usb/cdc.py` is a CDC consumer, not a host; a 1200-bps-touch reset would do nothing on rp2; MSC is mutually exclusive with [0087]. Its "host-driven board reset" row is closed by [0089]'s Phase 2
 - [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built; rejected [0086], and its restart step is unblocked since [0089] - `ahard_reset()` for a hard one, one line of `aexec()` for a soft one
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
@@ -263,3 +264,4 @@ record is added.
 [0090]: records/0090-post-boot-nudge-is-a-newline.md
 [0091]: records/0091-esp32-c3-port-feasibility.md
 [0092]: records/0092-power-button-and-power-cycle.md
+[0093]: records/0093-circuitpython-802-warm-boot-hang.md

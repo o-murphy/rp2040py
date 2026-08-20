@@ -66,6 +66,22 @@ class RP2040RTC(BasePeripheral):
         self.baseline = datetime(2021, 1, 1, tzinfo=timezone.utc)
         self.baseline_nanos: float = 0
 
+    def reset(self) -> None:
+        """`RESETS_RESET_RTC` (0089 Phase 5). pico-sdk's own `rtc_init()` starts with
+        `reset_block(RESETS_RESET_RTC_BITS)`, so firmware re-initialises this block after a reset
+        rather than expecting it to keep time - which is what makes clearing the setup registers
+        correct rather than destructive.
+
+        `baseline_nanos` is set to *now* rather than to 0 (construction's value, when the clock was
+        also 0): both mean "the RTC reads `baseline` at this instant", but only this one stays true
+        for a reset that happens partway through a run.
+        """
+        self.setup0 = 0
+        self.setup1 = 0
+        self.ctrl = 0
+        self.baseline = datetime(2021, 1, 1, tzinfo=timezone.utc)
+        self.baseline_nanos = self.rp2040.clock.nanos
+
     def read_uint32(self, offset: int) -> int:
         date = self.baseline + timedelta(milliseconds=(self.rp2040.clock.nanos - self.baseline_nanos) / 1_000_000)
         if offset == RTC_SETUP0:

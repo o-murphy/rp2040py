@@ -1074,7 +1074,8 @@ CI gate stays. Comment corrected in the workflow rather than left to mislead the
   `BaseDevice._on_watchdog_trigger()` exists to prevent. Written on `RP2040.reset()` itself.
 - **Still unreset**: `xosc`/`rosc` (deliberately - `watchdog_reboot()` excludes them too), the RTC,
   and `busctrl`/`syscfg`/`sysinfo`/`tbman`/`ssi`/`xip_ctrl`, which have no `reset()` of their own
-  yet. Named in `RP2040.reset()`'s docstring rather than left to be discovered.
+  yet. Named in `RP2040.reset()`'s docstring rather than left to be discovered. **Closed the same
+  day - see the follow-up below.**
 - **The TIMER's count** does not restart, because it reads from the simulation clock rather than
   from the block. A real `TIMER` restarts from zero. Unchanged by this phase, now written down.
 - **CircuitPython 8.0.2**, above.
@@ -1107,6 +1108,40 @@ Phase 4), [0087] and [0088].
 *What this phase deliberately did not do:* re-explain the reset design in the reference docs. The
 records carry the reasoning; the reference docs get the parts a *user* needs - what a command does,
 and what shape to copy.
+
+### Phase 5 follow-up - the last unreset blocks (2026-08-20)
+
+Phase 5's own "Still unreset" gap, closed rather than left: `RP2040RTC`, `RPBUSCTRL`, `RPXIPCtrl`
+and `RPSSI` gained real `reset()` methods and are wired into `RP2040.reset()`. What is left is
+`xosc`/`rosc` (deliberately) and the TIMER's count (it reads the simulation clock, not the block).
+
+Two things this turned up that are worth more than the code:
+
+- **`SYSCFG`/`SYSINFO`/`TBMAN` are not a gap.** They hold no instance state at all - read-only chip
+  identity - so `BasePeripheral`'s no-op default *is* their correct implementation. Checked, and
+  said so in `RP2040.reset()` rather than leaving them looking forgotten.
+- **The XIP domain is not a `RESETS` bit.** There is no `RESETS_RESET_XIP` or `_SSI`; both halves
+  sit in `PSM.WDSEL`'s XIP domain and reset together. Gating them on a RESETS bit would have looked
+  right and never fired.
+
+`RPSSI.reset()` had two landmines, both already documented in its constructor and both now covered
+by tests: its QSPI_SS listener must **not** be re-registered (`_listeners` holds *bound methods* -
+a fresh object each time, so re-adding leaves two firing per edge), and `_cs_asserted` must be
+re-synced from the pin rather than set `False` (an `always_output_enabled` pad with nothing driving
+it resolves LOW, i.e. already asserted; hardcoding False means the bootrom's first
+`flash_cs_force(low)` fires no edge and its flash command hangs forever).
+
+Since this touches the execution path out of flash, it was re-verified live rather than by tests
+alone: `chip_reset_run.py --pads`, `hard_reset_run.py` (MicroPython v1.23.0) and
+`chip_reset_run.py --cyw43` (CircuitPython 10.2.1) all still pass.
+
+Also part of this pass: `Peripheral` (the Protocol that types `RP2040.peripherals`) gained
+`reset()`. An earlier version of `BasePeripheral.reset()`'s docstring argued the opposite - that
+the Protocol is the *bus* contract and that `native/_pio.pyx`'s `cdef class` could not satisfy it.
+The first half is still true; the second stopped being true in Phase 4.1, when that class got its
+own `reset()`. Checked before changing it: 26 classes inherit `BasePeripheral`, exactly one
+implementer does not, and it has the method. Worth stating what this does **not** buy - it cannot
+*find* a missing reset, because the base-class default satisfies it trivially.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

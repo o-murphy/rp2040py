@@ -46,10 +46,11 @@ from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.ppb import RPPPB
-from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO
+from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP
 from rp2040py.peripherals.pwm import RPPWM
 from rp2040py.peripherals.reset import (
     RESET_ADC,
+    RESET_BUSCTRL,
     RESET_DMA,
     RESET_I2C0,
     RESET_I2C1,
@@ -60,6 +61,7 @@ from rp2040py.peripherals.reset import (
     RESET_PIO0,
     RESET_PIO1,
     RESET_PWM,
+    RESET_RTC,
     RESET_SPI0,
     RESET_SPI1,
     RESET_TIMER,
@@ -209,10 +211,14 @@ cdef class RP2040:
         self.pads_bank0 = RPPADS(self, "PADS_BANK0_BASE", "bank0")
         self.pads_qspi = RPPADS(self, "PADS_QSPI_BASE", "qspi")
         self.timer = RPTimer(self, "TIMER_BASE")
+        self.rtc = RP2040RTC(self, "RTC_BASE")
+        self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
+        self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
+        self.ssi = RPSSI(self, "SSI")
 
         self.peripherals = {
-            0x14000: RPXIPCtrl(self, "XIP_CTRL_BASE"),
-            0x18000: RPSSI(self, "SSI"),
+            0x14000: self.xip_ctrl,
+            0x18000: self.ssi,
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: RP2040SysCfg(self, "SYSCFG"),
             0x40008: self.clocks,
@@ -225,7 +231,7 @@ cdef class RP2040:
             0x40024: RPXOSC(self, "XOSC_BASE"),
             0x40028: UnimplementedPeripheral(self, "PLL_SYS_BASE"),
             0x4002C: UnimplementedPeripheral(self, "PLL_USB_BASE"),
-            0x40030: RPBUSCTRL(self, "BUSCTRL_BASE"),
+            0x40030: self.busctrl,
             0x40034: self.uart[0],
             0x40038: self.uart[1],
             0x4003C: self.spi[0],
@@ -236,7 +242,7 @@ cdef class RP2040:
             0x40050: self.pwm,
             0x40054: self.timer,
             0x40058: self.watchdog,
-            0x4005C: RP2040RTC(self, "RTC_BASE"),
+            0x4005C: self.rtc,
             0x40060: UnimplementedPeripheral(self, "ROSC_BASE"),
             0x40064: self.vreg_and_chip_reset,
             0x4006C: RPTBMAN(self, "TBMAN_BASE"),
@@ -360,11 +366,11 @@ cdef class RP2040:
           resetting in place safe for the `ExternalDevice`s and the `USBCDC` holding references
           into this object.
 
-        What is still *not* reset, and is a known gap rather than a decision: `xosc`/`rosc`
-        (deliberately - both are excluded by `watchdog_reboot()` itself, and neither is modelled
-        beyond its registers), the RTC, `busctrl`/`syscfg`/`sysinfo`/`tbman`/`ssi`/`xip_ctrl`
-        (register blocks with no `reset()` of their own yet), and the TIMER's count, which reads
-        from the simulation clock rather than from this block.
+        What is still *not* reset: `xosc`/`rosc` (deliberately - both are excluded by
+        `watchdog_reboot()` itself, and neither is modelled beyond its registers), and the TIMER's
+        count, which reads from the simulation clock rather than from this block. `SYSCFG`/
+        `SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at all, so
+        `BasePeripheral`'s default no-op is their correct implementation.
         """
         cdef unsigned char[:] filler
         if from_watchdog:
@@ -439,6 +445,18 @@ cdef class RP2040:
             self.pio[1].reset()
         if resets_wdsel & RESET_USBCTRL:
             self.usb_ctrl.reset()
+        if resets_wdsel & RESET_RTC:
+            self.rtc.reset()
+        if resets_wdsel & RESET_BUSCTRL:
+            self.busctrl.reset()
+        # SYSCFG/SYSINFO/TBMAN have RESETS bits too and are deliberately not called: they hold no
+        # instance state at all (read-only chip identity), so `BasePeripheral`'s default no-op is
+        # the correct implementation rather than a gap. Checked, not assumed.
+        if psm_wdsel & WDSEL_XIP:
+            # The XIP domain is a PSM bit, not a RESETS one - there is no RESETS_RESET_XIP or
+            # _SSI. Both halves of it reset together, as they do on silicon.
+            self.xip_ctrl.reset()
+            self.ssi.reset()
 
         if not preserve_flash:
             filler = bytearray(b"\xff" * len(self._flash))

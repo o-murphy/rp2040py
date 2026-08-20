@@ -13,7 +13,7 @@ Both `RP2040` twins are covered by the suite running under `RP2040PY_SKIP_CYTHON
 """
 
 from rp2040py.gpio_pin import FUNCTION_SIO
-from rp2040py.peripherals.psm import WDSEL_RESETS, WDSEL_SIO
+from rp2040py.peripherals.psm import WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP
 from rp2040py.peripherals.reset import RESET_UART0
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 
@@ -209,3 +209,63 @@ def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):
 
     assert rp2040.sio.gpio_output_enable == 0
     assert WDSEL_RESETS & rp2040.psm.wdsel == 0, "only SIO was selected"
+
+
+def test_the_remaining_register_blocks_reset_too(rp2040_factory):
+    """RTC and BUSCTRL were the last two `RESETS` blocks inheriting the no-op default. SYSCFG/
+    SYSINFO/TBMAN still do, and correctly - they hold no instance state at all."""
+    rp2040 = rp2040_factory()
+    rp2040.rtc.ctrl = 0xF
+    rp2040.rtc.setup0 = 0x1234
+    rp2040.busctrl.perf_ctr[1] = 99
+    rp2040.busctrl.perf_sel[1] = 0
+
+    rp2040.reset(preserve_flash=True)
+
+    assert rp2040.rtc.ctrl == 0
+    assert rp2040.rtc.setup0 == 0
+    assert rp2040.busctrl.perf_ctr == [0, 0, 0, 0]
+    assert rp2040.busctrl.perf_sel == [0x1F, 0x1F, 0x1F, 0x1F]
+
+
+def test_xip_and_ssi_are_gated_on_the_psm_xip_domain_not_a_resets_bit(rp2040_factory):
+    """There is no `RESETS_RESET_XIP` or `_SSI` - the XIP domain is a `PSM.WDSEL` bit, and both
+    halves of it reset together."""
+    rp2040 = rp2040_factory()
+    rp2040.xip_ctrl.stream_addr = 0x1000
+    rp2040.ssi._ssienr = 1
+    rp2040.resets.write_uint32(0x04, 0x01FFFFFF)  # every RESETS bit, and it must not be enough
+
+    rp2040.reset(preserve_flash=True, from_watchdog=True)
+    assert rp2040.xip_ctrl.stream_addr == 0x1000
+    assert rp2040.ssi._ssienr == 1
+
+    rp2040.psm.write_uint32(0x08, WDSEL_XIP)
+    rp2040.reset(preserve_flash=True, from_watchdog=True)
+    assert rp2040.xip_ctrl.stream_addr == 0
+    assert rp2040.ssi._ssienr == 0
+
+
+def test_resetting_ssi_does_not_duplicate_its_chip_select_listener(rp2040_factory):
+    """`RPSSI.__init__` registers a listener on QSPI_SS, and `_listeners` is a set of *bound
+    methods* - a fresh one each time, so re-adding on reset would leave two firing per edge."""
+    rp2040 = rp2040_factory()
+    before = len(rp2040.qspi[1]._listeners)
+
+    rp2040.reset(preserve_flash=True)
+
+    assert len(rp2040.qspi[1]._listeners) == before
+
+
+def test_resetting_ssi_re_syncs_chip_select_from_the_pin(rp2040_factory):
+    """Hardcoding `_cs_asserted = False` here is the bug the constructor's own comment documents:
+    an `always_output_enabled` pad with nothing driving it resolves LOW, i.e. already asserted, so
+    the bootrom's first `flash_cs_force(low)` would fire no edge and its flash command would hang
+    forever waiting for RX bytes that get silently dropped."""
+    rp2040 = rp2040_factory()
+
+    rp2040.reset(preserve_flash=True)
+
+    from rp2040py.gpio_pin import GPIOPinState
+
+    assert rp2040.ssi._cs_asserted == (rp2040.qspi[1].value == GPIOPinState.LOW)

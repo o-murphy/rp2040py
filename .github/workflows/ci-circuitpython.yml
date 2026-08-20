@@ -24,13 +24,17 @@ jobs:
         # full pypy/cpython-3.10/cpython-3.14 spread on every release it tests, and nothing about
         # CircuitPython exercises the host interpreter differently. Three jobs, one runtime.
         include:
-          # The project's own default (README), and the oldest thing we claim to support.
+          # The oldest release this project claims to support. **Not** the default any more - that
+          # is 10.2.1 (`firmware_specs.json`), and every test that needs a reset runs there. This
+          # row is deliberately boot-only: it proves the oldest supported firmware still comes up,
+          # which is coverage worth keeping, and nothing else is asserted on it.
           # hard_reset: false - 8.0.2 does not come back over USB after a chip reset in this
           # emulator (measured 2026-08-20: it re-boots and then spins in SRAM, never
-          # re-enumerating, where 9.2.9 and 10.2.1 both re-enumerate in ~20s). This was expected to
-          # be the peripheral/pad state 0089's Phase 5 clears - **it is not**: re-measured after
-          # that phase landed (2026-08-20), 8.0.2 still never comes back and ahard_reset() times
-          # out. Cause still unknown, so the gate stays.
+          # re-enumerating). This was expected to be the peripheral/pad state 0089's Phase 5
+          # clears - **it is not**: re-measured after that phase landed (2026-08-20), 8.0.2 still
+          # never comes back and ahard_reset() times out, while 9.2.9 and 10.2.1 both pass the same
+          # script. The boundary is 8.x vs 9.x; the cause is open in
+          # docs/records/0093-circuitpython-802-warm-boot-hang.md, so the gate stays.
           - tag: "8.0.2"
             wlan: false
             hard_reset: false
