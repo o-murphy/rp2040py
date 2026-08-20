@@ -398,3 +398,48 @@ and the low registers at that moment. That names which pointer was zero - and *t
 whose provenance decides whether this record ends in the emulator's reset path or in 8.x's own
 startup ordering.
 
+## 2026-08-20, last measurement of the day: registers at the entry, and a veneer
+
+Ran the capture the previous section asked for - 10 us alarm, triggering on the pc entering the
+blank window, recording registers and stack:
+
+    ENTRY #1: prev pc=0x20003362 -> pc=0x20003820, at simulated 3.5240 s
+       lr=0x10041d89  sp=0x20041f80  ipsr=0
+       r0-r7 = 0xffffff7d 0x000060cf 0x000000dd 0x40058000 0x00001fd6 0x000001b4 0x00000300 0x0
+       stack = 0x00000000 0x10027029 0x00000008 0x200000f9 0x0 0x0 0x0 0x0
+       [pc] = 0x00000000   [prev] = 0x00000000
+
+Two things follow immediately. The previous pc (`0x20003362`) is **also** blank memory, so the
+window `0x20003400..0x20003a80` was drawn too high - execution was already sliding before it. And
+`sp = 0x20041f80` is 128 bytes below the stack top (`0x20042000`), so this is shallow: an early
+call chain, not deep inside the runtime.
+
+The saved return address reconstructs it: `0x10027029` is the instruction after
+`bl 0x10041d78` at `0x10027024`, inside a run of `bl`s that looks like a startup sequence. That
+function calls `bl 0x10090b20`, and `lr = 0x10041d89` says we are inside **that** call when the pc
+is in blank memory.
+
+`0x10090b20` disassembles as a **long-branch veneer**:
+
+    push {r0}
+    ldr  r0, [pc, #8]     ; target from the literal pool
+    mov  ip, r0
+    pop  {r0}
+    bx   ip
+
+**Which is why this measurement does not close the record.** The veneer takes its target from a
+literal in *flash*, and flash is identical on both boots by construction - so "the reset corrupted
+the branch target" cannot be the whole story, exactly as the VTOR and low-SRAM checks already
+killed their own simpler versions.
+
+What is left needs a different tool than sampling: single-stepping from the `bl 0x10090b20` at
+`0x10041d84` through the veneer, on both a cold and a warm boot, and comparing. The emulator can
+do that (the core is steppable, and `RP2040PY_SKIP_CYTHON=1` makes it hookable in Python) - it is
+a matter of arranging to start stepping at the right moment, which is a session of its own rather
+than another sample-and-guess.
+
+**Status: still open, not root-caused.** Five hypotheses are now dead by measurement rather than
+by argument - the CONNECTED deadlock, stale SRAM contents, the XIP/SSI model, VTOR relocation, and
+an unpopulated low SRAM - and the search has narrowed from "somewhere in a 2.3-second boot" to one
+veneer, reached from a named call site, with the registers at the failure recorded above.
+
