@@ -1,7 +1,7 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Phases 0-2 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20); Phases
-  4-6 not started.** Design settled and the
+- Status: **Phases 0-2 and 4 landed (2026-08-20); Phase 3 dropped as unwanted (2026-08-20);
+  Phases 5-6 not started.** Design settled and the
   phased plan below written first - see the "Progress log" at the very end for what has
   actually shipped, per phase.
   Asked for while working through
@@ -493,7 +493,7 @@ plus live-boot on both firmwares (both transcripts are in the Appendix, byte for
 
 *Closes:* [0087]'s "the device API has no way to send that byte".
 
-### Phase 4 - RESET button / RUN pin
+### Phase 4 - RESET button / RUN pin - **done (2026-08-20)**
 
 4.1 **`RP2040` grows the RUN level** - in all three twins (`_rp2040.py`, `native/_rp2040.pyx`,
 `native/_rp2040.pyi`), per [0057]'s "Cost of touching `RP2040` at all".
@@ -868,6 +868,95 @@ and says so in a comment rather than quietly skipping 8.0.2.
 
 *Not touched:* Phases 3-6 - no soft-reset entry point, no RUN pin, and `RP2040.reset()` still
 covers only `core`/`pwm`/`dma`/`ppb`.
+
+### Phase 4 - done (2026-08-20)
+
+The RESET button, end to end - and with it [0057](0057-run-pin-reset-hook.md), which this closes in
+full. Both of that record's options landed together, as section 2 said they had to: option A's
+placement (a hook on `RP2040`, installed downward by `BaseDevice`) *and* option C's semantics (RUN
+is a level, so a held button really holds the chip).
+
+**4.1 The RUN level on `RP2040`** - `run_pin_low` (read-only) plus `set_run_pin(low=...)` and an
+`on_run_pin_reset` hook defaulting to a warning, in both twins (`_rp2040.py`,
+`native/_rp2040.pyx`). Only the *release* is an edge: pressing holds, re-driving a level already
+present does nothing, and a release with no hook installed is logged rather than half-resetting a
+chip whose USB half is unreachable from `RP2040`. `native/_rp2040.pyi` needed **no** change, which
+is worth recording against 0057's "Cost of touching `RP2040` at all" - the stub re-exports
+`RP2040` wholesale from `rp2040py._rp2040`, so the pure-Python class stays the single source of
+truth for types, and the native class's `cdef dict __dict__` means no `.pxd` entry was needed
+either. The cost was two twins, not three.
+
+**4.2 "Held in reset", in both batch loops** (`_execute_batch.py` and `native/_simulator.pyx`): an
+early return while `run_pin_low`. This is the third execution state 0057's option C priced -
+nothing executes, no PIO steps, and **no simulated time passes**, which is what separates it from
+`core.waiting` (a running chip in WFI, still servicing alarms) and from `simulator.stopped` (the
+engine room ending). Checked once per batch, not per iteration: the level can only change from a
+`schedule_threadsafe()` callback on the same loop, so it cannot move mid-batch.
+
+`Simulator.execute()` needed one line beyond the plan, and it is not cosmetic: with the batch
+returning instantly, its `await asyncio.sleep(0)` would have turned a held button into a fully
+busy-spun core - the exact failure mode CLAUDE.md's threaded-test note warns about. It now parks
+for `_HELD_IN_RESET_POLL_SECONDS` (0.005, one batch budget) per iteration while held.
+
+**4.3 `BaseDevice.__init__` installs the hook downward** - `self.mcu.on_run_pin_reset =
+self._on_run_pin_reset`, one line below the `watchdog.on_watchdog_trigger` line it copies, and
+`_on_run_pin_reset()` is one more caller of `hard_reset(cause=RUN_PIN)` rather than a second
+implementation. This is the trigger for which that cause is literal rather than a stand-in (D4).
+
+**4.4 `external/reset_button.py`** - `press()`/`release()`/`click()`/`is_pressed`, every level
+change handed to the engine room via `schedule_threadsafe()` per 0030, since unlike `BootselButton`
+this one is pressed *while running* by definition. `is_pressed` is deliberately the host's view
+(immediate); `mcu.run_pin_low` is the chip's (one engine-room turn later).
+
+**4.5 Boards** - attached to the three whose files carried the "not modelled" note, and those notes
+rewritten: `vcc_gnd_yd_rp2040` (whose own schematic is where the electrical facts came from),
+`waveshare_rp2040_lcd_0_96`, `weactstudio`. Not attached to `pico`/`pico_w`: a real Pico has **no**
+RESET button - BOOTSEL is its only one and RUN is a bare test point - so the live-boot check below
+wires one on itself, which is what `attach_external_devices()` is for.
+
+**Tests.** `tests/test_reset_button.py` (12) covers all three layers separately - the level/edge
+semantics, the batch loop's new state (a recurring alarm fires 0 times while held and >0 once
+released, with the clock frozen), and the device's handoff (asserted as "scheduled but not yet
+applied", which a direct call would erase). Two more in `tests/test_watchdog_reset.py` prove the
+`BaseDevice` wiring: releasing RUN runs the full device-level sequence (`pc`, flash preserved,
+`cdc` reset, same `usb_ctrl` object) and produces §1.3's RUN-pin row through the *pin* rather than
+through `hard_reset(cause=...)` directly. 0057's parity requirement needs nothing special - the
+suite already runs under both `RP2040PY_SKIP_CYTHON=1` and `=0`.
+
+**Live-boot verification** (`tests/reset_button_run.py`, now in both CI workflows): real
+MicroPython v1.23.0 and CircuitPython 10.2.1, a button attached to a plain `pico`.
+
+| observable | MicroPython v1.23.0 | CircuitPython 10.2.1 |
+|---|---|---|
+| RUN low while held | yes | yes |
+| PC frozen across a 0.5 s hold | `0x20000ae0` | `0x20000c06` |
+| re-enumerates on release, REPL usable | yes | yes |
+| guest RAM gone (`marker` -> `NameError`) | yes | yes |
+| reset cause | `machine.reset_cause() == PWRON_RESET` | **`microcontroller.ResetReason.RESET_PIN`** |
+
+The frozen PC is the observable that only a genuinely held chip produces: an idle emulated device
+is *not* still - a WFI'd core's PC moves constantly as timer/USB interrupts fire - so two reads
+half a second apart matching is not something an executing loop can fake. CircuitPython 8.0.2 is
+gated out of the CI step exactly as Phase 2's is, and for the same pre-existing reason.
+
+*Known gaps, deliberately left:*
+
+- **The emulated device stays enumerated while RUN is held.** On silicon the USB device drops off
+  the bus the moment the chip is held; here `cdc.reset()` only runs as part of the release, since
+  `hard_reset()` is one sequence and 0089 chose the release as its trigger. Visible only to a host
+  watching enumeration state during a hold, and not worth splitting the one owner of the reset in
+  two.
+- **A button-driven reset has no awaitable form.** `press()`/`release()` are fire-and-forget by
+  nature; a caller that needs to *wait* for the board to come back uses `ahard_reset()` (Phase 2),
+  which is the same reset with a host-side trigger. `tests/reset_button_run.py` therefore reaches
+  for `_arm_enumeration()`/`_await_enumeration()` directly - acceptable in an in-tree test script,
+  and a hint that a public form would need designing if a real caller ever wants one.
+- **BOOTSEL held across a RESET** stays unreachable in effect, as section 5 requires - nothing here
+  precludes it, and nothing here implements it either.
+
+*Not touched:* Phases 5-6 - `RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`, so the
+Appendix's point-5 gaps (a pad left driving, CircuitPython's CYW43 not coming back on a Pico W) are
+unchanged and remain the sharpest argument for Phase 5.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md

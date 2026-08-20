@@ -79,11 +79,11 @@ pin here, but still no new device class needed - `KeyMock(gpio=23, active_high=F
 already the generic "button on a GPIO pin, released state resolved through whichever pull resistor
 firmware configured" device (`external/key_mock.py`).
 
-Not modelled: the **RESET** button. It pulls the RP2040's RUN pin, which is not a GPIO and has no
-model here at all - unlike BOOTSEL, which shorts `GPIO_QSPI_SS`, an ordinary pad an
-`ExternalDevice` can drive (docs/records/0050/0051). Doing it faithfully needs a reset hook on
-`RP2040`, designed in docs/records/0057 and deliberately not implemented yet; until then a guest's
-own `machine.reset()` is the working equivalent.
+RESET: `ResetButton` (`rp2040py.external.reset_button`). It pulls the RP2040's RUN pin, which is
+not a GPIO and has no pad - unlike BOOTSEL, which shorts `GPIO_QSPI_SS`, an ordinary pad an
+`ExternalDevice` can drive (docs/records/0050/0051). RUN is now a real level on `RP2040` with the
+reset hook `BaseDevice` installs into it (docs/records/0089's Phase 4, closing docs/records/0057),
+so pressing holds the chip in reset and releasing boots it.
 
 Confirmed **not** the same board as "YD-RP2040" (VCC-GND Studio) - a different vendor's board,
 with an onboard NeoPixel this board does not have (confirmed absent from upstream WEACTSTUDIO's
@@ -95,6 +95,7 @@ from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.key_mock import KeyMock
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
 __all__ = ("BOARD", "BOARD_FLASH_2M", "BOARD_FLASH_4M", "BOARD_FLASH_8M", "BOARD_FLASH_16M")
@@ -103,7 +104,12 @@ _FS_START = "0x100000"
 _FS_BLOCKSIZE = 4096
 _USR_BUTTON_GPIO = 23
 
-_EXTRAS = (lambda: LEDMock(gpio=25), BootselButton, lambda: KeyMock(gpio=_USR_BUTTON_GPIO, active_high=False))
+_EXTRAS = (
+    lambda: LEDMock(gpio=25),
+    BootselButton,
+    lambda: KeyMock(gpio=_USR_BUTTON_GPIO, active_high=False),
+    ResetButton,
+)
 
 # Full version history from https://micropython.org/download/WEACTSTUDIO/ (one page, all four
 # variants - see scripts/fetch_firmware.py's own `--page` note for why the fetch needs it split

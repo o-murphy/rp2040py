@@ -223,11 +223,35 @@ cdef class RP2040:
         # _rp2040.py's identical field for the full rationale.
         self._simulator = None
 
+        # RUN pin / RESET button (0089 Phase 4) - see _rp2040.py's identical fields for the full
+        # rationale, including the schematic that makes a press a level rather than a pulse.
+        self._run_pin_low = False
+        self.on_run_pin_reset = self._default_run_pin_reset
+
         self.reset()
 
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    def _default_run_pin_reset(self) -> None:
+        self.logger.warning(LOG_NAME, "RUN pin released, but no reset handler provided")
+
+    @property
+    def run_pin_low(self):
+        """True while RUN is held low - the chip is in reset and executes nothing at all. Read
+        once per batch by execute_batch() (native/_simulator.pyx). See _rp2040.py's twin."""
+        return self._run_pin_low
+
+    def set_run_pin(self, *, low: bool) -> None:
+        """Drive the RUN pin, as a RESET button does: `low=True` holds the chip in reset,
+        `low=False` releases it and that edge fires `on_run_pin_reset`. Idempotent per level.
+        See _rp2040.py's twin for the full contract - the two must not drift."""
+        if low == self._run_pin_low:
+            return
+        self._run_pin_low = low
+        if not low:
+            self.on_run_pin_reset()
 
     @property
     def simulator(self):

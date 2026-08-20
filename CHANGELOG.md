@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ResetButton` (`rp2040py.external.reset_button`) - the RESET button, as an `ExternalDevice`, and
+  with it the **RUN pin** as a real level on `RP2040` (`run_pin_low`/`set_run_pin()` plus an
+  `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into). RUN is not a GPIO and has
+  no pad, so this is the first device that acts on the chip rather than on a pin. A press *holds*
+  the chip in reset - `execute_batch()` gained a third execution state in which nothing runs and no
+  simulated time passes, distinct from a WFI'd `core.waiting` core - and the release is what boots
+  it, with `machine.reset_cause()`/`microcontroller.cpu.reset_reason` reporting the RESET pin.
+  Sourced from a real vendor schematic (`3V3 -[R12 10k]- RUN`, switch to GND, in VCC-GND Studio's
+  own YD-2040 sheet), which is what makes the button a level rather than a pulse. Attached to the
+  three boards whose files previously documented it as "not modelled": `vcc_gnd_yd_rp2040`,
+  `waveshare_rp2040_lcd_0_96`, `weactstudio`. Live-boot-verified on real MicroPython v1.23.0 and
+  CircuitPython 10.2.1, both now in CI (`tests/reset_button_run.py`).
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 4, closing
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md).
 - `demo/mkfat12.py` - builds (and reads back) the CIRCUITPY FAT12 image CircuitPython auto-runs
   `boot.py`/`code.py` from, with no host dependencies, and without booting anything - which is what
   makes it usable from a test, from CI, and as `--code`/`--boot`'s implementation. (It was

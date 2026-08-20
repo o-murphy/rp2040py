@@ -55,6 +55,11 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     cdef RP2040 rp2040 = simulator.rp2040
     cdef CortexM0Core core = rp2040.core
     cdef SimulationClock clock = simulator.clock
+
+    if rp2040.run_pin_low:
+        # RUN held low - the chip is in reset and executes nothing. See _execute_batch.py's own
+        # comment here for the full rationale; the two loops must not drift.
+        return
     # Advanced once per loop iteration below (both the idle-jump and busy-instruction paths -
     # real PIO keeps running independent of CPU sleep state), by the system clocks that iteration
     # covered rather than by one step regardless: honouring SM_CLKDIV and [delay] is

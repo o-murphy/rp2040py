@@ -392,6 +392,14 @@ Two practical notes both runners now encode, learned the hard way:
   0043](../records/0043-pio-dma-first-batch-race.md)), and for the same reason PIO does not run
   through a CPU idle jump. Anything asking for a divider above ~1.4 - which is every pulse-width
   driver - is exact.
+- **A device can reach more than pins, but only through what `RP2040` itself exposes.** Almost
+  every device here wires itself to `rp2040.gpio[n]`/`rp2040.spi[n]` and nothing else, but
+  `ResetButton` (`external/reset_button.py`) is the case that does not fit: RESET pulls the **RUN**
+  pin, which is not a GPIO, not memory-mapped and has no pad. It works through `RP2040.set_run_pin()`
+  plus the `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into
+  ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 4) - the pattern to copy if
+  you ever need a device that acts on the *chip* rather than on a pin. Note what it implies: while
+  RUN is held low nothing executes at all, and no simulated time passes.
 - **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See

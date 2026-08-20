@@ -57,19 +57,20 @@ and `reference/` for those). The structure itself is decided in
 - [ ] [0091] ESP32-C3 port feasibility | idea only, nothing proposed - the harness reuses and the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers, and no C3 claim in it is source-verified yet
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
-- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **Phases 0-2 landed, Phase 3 dropped as unwanted, Phases 4-6 not started** (2026-08-20); the umbrella record for reset across [0057]/[0087]/[0088]
+- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **Phases 0-2 and 4 landed, Phase 3 dropped as unwanted, Phases 5-6 not started** (2026-08-20); the umbrella record for reset across [0057]/[0087]/[0088]
 - [ ] [0088] USB host side: mass storage, CDC control lines, and reset | measured, nothing built - `usb/cdc.py` is a CDC consumer, not a host; a 1200-bps-touch reset would do nothing on rp2; MSC is mutually exclusive with [0087]
-- [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built; rejected [0086], and its restart step is unblocked since [0089]'s Phase 2/3
+- [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built; rejected [0086], and its restart step is unblocked since [0089]'s Phase 2
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
 - [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
 - [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
 - [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
-- [ ] [0057] RESET button / RUN pin reset hook on `RP2040` | documented, not built - its register half landed as [0089]'s Phase 1, and the pin itself is that record's Phase 4
 - [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, core1/the real FIFO not implemented**; the addendum settles the execution model, and its interim clearer-warning option landed 2026-08-18
 - [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
 - [ ] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | **Closed dormant, not root-caused** (2026-08-18; one local sighting 2026-08-20, so not CI-specific, and there is now a repro recipe)
 
 ### Implemented
+
+- [x] [0057] RESET button / RUN pin reset hook on `RP2040` | **closed in full by [0089]'s Phase 4** - `run_pin_low`/`set_run_pin()` + an `on_run_pin_reset` hook, a held-in-reset state in both batch loops, and `ResetButton` on three boards; live-verified on both firmware families
 
 - [x] [0090] the post-boot nudge is a newline, for both firmware families | measured, then changed; fell out of [0089]'s Phase 0.1 moving the nudge onto the device
 

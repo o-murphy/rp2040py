@@ -86,6 +86,14 @@ jobs:
         if: ${{ matrix.hard_reset }}
         run: timeout 10m uv run --no-dev -- python tests/hard_reset_run.py --circuitpython --image ${{ matrix.tag }}
 
+      # 0089's Phase 4, CircuitPython half: the RESET button. Gated on the same `hard_reset` flag
+      # as the step above, and for the same reason - 8.0.2 never re-enumerates after a chip reset,
+      # whichever trigger caused it. This is the family that reports the cause precisely
+      # (`RESET_PIN`), so it is the sharper of the two live checks.
+      - name: Test CircuitPython RESET button ${{ matrix.tag }}
+        if: ${{ matrix.hard_reset }}
+        run: timeout 10m uv run --no-dev -- python tests/reset_button_run.py --circuitpython --image ${{ matrix.tag }}
+
       # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step (33s measured
       # locally, 2026-08-16), and soft-failing for
       # the same reason: it opens a real TCP connection and a real DNS query to the internet

@@ -492,8 +492,9 @@ hardware it doesn't model out of the box:
 
 - **`ExternalDevice`** (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets
   wired up via `attach_external_devices()`. Devices already shipping in-tree this way: the onboard
-  LED, the BOOTSEL button, a generic button/key, the CYW43439 WiFi chip behind `pico_w`, a Waveshare
-  2.9″ e-Paper panel, an ST7735S TFT controller, and a WS2812/WS2812B "NeoPixel" RGB LED.
+  LED, the BOOTSEL button, the RESET button (the RUN pin), a generic button/key, the CYW43439 WiFi
+  chip behind `pico_w`, a Waveshare 2.9″ e-Paper panel, an ST7735S TFT controller, and a
+  WS2812/WS2812B "NeoPixel" RGB LED.
 - **`boards.BoardSpec`** (what `--board` itself resolves to internally) - a public dataclass you
   build your own instance of: your own device mix on an existing firmware family, or a fully custom
   board with its own firmware and flash layout. Hand it to any `Device` class (`board=...`) or the

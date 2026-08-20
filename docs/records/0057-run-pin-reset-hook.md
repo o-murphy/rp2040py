@@ -1,7 +1,11 @@
 # 0057. RESET button / the RUN pin: a reset hook on `RP2040`
 
-- Status: **Proposed — documented, not implemented (2026-08-17).** Nothing in this record has been
-  built; it exists so the decision is made deliberately rather than guessed at inside a board file.
+- Status: **Implemented (2026-08-20)**, as [0089](0089-one-reset-for-every-trigger.md)'s Phase 4 -
+  see the closing section at the end of this record for what was actually built and where. It was
+  "Proposed — documented, not implemented (2026-08-17)" for three days; the record exists because
+  the decision needed making deliberately rather than being guessed at inside a board file, and
+  what shipped is neither option A nor option C alone but both together, which is what the
+  addendum's schematic forced.
 - Conceived: 2026-08-17
 - Related: 0056 (`WAVESHARE_RP2040_LCD_0_96` — the board whose RESET button raised this, and where
   the omission is currently written down), 0051 (`BootselButton` — the button that *could* be an
@@ -224,3 +228,31 @@ open question:
 - **BOOTSEL held across a RESET** stays unreachable in effect, because mass storage and the
   bootrom's USB mode are explicitly out of scope (0089 section 5, maintainer's decision). Phase 4's
   hook contract must still not preclude it.
+
+
+## Closing (2026-08-20): built, live-verified, and where each piece landed
+
+[0089](0089-one-reset-for-every-trigger.md)'s Phase 4 shipped this record in full. The mapping, so
+nothing above has to be read as still-open:
+
+| this record asked | what landed |
+|---|---|
+| A reset hook on `RP2040` (option A) | `RP2040.on_run_pin_reset`, defaulting to a warning; `BaseDevice.__init__` installs `_on_run_pin_reset` -> `hard_reset(cause=RUN_PIN)` next to the `watchdog.on_watchdog_trigger` line it copies |
+| RUN as a real pin (option C) | `run_pin_low` + `set_run_pin(low=...)`; only the release is an edge |
+| "hold the core" - the new execution state option C priced | an early return in both `execute_batch()` twins while `run_pin_low`: no instruction, no PIO, no simulated time. Plus one line in `Simulator.execute()` so a held button parks instead of busy-spinning |
+| `press()`/`release()` on the device (the recommendation's API shape) | `external/reset_button.py`, every level change via `schedule_threadsafe()` per 0030 |
+| "Does RUN-low erase flash?" - no | unchanged: `hard_reset()` calls `mcu.reset(preserve_flash=True)` |
+| "What does `WATCHDOG.REASON` read?" - not `TIMER` | 0089's Phase 1 already answered this in code; Phase 4 is what pulls it. Live: MicroPython reads `PWRON_RESET`, CircuitPython reads `RESET_PIN` |
+| Parity between the two `RP2040` twins | both changed; the suite runs under `RP2040PY_SKIP_CYTHON=1` and `=0` already. `native/_rp2040.pyi` needed nothing - it re-exports the pure-Python class, so the "any new public member has to land in all three" cost above was two, not three |
+| The testing plan (unit, live-boot, parity) | `tests/test_reset_button.py`, `tests/test_watchdog_reset.py`'s two new cases, and `tests/reset_button_run.py` in both CI workflows |
+
+**Option B is still not done, and is still worth doing.** Nothing here moved the reset sequence out
+of `BaseDevice` or gave `usb_ctrl` an `on_reset` notification - the hook indirection this record
+recommended as the cheaper path is exactly what shipped. What changed is that there are now three
+callers behind it (watchdog, host API, RUN pin) rather than one, which makes the case for B
+stronger, not weaker.
+
+**Two of the "semantics still to decide" bullets stayed decided-but-unbuilt**, both by 0089's own
+scoping: BOOTSEL held across a reset (mass storage is rejected outright, 0089 section 5) and
+whether attached `ExternalDevice`s need a reset callback (no - 0089's D7 says a real board's
+external chip only sees a reset through the GPIO firmware drives, which is Phase 5's pad reset).

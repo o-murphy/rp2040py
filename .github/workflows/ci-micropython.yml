@@ -146,6 +146,14 @@ jobs:
         env:
           PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
 
+      # 0089's Phase 4: the RESET button / RUN pin. Same three assertions as the host-side step
+      # above, reached through the pin instead - plus the one only a real held level can produce,
+      # that the core's PC does not move at all while the button is down.
+      - name: Test MicroPython RESET button ${{matrix.python_runtime}}-${{ matrix.micropython_version.tag }}
+        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python tests/reset_button_run.py --image ${{ matrix.micropython_version.tag }}
+        env:
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+
       - name: Test MicroPython flash dump is deterministic ${{ matrix.python_runtime }}-${{ matrix.micropython_version.tag }}
         run: |
           . scripts/ci-common.sh

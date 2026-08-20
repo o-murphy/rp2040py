@@ -47,6 +47,20 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
     native/_simulator.pyx's own execute_batch() reads."""
     rp2040, clock = simulator.rp2040, simulator.clock
 
+    if rp2040.run_pin_low:
+        # RUN held low: the chip is in reset and does nothing at all - no instruction, no PIO
+        # step, and no simulated time (docs/records/0089-one-reset-for-every-trigger.md Phase 4,
+        # which is 0057's option C). A third execution state, distinct from both of the ones
+        # already here: `core.waiting` is a WFI'd *running* chip that still services alarms and is
+        # cleared by an IRQ, and `simulator.stopped` ends the engine room entirely. Here the
+        # emulator is still running and the chip is held, exactly as a finger on RESET holds it.
+        #
+        # Checked once per batch rather than per iteration because the level cannot change during
+        # one: `ResetButton` hands press()/release() to this same engine-room loop via
+        # schedule_threadsafe(), so a change can only land between batches. Returning immediately
+        # would spin the loop - `Simulator.execute()` sleeps instead of yielding while this is set.
+        return
+
     # Stepped once per loop iteration below (both the idle-jump and busy-instruction paths - real
     # PIO keeps running independent of CPU sleep state), the same "driven directly by this loop,
     # not a competing asyncio.Task" pattern clock.tick() itself already uses. Grabbed once here,

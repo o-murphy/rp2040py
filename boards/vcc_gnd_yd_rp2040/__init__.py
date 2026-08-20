@@ -72,11 +72,12 @@ Onboard extras:
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
 - The user LED on GPIO25: `LEDMock`, same wiring as a plain Pico.
-- Not modelled: the **RESET** button. Its net is `3V3 -[R12 10k]- RUN`, with the switch grounding
-  RUN directly for as long as it is held - so a faithful model is a really-held-low RUN pin, which
-  this emulator has no concept of at all (RUN is not a GPIO). Designed, with its alternatives, in
-  docs/records/0057; until then a guest's own `machine.reset()`/`microcontroller.reset()` is the
-  working equivalent. Also not modelled: the PWR LED (wired to the rail, nothing RP2040-visible),
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). Its net is `3V3 -[R12 10k]- RUN`, with
+  the switch grounding RUN directly for as long as it is held - **this board's own schematic is
+  where that fact came from**, and it is what makes the emulated button a held level rather than a
+  one-shot pulse: `press()` holds the chip in reset (nothing executes), `release()` boots it with
+  `machine.reset_cause()` reporting the RESET pin. Built in docs/records/0089's Phase 4, which
+  closes docs/records/0057. Also not modelled: the PWR LED (wired to the rail, nothing RP2040-visible),
   USB-C, and the RP2040's own RTC (not board-specific).
 """
 
@@ -86,6 +87,7 @@ from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.key_mock import KeyMock
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -100,6 +102,7 @@ _EXTRAS = (
     lambda: KeyMock(gpio=USRKEY_GPIO, active_high=False),
     BootselButton,
     lambda: LEDMock(gpio=LED_GPIO),
+    ResetButton,
 )
 
 # Real download URL from https://circuitpython.org/board/vcc_gnd_yd_rp2040/ - only the tag this
