@@ -68,10 +68,11 @@ Onboard extras:
   activity with no guest code at all. MicroPython's build declares no such default.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
-- Not modelled: the **RESET** button. Not documented in either source cited above - nullbits' own
-  product page and pinout show a boot/reset control, but with no schematic or firmware-config
-  statement of its net, the same "pulls RUN, not a GPIO" gap every other board file here documents
-  applies regardless (docs/records/0057). Also not modelled: USB-C, and the RP2040's own RTC (not
+- Not modelled: any **RESET** button. A `ResetButton` exists since docs/records/0089's Phase 4, so
+  the question is now only whether this board has one - and nothing sourceable says it does.
+  Re-checked 2026-08-20: nullbits' own product page text mentions no buttons at all (only the UF2
+  bootloader), and its linked pinout is an image this project cannot read as a citation. Left off
+  rather than inferred from the fact that most RP2040 boards have one. Also not modelled: USB-C, and the RP2040's own RTC (not
   board-specific).
 """
 

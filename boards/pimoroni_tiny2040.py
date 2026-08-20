@@ -84,15 +84,20 @@ Onboard extras (identical between variants - only flash size and firmware differ
   confirmed active-low by both firmware ports independently.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051) - the real BOOTSEL mechanism, independent of `USER_SW`.
-- Not modelled: `USER_SW`/GPIO23 (see above), the **RESET** button (pins.csv lists no RESET net at
-  all for this board - unlike some other board files here, there's nothing board-specific to
-  document beyond the RUN pin every board leaves unmodelled, docs/records/0057), USB-C, and the
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). `pins.csv` lists no RESET net, and it
+  never would - RUN is not a GPIO - so the source for this one is Pimoroni's own product page:
+  "We've also managed to fit in a programmable RGB LED, a reset button and some clever circuitry".
+  That the firmware config is silent is not evidence of absence here, which is worth stating
+  because this file previously read as if it were. Modelled since docs/records/0089's Phase 4
+  (which closes docs/records/0057).
+- Not modelled: `USER_SW`/GPIO23 (see above), USB-C, and the
   RP2040's own RTC (not board-specific).
 """
 
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
 __all__ = ("BOARD", "BOARD_8MB", "LED_B_GPIO", "LED_G_GPIO", "LED_R_GPIO")
@@ -106,6 +111,7 @@ _EXTRAS = (
     lambda: LEDMock(gpio=LED_G_GPIO, active_low=True),
     lambda: LEDMock(gpio=LED_B_GPIO, active_low=True),
     BootselButton,
+    ResetButton,
 )
 
 # Full version history from

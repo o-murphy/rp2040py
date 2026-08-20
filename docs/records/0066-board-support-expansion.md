@@ -398,3 +398,32 @@ Phase 4 (a RUN level on `RP2040`, `BaseDevice` installing the hard reset into it
 `external/reset_button.py` with `press()`/`release()`), on top of [0057](0057-run-pin-reset-hook.md).
 Once that lands, a RESET button is one more entry in a board's `extras` and needs no new analysis
 per board - the same way `Ws2812`/`LEDMock`/`KeyMock` became free after their first board.
+
+
+## Correction (2026-08-20): "every board on these lists has one" is wrong
+
+The note above says a RESET button "is not a board feature at all - it is the RP2040's RUN pin", and
+concludes that every board on these checklists has one. [0089](0089-one-reset-for-every-trigger.md)'s
+Phase 4 landed, `boards/` was then swept board by board for it, and that conclusion does not
+survive the sweep. RUN exists on every RP2040; a *button wired to it* is very much a board decision,
+and the Raspberry Pi Pico itself is the counterexample sitting in this repo's own registry - it has
+BOOTSEL and no RESET button, only a RUN test point.
+
+Two ways a board fails to have one, both found in `boards/`:
+
+- **No RESET control at all**, or one that is not a RUN short. `boards/pimoroni_picolipo.py` has an
+  on/off **power** button; Pimoroni's own page says a reboot is "double press it to cut and
+  reinstate the power". That is a power cycle, so on silicon it reports `HAD_POR`, not `HAD_RUN`
+  (0089 §1.3) - attaching a `ResetButton` there would make the board lie about why it rebooted.
+- **Nothing sourceable says either way.** Waveshare's wiki/product pages return HTTP 403 to this
+  project (re-checked 2026-08-20; waveshare.net refuses the connection), the 0xCB guide URL cited in
+  `boards/0xcb_gemini.py` now 404s with no findable hardware repository, and nullbits' page text
+  mentions no buttons at all. Firmware config cannot fill the gap: RUN is not a GPIO, so `pins.csv`/
+  `pins.c` never declare it, and MicroPython's `board.json` `features` lists (checked for seven of
+  these boards) carry things like "USB-C"/"RGB LED" and never buttons.
+
+What *is* true is the second half: once the device exists, a RESET button costs one `extras` entry
+and no new analysis - the only per-board fact left is presence, since 0057's addendum settled that
+the net has no pin number and no configurable pull. The sweep's result, 12 of 19 board files
+carrying one, is in [0089](0089-one-reset-for-every-trigger.md)'s Phase 4 progress-log entry.
+

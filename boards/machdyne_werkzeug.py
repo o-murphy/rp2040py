@@ -56,10 +56,11 @@ Onboard extras:
   its polarity is a stated gap (see above), not a sourced fact.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
-- Not modelled: the **RESET** button. Not documented in either source cited above - Machdyne's own
-  product page shows the board has a reset control, but with no schematic or firmware-config
-  statement of its net, the same "pulls RUN, not a GPIO" gap every other board file here documents
-  applies regardless (docs/records/0057). Also not modelled: the USB-A host port (`USBA_POWER`/
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). Machdyne's own specifications say
+  "Reset and boot select buttons"; there is still no schematic statement of the net, and there does
+  not need to be - RUN's net carries no pin number and no configurable pull (docs/records/0057's
+  addendum), so presence is the whole fact. Modelled since docs/records/0089's Phase 4.
+- Not modelled: the USB-A host port (`USBA_POWER`/
   `USBA_DN`/`USBA_DP`/`USBA_DP_PU` in `pins.csv` - a real onboard USB-A receptacle this board
   exposes as plain GPIO, out of scope for a board-file `ExternalDevice` mix), the PMOD headers
   (plain GPIO breakouts, nothing board-specific to model), and the RP2040's own RTC.
@@ -68,6 +69,7 @@ Onboard extras:
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
 __all__ = ("BOARD", "FIRMWARE", "LED_GREEN_GPIO", "LED_RED_GPIO")
@@ -79,6 +81,7 @@ _EXTRAS = (
     lambda: LEDMock(gpio=LED_GREEN_GPIO, active_low=True),
     lambda: LEDMock(gpio=LED_RED_GPIO),
     BootselButton,
+    ResetButton,
 )
 
 # Full version history from
