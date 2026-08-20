@@ -1193,9 +1193,26 @@ Re-verified live after both changes, since this is still the reset path: `chip_r
 `chip_reset_run.py --cyw43` (CircuitPython 10.2.1, WiFi back up after the reset). 803 unit tests
 pass on both builds.
 
-*What is left against this record:* `xosc`/`rosc` are deliberately not reset, the core is
-deliberately reset on every path, and a button-driven reset deliberately has no awaitable form
-(use `ahard_reset()`). All three are decisions, not defects - so the row can close.
+*What is left against this record*, stated precisely rather than as one bucket:
+
+- **Decisions.** The core is deliberately reset on every path (see `RP2040.reset()`: with PROC0
+  unselected the emulated CPU would run on into the reset it just requested). A button-driven reset
+  deliberately has no awaitable form - `press()`/`release()` model a physical action, and a caller
+  that needs to wait uses `ahard_reset()`, the same reset with a host-side trigger. `rosc` is not
+  reset because it is an `UnimplementedPeripheral` with no state.
+- **`xosc`, which was briefly written down as a residual gap and then simply fixed.** The first
+  draft of this section claimed it was deliberately not reset "because `watchdog_reboot()` excludes
+  it" - true of the watchdog path and *false* of the RUN-pin/power-on one, where silicon does reset
+  it. What made the fix trivial is that Phase 5's own machinery already expressed the distinction:
+  XOSC is a `PSM.WDSEL` domain bit, so gating `RPXOSC.reset()` on it is right on both paths for
+  free - excluded when `watchdog_reboot()` clears the bit, reset when a power-on selects
+  everything. `tests/test_chip_reset.py` asserts both halves, because getting only one right looks
+  identical in any test that does not check the other.
+
+  Worth keeping the wrong first draft visible: the temptation was to file it as a task note, and
+  the honest check - *does the machinery already say this?* - turned a backlog item into ten lines.
+
+So the row closes.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md
