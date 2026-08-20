@@ -166,11 +166,14 @@ firmware configures - the case 0006 models and 0049's addendum had to fix in `ke
 
 ## Note (2026-08-20): the third step now has a proposed owner
 
-[0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) proposes a public, host-side
-`device.areset()` for an unrelated reason - restarting a board after writing its CIRCUITPY over the
-raw REPL, so the written filesystem (flash is preserved) is what boots. Its body is this record's
-own three-line sequence plus the waiting half of `_aconnect()`, which is exactly the `cdc.reset()`
-+ re-enumeration step "The gap" above calls the blocker.
+[0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) may need a public, host-side
+hard reset for an unrelated reason - restarting a board after writing its CIRCUITPY over the raw
+REPL, so the written filesystem (flash is preserved) is what boots. Its body would be this
+record's own three-line sequence plus the waiting half of `_aconnect()`, which is exactly the
+`cdc.reset()` + re-enumeration step "The gap" above calls the blocker. Note it is 0087's
+*fallback*, not its plan: a firmware soft reset (Ctrl-D at the raw-REPL prompt) already works and
+needs none of this, so the hard reset only gets built there if a soft one turns out not to re-run
+`code.py`.
 
 That does not resolve this record. The blocker it removes is the *sequencing* one; the other half
 stands untouched - `ExternalDevice` gets `attach(rp2040)`, and a `BaseDevice` is not reachable from
