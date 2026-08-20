@@ -136,3 +136,76 @@ moved - it is worth re-running the instrumentation that found the above (a `SIE_
 plus the core's `pc`/IPSR while it hangs) against 8.0.2 specifically, since the tooling now exists
 and the three known-bad mechanisms are out of the way.
 
+## 2026-08-20 (later): SRAM ruled out by experiment, and where the warm boot actually goes
+
+Three measurements, all on `tests/hard_reset_run.py --circuitpython --image 8.0.2` or the
+instrumentation around it.
+
+**1. The core runs; it just never reaches USB.** After the reset the pc keeps moving and simulated
+time keeps advancing - this is not a hang in the emulator's sense. What is missing is any contact
+with the USB block at all: instrumenting `RPUSBController.read_uint32`/`write_uint32` counts
+**zero** accesses after the reset, so the firmware never gets as far as initialising USB, and the
+host's `on_usb_enabled` (which is what `ahard_reset()` waits behind) can never fire. Contrast
+MicroPython, where "firmware enabled USB" lands within a tenth of a second of the reset.
+
+**2. Execution ends up in SRAM.** Sampled pc after the reset: `0x100378b0` → `0x1006f1f4` →
+`0x200038dc` → `0x20003666`, i.e. it leaves flash for the SRAM region and stays there. This
+record's own "a cold boot never enters the SRAM region it gets stuck in" now has the addresses.
+
+**3. SRAM *contents* are not the cause.** The obvious hypothesis - the emulator deliberately does
+not clear SRAM (0089's D6, matching hardware), so 8.x trips over something the previous session
+left - is **wrong**, and this is an experiment rather than an argument: zeroing all 264 KiB inside
+`_enter_reset()` changes nothing, `ahard_reset()` still times out after 120s. So whatever diverges
+is not stale RAM state.
+
+### Method note, for whoever picks this up
+
+Sampling the pc from a **simulation-clock alarm** (`clock.create_alarm()`, rescheduled every 0.5 ms
+of simulated time) rather than from wall-clock polling is what makes a cold boot and a warm boot
+comparable: both traces are then taken at the same simulated instants, on a clock that stops when
+the emulator does. A cold boot produces ~4650 samples over 2.3 s of simulated time.
+
+What that showed at region granularity:
+
+| | cold boot | after the reset |
+|---|---|---|
+| pc range | `0x0000002a` .. `0x1006fb16` | `0x10000216` .. `0x20003a00` |
+| bootrom (`< 0x4000`) | yes | never |
+| SRAM (`0x2000_0000+`) | never | yes |
+
+The cold boot's excursions below `0x4000` are the firmware calling **bootrom** helpers (the ROM
+table's flash/memory routines); the warm boot never calls one. Both start from the same place -
+`_leave_reset()` points the core at `FLASH_START_ADDRESS`, exactly as `_aconnect()` does on a cold
+boot - so the divergence is in what the code *finds* when it gets there, not in where it starts.
+
+### The divergence, to the millisecond
+
+Both traces run together through early init (`0x100378xx`) and both reach the same high-flash
+region at ~200 ms. Then, at **the same instant**, they go different ways:
+
+| | sample | simulated time | pc |
+|---|---|---|---|
+| cold boot enters the **bootrom** | 2401 | 1201.00 ms | `0x00002440` |
+| warm boot enters **SRAM** | 2402 | 1201.33 ms | `0x2000398c` |
+
+The cold boot never executes a single instruction in SRAM; the warm boot never executes one in the
+bootrom. One third of a millisecond apart, out of a 2.3-second boot - so this is not drift, it is
+one call going to a different address.
+
+That shape says **a call through a pointer**: at that point the firmware picks a routine and jumps
+to it, and after a reset it picks a RAM-resident one where a cold boot picks a ROM one. The SDK
+does exactly this around flash access - `rom_func_lookup()` for the bootrom's flash helpers, versus
+`.ramfunc` copies that must not execute from XIP while the flash is busy - and ~1.2 s into a
+CircuitPython boot is when it is mounting (or formatting) CIRCUITPY.
+
+**Next steps, in order:**
+
+1. Dump the SRAM around `0x2000398c` at the moment it hangs and disassemble it (capstone; the
+   bytes are not in the `.uf2`, they are whatever the firmware copied there), to see what that
+   routine polls.
+2. Count peripheral accesses *by block* during the warm boot the way the USB ones were counted -
+   the suspicion is `SSI`/`XIP_CTRL`, which 0089's Phase 5 resets on a RUN-pin reset, since a
+   RAM-resident flash routine waiting on SSI status would spin exactly like this.
+3. Only then decide whether the defect is the reset (resetting something boot2 does not restore)
+   or the XIP/SSI model itself.
+
