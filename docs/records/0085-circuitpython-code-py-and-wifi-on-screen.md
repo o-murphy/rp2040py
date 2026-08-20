@@ -296,3 +296,43 @@ What follows from that:
 - One caveat this hands to whoever builds the REPL route: enumerating MSC later (for fidelity with
   a real board, where CIRCUITPY *is* read-only to the guest) would take that lock and break it. So
   the two are mutually exclusive by construction, and an MSC implementation has to be opt-in.
+
+## Appendix: the demo-half rework (planned 2026-08-20, not built)
+
+Step 3 of [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)'s sequencing is
+"rework the demo half on top of whatever 0087 and 0086 settle on". Both have now settled:
+[0086](0086-fat12-library-and-a-mkfat12-subcommand.md) is **rejected**, and 0087's route is
+in-process (`aexec()` writes the files, a host-side `device.areset()` restarts the chip with flash
+preserved, `--dump-fs` optional). The mechanism, its missing `areset()`, and its prerequisite live
+in 0087; what changes *here* is the demo surface.
+
+### `--code`/`--boot` keep building an offline image by default
+
+Not a fallback and not inertia - a measurement. `demo/lcd_run.py` already raises its start timeout
+above the 30s default because a **freshly formatted** CIRCUITPY has CircuitPython laying down
+`boot_out.txt`/`lib`/`.fseventsd` before USB comes up ("measured past 30s in emulation"), where the
+same board with an already-populated drive enumerates well inside it. The REPL route starts from
+exactly that blank volume every time; `demo/mkfat12.py`'s 8.3 builder produces the populated one in
+milliseconds. Default stays where the fast path is.
+
+### What the REPL route becomes: an opt-in mode, for what 8.3 cannot express
+
+The case it exists for is the one this record already measured - `settings.toml` (needs an LFN
+chain) and `lib/greeter.py` (needs a directory) - written by the firmware's own FatFS rather than
+by a host-side writer that would have to implement both. That is the whole reason
+[0086](0086-fat12-library-and-a-mkfat12-subcommand.md) could be rejected, so the demo has to
+actually offer the route, not just cite it.
+
+Two pieces, in 0087's own numbering:
+
+- `demo/mkfat12_dump.py` (0087 item 1) - generates the raw-REPL script, the counterpart of
+  `demo/mklittlefs_dump.py`. Usable on its own, exactly like that one.
+- a push mode in `demo/lcd_run.py` (0087 item 2) - `aexec()` the generated script, `areset()`, then
+  collect frames as today.
+
+### Unchanged by all of this
+
+The screenshots, the `boot.py` -> `boot_out.txt` finding, finding 5's `fs_start` fix, and
+`demo/wifi_lcd_run.py`. Only how a CIRCUITPY volume gets populated is in question, and only for the
+cases 8.3 names cannot cover.
+
