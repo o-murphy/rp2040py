@@ -1217,3 +1217,67 @@ So the row closes.
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md
 [0088]: 0088-usb-host-side-msc-control-lines-and-reset.md
+
+## Note (2026-08-20): AIRCR/SYSRESETREQ - the trigger this record never enumerated
+
+**Documentation only. Nothing here is built, and this authorizes nothing** (CLAUDE.md's
+"document vs. implement"). Found while diagnosing the CI reds this record's own live checks
+produced.
+
+### What is missing
+
+`AIRCR` (`0xE000ED0C`) is not implemented at all. `peripherals/ppb.py` has no constant for it and
+no branch handling it, so the architectural reset request every ARM toolchain emits - CMSIS's
+`NVIC_SystemReset()`, which writes `VECTKEY | SYSRESETREQ` - falls through to
+`Peripheral.write_uint32()`'s default. Measured:
+
+    >>> mcu.write_uint32(0xE000ED0C, (0x05FA << 16) | (1 << 2))
+    [PPB] Unimplemented peripheral write to 0xd0c: 0x5fa0004
+    triggers fired : none
+    pc             : 0x10000100  (unchanged - nothing reset)
+
+A read is worse than silent: `[PPB] Unimplemented peripheral read from 0xd0c` returns
+`0xffffffff`, so any firmware doing a read-modify-write of AIRCR (the CMSIS `NVIC_SystemReset()`
+for M3 and up does exactly that) computes its new value from garbage.
+
+Section 1.2's table lists five triggers. This is a sixth, and neither firmware family here reaches
+it: both MicroPython and CircuitPython reset through `watchdog_reboot()`, which is why nothing has
+noticed. It is what a **non**-MicroPython/CircuitPython image would use - the tracker's own
+"test TinyGo-compiled firmware" row is the near-term case, and any bare-metal SDK or RTOS image is
+the general one.
+
+### Why it is *not* simply a sixth caller of `hard_reset()`
+
+This is the part worth writing down, because the obvious reading is wrong. On RP2040 SYSRESETREQ
+is **not** a chip reset:
+
+> [RP2040 datasheet §2.4.2.9] SYSRESETREQ on RP2040 resets only the core on which it is asserted,
+> not the wider system.
+
+The same datasheet's AIRCR description (§2.4.8) still carries ARM's generic wording - *"the
+intention is to force a large system reset of all major components except for debug"* - which
+contradicts it; Raspberry Pi's own tracker carries that contradiction as
+[pico-feedback#329](https://github.com/raspberrypi/pico-feedback/issues/329), unresolved at the
+time of writing. The narrower statement is the one to implement against: it is the specific one,
+and it matches why the SDK reboots through the watchdog rather than through AIRCR.
+
+So a faithful model needs something this record does not have: a **core-only** reset level, below
+the two it settled on. Its D-decisions go the other way on purpose - "the core is reset on every
+path" (section 4, Phase 5's note) is written as deliberately broader than the hardware, and
+`_enter_reset()` always takes the whole chip down. A `SYSRESETREQ` that reset the chip would be
+wrong in a way that is *hard to see*: firmware would come back with peripherals it expected to
+keep, which is exactly the class of silent-wrongness this record exists to avoid.
+
+### What that leaves as the decision, whenever someone picks this up
+
+1. **Implement AIRCR as a register first** (VECTKEY validation, `ENDIANNESS`, the reserved
+   read-back), so a read-modify-write stops seeing `0xffffffff`. That much is uncontroversial and
+   independent of the reset question.
+2. **Then decide the level.** Either model the core-only reset honestly (`core.reset()` plus
+   whatever PSM `PROC0` implies, leaving peripherals alone), or refuse it loudly - a
+   `logger.warning` naming SYSRESETREQ rather than the generic "unimplemented peripheral write" -
+   until a firmware that actually uses it is in the tree to verify against. The second is cheap and
+   honest; the first needs a real image to check, per this project's own live-verification rule.
+3. **Do not route it into `hard_reset()`** without that decision, however tempting the one-line
+   version looks.
+
