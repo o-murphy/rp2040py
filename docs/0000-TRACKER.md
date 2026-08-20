@@ -75,7 +75,7 @@ and `reference/` for those). The structure itself is decided in
 
 - [x] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **all phases landed and its own Known gaps closed** (2026-08-20; Phase 3 built then dropped as unwanted); one hard-reset owner behind four triggers, WDSEL-gated like hardware, live-verified on both firmware families. Closing the gaps found that Phase 5's WDSEL model was never reached from the device layer. What is left is decisions, not defects; 8.0.2 is [0093]. **AIRCR/SYSRESETREQ is a sixth trigger it never enumerated** - unimplemented, documented 2026-08-20 as a decision (a core-only reset on RP2040, not a chip reset), not a defect of any shipped phase
 
-- [x] [0057] RESET button / RUN pin reset hook on `RP2040` | **closed in full by [0089]'s Phase 4** - `run_pin_low`/`set_run_pin()` + an `on_run_pin_reset` hook, a held-in-reset state in both batch loops, and `ResetButton` on three boards; live-verified on both firmware families
+- [x] [0057] RESET button / RUN pin reset hook on `RP2040` | **closed in full by [0089]'s Phase 4** - `run_pin_low`/`set_run_pin()` + an `on_run_pin_reset` hook, a held-in-reset state in both batch loops, and `ResetButton` on three boards; live-verified on both firmware families. **Option B landed too** (2026-08-20, later the same day): the sequence itself is `RP2040.enter_reset()`/`leave_reset()` now, with `usb_ctrl.on_reset` as the notification `USBCDC` installs itself into - so a bare chip resets both halves, and the watchdog/RUN-pin no-hook defaults reset instead of logging a warning
 
 - [x] [0090] the post-boot nudge is a newline, for both firmware families | measured, then changed; fell out of [0089]'s Phase 0.1 moving the nudge onto the device
 

@@ -85,6 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot do this at all: it has no CYW43439, so its CircuitPython build ships no `wifi` module.
   See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
+### Changed
+- **A chip reset is now the chip's own operation.** `RP2040.enter_reset(from_watchdog=...)` and
+  `leave_reset()` hold the sequence that lived in `BaseDevice` (reset the blocks, notify the USB
+  host side, point the core at flash); `USBCDC` installs itself into the new
+  `RPUSBController.on_reset` the same way it already installs its four other controller hooks, so
+  the chip resets whatever is on its bus without knowing a CDC exists. `BaseDevice._enter_reset()`/
+  `_leave_reset()` keep their names and still own the `ResetCause` bookkeeping. Consequence worth
+  knowing: with no hook installed, a watchdog TRIGGER/timeout and a RUN-pin pull now **reset the
+  chip** instead of logging "no reset handler provided" - so a guest calling `machine.reset()`
+  under `rp2040py run` (a bare `RP2040` + `USBCDC`, no device layer) reboots rather than hangs.
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md)'s option B.
+
 ### Fixed
 - **A watchdog *timeout* froze the chip instead of resetting it.** `Timer32PeriodicAlarm`
   re-armed at a zero delta whenever the counter sat on its target - which is exactly what happens
