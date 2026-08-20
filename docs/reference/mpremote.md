@@ -220,6 +220,68 @@ already answers, from paths that all already exist, so a second way to express i
 verified and then dropped (0089's Phase 3). A *hard* reset - which does re-run everything, because
 the chip reboots - is `ahard_reset()`.
 
+### Against CircuitPython firmware
+
+Everything above was verified against MicroPython. `mpremote` is a MicroPython tool, and the split
+against CircuitPython is not "works / doesn't" but **per subcommand**, decided entirely by which
+`os` functions the firmware exposes. Measured 2026-08-20 against CircuitPython 10.2.1 (Pico W)
+under `rp2040py micropython --circuitpython --tcp-port`, `mpremote` 1.28.0; the MicroPython column
+is v1.23.0 in the same emulator for contrast.
+
+| Command | CircuitPython | Why |
+| --- | :---: | --- |
+| `exec` / `eval` / `run script.py` | ✅ | The raw REPL is family-agnostic - `RawReplRunner` has one banner constant for both. |
+| `soft-reset` | ✅ | Firmware's own; at the raw prompt it does not re-run `code.py` (see above) - same as MicroPython. |
+| `fs cat` / `sha256sum` / `mkdir` / `touch` / `rm` | ✅ | Plain `open()` / `os.mkdir` / `os.remove`, all present. Writes need the remount below. |
+| `fs cp` **device → host** | ✅ | Reads an existing file. |
+| `fs cp` **host → device** | ⚠️ only if the destination file **already exists** | See "the errno name" below. Onto a new name it fails with `OSError: [Errno 2]` before writing anything. |
+| `fs ls` / `fs tree` | ❌ | `AttributeError: 'module' object has no attribute 'ilistdir'`. |
+| `mount ./local_dir` | ❌ | `AttributeError: 'module' object has no attribute 'mount'`. |
+| `df` | ❌ | `ImportError: no module named 'vfs'` - the same shape as MicroPython ≤1.21 in the table above, for the same reason. |
+
+The firmware's own answer to `dir(os)` is the whole story, and is worth quoting rather than
+paraphrasing - CircuitPython 10.2.1:
+
+```
+['__class__', '__dict__', '__name__', 'chdir', 'getcwd', 'getenv', 'listdir', 'mkdir', 'remove',
+ 'rename', 'rmdir', 'sep', 'stat', 'statvfs', 'sync', 'uname', 'unlink', 'urandom', 'utime']
+```
+
+...against MicroPython v1.23.0, which has the three names the ❌ rows need (`ilistdir`, `mount`,
+plus `VfsFat`/`VfsLfs2`, and a separate `vfs` module):
+
+```
+['VfsFat', 'VfsLfs2', '__class__', '__dict__', '__name__', 'chdir', 'dupterm', 'dupterm_notify',
+ 'getcwd', 'ilistdir', 'listdir', 'mkdir', 'mount', 'remove', 'rename', 'rmdir', 'stat',
+ 'statvfs', 'sync', 'umount', 'uname', 'unlink', 'urandom']
+```
+
+**Two CircuitPython-specific things to know before any write.**
+
+1. **The filesystem starts read-only to the REPL** - `OSError: [Errno 30] Read-only filesystem`.
+   One line fixes it for the session: `import storage; storage.remount('/', readonly=False)`.
+   Measured: the flag **survives a soft reset** (`mpremote resume soft-reset`, then a write, still
+   works) but not a chip reset, since it is RAM state. On real hardware this line raises instead,
+   whenever a USB host holds the mass-storage lock - this emulator never claims that interface, so
+   it is permanently in the state a real board reaches only after the drive is ejected
+   ([record 0087](../records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
+2. **The errno name**, which is the entire reason for the `fs cp` caveat. `fs cp` first probes
+   whether the destination exists (`fs_exists` -> `os.stat`), expecting a catchable `OSError`.
+   MicroPython renders one as `OSError: [Errno 2] ENOENT`; CircuitPython renders it as
+   `OSError: [Errno 2] No such file/directory`. `mpremote`'s `_convert_filesystem_error`
+   (`transport.py`) matches the *name* - it scans the traceback for `ENOENT` and friends, then for
+   a bare `OSError: <number>` line - so the CircuitPython text matches neither, the raw
+   `TransportExecError` escapes `except OSError`, and the copy dies on the probe. Traced call by
+   call: the probe is the only thing that fails - `fs_writefile()` on the same connection writes
+   the file fine, and `fs cp` onto a name that already exists succeeds.
+
+None of this is an rp2040py limitation, and none of it is fixable here: it is `mpremote` talking
+to firmware it was not written for, and a real CircuitPython board on a real serial port answers
+identically. For pushing files at CircuitPython, use the guest itself - `remount()` plus
+`open()`/`write()` over `rp2040py micropython --circuitpython -c ...`, which is what
+`demo/mklittlefs_dump.py` does for MicroPython and what 0087 measured for CircuitPython.
+
+
 ## What doesn't work
 
 - **Bare interactive REPL over `--tcp-port`, through the real (unpatched) `mpremote` binary**

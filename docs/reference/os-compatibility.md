@@ -19,9 +19,15 @@ strict reading order (top-to-bottom, left-to-right). The same note is reused (sa
 the same reason applies.
 
 > [!IMPORTANT]
-> One limitation is **not** per-OS and so has no meaningful row above: rp2040py emulates a single
-> core. Firmware that launches `core1` does not work anywhere — see the last row and note
-> [[16]](#fn16).
+> Two limitations are **not** per-OS, so neither gets a meaningful row above.
+> **Single core**: rp2040py emulates one. Firmware that launches `core1` does not work anywhere —
+> see the last row and note [[16]](#fn16).
+> **`mpremote` against CircuitPython**: `exec`/`eval`/`run`/`soft-reset` and most of `fs` work,
+> but `fs ls`/`tree`, `mount` and `df` fail on every host OS, because CircuitPython's `os` has no
+> `ilistdir`/`mount` and there is no `vfs` module — `mpremote` is a MicroPython tool, and a real
+> CircuitPython board on a real serial port answers the same way. Per-subcommand table, with the
+> `fs cp` caveat and the one-line `storage.remount()` writes need:
+> [mpremote.md](mpremote.md#against-circuitpython-firmware).
 
 | Feature | Linux | macOS | Windows | Android (Termux / Pydroid 3) | iOS (Pythonista) | iOS (PythonIDE) |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
