@@ -163,3 +163,18 @@ Written without a schematic in hand. One has since turned up, in
 Same board, for contrast: its USRKEY on GPIO24 has *no* external pull-up (a 10k sits in series with
 the pin instead), so that button's released level comes entirely from whichever internal pull
 firmware configures - the case 0006 models and 0049's addendum had to fix in `key_mock.py`.
+
+## Note (2026-08-20): the third step now has a proposed owner
+
+[0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) proposes a public, host-side
+`device.areset()` for an unrelated reason - restarting a board after writing its CIRCUITPY over the
+raw REPL, so the written filesystem (flash is preserved) is what boots. Its body is this record's
+own three-line sequence plus the waiting half of `_aconnect()`, which is exactly the `cdc.reset()`
++ re-enumeration step "The gap" above calls the blocker.
+
+That does not resolve this record. The blocker it removes is the *sequencing* one; the other half
+stands untouched - `ExternalDevice` gets `attach(rp2040)`, and a `BaseDevice` is not reachable from
+there, so a RESET button still has nothing to call. Worth designing the two together: if 0087's
+reset lands first without this record in view, a RUN-pin model will have to work around whatever
+shape it took.
+
