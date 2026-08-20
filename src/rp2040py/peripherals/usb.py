@@ -224,6 +224,8 @@ class RPUSBController(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._sie_status = 0
+        self._connected = False
+        self._connect_event = False
         self._buff_status = 0
 
         # Host mode registers
@@ -395,7 +397,7 @@ class RPUSBController(BasePeripheral):
         elif offset == USB_MUXING:
             # Workaround for busy wait in hw_enumeration_fix_force_ls_j() / hw_enumeration_fix_finish():
             if value & TO_DIGITAL_PAD and not (value & TO_PHY):
-                self._sie_status |= SIE_CONNECTED
+                self._set_connected(True)
         elif offset == USB_PWR:
             self._usb_pwr = value
             # VBUS detect override - set VBUS detected in SIE_STATUS
@@ -406,11 +408,18 @@ class RPUSBController(BasePeripheral):
                     self._sie_status &= ~SIE_VBUS_DETECTED
         elif offset == SIE_STATUS:
             self._sie_status &= ~(self.raw_write_value & SIE_WRITECLEAR_MASK)
+            if self.raw_write_value & SIE_CONNECTED:
+                # Write-1-to-clear acknowledges the connect/disconnect *event*. It does not
+                # unplug anything - see `_set_connected()`.
+                self._connect_event = False
             if self.raw_write_value & SIE_BUS_RESET:
                 if not self._host_mode and self.on_reset_received:
                     self.on_reset_received()
                 self._sie_status &= ~(SIE_LINE_STATE_MASK << SIE_LINE_STATE_SHIFT)
-                self._sie_status |= (SIELineState.J << SIE_LINE_STATE_SHIFT) | SIE_CONNECTED
+                self._sie_status |= SIELineState.J << SIE_LINE_STATE_SHIFT
+                self._set_connected(True)
+            elif self._connected:
+                self._sie_status |= SIE_CONNECTED
             self._sie_status_updated()
         elif offset == INTE:
             self._int_enable = value & 0xFFFFF
@@ -522,6 +531,8 @@ class RPUSBController(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._sie_status = 0
+        self._connected = False
+        self._connect_event = False
         self._buff_status = 0
 
         self._sie_ctrl = 0
@@ -560,6 +571,34 @@ class RPUSBController(BasePeripheral):
         self._sie_status |= SIE_SETUP_REC
         self._sie_status_updated()
 
+    def _set_connected(self, connected: bool) -> None:
+        """`SIE_STATUS.CONNECTED` is a **level**, not a latch: it says a host is on the other end
+        of the bus, so it comes straight back after a write-1-to-clear for as long as that stays
+        true. The *event* is what write-1-to-clear acknowledges, and that is what
+        `INTR_DEV_CONN_DIS` reports.
+
+        Modelling it as a pure latch deadlocked every second boot: pico-sdk's own
+        `rp2040_usb_device_enumeration_fix()` busy-waits on this bit
+        (`while (!(usb_hw->sie_status & USB_SIE_STATUS_CONNECTED_BITS));`, inside a timer alarm),
+        and TinyUSB's ISR clears the connect status a moment earlier. On a first boot the two
+        happen to race the right way round; after a chip reset they do not, and the firmware sat
+        in that loop forever with the emulator's clock running - the shape
+        docs/records/0089-one-reset-for-every-trigger.md's Phase 2 live check hit on MicroPython
+        1.16/1.17.
+        """
+        changed = connected != self._connected
+        if changed:
+            self._connect_event = True
+        self._connected = connected
+        if connected:
+            self._sie_status |= SIE_CONNECTED
+        else:
+            self._sie_status &= ~SIE_CONNECTED
+        if changed:
+            # Connecting *is* the event, so the interrupt is raised here rather than waiting for
+            # whatever else happens to refresh the status next.
+            self._sie_status_updated()
+
     def _indicate_buffer_ready(self, endpoint: int, out: bool) -> None:
         self._buff_status |= 1 << (endpoint * 2 + (1 if out else 0))
         self._buff_status_updated()
@@ -589,7 +628,6 @@ class RPUSBController(BasePeripheral):
                 (SIE_SETUP_REC, INTR_SETUP_REQ),
                 (SIE_RESUME, INTR_DEV_RESUME_FROM_HOST),
                 (SIE_SUSPENDED, INTR_DEV_SUSPEND),
-                (SIE_CONNECTED, INTR_DEV_CONN_DIS),
                 (SIE_BUS_RESET, INTR_BUS_RESET),
                 (SIE_VBUS_DETECTED, INTR_VBUS_DETECT),
                 (SIE_STALL_REC, INTR_STALL),
@@ -604,6 +642,14 @@ class RPUSBController(BasePeripheral):
                 self._int_raw |= int_raw_bit
             else:
                 self._int_raw &= ~int_raw_bit
+        if not self._host_mode:
+            # Device mode's connect/disconnect interrupt is the *edge*, which is why it is not in
+            # the table above: its status bit is a level that survives being written to
+            # (`_set_connected()`), so deriving the interrupt from it would re-raise forever.
+            if self._connect_event:
+                self._int_raw |= INTR_DEV_CONN_DIS
+            else:
+                self._int_raw &= ~INTR_DEV_CONN_DIS
         self.check_interrupts()
 
     # ============ Host Mode Methods ============
