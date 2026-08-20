@@ -178,6 +178,10 @@ re-enumerate USB, so the console connection stays up across it.
 
 `--dump-fs` is then optional - for *keeping* the image, not for making the flow work.
 
+**The reset design itself moved out of this record**: making all four triggers (guest watchdog,
+host API, CDC, [0057]'s RUN pin) route through one owner per level is
+[0089](0089-one-reset-for-every-trigger.md). What stays here is only what this route consumes.
+
 ### What is actually missing (much less than a reset API)
 
 `MicroPythonDevice` already has `__aenter__`/`__aexit__` and `aexec()`/`exec_async()`/

@@ -56,6 +56,7 @@ and `reference/` for those). The structure itself is decided in
 
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
+- [ ] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | design only - the hard sequence exists as a private callback body on `BaseDevice`, the soft one is firmware-side and already works, and neither the host API nor [0057]'s RUN pin can reach either
 - [ ] [0088] USB host side: mass storage, CDC control lines, and reset | measured, nothing built - `usb/cdc.py` is a CDC consumer, not a host; a 1200-bps-touch reset would do nothing on rp2; MSC is mutually exclusive with [0087]
 - [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built - `storage.remount()` succeeds because nothing here claims the MSC interface; rejected [0086], and now proposes `aexec()` + a firmware **soft** reset (Ctrl-D at the prompt, already supported) - the device API just has no way to send that byte
 - [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
@@ -253,3 +254,4 @@ record is added.
 [0086]: records/0086-fat12-library-and-a-mkfat12-subcommand.md
 [0087]: records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0088]: records/0088-usb-host-side-msc-control-lines-and-reset.md
+[0089]: records/0089-one-reset-for-every-trigger.md
