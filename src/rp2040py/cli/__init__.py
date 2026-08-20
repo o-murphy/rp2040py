@@ -645,13 +645,10 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
         )
         cleanup.push_async_callback(repl.stop)
 
+        # No prompt nudge here anymore: MicroPythonDevice._post_boot_handshake() sends it (the
+        # family-keyed \r\n vs Ctrl-C) from inside its own connect, so a device-level reset can
+        # re-run it without reaching into the CLI - see 0089 Phase 0.1.
         await device.astart(timeout=None)
-        if not args.circuitpython:
-            # We send a newline so the user sees the MicroPython prompt
-            cdc.send_serial_byte(ord("\r"))
-            cdc.send_serial_byte(ord("\n"))
-        else:
-            cdc.send_serial_byte(3)
 
         return await _await_shutdown(device.simulator)
 

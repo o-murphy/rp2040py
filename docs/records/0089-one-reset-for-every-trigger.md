@@ -1,6 +1,8 @@
 # 0089 - One reset, every trigger: soft vs hard, guest-initiated vs host-initiated
 
-- Status: **Planned - design settled, phased plan written, nothing implemented (2026-08-20).**
+- Status: **Phase 0 landed (2026-08-20); Phases 1-6 not started.** Design settled and the
+  phased plan below written first - see the "Progress log" at the very end for what has
+  actually shipped, per phase.
   Asked for while working through
   [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)'s restart step: a reset that
   behaves the same no matter who asks for it. The first half of this record is the design as
@@ -386,7 +388,7 @@ section 5.
 Each phase is independently shippable and independently verifiable. Phase order is
 prerequisite-driven, not importance-driven.
 
-### Phase 0 - prerequisites, no behaviour change
+### Phase 0 - prerequisites, no behaviour change - **done (2026-08-20)**
 
 0.1 **Move the post-boot handshake onto the device/family** ([0087]'s item 4, which stops being
 "optional, cosmetic" here). `cli/__init__.py`'s `_micropython_async()` currently does
@@ -649,6 +651,44 @@ Cheap lessons from the probes, all of which cost a run to learn:
 - **Assert on state, not on console output** - see point 4.
 - **`on_device_connected` survives `cdc.reset()`**, which is what makes a re-enumeration wait
   possible; re-arm it with a fresh `asyncio.Event` before each reset.
+
+## Progress log
+
+### Phase 0 - done (2026-08-20)
+
+**0.1 - the post-boot handshake moved onto the device/family.**
+`MicroPythonDevice._post_boot_handshake()` (`device/mp_device.py`) sends `\r\n` for MicroPython
+and Ctrl-C for CircuitPython, keyed on `self.circuitpython`, and `_aconnect()` calls it *after*
+the enumeration wait. `cli/__init__.py`'s `_micropython_async()` lost its own
+`if not args.circuitpython:` block - the CLI no longer branches on a firmware flag it otherwise
+doesn't care about, and Phase 2's reset path now has a handshake it can re-run without reaching
+into the CLI. Also closes [0087]'s item 4.
+
+One deliberate behaviour change beyond the CLI: the nudge now goes out on *every*
+`MicroPythonDevice` connect, including the library/exec-only paths that previously never sent it.
+Harmless in both directions - `RawReplRunner.start()` already opens with Ctrl-C, Ctrl-C, Ctrl-A,
+so an exec is unaffected by an earlier newline or Ctrl-C - and it is what makes the handshake a
+property of the device rather than of one caller.
+
+**0.2 - `BaseDevice.hard_reset()` is now a real method.** Same three lines as before
+(`mcu.reset(preserve_flash=True)` / `core.pc = FLASH_START_ADDRESS` / `cdc.reset()`);
+`_on_watchdog_trigger()` is reduced to a one-line caller of it. The docstring carries the
+"one owner per level" contract, plus the two properties Phase 2 depends on: it stays synchronous
+and fire-and-forget (it runs from inside an emulated register write), and `cdc.reset()`
+deliberately leaves `on_device_connected` wired so a re-enumeration wait is possible later.
+
+*Tests:* `tests/test_watchdog_reset.py` unchanged and still passing, plus
+`test_hard_reset_called_directly_runs_the_same_sequence` calling the method directly;
+`tests/test_device.py` gains three handshake tests (per-family bytes, and that `_aconnect()` sends
+them only after enumeration). Full `pre-commit run --all-files` green.
+
+*Live-boot verified*, library API only (no CLI), both firmwares booted on `--board pico`:
+MicroPython v1.23.0 emits `\r\n>>> ` and CircuitPython 8.0.2 emits its
+"Press any key to enter the REPL" banner followed by `>>> ` - i.e. the prompt the CLI used to nudge
+out now arrives from `astart()` alone.
+
+*Not touched:* everything in Phases 1-6. No `ResetCause`, no host-side entry point, no RUN pin, and
+`RP2040.reset()` still covers only `core`/`pwm`/`dma`/`ppb`.
 
 [0087]: 0087-circuitpython-writable-circuitpy-over-the-raw-repl.md
 [0057]: 0057-run-pin-reset-hook.md
