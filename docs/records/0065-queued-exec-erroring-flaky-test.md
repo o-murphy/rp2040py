@@ -132,3 +132,21 @@ Not re-run locally yet - only seen via these two CI job logs so far.
 
 - The two observed failure shapes (Windows timeout vs. Ubuntu clean non-raise) and their job
   links above - no need to re-fetch those CI logs unless investigating further invalidates them.
+
+## Sighting - 2026-08-20 (local, under load)
+
+One failure on a developer machine, which answers this record's own third "where to look next"
+(*"a local repro under load ... to see if it reproduces off CI"*): **it does.**
+
+`RP2040PY_SKIP_CYTHON=1 uv run pytest` failed `test_a_queued_exec_erroring_does_not_stall_the_ones
+_behind_it` with the Windows-CI failure shape (a `concurrent.futures TimeoutError` out of
+`future.result(timeout=5)`) while several live-firmware boots were running in parallel on the same
+machine. The native run in the same `pre-commit` invocation passed, and three consecutive re-runs
+of `tests/test_device.py` plus a full re-run of the suite were all green.
+
+So: not CI-runner-specific, and not Windows-specific - it is a real-time-budget flake that surfaces
+whenever the machine is busy enough, which is exactly what a shared CI runner is. Nothing about the
+2026-08-20 work (docs/records/0089-one-reset-for-every-trigger.md's Phases 0-2) touches this test's
+path; the load it ran under is the whole difference. Still not root-caused, and still closed
+dormant - this is one more data point for whoever picks it up, plus a cheap local repro recipe:
+run the suite while a couple of `rp2040py micropython --image <tag>` boots are in flight.

@@ -8,7 +8,7 @@
 # ///
 """Builds a CIRCUITPY filesystem image - the FAT12 volume CircuitPython auto-runs `boot.py` and
 `code.py` from - for `rp2040py micropython --circuitpython --fat12 <image>` (or
-`MicroPythonDevice(fat12=...)`, which is what demo/lcd_run.py's own `--code`/`--boot` use).
+`MicroPythonDevice(filesystem=...)`, which is what demo/lcd_run.py's own `--code`/`--boot` use).
 
     python demo/mkfat12.py --output fat12.img demo/cp_lcd_demo.py=code.py
 

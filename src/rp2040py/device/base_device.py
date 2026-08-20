@@ -151,15 +151,73 @@ class BaseDevice:
         self.mcu.watchdog.reset()
         self.mcu.vreg_and_chip_reset.record_reset_cause(HAD_RUN if cause is ResetCause.RUN_PIN else HAD_POR)
 
-    async def _aconnect(self, timeout: "float | None") -> None:
+    def _post_boot_handshake(self) -> None:
+        """Nudge the firmware that has just enumerated into a usable prompt. A no-op here - not
+        every firmware family needs one (Kaluma deliberately gets none, see `cli/__init__.py`) -
+        and overridden by `MicroPythonDevice`, which does. Called from both paths that bring a
+        console up: the cold boot below and the reset one (0089 Phase 0.1/2.1), so a family only
+        ever writes it once."""
+
+    def _arm_enumeration(self) -> "asyncio.Event":
+        """Wire a fresh Event to `cdc.on_device_connected`, to be awaited by
+        `_await_enumeration()`. Deliberately separate from the wait: it has to happen *before*
+        whatever triggers the boot (`start_execution()` on a cold boot, `hard_reset()` on a reset),
+        or the callback can fire before anything is listening for it. `cdc.reset()` leaves
+        `on_device_connected` wired, which is what makes the reset case work at all."""
         connected = asyncio.Event()
         self.cdc.on_device_connected = connected.set
-        self.mcu.core.pc = FLASH_START_ADDRESS
-        self.simulator.start_execution()
+        return connected
+
+    async def _await_enumeration(self, connected: "asyncio.Event", timeout: "float | None", what: str) -> None:
+        """The waiting half of `_aconnect()`, shared with the reset path rather than copied into it
+        (0089 Phase 2.2). `what` only names the event in the timeout message."""
         try:
             await self.simulator.wait_for(connected, timeout)
         except asyncio.TimeoutError as exc:
-            raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
+            raise TimeoutError(f"device did not {what} over USB within {timeout}s") from exc
+
+    async def _aconnect(self, timeout: "float | None") -> None:
+        connected = self._arm_enumeration()
+        self.mcu.core.pc = FLASH_START_ADDRESS
+        self.simulator.start_execution()
+        await self._await_enumeration(connected, timeout, "enumerate")
+        self._post_boot_handshake()
+
+    async def _ahard_reset(self, timeout: "float | None", cause: ResetCause) -> None:
+        """`hard_reset()` plus the waiting a host-side caller can do and a guest-triggered one
+        cannot: the chip drops off the bus, boots again, re-enumerates, and the family's post-boot
+        handshake runs a second time. The emulator is already executing, so nothing restarts it -
+        `hard_reset()` only points the core back at the flash entry point."""
+        connected = self._arm_enumeration()
+        self.hard_reset(cause=cause)
+        await self._await_enumeration(connected, timeout, "re-enumerate after the reset")
+        self._post_boot_handshake()
+
+    def hard_reset_async(
+        self, timeout: "float | None" = DEFAULT_TIMEOUT, *, cause: ResetCause = ResetCause.RUN_PIN
+    ) -> "Future[None]":
+        """Reset the chip and wait for it to come back. Returns a Future that resolves once the
+        device has re-enumerated over USB and its console is usable again, or fails with
+        TimeoutError after `timeout` (if given).
+
+        What it promises is "re-enumerated, console usable" - **not** "you will see the boot
+        banner". Firmware only flushes CDC once DTR is asserted, exactly as a real board does to a
+        terminal re-opening the port, so output printed during the boot that follows the reset is
+        lost by construction (0089's Appendix, point 4). Assert on state (a variable is gone, a
+        counter advanced), never on boot output.
+
+        Not a second `astart()`: `_started` stays True across a reset, and `start_async()` keeps
+        raising if called again. Anything the guest had in RAM is gone; flash is preserved.
+        """
+        if not self._started:
+            raise RuntimeError("call astart()/start_async() (or enter as an async context manager) before resetting")
+        return self.simulator.submit(self._ahard_reset(timeout, cause))
+
+    async def ahard_reset(
+        self, timeout: "float | None" = DEFAULT_TIMEOUT, *, cause: ResetCause = ResetCause.RUN_PIN
+    ) -> None:
+        """asyncio version of `hard_reset_async()`."""
+        await _await(self.hard_reset_async(timeout, cause=cause), timeout)
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails

@@ -114,7 +114,7 @@ def main() -> None:
                     image_bytes=board.layout.fs_blocksize * board.layout.fs_blockcount,
                 )
             )
-        device = MicroPythonDevice(board=board, circuitpython=True, fat12=fat12, log_level=LogLevel.ERROR)
+        device = MicroPythonDevice(board=board, circuitpython=True, filesystem=fat12, log_level=LogLevel.ERROR)
     # Same reason as lcd_run.py's own raised ceiling, doubled: a freshly formatted CIRCUITPY costs
     # the firmware several flash writes before USB comes up, and this board is running the CYW43's
     # hot path alongside everything else.

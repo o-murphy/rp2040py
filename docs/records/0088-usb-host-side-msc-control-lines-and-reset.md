@@ -152,6 +152,9 @@ Maintainer's decision, so the three questions this record holds together now spl
 - **"Host-driven board reset" - the cheap, useful one this record recommended - is now
   [0089](0089-one-reset-for-every-trigger.md)'s Phase 2**, with the reset-cause fidelity it needs
   in Phase 1 and [0057]'s RUN pin in Phase 4. Nothing in it depends on this record's USB work.
+  **Built 2026-08-20**: `BaseDevice.ahard_reset()`, live-verified on both firmwares - so this
+  record's table row is answered without a single byte of MSC or control-line work, which was the
+  point.
 - **The DTR/RTS gaps stay open and unscheduled**: runtime control-line changes and
   `SET_LINE_CODING` are still absent, and the recipient/`wIndex` correction in section 1 is still
   the thing to fix if that surface is ever added. They are simply not on any critical path now that
