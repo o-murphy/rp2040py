@@ -207,11 +207,54 @@ class RP2040:
         # in that case rather than silently doing nothing.
         self._simulator: Simulator | None = None
 
+        # RUN pin / RESET button (docs/records/0089-one-reset-for-every-trigger.md Phase 4, which
+        # is docs/records/0057-run-pin-reset-hook.md in full). RUN is neither a GPIO nor
+        # memory-mapped, so it gets no pad and no register - it is a plain level, held high by the
+        # board's own external pull-up (0057's addendum has a real schematic: `3V3 -[R12 10k]- RUN`
+        # with the switch grounding RUN directly). That makes a press a *level*, not a pulse: the
+        # chip stays in reset for as long as the button is down, and the release is what boots it.
+        # `run_pin_low` is what execute_batch() reads to skip execution entirely while held;
+        # `on_run_pin_reset` is the hook `BaseDevice` installs its own hard_reset() into - the same
+        # downward installation `watchdog.on_watchdog_trigger` already uses, so an ExternalDevice
+        # holding nothing but `attach(rp2040)`'s RP2040 can still reach the full device-level
+        # sequence (which includes `cdc.reset()`, unreachable from here).
+        self._run_pin_low = False
+        self.on_run_pin_reset: Callable[[], None] = self._default_run_pin_reset
+
         self.reset()
 
     def _default_on_break(self, code: int) -> None:
         # TODO: raise HardFault exception
         pass
+
+    def _default_run_pin_reset(self) -> None:
+        self.logger.warning(LOG_NAME, "RUN pin released, but no reset handler provided")
+
+    @property
+    def run_pin_low(self) -> bool:
+        """True while RUN is held low - i.e. the chip is in reset and executes nothing at all.
+        Read once per batch by `execute_batch()` (see `set_run_pin()` for the edge semantics)."""
+        return self._run_pin_low
+
+    def set_run_pin(self, *, low: bool) -> None:
+        """Drive the RUN pin, as a RESET button does. `low=True` holds the chip in reset (nothing
+        executes, no simulated time passes); `low=False` releases it, which is the edge that
+        actually performs the reset-and-boot sequence via `on_run_pin_reset`.
+
+        Idempotent per level - re-driving the level already present is not an edge and fires
+        nothing, matching a switch that is simply still held. With no hook installed (a bare
+        `RP2040` outside a `BaseDevice`) a release is logged and ignored rather than half-resetting
+        the chip: the USB half of a real reset lives on the device layer and is not reachable from
+        here.
+
+        Not thread-safe, and deliberately not made so: call it on the engine-room loop, which is
+        what `external/reset_button.py` does via `schedule_threadsafe()` (0030's rule for an
+        ExternalDevice pressed while the simulation is running)."""
+        if low == self._run_pin_low:
+            return
+        self._run_pin_low = low
+        if not low:
+            self.on_run_pin_reset()
 
     @property
     def simulator(self) -> "Simulator | None":

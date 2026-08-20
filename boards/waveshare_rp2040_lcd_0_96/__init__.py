@@ -104,22 +104,22 @@ Onboard extras - one set, since it is one piece of hardware:
   `BACKLIGHT` below rather than "LED" because this board has no user LED at all (the pico-sdk
   header defines no `PICO_DEFAULT_LED_PIN`, and no `PICO_DEFAULT_WS2812_PIN` either - "no
   PICO_DEFAULT_WS2812_PIN" is an explicit comment in it).
-- Not modelled: **the RESET button**, the MP28164 buck-boost converter and the battery
+- RESET: `ResetButton` - see the note below.
+- Not modelled: the MP28164 buck-boost converter and the battery
   charge/discharge header (no RP2040-visible interface to emulate - `PICO_SMPS_MODE_PIN 23` just
   forces PWM mode), and the USB-C connector (indistinguishable from any other USB port at this
   level).
 
-The RESET button is the interesting omission of those, so it is written down rather than left
-silent: unlike BOOTSEL (which shorts `GPIO_QSPI_SS`, an ordinary pad an `ExternalDevice` can drive
-- 0050/0051), RESET pulls the **RUN** pin low, and RUN is not a GPIO at all. Nothing in this
-emulator models it: the one live-reset path that exists is `BaseDevice._on_watchdog_trigger()`
-(what a guest's own `machine.reset()` reaches through the watchdog's TRIGGER bit), and it is a
-*device*-level sequence - `mcu.reset(preserve_flash=True)`, `core.pc = FLASH_START_ADDRESS`, **and**
-`cdc.reset()` - whose USB half an `ExternalDevice` cannot reach, since it only ever gets the
-`RP2040` and nothing hangs the `USBCDC` off it. A faithful `ResetButton` therefore needs a new
-reset hook on `RP2040` (the shape `RPWatchdog.on_watchdog_trigger` already uses) - designed, with
-its alternatives and open semantics, in docs/records/0057, and deliberately not implemented yet.
-Until then: `machine.reset()` from guest code is the working equivalent.
+The RESET button was this board file's own documented omission for a long time, and the reason is
+worth keeping now that it is modelled: unlike BOOTSEL (which shorts `GPIO_QSPI_SS`, an ordinary pad
+an `ExternalDevice` can drive - 0050/0051), RESET pulls the **RUN** pin low, and RUN is not a GPIO
+at all. What blocked it was not the pin but the *sequence*: a real reset is a device-level one -
+`mcu.reset(preserve_flash=True)`, `core.pc = FLASH_START_ADDRESS`, **and** `cdc.reset()` - whose USB
+half an `ExternalDevice` cannot reach, since it only ever gets the `RP2040` and nothing hangs the
+`USBCDC` off it. docs/records/0089's Phase 4 (which closes docs/records/0057) resolved that the way
+the watchdog already was: `RP2040` carries the RUN level plus an `on_run_pin_reset` hook, and
+`BaseDevice` installs its own `hard_reset()` into it. So `ResetButton` above holds the chip in reset
+while pressed and boots it on release, with the firmware reporting the RESET pin as the cause.
 
 **What makes the CircuitPython side interesting beyond "the same board again": CircuitPython
 initialises the display itself, at boot.** `board_init()` -> `display_init()` builds a
@@ -138,6 +138,7 @@ from collections.abc import Callable
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.st7735s import St7735s
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -147,7 +148,7 @@ BACKLIGHT_GPIO = 25
 
 LCD = St7735s  # zero-arg factory: the constructor's defaults already are this board's pin map
 
-_EXTRAS = (LCD, BootselButton, lambda: LEDMock(gpio=BACKLIGHT_GPIO))
+_EXTRAS = (LCD, BootselButton, lambda: LEDMock(gpio=BACKLIGHT_GPIO), ResetButton)
 
 # Real download URLs from https://micropython.org/download/WAVESHARE_RP2040_LCD_0_96/ and
 # https://circuitpython.org/board/waveshare_rp2040_lcd_0_96/ - only the tags this file was built

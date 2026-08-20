@@ -197,6 +197,42 @@ def test_hard_reset_defaults_to_the_run_pin(tmp_path):
     assert _chip_reset(device) == HAD_RUN
 
 
+def test_releasing_the_run_pin_runs_the_full_device_level_reset(tmp_path):
+    """0089's Phase 4/D3: `BaseDevice.__init__` installs its own `hard_reset()` into
+    `mcu.on_run_pin_reset`, the same downward hook it already uses for the watchdog. Without that
+    wiring an `ExternalDevice` - which only ever gets `attach(rp2040)` - could restart the chip but
+    never `cdc.reset()`, leaving the host console stale."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.mcu.flash[0x100] = 0x42
+    device.cdc._initialized = True
+    usb_ctrl_before = device.mcu.usb_ctrl
+
+    device.mcu.set_run_pin(low=True)
+    assert device.mcu.core.pc == 0x2000_1234, "the hold must not reset anything by itself"
+    device.mcu.set_run_pin(low=False)
+
+    assert device.mcu.core.pc == FLASH_START_ADDRESS
+    assert device.mcu.flash[0x100] == 0x42
+    assert device.cdc._initialized is False
+    assert device.mcu.usb_ctrl is usb_ctrl_before
+
+
+def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_path):
+    """The full path a RESET button takes, end to end: the same registers 0089 §1.3 requires, but
+    reached through the pin rather than through `hard_reset(cause=...)` directly."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    device.mcu.set_run_pin(low=True)
+    device.mcu.set_run_pin(low=False)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_RUN
+
+
 def test_power_on_reset_records_had_por(tmp_path):
     device = _make_device(tmp_path)
     device.hard_reset(cause=ResetCause.RUN_PIN)

@@ -18,6 +18,12 @@ __all__ = ("ShutdownRequest", "Simulator")
 _T = TypeVar("_T")
 _logger = logging.getLogger(__name__)
 
+# How long execute() parks per iteration while the chip is held in reset (RUN low). Matches
+# _execute_batch.py's own per-batch wall-clock budget: a held RESET button is a human-scale event,
+# so nothing needs finer resolution than one batch's worth of latency, and anything shorter just
+# spends CPU noticing that the chip is still held.
+_HELD_IN_RESET_POLL_SECONDS = 0.005
+
 
 class ShutdownRequest:
     """Lets a background thread (a REPL's Ctrl+X handler, a --expect-text watcher, a SIGTERM
@@ -213,6 +219,14 @@ class Simulator:
         self.stopped = False
         try:
             while not self.stopped:
+                if self.rp2040.run_pin_low:
+                    # Held in reset by a RESET button (0089 Phase 4): `_execute_batch()` returns
+                    # immediately for as long as the level lasts, so the `await asyncio.sleep(0)`
+                    # below would turn a held button into a full busy-spun core. A real sleep
+                    # instead - the level can only change from a `schedule_threadsafe()` callback
+                    # on this same loop, and yielding for this long is what lets one run.
+                    await asyncio.sleep(_HELD_IN_RESET_POLL_SECONDS)
+                    continue
                 self._execute_batch()
                 # Upstream rp2040js uses `setTimeout(() => this.execute(), 0)` to yield back to
                 # the single-threaded JS event loop every batch so external stop() calls can get

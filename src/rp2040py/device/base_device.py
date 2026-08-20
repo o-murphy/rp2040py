@@ -98,6 +98,11 @@ class BaseDevice:
         load_uf2(Path(board.image), self.mcu)
         self.cdc = USBCDC(self.mcu.usb_ctrl)
         self.mcu.watchdog.on_watchdog_trigger = self._on_watchdog_trigger
+        # The second trigger installed downward onto an MCU-owned hook, same shape as the line
+        # above (0089's D3): an `ExternalDevice` only ever gets `attach(rp2040)`, so without this
+        # a RESET button could reach `mcu.reset()` but never `cdc.reset()` - a restarted chip
+        # with a stale host-side console, which is worse than not modelling the button at all.
+        self.mcu.on_run_pin_reset = self._on_run_pin_reset
         self._started = False
 
     def _on_watchdog_trigger(self) -> None:
@@ -111,6 +116,15 @@ class BaseDevice:
         timeout - because RPWatchdog has already written the REASON bit that tells them apart
         (FORCE vs TIMER) by the time it calls this."""
         self.hard_reset(cause=ResetCause.WATCHDOG)
+
+    def _on_run_pin_reset(self) -> None:
+        """A RESET button letting the RUN pin go (`external/reset_button.py`) - one of
+        `hard_reset()`'s callers, not a second implementation of it (0089 Phase 4).
+
+        Only the *release* gets here: while the button was down the chip was already held in reset
+        by `execute_batch()` (`mcu.run_pin_low`), executing nothing. This is the boot half, and it
+        is the one trigger for which `cause=RUN_PIN` is literal rather than a stand-in."""
+        self.hard_reset(cause=ResetCause.RUN_PIN)
 
     def hard_reset(self, *, cause: ResetCause = ResetCause.RUN_PIN) -> None:
         """Chip-level reset: restart the RP2040 with flash preserved and drop off the USB bus,
