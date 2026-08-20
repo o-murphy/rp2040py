@@ -60,10 +60,12 @@ Onboard extras:
   write to `NEOPIXEL`/GPIO16 itself.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
-- Not modelled: the **RESET** button. Waveshare's own wiki (http://www.waveshare.com/wiki/RP2040-Zero)
-  documents a BOOT and a RESET pad, but RESET pulls RUN directly - not a GPIO, no model here at all
-  (docs/records/0057, same gap `boards/vcc_gnd_yd_rp2040/` and `boards/weactstudio/` document); a
-  guest's own `machine.reset()`/`microcontroller.reset()` is the working equivalent. Also not
+- RESET: `ResetButton` (`rp2040py.external.reset_button`), on the strength of the wiki citation
+  this file already carried - Waveshare's own wiki (http://www.waveshare.com/wiki/RP2040-Zero)
+  documents a BOOT and a RESET pad, and RESET pulls RUN. **That citation could not be re-read on
+  2026-08-20** (waveshare.com returns HTTP 403 to this project's fetches, and waveshare.net refuses
+  the connection), so it rests on the session that added this board having read it, not on a fresh
+  check. Modelled since docs/records/0089's Phase 4 (which closes docs/records/0057). Also not
   modelled: USB-C, and the RP2040's own RTC (not board-specific). No plain GPIO25 LED exists on
   this board at all - confirmed absent from every source cited above, not merely left out.
 """
@@ -72,6 +74,7 @@ from collections.abc import Callable
 
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -79,7 +82,7 @@ __all__ = ("BOARD", "FIRMWARE", "RGB_GPIO", "board_with")
 
 RGB_GPIO = 16
 
-_EXTRAS = (lambda: Ws2812(gpio=RGB_GPIO), BootselButton)
+_EXTRAS = (lambda: Ws2812(gpio=RGB_GPIO), BootselButton, ResetButton)
 
 # Full version history from
 #   uv run scripts/fetch_firmware.py list --family micropython --slug WAVESHARE_RP2040_ZERO

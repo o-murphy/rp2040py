@@ -939,6 +939,37 @@ is *not* still - a WFI'd core's PC moves constantly as timer/USB interrupts fire
 half a second apart matching is not something an executing loop can fake. CircuitPython 8.0.2 is
 gated out of the CI step exactly as Phase 2's is, and for the same pre-existing reason.
 
+**4.5b - the rest of `boards/`, swept board by board (2026-08-20).** 4.5 above attached the button
+to the three boards whose files already documented it as "not modelled". The remaining 16 were then
+checked one at a time, because the plan's "new boards get a RESET button for free" line quietly
+assumes every board has one - and [0066](0066-board-support-expansion.md)'s own note said so
+outright. It is not true, and that record now carries the correction.
+
+*Method.* After Phase 4 there is **no electrical fact left to source** for a RESET button: 0057's
+addendum settled that RUN's net has no pin number, no configurable pull and no polarity. The only
+per-board question is whether the board has one, which firmware config can never answer (RUN is not
+a GPIO, so `pins.csv`/`pins.c` never mention it; MicroPython's `board.json` `features` lists were
+checked for seven of these boards and carry "USB-C"/"RGB LED", never buttons). So the source has to
+be the vendor's own documentation, and that is what was fetched.
+
+| verdict | boards | source |
+|---|---|---|
+| **attached, verified this session** | `seeed_xiao_rp2040`, `adafruit_feather_rp2040`, `adafruit_itsybitsy_rp2040`, `adafruit_qtpy_rp2040`, `sparkfun_promicro`, `pimoroni_tiny2040`, `machdyne_werkzeug` | vendor pages/wiki, quoted in each board file. Seeed's is the strongest: its wiki pin map lists the **R** pad as `RUN`, "Reset input" |
+| **attached, on an in-tree citation that could not be re-read** | `waveshare_rp2040_zero`, `garatronic_pybstick26_rp2040` | the URL each file already cited; the fetch failed on 2026-08-20 and each file now says so |
+| **not attached - the board has no RESET button** | `pimoroni_picolipo` | Pimoroni: an on/off **power** button, rebooting by "cut and reinstate the power" - a power cycle, `HAD_POR` not `HAD_RUN`. Attaching one would have been wrong, not approximate. What modelling it would take is [0092](0092-power-button-and-power-cycle.md) |
+| **not attached - unsourceable** | `waveshare_rp2040_one`, `waveshare_rp2040_tiny`, `waveshare_rp2040_plus`, `nullbits_bit_c_pro`, `0xcb_gemini`, `0xcb_helios` | waveshare.com 403 / waveshare.net refused; the 0xCB guide URL 404s with no findable hardware repo; nullbits' page text names no buttons |
+
+12 of 19 board files now carry one. The `pimoroni_picolipo` row is the reason this was worth doing
+board by board rather than as a bulk edit: it is the one board where the "every board has one"
+assumption would have produced a wrong emulation rather than a missing feature.
+
+Live-boot: `seeed_xiao_rp2040`, `adafruit_feather_rp2040` and `pimoroni_tiny2040` were booted
+through their own `--board-spec` files with the button attached (real MicroPython 1.28.0, each
+reporting `machine.reset_cause() == 1` on a cold boot). The button's *behaviour* is proven on
+`pico` instead (`tests/reset_button_run.py`) for a reason worth naming: `attach_external_devices()`
+returns nothing, so a board file cannot hand its constructed `ResetButton` back to a caller - the
+"a `BoardSpec` cannot hand you the devices it attached" caveat, not a new limitation.
+
 *Known gaps, deliberately left:*
 
 - **The emulated device stays enumerated while RUN is held.** On silicon the USB device drops off

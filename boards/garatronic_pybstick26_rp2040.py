@@ -54,23 +54,26 @@ Onboard extras:
   `board.json` discrepancy above).
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
-- Not modelled: the **RESET** button. Not documented in either source cited above - McHobby's own
-  product page shows the board has one, but with no schematic or firmware-config statement of its
-  net (unlike `boards/vcc_gnd_yd_rp2040/`'s VCC-GND Studio schematic), the same "pulls RUN, not a
-  GPIO" gap every other board file here documents applies regardless
-  (docs/records/0057). Also not modelled: USB, and the RP2040's own RTC (not board-specific).
+- RESET: `ResetButton` (`rp2040py.external.reset_button`), on the strength of the citation this
+  file already carried - McHobby's own product page shows the board has one. There is still no
+  schematic (unlike `boards/vcc_gnd_yd_rp2040/`'s VCC-GND Studio one) and none is needed: RUN's net
+  has no pin number and no configurable pull (docs/records/0057's addendum), so presence is the
+  whole fact. **The page could not be re-read on 2026-08-20** (the fetch failed), so this rests on
+  the session that added this board. Modelled since docs/records/0089's Phase 4. Also not modelled:
+  USB, and the RP2040's own RTC (not board-specific).
 """
 
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
 __all__ = ("BOARD", "FIRMWARE", "LED_GPIO")
 
 LED_GPIO = 23
 
-_EXTRAS = (lambda: LEDMock(gpio=LED_GPIO), BootselButton)
+_EXTRAS = (lambda: LEDMock(gpio=LED_GPIO), BootselButton, ResetButton)
 
 # Full version history from
 #   uv run scripts/fetch_firmware.py list --family micropython --slug GARATRONIC_PYBSTICK26_RP2040

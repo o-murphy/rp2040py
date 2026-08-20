@@ -77,8 +77,23 @@ Onboard extras (identical between variants - only flash size and firmware differ
   `PICO_DEFAULT_LED_PIN_INVERTED` in either pico-sdk header), not a NeoPixel.
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051) - the real BOOTSEL mechanism, independent of `USER_SW`.
-- Not modelled: `USER_SW`/GPIO23 (see above), the **RESET**/power button (pulls RUN, not a GPIO -
-  docs/records/0057, same gap every other board file here documents), the MCP73831 LiPo charger
+- **No `ResetButton`, and that is a finding rather than a gap** (checked 2026-08-20, correcting
+  what this file used to say). This board has no dedicated RESET button: Pimoroni's own product
+  page describes "an on/off button and a BOOTSEL button", and the way it reboots is "The power
+  button can also be used as a reset button, yay! Just double press it to cut and reinstate the
+  power". That is a **power cycle**, not a RUN short - a different reset cause on real silicon
+  (`HAD_POR` rather than `HAD_RUN`, docs/records/0089 §1.3), which is exactly why attaching a
+  `ResetButton` here would be wrong rather than merely approximate.
+
+  The *cause* is not what is missing - `ResetCause.POWER_ON` -> `CHIP_RESET.HAD_POR` already exists
+  and is what `BaseDevice.hard_reset(cause=ResetCause.POWER_ON)` records (0089's Phase 1). What a
+  faithful `PowerButton` would still need is a trigger and a decision: `RP2040` exposes
+  `on_run_pin_reset` and nothing equivalent for power, so an `ExternalDevice` - which only ever gets
+  `attach(rp2040)` - has nothing to call; and "what a power cut destroys" is undecided. 0089's D6
+  keeps SRAM across a reset deliberately, but that reasoning is about a *PSM* reset, not about the
+  rail actually going away. Both are written up in docs/records/0092, which decides nothing and
+  builds nothing - this board is simply the one that raised the question.
+- Not modelled: `USER_SW`/GPIO23 (see above), the power button (above), the MCP73831 LiPo charger
   and its charge-status LED, the battery-voltage sense circuit on `BAT_SENSE`/GPIO29 (a real ADC
   input this board exposes, but nothing board-specific to model beyond the RP2040's own ADC), the
   STEMMA QT/Qwiic connector (electrically just `I2C(0)`), USB-C, and the RP2040's own RTC.

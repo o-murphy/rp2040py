@@ -54,6 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause already exists; what is missing is a trigger a device can call and a decision on SRAM/USB/attached devices
 - [ ] [0091] ESP32-C3 port feasibility | idea only, nothing proposed - the harness reuses and the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers, and no C3 claim in it is source-verified yet
 - [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
 - [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
@@ -261,3 +262,4 @@ record is added.
 [0089]: records/0089-one-reset-for-every-trigger.md
 [0090]: records/0090-post-boot-nudge-is-a-newline.md
 [0091]: records/0091-esp32-c3-port-feasibility.md
+[0092]: records/0092-power-button-and-power-cycle.md

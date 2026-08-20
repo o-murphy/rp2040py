@@ -76,8 +76,13 @@ Onboard extras (identical between variants - only flash size and firmware differ
   ripple mode - not a discrete component with observable behavior to emulate), `VBUS_SENSE`/GPIO24
   and `VOLTAGE_MONITOR`/GPIO29 (real ADC inputs this board exposes for USB-power and battery-voltage
   sensing respectively, but nothing board-specific to model beyond the RP2040's own ADC), the
-  RESET/power button (pulls RUN, not a GPIO - docs/records/0057, same gap every other board file
-  here documents), the onboard LiPo charge circuit and USB-C, and the RP2040's own RTC.
+  RESET/power button, the onboard LiPo charge circuit and USB-C, and the RP2040's own RTC. On that
+  button specifically: a `ResetButton` exists since docs/records/0089's Phase 4, so the blocker is
+  no longer the emulator - it is that nothing sourceable says which control this board actually has.
+  waveshare.com returns HTTP 403 to this project's fetches (re-checked 2026-08-20) and this file's
+  own "RESET/power" phrasing is ambiguous between the two. It matters: `boards/pimoroni_picolipo.py`
+  turned out to have a *power* button, which reboots by cutting power - a different reset cause
+  (`HAD_POR`, not `HAD_RUN`). Guessing here would produce a board that lies about why it rebooted.
 """
 
 from rp2040py.boards import BoardSpec

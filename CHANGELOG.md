@@ -17,8 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, with `machine.reset_cause()`/`microcontroller.cpu.reset_reason` reporting the RESET pin.
   Sourced from a real vendor schematic (`3V3 -[R12 10k]- RUN`, switch to GND, in VCC-GND Studio's
   own YD-2040 sheet), which is what makes the button a level rather than a pulse. Attached to the
-  three boards whose files previously documented it as "not modelled": `vcc_gnd_yd_rp2040`,
-  `waveshare_rp2040_lcd_0_96`, `weactstudio`. Live-boot-verified on real MicroPython v1.23.0 and
+  boards whose vendor documentation establishes one - 12 of the 19 files under `boards/`. The other
+  seven are documented rather than guessed: `pimoroni_picolipo` genuinely has **no** RESET button
+  (an on/off power button, which reboots by cutting power - a different reset cause), and six more
+  have no sourceable answer either way. This corrects
+  [docs/records/0066](docs/records/0066-board-support-expansion.md)'s claim that every board has
+  one. Live-boot-verified on real MicroPython v1.23.0 and
   CircuitPython 10.2.1, both now in CI (`tests/reset_button_run.py`).
   [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 4, closing
   [docs/records/0057](docs/records/0057-run-pin-reset-hook.md).

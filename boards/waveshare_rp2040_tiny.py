@@ -80,9 +80,11 @@ Onboard extras:
   (docs/records/0050/0051).
 - Not modelled: any **RESET/BOOT pushbutton** beyond BOOTSEL. CircuitPython's `pins.c` declares no
   `BUTTON` of any kind, and a RESET control pulls RUN rather than a GPIO (docs/records/0057, the
-  same gap every other board file here documents). Waveshare's own wiki and product pages could not
-  be read this session (both returned HTTP 403), so nothing beyond the firmware source is claimed
-  about this board's physical controls or its packaging. Also not modelled: the RP2040's own RTC
+  same reason `boards/waveshare_rp2040_plus.py` gives). A `ResetButton` exists since
+  docs/records/0089's Phase 4, so what is missing is a source, not a model: Waveshare's own wiki and
+  product pages could not be read when this board was added and still could not on 2026-08-20 (403
+  from waveshare.com, connection refused from waveshare.net), so nothing beyond the firmware source
+  is claimed about this board's physical controls or its packaging. Also not modelled: the RP2040's own RTC
   (not board-specific).
 """
 

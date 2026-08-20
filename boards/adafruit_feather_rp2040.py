@@ -79,8 +79,12 @@ Onboard extras:
   pull/polarity is not established from either port's source (neither `pins.c` nor
   `mpconfigboard.h` states a pull direction), so per the 3g rule it stays undocumented rather than
   guessed - a real gap, not an oversight, unlike `boards/vcc_gnd_yd_rp2040/`'s USRKEY, where a
-  vendor schematic settled the same question. Also not modelled: the **RESET** button (pulls RUN,
-  not a GPIO - docs/records/0057, same gap every other board file here documents), the STEMMA QT
+  vendor schematic settled the same question.
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). Adafruit's own product page states it in
+  the feature list - "Both Reset button and Bootloader select button for quick restarts" - which is
+  the only per-board fact a RESET button needs, since RUN's net carries no configurable pull and no
+  pin number (docs/records/0057's addendum). Modelled since docs/records/0089's Phase 4.
+- Not modelled: the STEMMA QT
   I2C connector (electrically just `I2C(1)`, nothing board-specific to model), the LiPo charging
   circuit and its status LED (analog, not RP2040-visible), and USB-C.
 """
@@ -90,6 +94,7 @@ from collections.abc import Callable
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -98,7 +103,7 @@ __all__ = ("BOARD", "FIRMWARE", "LED_GPIO", "RGB_GPIO", "board_with")
 LED_GPIO = 13
 RGB_GPIO = 16
 
-_EXTRAS = (lambda: LEDMock(gpio=LED_GPIO), lambda: Ws2812(gpio=RGB_GPIO), BootselButton)
+_EXTRAS = (lambda: LEDMock(gpio=LED_GPIO), lambda: Ws2812(gpio=RGB_GPIO), BootselButton, ResetButton)
 
 # Full version history from
 #   uv run scripts/fetch_firmware.py list --family micropython --slug ADAFRUIT_FEATHER_RP2040
