@@ -338,10 +338,12 @@ def main() -> None:
             except queue.Empty:
                 pass
             else:
-                # Drain to the newest frame before decoding. The emulator emits frames far faster
-                # than a Python RGB565 decode can consume them, and a queue that grows means the
-                # picture examined below is minutes stale - which looked exactly like a panel that
-                # paints slowly. `--all-frames` opts back into decoding every one, for debugging.
+                # Drain to the newest frame before decoding. Measured: the panel is painted in a
+                # burst of 171 frames over 7.6s (43ms apart, 25 in the busiest second), while this
+                # loop manages ~15/s once `text_lines()` and the change check are counted - a peak
+                # backlog of 3.7s. That is half the burst, so the picture the stop rule examines is
+                # mid-paint and still changing, which reads exactly like a panel that paints slowly.
+                # `--all-frames` opts back into decoding every one, for debugging.
                 pending = [buffer]
                 while not args.all_frames:
                     try:
