@@ -206,14 +206,33 @@ This matches both firmwares' source: `pyexec_raw_repl()` answers an empty line +
 and `PYEXEC_FORCED_EXIT`, and the main loop only re-runs the startup script when
 `pyexec_mode_kind == PYEXEC_MODE_FRIENDLY_REPL`.
 
-So `mpremote soft-reset` is not a way to re-run a script you just uploaded. To do that from the
-device API, ask the guest to restart itself and let the *firmware* decide - one line, no
-emulator-side support (measured: both return cleanly and the console stays usable):
+So `mpremote soft-reset` is not a way to re-run a script you just uploaded. Neither, it turns
+out, is asking the guest to restart itself from an `aexec()`/`exec_async()`:
 
 ```python
-await device.aexec("import machine\nmachine.soft_reset()")  # MicroPython
-await device.aexec("import supervisor\nsupervisor.reload()")  # CircuitPython
+await device.aexec("import supervisor\nsupervisor.reload()")  # CircuitPython: does NOT re-run code.py
 ```
+
+Measured 2026-08-20 on CircuitPython 10.2.1: the call returns cleanly, and then **nothing
+happens** - no `soft reboot`, no `code.py output:`, no console output at all, and a display demo
+driven this way sat for 20 minutes without a single frame. The reason is the same raw-vs-friendly
+split as the table above: `RawReplRunner` never sends Ctrl-B, so an exec leaves the device *in*
+the raw REPL, and a restart from there comes back to a raw prompt with the startup script skipped.
+
+What does work, from the device API, is sending the two bytes a person would type - Ctrl-B to
+leave the raw REPL, then Ctrl-D at the friendly prompt:
+
+```python
+from rp2040py.device import CTRL_B, CTRL_D
+
+for byte in (CTRL_B, CTRL_D):
+    device.simulator.schedule_threadsafe(lambda value=byte: device.cdc.send_serial_byte(value))
+```
+
+Measured on the same firmware, the console then shows `soft reboot` -> `code.py output:` -> the
+new file's output, and `demo/wifi_lcd_run.py` uses exactly this to run the `code.py` it just
+pushed. A *hard* reset (`ahard_reset()`) re-runs everything too, including `boot.py`, at the cost
+of re-enumerating USB.
 
 There is deliberately **no** `asoft_reset()` on the device API: a soft reset is bytes the firmware
 already answers, from paths that all already exist, so a second way to express it was built,

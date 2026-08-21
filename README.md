@@ -349,13 +349,19 @@ only mount `2.0`, 1.28's reads both - see
   rp2040py micropython --circuitpython --fat12 fat12.img
   ```
 
-  CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython does,
-  so this path hasn't been separately exercised - the underlying flash-write mechanism is the same
-  SSI peripheral either way.
+  It can also write its own drive, which is usually the easier route: `storage.remount('/',
+  readonly=False)` at the REPL, then plain `open()`/`write()`. On real hardware that raises while a
+  USB host holds the mass-storage lock; this emulator claims only the CDC interface, so the lock is
+  free and the firmware builds the volume itself - long names and subdirectories included. Restart
+  it afterwards (Ctrl-B then Ctrl-D at the console) to make CircuitPython re-run `code.py`, and
+  `--dump-fs` if you want to keep the image. `demo/lcd_run.py --code` and `demo/wifi_lcd_run.py`
+  both work this way; see
+  [docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md).
 
-`--dump-fs <path>` dumps a device's littlefs flash region back out to a local file on exit (Ctrl+X,
-`--expect-text`, or the end of a run) - the same layout `--littlefs` reads back in, so it
-round-trips for persistence across runs. Works for both **MicroPython** and **Kaluma**; MicroPython
+`--dump-fs <path>` dumps a device's filesystem flash region back out to a local file on exit
+(Ctrl+X, `--expect-text`, or the end of a run) - the same layout `--littlefs`/`--fat12` reads back
+in, so it round-trips for persistence across runs. Works for all three families - littlefs for
+**MicroPython** and **Kaluma**, FAT12 for **CircuitPython**; MicroPython
 additionally supports scripting it non-interactively via `-c`/`-m`/`<filename>` (see
 [demo/mklittlefs_dump.py](demo/mklittlefs_dump.py), which builds such a script from local files) -
 Kaluma has no non-interactive exec mode, so use `require('fs')` at its REPL instead. This makes
