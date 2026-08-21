@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 ### Changed
+- **The display demos no longer decode frames on the emulator's thread.** `on_frame` fires on the
+  engine-room thread, so the RGB565->PIL decode `lcd_run.py`, `eink_run.py` and `wifi_lcd_run.py`
+  all did inside that callback was time the emulated chip did not get to run; the queues now carry
+  raw bytes and the decode happens in each runner's own loop, which also drains to the newest frame
+  rather than falling minutes behind. Measured on the WiFi demo: 1 m 40 s end to end, against forty
+  minutes with the decode inline (and `auto_refresh` back on in the guest, which was the other half
+  of it). Emulation speed itself was never the difference - 0.069x realtime pushing `code.py` over
+  the REPL, 0.063x booting the same code from a prepared image.
 - **Re-running a guest script from the device API takes two bytes, not a call.** Measured on
   CircuitPython 10.2.1: `aexec("import supervisor\nsupervisor.reload()")` is a **no-op** - it
   returns cleanly and nothing happens, because an exec leaves the device in the *raw* REPL and a

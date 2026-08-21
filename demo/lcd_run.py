@@ -141,15 +141,19 @@ def _budget(frame_limit: int, shown: int) -> "int | None":
     return None if frame_limit <= 0 else frame_limit - shown
 
 
-def _drain(frame_queue: "queue.Queue[Image.Image]", renderer: Renderer, budget: "int | None" = None) -> int:
-    """Shows every queued frame, or at most `budget` of them - the caller's frame limit has to
-    bound the drain itself, not just how often it runs: CircuitPython queues frames faster than
-    this loop spins, so draining "everything available" once overshoots any limit by a wide
-    margin (measured: 87 PNGs written for a `--frames 3` run before this was fixed)."""
+def _drain(frame_queue: "queue.Queue[bytes]", renderer: Renderer, budget: "int | None" = None) -> int:
+    """Decodes and shows every queued frame, or at most `budget` of them - the caller's frame limit
+    has to bound the drain itself, not just how often it runs: CircuitPython queues frames faster
+    than this loop spins, so draining "everything available" once overshoots any limit by a wide
+    margin (measured: 87 PNGs written for a `--frames 3` run before this was fixed).
+
+    Decoding here rather than in `on_frame`: that callback runs on the emulator's engine-room
+    thread, where every millisecond spent turning RGB565 into a picture is a millisecond the
+    emulated chip is not running."""
     drained = 0
     while budget is None or drained < budget:
         try:
-            renderer.show(frame_queue.get_nowait())
+            renderer.show(_decode_frame(frame_queue.get_nowait()))
         except queue.Empty:
             break
         drained += 1
@@ -268,14 +272,17 @@ def main() -> None:
     # frame_queue exists because St7735s.on_frame fires from the device's own engine-room thread,
     # not this one; frames are decoded there and only ever drawn from the loop below (Tkinter
     # widgets may only be touched from the thread that created them). Same shape as eink_run.py.
-    frame_queue: queue.Queue[Image.Image] = queue.Queue()
+    # Raw bytes across the queue, not decoded images: `on_frame` fires on the emulator's own
+    # engine-room thread, so a pure-Python RGB565 decode in it is time the emulated chip does not
+    # get to run. `_drain()` decodes on this thread instead.
+    frame_queue: queue.Queue[bytes] = queue.Queue()
 
     from boards.waveshare_rp2040_lcd_0_96 import board_with
 
     # One board file, two firmware families - `--circuitpython` picks which of its own `firmware`
     # declarations to resolve, exactly as the CLI's own flag does (docs/records/0059).
     board = resolve_firmware(
-        board_with(lambda buf: frame_queue.put(_decode_frame(buf))),
+        board_with(frame_queue.put),
         "circuitpython" if args.circuitpython else "micropython",
     )
     # `--fat12` is passed through untouched when given: a prepared image is flash content, read in
