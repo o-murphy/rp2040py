@@ -363,9 +363,12 @@ Three things had to be measured to make that work, none of them predictable from
    - `on_frame` fires on the emulator's **engine-room thread**. Decoding RGB565 into a PIL image
      inside that callback - which every display demo here did - is time the emulated chip does not
      get to run.
-   - The consumer decoded one frame per loop tick while the emulator produced hundreds, so the
-     queue grew and the picture being examined was minutes stale. Draining to the newest frame
-     first is the fix.
+   - The consumer fell behind, and the stop rule then read a stale frame. Measured: the panel is
+     painted in a burst of **171 frames over 7.6 s** (43 ms apart, 25 in the busiest second), while
+     the loop managed ~15/s - the decode is only 7.5 ms, but `text_lines()` and the change check
+     ran on every frame too. Peak backlog **3.7 s**: seconds, not minutes, but half the burst, so
+     what the rule examined was mid-paint and still changing. Draining to the newest frame first is
+     the fix.
 
    Turning `auto_refresh` back on in the guest's idle loop made it worse still - 60 fps of
    full-framebuffer SPI pushes, exactly what the constructor comment warns about - and was
