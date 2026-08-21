@@ -16,8 +16,9 @@ network and prints the result on the display, and this script saves a PNG of it.
     python demo/wifi_lcd_run.py --image 9.2.9 --all-frames out
 
 One file, start to finish, and nothing is prepared on the host: the guest code below is **pushed
-over the REPL** into the CIRCUITPY the firmware formatted itself, and `supervisor.reload()` makes
-CircuitPython re-run it as `code.py`. That is the whole route
+over the REPL** into the CIRCUITPY the firmware formatted itself, and a Ctrl-B/Ctrl-D soft reset
+makes CircuitPython re-run it as `code.py` (not `supervisor.reload()` - see
+`restart_into_code_py()`). That is the whole route
 [record 0087](../docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)
 measured - `storage.remount('/', readonly=False)` works here because this emulator drives the CDC
 interface only and never claims the mass-storage one, so the blockdev lock a real USB host would
