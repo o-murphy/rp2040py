@@ -5,8 +5,8 @@ MicroPython code that runs *inside* the emulated firmware, pushed over the raw R
 runner. The `cp_*.py` files are the CircuitPython equivalent and get there the same way, with one
 extra step: CircuitPython auto-runs `code.py` off its CIRCUITPY drive, so the runner writes the
 file onto that drive over the REPL (`storage.remount('/', readonly=False)`, then an ordinary
-`open()`/`write()`) and asks the firmware to restart - `supervisor.reload()` for a `code.py`, a
-chip reset for a `boot.py`. Nothing is prepared on the host: the firmware writes its own
+`open()`/`write()`) and asks the firmware to restart - Ctrl-B then Ctrl-D at the console for a
+`code.py`, a chip reset for a `boot.py`. Nothing is prepared on the host: the firmware writes its own
 filesystem ([record 0087](../docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
 
 | script | what it does |
@@ -73,8 +73,8 @@ That `wifi: MISSING` is the honest answer to "would a WiFi connection show up he
 board: it has no CYW43439, so its CircuitPython build ships no `wifi` module at all. `wifi_lcd_run.py`
 below is where a real join happens. `--boot` works the same way but is invisible to any
 screenshot - CircuitPython sends `boot.py`'s output to `boot_out.txt` instead of the console, and
-it only runs out of a chip reset, so `--boot` restarts with one rather than with
-`supervisor.reload()`. To read what it wrote, ask the guest:
+it only runs out of a chip reset, so `--boot` restarts with one rather than with a soft
+reset. To read what it wrote, ask the guest:
 `rp2040py micropython --circuitpython -c "print(open('/boot_out.txt').read())"`. Both findings are [record 0085](../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 The two runs also drive the panel through *different* orientations (`MADCTL` `0xA8` vs `0xC8`,
