@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CircuitPython 10.2.1, both now in CI (`tests/reset_button_run.py`).
   [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 4, closing
   [docs/records/0057](docs/records/0057-run-pin-reset-hook.md).
+- **A host-side reset in the device API**: `BaseDevice.hard_reset()` (synchronous, does not wait),
+  `hard_reset_async()` (a `concurrent.futures.Future`) and `await device.ahard_reset()` reboot the
+  emulated chip from the host, as pulling RUN would. The awaiting forms resolve only once the
+  firmware has re-enumerated over USB and its console is usable again, so a caller can reset and
+  immediately keep talking instead of guessing at a sleep - and they queue behind an `aexec()`
+  already in flight on the same REPL rather than interleaving with it. The trigger is a real
+  argument: `ResetCause` (`POWER_ON`/`RUN_PIN`/`WATCHDOG`, now exported from `rp2040py.device`,
+  default `RUN_PIN`) decides what the firmware reads back as `machine.reset_cause()` /
+  `microcontroller.cpu.reset_reason`, because the three are different signatures in the CHIP_RESET
+  and watchdog registers rather than labels on one event.
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 2.
 - `docs/reference/mpremote.md` gained a "Soft reset: raw prompt vs friendly prompt" section: a
   soft reset restarts the VM but **does not** re-run `main.py`/`code.py` unless the Ctrl-D is sent
   at the *friendly* prompt - measured on both firmware families, and the thing to know before
@@ -99,6 +110,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chip** instead of logging "no reset handler provided" - so a guest calling `machine.reset()`
   under `rp2040py run` (a bare `RP2040` + `USBCDC`, no device layer) reboots rather than hangs.
   [docs/records/0057](docs/records/0057-run-pin-reset-hook.md)'s option B.
+- **One filesystem image, not two flags. Breaking:** `MicroPythonDevice(littlefs=..., fat12=...)`
+  is now `MicroPythonDevice(filesystem=...)`, interpreted by the firmware family the device was
+  constructed for - littlefs for MicroPython, FAT12 for `circuitpython=True`. The format was never
+  the caller's choice, and the pair made two invalid combinations expressible: passing both
+  silently dropped one, and the wrong one for the family was accepted and then ignored.
+  `dump_flash_image()` already branched on `circuitpython` for exactly this reason; loading now
+  matches it. The CLI's `--littlefs`/`--fat12` keep both spellings but reject the mismatch up
+  front - `--fat12` without `--circuitpython` used to boot cleanly with no filesystem at all and no
+  hint as to why, and the check now runs before any firmware is resolved or downloaded. A
+  named-but-missing image is still skipped rather than an error, as documented.
+  [docs/records/0036](docs/records/0036-littlefs-fat12-exclusivity.md).
+- **The post-boot nudge is a newline for both firmware families.** The console sends a byte the
+  moment the device enumerates, so a host that missed the banner still gets a prompt; that was
+  `\r\n` for MicroPython and **Ctrl-C** for CircuitPython. Ctrl-C only produces a prompt on an
+  *idle* REPL - against a script that is still running it is an interrupt, and both families
+  auto-run one. Measured: CircuitPython 8.0.2 with a looping `code.py` is killed by it ("Code done
+  running.") and does not even reach a prompt, while a newline leaves it printing; with no
+  `code.py` the two are byte-identical. Attaching to a board must not disturb what it is doing - a
+  user who wants to interrupt can still type Ctrl-C themselves. It also moved out of the CLI onto
+  `MicroPythonDevice._post_boot_handshake()`, which is what lets a device-level reset re-run it.
+  [docs/records/0090](docs/records/0090-post-boot-nudge-is-a-newline.md).
+- **CI covers the reset paths and a second CircuitPython WiFi version.** The reset-cause check
+  (0089's Phase 1), the host-initiated `ahard_reset()` round trip (Phase 2) and the RESET button
+  (Phase 4) now run live on both firmware families; the CircuitPython CYW43 job runs on **10.2.1**
+  as well as 9.2.9, which 0048 had asked for a live re-verification before allowing and
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md) supplied
+  (scan/join/DHCP through to an address rendered on an emulated panel). The CircuitPython workflow
+  also stopped being the odd one out: same triggers, same `paths-ignore`, same `concurrency`
+  cancellation as every other CI workflow, and no `workflow_dispatch`.
 
 ### Fixed
 - **A watchdog *timeout* froze the chip instead of resetting it.** `Timer32PeriodicAlarm`

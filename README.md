@@ -358,6 +358,13 @@ only mount `2.0`, 1.28's reads both - see
   both work this way; see
   [docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md).
 
+The format is a property of the firmware family, not a choice, so the two flags are mutually
+exclusive *and* family-checked: `--fat12` needs `--circuitpython`, `--littlefs` needs its absence,
+and the wrong one is a startup error rather than a flag that is quietly ignored (a
+`--fat12 image.img` run without `--circuitpython` used to boot with no filesystem at all and no
+hint as to why). A named image that doesn't exist is still skipped silently - that is about the
+file, not the flag.
+
 `--dump-fs <path>` dumps a device's filesystem flash region back out to a local file on exit
 (Ctrl+X, `--expect-text`, or the end of a run) - the same layout `--littlefs`/`--fat12` reads back
 in, so it round-trips for persistence across runs. Works for all three families - littlefs for
@@ -449,7 +456,7 @@ the ROM image on the fly, no separate conversion step needed. A local `.bin` (e.
 
 ## Library API
 
-Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image (optionally for a specific `board`, e.g. `board="pico_w"`) and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
+Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a board and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image). `board` is keyword-only and is the *only* board-related argument - a resolved `BoardSpec` carrying its own firmware image, never a board-name string or a separate `image=` kwarg; see [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md#using-a-boardspec) for building one of your own.
 
 > [!NOTE]
 > **Async-native only, no blocking API.** `MicroPythonDevice`/`KalumaDevice`/`BaseDevice` boot and
@@ -464,11 +471,15 @@ Everything above is the CLI, but the emulator is also usable programmatically - 
 
 ```python
 import asyncio
+from rp2040py.boards import BOARDS, resolve_firmware
 from rp2040py.device import MicroPythonDevice
 
 
 async def main():
-    async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+    # Downloads and caches the family's default firmware; pass a third argument
+    # ("1.23.0", a local .uf2 path, a URL) to pin a different one.
+    board = resolve_firmware(BOARDS["pico"], "micropython")
+    async with MicroPythonDevice(board=board) as device:
         stdout, stderr = await device.aexec("print(1 + 1)")
         assert stdout == b"2\r\n"
 
