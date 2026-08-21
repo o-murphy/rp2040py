@@ -1,7 +1,9 @@
 # 0087 - CircuitPython over the raw REPL: a writable CIRCUITPY on the stack we already have
 
-- Status: **Proposed / documented, nothing implemented.** Everything below is measured; what to
-  *build* from it is listed at the end and deliberately left unbuilt.
+- Status: **Implemented (2026-08-20)** - see the closing section at the end for what each of the
+  three build items became (one rejected, one built, one documented). It was "Proposed /
+  documented, nothing implemented" for a day; everything in the body below is measured, and the
+  sections are left as written.
 - Corrects, and is the follow-through from,
   [0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s own appended correction; changes what
   [0086](0086-fat12-library-and-a-mkfat12-subcommand.md) is deciding.
@@ -332,3 +334,58 @@ code.
   soft-reset entry point"* - contradicts the paragraph directly above it, which already records
   Phase 3 as dropped. Read it as: **unblocked, full stop**, with the restart taken from the table
   in this section.
+
+
+## Closing (2026-08-20): all three items resolved, and the one thing that had to be measured again
+
+Status for this record is now **Implemented** - not because everything it listed was built, but
+because each item has an answer:
+
+| item | outcome |
+|---|---|
+| 1. `demo/mkfat12_dump.py` | **rejected** (previous section): the composition already exists - REPL write, then `--dump-fs` if an image is wanted |
+| 2. a "push over the REPL" mode for `--code`/`--boot` | **built**, in both display demos - see below |
+| 3. document the mpremote story | **done**, measured first: [reference/mpremote.md](../reference/mpremote.md)'s "Against CircuitPython firmware" |
+| 4. move the post-boot handshake onto the device | done earlier, as [0089](0089-one-reset-for-every-trigger.md)'s Phase 0.1 |
+
+**What item 2 became.** `demo/lcd_run.py`'s `--code`/`--boot` no longer build a FAT12 image on the
+host: they boot the board, write the files onto the CIRCUITPY the firmware formatted itself, and
+restart it. `demo/wifi_lcd_run.py` is the same route end to end in one file - it carries its own
+guest code as a string, pushes it as `code.py`, restarts, and saves the panel as a PNG. The
+host-side builder (`demo/mkfat12.py`, its `pyfatfs` route and its test) is **deleted**: with the
+firmware writing its own volume there is nothing left for it to do that this route does not do
+better, and `--dump-fs`/`--fat12` still carry images out and back in.
+
+**And the thing that had to be measured again: `supervisor.reload()` does not work from an
+`exec()`.** The "both blocking questions answered" section above measured the restart at the
+*console* - Ctrl-B, then Ctrl-D - and this record then wrote the flow as
+`await device.aexec("import supervisor\nsupervisor.reload()")`, which
+[reference/mpremote.md](../reference/mpremote.md) repeated. Measured 2026-08-20 on CircuitPython
+10.2.1, that call is a **no-op**: it returns cleanly and then nothing happens - no `soft reboot`,
+no `code.py output:`, no console output at all, and the first version of the WiFi demo sat for
+twenty minutes without a single frame. The cause is the same raw-vs-friendly split the record
+already knew about, one level further out: `RawReplRunner` never sends Ctrl-B, so *every* exec
+leaves the device in the raw REPL, and a restart from there comes back to a raw prompt with the
+startup script skipped. What works, and what both demos now do:
+
+```python
+from rp2040py.device import CTRL_B, CTRL_D
+
+for byte in (CTRL_B, CTRL_D):
+    device.simulator.schedule_threadsafe(lambda value=byte: device.cdc.send_serial_byte(value))
+```
+
+Console, measured: `soft reboot` -> `Auto-reload is on.` -> `code.py output:` -> the new file's
+output. The wrong version and the right one differ by two bytes, and the wrong one fails
+*silently* - which is why this is written down rather than just fixed.
+
+**The write-cache question, closed in passing.** "Whether the write cache needs an explicit flush
+before `--dump-fs`" has been open in Constraints since 2026-08-19. Both demos now write with
+`os.sync()` and read the length back in the same exec, and the pushed `code.py` survives a
+restart - so the flush is available from the guest and costs one call. `--dump-fs` on a run that
+did that is safe; nothing here needed an emulator-side change.
+
+**What is left, and it is not in this record.** The `--code`/`--boot` route now costs a
+format-from-blank boot (minutes on a Pico W with the radio running) where the old builder cost
+milliseconds. That is the trade the previous section priced and accepted; if it ever hurts a test,
+the answer is a cached image via `--fat12`, not a new host-side writer.

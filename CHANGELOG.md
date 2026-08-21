@@ -56,36 +56,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   soft reset restarts the VM but **does not** re-run `main.py`/`code.py` unless the Ctrl-D is sent
   at the *friendly* prompt - measured on both firmware families, and the thing to know before
   reaching for `mpremote soft-reset` to run a script you just uploaded.
-- `demo/mkfat12.py` - builds (and reads back) the CIRCUITPY FAT12 image CircuitPython auto-runs
-  `boot.py`/`code.py` from, with no host dependencies, and without booting anything - which is what
-  makes it usable from a test, from CI, and as `--code`/`--boot`'s implementation. (It was
-  originally justified by "CircuitPython refuses to write CIRCUITPY while USB is attached, so the
-  host has to lay the bytes down itself". That is wrong for this emulator - see the correction in
-  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md) - and the
-  offline-build property is the real reason to keep it.)
 - `demo/lcd_run.py --code/--boot/--fat12/--dump-fs` plus `demo/cp_lcd_demo.py` - guest
   CircuitPython code on the Waveshare RP2040-LCD-0.96, and reading the drive back afterwards.
+  `--code`/`--boot` write the files onto the running device over the REPL and restart the
+  firmware - `storage.remount('/', readonly=False)`, `open()`/`write()`, `os.sync()` - so nothing
+  is built on the host and long names and subdirectories come from CircuitPython's own FatFS
+  ([docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
   What the resulting screenshots show: `code.py` output *does* reach the panel (it is
   CircuitPython's console on that board), while `boot.py` output never can - CircuitPython sends
   it to `boot_out.txt`, which is what `--dump-fs` is for.
-- `demo/mkfat12.py` grew a second route for names its own 8.3 writer cannot represent - a long
-  name (`settings.toml`) or a path (`lib/greeter.py`) hands the whole image to `pyfatfs`, which
-  implements the VFAT/LFN entry chains and directories this file deliberately does not. `pyfatfs`
-  is declared in that script's own PEP 723 header rather than in `pyproject.toml`, so
-  `uv run --script demo/mkfat12.py ...` installs it for that script alone and the project takes no
-  dependency on it; the 8.3 path still needs nothing installed at all.
-  [docs/records/0086](docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md) proposed making
-  it a real optional dependency plus a `mkfat12` CLI subcommand; that is **rejected** (2026-08-20)
-  and the record keeps its library survey as the answer to a question no longer being asked - see
-  [docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md),
-  where the firmware writes CIRCUITPY itself over the raw REPL and long names and subdirectories
-  come from its own FatFS.
-- `demo/wifi_lcd_run.py` + `demo/cp_wifi_lcd_demo.py` - a Pico W with an ST7735S wired to it,
-  showing a real `wifi.radio.connect()` and the DHCP address on the panel. The Waveshare LCD board
-  cannot do this at all: it has no CYW43439, so its CircuitPython build ships no `wifi` module.
-  See [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
+- `demo/wifi_lcd_run.py` - a Pico W with an ST7735S wired to it, showing a real
+  `wifi.radio.connect()` and the DHCP address on the panel, and saving the frame as a PNG. One
+  self-contained file: it carries its own guest code, pushes it as `code.py` over the REPL,
+  restarts the firmware and screenshots the result. The Waveshare LCD board cannot do this at all -
+  no CYW43439, so its CircuitPython build ships no `wifi` module. See
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 ### Changed
+- **Re-running a guest script from the device API takes two bytes, not a call.** Measured on
+  CircuitPython 10.2.1: `aexec("import supervisor\nsupervisor.reload()")` is a **no-op** - it
+  returns cleanly and nothing happens, because an exec leaves the device in the *raw* REPL and a
+  restart from there skips the startup script. Send Ctrl-B then Ctrl-D over the console instead
+  (`demo/wifi_lcd_run.py` does), or `ahard_reset()` if `boot.py` has to run too.
+  `docs/reference/mpremote.md` documents both, and its earlier `supervisor.reload()` advice is
+  corrected there.
 - **A chip reset is now the chip's own operation.** `RP2040.enter_reset(from_watchdog=...)` and
   `leave_reset()` hold the sequence that lived in `BaseDevice` (reset the blocks, notify the USB
   host side, point the core at flash); `USBCDC` installs itself into the new

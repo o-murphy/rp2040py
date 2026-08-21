@@ -54,56 +54,57 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | **open, not root-caused** (2026-08-20) - the boundary is 8.x vs 9.x (9.2.9/10.2.1 both pass); ruled out SRAM survival, the reset-cause registers, slowness and any peripheral poll; a cold boot never enters the SRAM region it gets stuck in
-- [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause already exists; what is missing is a trigger a device can call and a decision on SRAM/USB/attached devices
-- [ ] [0091] ESP32-C3 port feasibility | idea only, nothing proposed - the harness reuses and the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers. Addendum prices the speed question (**not faster; end-to-end slower**) and sources two claims from `soc_caps.h`; the rest is still unverified
-- [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | **Proposed, phased plan only.** MACRAW passthrough (MicroPython's default) reuses [0048]'s `NatBridge` almost directly; hardware TCP/UDP socket-engine mode (CircuitPython's `adafruit_wiznet5k`) is a separate, later phase. 5 phases, none started
-- [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | **partly done** - the MicroPython list is 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest gated on missing `ExternalDevice`s
-- [ ] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | measured, nothing built; rejected [0086], and its restart step is unblocked since [0089] - `ahard_reset()` for a hard one, one line of `aexec()` for a soft one
-- [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - TinyGo (`tinygo build -target=pico`) emits a `.uf2`/`.hex`, which the existing `run` subcommand already loads (raw image + GDB server, no firmware-family resolution); unverified whether it actually boots/runs correctly, or what (if anything) blocks it
-- [ ] [0061] one firmware command with `--family` | **Deferred, documented.** Step 1 is nearly free since [0059]
-- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | **Deferred, documented, not planned near-term.** Splits the *watching* half out of [0060] (no wall-clock ceiling applies); blocked first on devices being able to describe themselves ([0049])
-- [ ] [0060] external I/O bridges (web viewer, host GPIO) | **Deferred, documented.** Names the wall-clock ceiling a pin-level bridge cannot escape
-- [ ] [0053] second core (core1) + inter-core FIFO | **Proposed, core1/the real FIFO not implemented**; the addendum settles the execution model, and its interim clearer-warning option landed 2026-08-18
-- [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | **4a-4e merged and live-verified**, open only for the record's own "Known gaps" - window backpressure, AP mode, multi-guest, IPv6
+- [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
+- [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause exists; a trigger and an SRAM/USB decision do not
+- [ ] [0091] ESP32-C3 port feasibility | idea only - the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers
+- [ ] [0072] W5500 Ethernet PHY `ExternalDevice` + `W5500_EVB_PICO` board (epic) | proposed, 5 phases, none started - MACRAW reuses [0048]'s `NatBridge`; the socket engine comes later
+- [ ] [0066] board support expansion: which RP2040 boards are addable, and what each still needs | partly done - MicroPython 12/12 ([0080]); 4 of 37 CircuitPython-only, the rest need new devices
+- [ ] (no record yet) test TinyGo-compiled firmware | idea only, not investigated - `run` already loads a TinyGo `.uf2`; whether it boots is unverified
+- [ ] [0061] one firmware command with `--family` | deferred, documented - step 1 is nearly free since [0059]
+- [ ] [0064] read-only state server (WebSocket/Socket.IO) + web visualizer | deferred, documented - the watching half of [0060]; blocked on devices describing themselves ([0049])
+- [ ] [0060] external I/O bridges (web viewer, host GPIO) | deferred, documented - names the wall-clock ceiling a pin-level bridge cannot escape
+- [ ] [0053] second core (core1) + inter-core FIFO | proposed - core1 and the real FIFO unbuilt; the addendum settles the execution model
+- [ ] [0048] CYW43 step 4 NAT bridge (supersedes [0045]) | 4a-4e merged and live-verified; open only for its own gaps - backpressure, AP mode, multi-guest, IPv6
 
 ### Implemented
 
-- [x] [0088] USB host side: mass storage, CDC control lines, and reset | **closed 2026-08-20** - DTR/RTS and `SET_LINE_CODING` are movable at runtime and addressed to the CDC control interface, live-verified on both families (CircuitPython's guest watches DTR drop); MSC and the 1200-bps touch closed as rejected, host-driven reset closed by [0089]'s Phase 2
+- [x] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | closed 2026-08-20 - the demos push `code.py` over the REPL; the host-side FAT12 builder is gone
 
-- [x] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | **Closed 2026-08-20, not root-caused** - no recurrence in CI and no further testing planned; the two failure shapes and a local-under-load repro recipe stay in the record
+- [x] [0088] USB host side: mass storage, CDC control lines, and reset | closed 2026-08-20 - runtime DTR/RTS and `SET_LINE_CODING`, addressed to the CDC control interface
 
-- [x] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | **all phases landed and its own Known gaps closed** (2026-08-20; Phase 3 built then dropped as unwanted); one hard-reset owner behind four triggers, WDSEL-gated like hardware, live-verified on both firmware families. Closing the gaps found that Phase 5's WDSEL model was never reached from the device layer. What is left is decisions, not defects; 8.0.2 is [0093]. **AIRCR/SYSRESETREQ is a sixth trigger it never enumerated** - unimplemented, documented 2026-08-20 as a decision (a core-only reset on RP2040, not a chip reset), not a defect of any shipped phase
+- [x] [0065] `test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it` flaky on CI | closed 2026-08-20, not root-caused - no recurrence; the failure shapes and a repro recipe stay in it
 
-- [x] [0057] RESET button / RUN pin reset hook on `RP2040` | **closed in full by [0089]'s Phase 4** - `run_pin_low`/`set_run_pin()` + an `on_run_pin_reset` hook, a held-in-reset state in both batch loops, and `ResetButton` on three boards; live-verified on both firmware families. **Option B landed too** (2026-08-20, later the same day): the sequence itself is `RP2040.enter_reset()`/`leave_reset()` now, with `usb_ctrl.on_reset` as the notification `USBCDC` installs itself into - so a bare chip resets both halves, and the watchdog/RUN-pin no-hook defaults reset instead of logging a warning
+- [x] [0089] one reset for every trigger: soft vs hard, guest- vs host-initiated | all phases landed, own gaps closed - one hard-reset owner behind four triggers, WDSEL-gated
+
+- [x] [0057] RESET button / RUN pin reset hook on `RP2040` | closed by [0089]'s Phase 4, then option B - the sequence lives on `RP2040`, a bare chip resets itself
 
 - [x] [0090] the post-boot nudge is a newline, for both firmware families | measured, then changed; fell out of [0089]'s Phase 0.1 moving the nudge onto the device
 
-- [x] [0085] CircuitPython `code.py`/`boot.py` on the display demos, and where a WiFi screenshot has to come from | `demo/mkfat12.py` + `lcd_run.py --code/--boot/--fat12/--dump-fs`; demo-half rework planned, not built (appendix)
-- [x] [0084] 0xCB Helios board | fourth board off [0066]'s CircuitPython-only list; closes that record's own "not fully confirmed" flag on this board's RGB pin - the pico-sdk header's `PICO_DEFAULT_WS2812_PIN 25` settles it, since CircuitPython's own port source never says what protocol GPIO25 speaks. `LEDMock(gpio=17)` + `Ws2812(gpio=25)` + `BootselButton`, one firmware family, 16 MiB. Live boot: LED toggles 16 times as CircuitPython's status indicator, RGB decodes 0 frames with no guest code - the opposite WS2812-at-boot behavior from every other board here
-- [x] [0083] 0xCB Gemini board | third board off [0066]'s CircuitPython-only list; first board here with an identifier-unsafe filename, so it has no `--board-spec module.path:ATTR` form
-- [x] [0082] Waveshare RP2040-Tiny board | off [0066]'s CircuitPython-only list; narrowest pin breakout of any board here, and its 2 MiB part matches a plain Pico's exactly
-- [x] [0081] Waveshare RP2040-One board | **first board off [0066]'s CircuitPython-only list** (the MicroPython-port list is exhausted as of [0080]); also found that `--image` needs a local `.uf2` path on a one-family spec, which [0062]'s own board file gets wrong
-- [x] [0080] SparkFun Pro Micro RP2040 board | off [0066]'s survey, and the row that **completes** its "addable now, has a MicroPython port" checklist (12/12); largest flash here at 16 MiB
-- [x] [0079] Seeed Studio XIAO RP2040 board | off [0066]'s survey; first board here with **both** kinds of RGB LED, its polarity sourced from Seeed's own wiki rather than either firmware port
+- [x] [0085] CircuitPython `code.py`/`boot.py` on the display demos, and where a WiFi screenshot has to come from | its demo half reworked onto [0087]'s REPL route 2026-08-20
+- [x] [0084] 0xCB Helios board | fourth CircuitPython-only board; settles its RGB pin from pico-sdk's own header
+- [x] [0083] 0xCB Gemini board | third CircuitPython-only board; first filename here that is not a valid Python identifier
+- [x] [0082] Waveshare RP2040-Tiny board | off [0066]'s CircuitPython-only list; narrowest breakout here, 2 MiB like a plain Pico
+- [x] [0081] Waveshare RP2040-One board | first board off [0066]'s CircuitPython-only list; found `--image` needs a path on a one-family spec
+- [x] [0080] SparkFun Pro Micro RP2040 board | completes [0066]'s MicroPython checklist (12/12); largest flash here at 16 MiB
+- [x] [0079] Seeed Studio XIAO RP2040 board | off [0066]'s survey; first board with both kinds of RGB LED, polarity from Seeed's own wiki
 - [x] [0078] Waveshare RP2040-Plus board | off [0066]'s survey; `LEDMock` + `BootselButton` only, two flash variants (4/16 MiB)
-- [x] [0077] Pimoroni Tiny 2040 board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (not a `Ws2812`, same shape [0075]), two flash variants (2/8 MiB, `BOARD`/`BOARD_8MB`); `USER_SW` left unmodelled (no schematic, same gap as [0076])
-- [x] [0076] Pimoroni Pico LiPo board | off [0066]'s survey; the first board written as a flat file rather than a directory, plus the pass that retroactively flattened seven earlier ones
-- [x] [0075] nullbits Bit-C PRO board | off [0066]'s survey; RGB LED as 3×`LEDMock(active_low=True)` (confirmed by both firmware ports independently, not a `Ws2812`), CircuitPython drives it as a PWM status indicator from boot
-- [x] [0074] Machdyne Werkzeug board | off [0066]'s survey; `LEDMock` gained `active_low` (this board's green LED is genuinely active-low, the first such case), red LED's polarity stays an open gap
-- [x] [0073] Garatronic/McHobby PYBStick26 RP2040 board | smallest remaining board off [0066]'s survey; MicroPython-only, `LEDMock` (`board.json`'s own "RGB LED" tag contradicted by every real source), live-boot-verified
-- [x] [0071] Adafruit QT Py RP2040 board | fourth board picked up off [0066]'s survey; `Ws2812`/`KeyMock`, no plain LED, both firmware families, live-boot-verified; power pin and diode-into-BOOTSEL button design component-for-component identical to [0070]'s ItsyBitsy
-- [x] [0070] Adafruit ItsyBitsy RP2040 board | third board picked up off [0066]'s survey; `LEDMock`/`Ws2812`/`KeyMock`, both firmware families, live-boot-verified; BOOT button sourced from Adafruit's own schematic (also diode-coupled into real BOOTSEL, not modelled - analog cross-pin path)
-- [x] [0069] Adafruit Feather RP2040 board | second board picked up off [0066]'s survey; zero new devices needed (`LEDMock`/`Ws2812`), both firmware families, live-boot-verified; documents that its marketing copy's NeoPixel-power-pin claim is contradicted by firmware source
-- [x] [0068] Waveshare RP2040-Zero board | first board picked up off [0066]'s survey; zero new devices needed (`Ws2812` on GPIO16, already exists since [0062]), both firmware families, live-boot-verified
-- [x] [0067] Claude Code skill for adding `ExternalDevice`s/boards | `.claude/skills/external-devices-and-boards/`; execution layer on top of [0049]'s reference doc, `.gitignore` fixed so it's actually tracked
-- [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | both halves landed as a due-time skip; unblocks pulse-width protocols and fixes CYW43's gSPI clock, ~11% faster. Ceiling kept: one instruction per CPU instruction, which [0043] depends on
-- [x] [0062] YD-RP2040 board + the `Ws2812` device | device and board landed and live-verified; the PIO-driven live decoding it was open for works since [0063]
-- [x] [0059] firmware resolution inside `BoardSpec`: one path for `--board` and `--board-spec` | `firmware` keyed by family, resolved at use time; `boards/` is one directory per board; `--image`/`--fetch-fw-only` now work with `--board-spec`
+- [x] [0077] Pimoroni Tiny 2040 board | off [0066]'s survey; RGB as 3x`LEDMock(active_low=True)`, two flash variants; `USER_SW` unmodelled
+- [x] [0076] Pimoroni Pico LiPo board | off [0066]'s survey; first flat board file, plus the pass that flattened seven earlier ones
+- [x] [0075] nullbits Bit-C PRO board | off [0066]'s survey; RGB as 3x`LEDMock(active_low=True)`, a PWM status indicator from boot
+- [x] [0074] Machdyne Werkzeug board | off [0066]'s survey; `LEDMock` gained `active_low`; the red LED's polarity stays an open gap
+- [x] [0073] Garatronic/McHobby PYBStick26 RP2040 board | smallest board off [0066]'s survey; MicroPython-only, `LEDMock`, live-boot-verified
+- [x] [0071] Adafruit QT Py RP2040 board | fourth board off [0066]'s survey; `Ws2812`/`KeyMock`, no plain LED, both firmware families
+- [x] [0070] Adafruit ItsyBitsy RP2040 board | third board off [0066]'s survey; BOOT button from Adafruit's schematic, its BOOTSEL diode unmodelled
+- [x] [0069] Adafruit Feather RP2040 board | second board off [0066]'s survey; its NeoPixel-power claim contradicted by firmware source
+- [x] [0068] Waveshare RP2040-Zero board | first board off [0066]'s survey; zero new devices - `Ws2812` exists since [0062]
+- [x] [0067] Claude Code skill for adding `ExternalDevice`s/boards | `.claude/skills/external-devices-and-boards/` - the execution layer over [0049]'s reference doc
+- [x] [0063] `RPPIO` paces state machines by `SM_CLKDIV` and `[delay]` | landed as a due-time skip; unblocks pulse-width protocols, fixes CYW43's gSPI clock, ~11% faster
+- [x] [0062] YD-RP2040 board + the `Ws2812` device | device and board landed and live-verified; live PIO decoding works since [0063]
+- [x] [0059] firmware resolution inside `BoardSpec`: one path for `--board` and `--board-spec` | `firmware` keyed by family, resolved at use time; `--image` now works with `--board-spec`
 - [x] [0049] document external devices/boards + how a user writes their own | all 5 phases landed; `reference/external-devices-and-boards.md` is the how-to
-- [x] [0056] `St7735s` external device + Waveshare RP2040-LCD-0.96 board | first board whose point is its device; MADCTL geometry + RGB444/666 in the addendum
+- [x] [0056] `St7735s` external device + Waveshare RP2040-LCD-0.96 board | first board whose point is its device; MADCTL geometry and RGB444/666 in the addendum
 - [x] [0055] `v0.2.2`/`v0.2.3` publish-workflow hang | fixed; confirmed by the real `v0.2.5` release
-- [x] [0027] CYW43439 / Pico W WiFi (epic) | steps 0-3g done and live-boot-verified; step 4 landed via [0048], whose own gaps are tracked there
+- [x] [0027] CYW43439 / Pico W WiFi (epic) | steps 0-3g done and live-boot-verified; step 4 landed via [0048], whose gaps are tracked there
 - [x] [0047] CYW43 pure-Python hot path + `GPIOPin`/`RPPIO` Cython ports | ~2.6x to `scan()`; closes [0031]'s last gap
 - [x] [0050] CircuitPython 10.x boot stall root cause + fix | `PADS_QSPI` reset values - `GPIO_QSPI_SS` needs its pull-up
 - [x] [0054] CYW43 `disconnect()` root cause + fix | closes the only correctness bug among [0048]'s gaps
@@ -118,8 +119,8 @@ and `reference/` for those). The structure itself is decided in
 - [x] [0039] `SimulationClock` native Cython port | ~2.7x synthetic; closes [0034]'s leftover gap
 - [x] [0038] `GSPIBus` ioctl-response zero-fill fix | the real root cause of `nic.active(True)`
 - [x] [0037] couple `RPPIO` stepping to the CPU's instruction loop | fixes the CYW43 native-mode livelock
-- [x] [0036] `--littlefs`/`--fat12` mutual exclusivity | explicit validation instead of a silent drop; **follow-through 2026-08-20** finished what it deferred - the format now follows the firmware family
-- [x] [0035] board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes the pico_w wild-execution crash (its CircuitPython `pico_w` offset corrected by [0085] on 2026-08-19 - see this record's own appended Correction)
+- [x] [0036] `--littlefs`/`--fat12` mutual exclusivity | explicit validation instead of a silent drop; the 2026-08-20 follow-through ties format to family
+- [x] [0035] board-aware MicroPython/CircuitPython/Kaluma FS flash offset | fixes the pico_w wild-execution crash; its CircuitPython offset corrected by [0085]
 - [x] [0034] `_execute_batch()` native Cython port | follow-up of [0013]/[0031]
 - [x] [0033] shell autocompletions for the CLI | accepted
 - [x] [0032] documentation restructure | this scheme
@@ -149,7 +150,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Rejected / Superseded
 
-- [ ] [0086] a FAT12 library dependency + a `mkfat12` CLI subcommand | **rejected (2026-08-20)** - [0087]'s firmware-written CIRCUITPY gives LFN and subdirectories for free; `demo/mkfat12.py`'s offline 8.3 builder stays for tests and fast runs
+- [ ] [0086] a FAT12 library dependency + a `mkfat12` CLI subcommand | rejected 2026-08-20, and `demo/mkfat12.py` deleted with it - the firmware writes its own CIRCUITPY ([0087])
 - [ ] [0045] CYW43 step 4 NAT bridge via `gVisor`'s `pkg/tcpip` | **Superseded → [0048]** - kept for its research trail
 - [ ] [0016] basic-block fusion / mini-JIT | **Rejected** - net negative in every integration attempt
 - [ ] [0015] HLE memcpy hook | **Rejected** - net negative (measurements kept)
