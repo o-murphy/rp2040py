@@ -77,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine-room thread, so the RGB565->PIL decode `lcd_run.py`, `eink_run.py` and `wifi_lcd_run.py`
   all did inside that callback was time the emulated chip did not get to run; the queues now carry
   raw bytes and the decode happens in each runner's own loop, which also drains to the newest frame
-  rather than falling minutes behind. Measured on the WiFi demo: 1 m 40 s end to end, against forty
+  rather than falling seconds behind a burst that is only seconds long (measured: 171 frames in
+  7.6 s out, ~15/s consumed, 3.7 s peak backlog). Measured on the WiFi demo: 1 m 40 s end to end, against forty
   minutes with the decode inline (and `auto_refresh` back on in the guest, which was the other half
   of it). Emulation speed itself was never the difference - 0.069x realtime pushing `code.py` over
   the REPL, 0.063x booting the same code from a prepared image.
