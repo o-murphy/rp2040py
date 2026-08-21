@@ -2,9 +2,12 @@
 
 Runnable examples. The `*_run.py` scripts are host-side programs; the `mp_*.py` files are
 MicroPython code that runs *inside* the emulated firmware, pushed over the raw REPL by their
-runner. The `cp_*.py` files are the CircuitPython equivalent, and get there differently:
-CircuitPython auto-runs `code.py` off its CIRCUITPY drive, so they are written into a FAT12 image
-the emulator loads as flash content (see `mkfat12.py`) instead of being pushed over the REPL.
+runner. The `cp_*.py` files are the CircuitPython equivalent and get there the same way, with one
+extra step: CircuitPython auto-runs `code.py` off its CIRCUITPY drive, so the runner writes the
+file onto that drive over the REPL (`storage.remount('/', readonly=False)`, then an ordinary
+`open()`/`write()`) and asks the firmware to restart - `supervisor.reload()` for a `code.py`, a
+chip reset for a `boot.py`. Nothing is prepared on the host: the firmware writes its own
+filesystem ([record 0087](../docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
 
 | script | what it does |
 |---|---|
@@ -13,22 +16,19 @@ the emulator loads as flash content (see `mkfat12.py`) instead of being pushed o
 | [`kaluma_run.py`](kaluma_run.py) | Kaluma REPL (`rp2040py kaluma`) |
 | [`benchmark.py`](benchmark.py) | instruction-throughput benchmark (`rp2040py bench`) |
 | [`mklittlefs_dump.py`](mklittlefs_dump.py) | build/inspect a littlefs image |
-| [`mkfat12.py`](mkfat12.py) | build/inspect a CIRCUITPY (FAT12) image - `code.py`, `boot.py`, `boot_out.txt` |
 | [`eink_run.py`](eink_run.py) + [`mp_eink_demo.py`](mp_eink_demo.py) | virtual Waveshare 2.9″ e-Paper (G) over SPI1, with a from-scratch driver |
 | [`lcd_run.py`](lcd_run.py) + [`mp_lcd_demo.py`](mp_lcd_demo.py) / [`cp_lcd_demo.py`](cp_lcd_demo.py) | Waveshare RP2040-LCD-0.96's onboard 160×80 ST7735S panel, MicroPython or CircuitPython |
-| [`wifi_lcd_run.py`](wifi_lcd_run.py) + [`cp_wifi_lcd_demo.py`](cp_wifi_lcd_demo.py) | a Pico W's CYW43439 *and* an ST7735S wired to it: a CircuitPython WiFi join, on screen |
+| [`wifi_lcd_run.py`](wifi_lcd_run.py) | a Pico W's CYW43439 *and* an ST7735S wired to it: a CircuitPython WiFi join, on screen - guest code and all, in one file |
 
-`mkfat12.py` writes root-level 8.3 names on its own, with nothing installed. A long name or a path
-(`settings.toml`, `lib/greeter.py`) needs VFAT/LFN entry chains it deliberately doesn't implement,
-so it hands those images to `pyfatfs` - declared in that script's own PEP 723 header, so
-`uv run --script demo/mkfat12.py ...` installs it for that script alone and the project itself
-takes no dependency on it. [Record 0086](../docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md)
-proposed making that a real optional dependency plus a `mkfat12` CLI subcommand and was
-**rejected** (2026-08-20), library survey and all: per
-[record 0087](../docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md) the
-firmware can write its own CIRCUITPY over the raw REPL, so long names and subdirectories come out
-of CircuitPython's FatFS instead of a host-side writer. This file's 8.3 builder stays - it is what
-a test or a fast `--code` run uses, since the firmware route costs a format-from-blank boot.
+There is no host-side CIRCUITPY builder here any more. `mkfat12.py` used to write root-level 8.3
+names itself and hand anything longer (`settings.toml`, `lib/greeter.py`) to `pyfatfs` for the
+VFAT/LFN entry chains; [record 0086](../docs/records/0086-fat12-library-and-a-mkfat12-subcommand.md)
+proposed promoting that to a real optional dependency plus a `mkfat12` CLI subcommand and was
+**rejected** (2026-08-20), library survey and all, then the builder itself went with it: the
+firmware writes its own volume over the REPL, so long names and subdirectories come out of
+CircuitPython's own FatFS and no host-side writer has to be maintained or installed. To keep an
+image afterwards, `--dump-fs` reads the drive back out; to feed one back in, `--fat12` loads it.
+`mklittlefs_dump.py` is the same idea on the MicroPython side.
 
 ## What the display demos actually produce
 
@@ -58,9 +58,9 @@ partial repaints, which is exactly how the firmware draws:
 <img src="screenshots/lcd-circuitpython-boot-banner.png" width="480" alt="ST7735S showing part of the CircuitPython boot banner being drawn">
 <img src="screenshots/lcd-circuitpython-console.png" width="480" alt="ST7735S showing the CircuitPython console with the board id">
 
-CircuitPython again, this time with a guest `code.py` - `--code` writes one into a CIRCUITPY
-(FAT12) image the emulator loads as flash content, and the panel *is* CircuitPython's console on
-this board, so whatever it prints is drawn there (the status bar reads `code.py` while it runs):
+CircuitPython again, this time with a guest `code.py` - `--code` writes one onto the drive over
+the REPL and reloads the firmware, and the panel *is* CircuitPython's console on this board, so
+whatever it prints is drawn there (the status bar reads `code.py` while it runs):
 
 ```sh
 uv run --with pillow python demo/lcd_run.py --circuitpython --code demo/cp_lcd_demo.py \
@@ -72,9 +72,10 @@ uv run --with pillow python demo/lcd_run.py --circuitpython --code demo/cp_lcd_d
 That `wifi: MISSING` is the honest answer to "would a WiFi connection show up here?" on *this*
 board: it has no CYW43439, so its CircuitPython build ships no `wifi` module at all. `wifi_lcd_run.py`
 below is where a real join happens. `--boot` works the same way but is invisible to any
-screenshot - CircuitPython sends `boot.py`'s output to `boot_out.txt` instead of the console, so
-`--dump-fs after.img` plus `python demo/mkfat12.py --base after.img --read boot_out.txt` is how to
-read it. Both findings are [record 0085](../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
+screenshot - CircuitPython sends `boot.py`'s output to `boot_out.txt` instead of the console, and
+it only runs out of a chip reset, so `--boot` restarts with one rather than with
+`supervisor.reload()`. To read what it wrote, ask the guest:
+`rp2040py micropython --circuitpython -c "print(open('/boot_out.txt').read())"`. Both findings are [record 0085](../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
 
 The two runs also drive the panel through *different* orientations (`MADCTL` `0xA8` vs `0xC8`,
 with transposed window offsets); both come out upright because the emulated controller applies
@@ -83,20 +84,25 @@ that mapping - see [record 0056](../docs/records/0056-st7735s-waveshare-lcd-boar
 ### `wifi_lcd_run.py` - a WiFi join, on the panel
 
 The same ST7735S, wired to a **Pico W** instead of being soldered to a Waveshare board - so the
-run has both an emulated CYW43439 and an emulated panel, and `code.py` builds the display itself
-(a Pico W's `board_init()` builds none):
+run has both an emulated CYW43439 and an emulated panel, and the guest code builds the display
+itself (a Pico W's `board_init()` builds none). One self-contained file: it boots the board,
+writes its own `code.py` over the REPL, reloads, and saves the last frame as a PNG:
 
 ```sh
-uv run --with pillow python demo/wifi_lcd_run.py --screenshot out
+uv run --script demo/wifi_lcd_run.py    # -> screenshots/wifi-lcd-circuitpython-connected.png
 ```
 
 <img src="screenshots/wifi-lcd-circuitpython-connected.png" width="480" alt="ST7735S showing 'wifi test / mac ok / connected: True / ip 10.0.0.2'">
 
 That IP comes from the emulator's own DHCP server, over the NAT bridge
-([record 0048](../docs/records/0048-cyw43-nat-reflector.md)); the panel scrolls one more line
-afterwards to show the gateway. Expect it to be slow - the CYW43's PIO/gSPI path is the heaviest
-thing in this emulator, which is also why the guest code refreshes the display by hand instead of
-leaving `auto_refresh` on.
+([record 0048](../docs/records/0048-cyw43-nat-reflector.md)), and it is the guest's last status
+line on purpose: a sixth would scroll this 5-row terminal, and a frame caught mid-scroll is a torn
+picture. Expect the run to be slow - the CYW43's PIO/gSPI path is the heaviest thing in this
+emulator, which is also why the guest code refreshes the display by hand instead of leaving
+`auto_refresh` on. The panel also runs *minutes* behind the console - CircuitPython's terminal
+paints it a glyph or two at a time and stalls for minutes mid-line - which is why the run ends by
+counting the text lines actually on the panel (`--until-lines`, four of them) and then waiting for
+the picture to go still, rather than on a frame count, a timer, or the console alone.
 
 ### `eink_run.py` - Waveshare 2.9″ e-Paper (G), 128×296
 

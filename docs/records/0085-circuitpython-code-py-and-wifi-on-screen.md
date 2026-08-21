@@ -337,3 +337,39 @@ The screenshots, the `boot.py` -> `boot_out.txt` finding, finding 5's `fs_start`
 `demo/wifi_lcd_run.py`. Only how a CIRCUITPY volume gets populated is in question, and only for the
 cases 8.3 names cannot cover.
 
+
+
+## Appendix: the demo-half rework, as built (2026-08-20, same day)
+
+The section above planned it as an *opt-in* mode ("default stays where the fast path is"). It
+shipped as the **only** mode, and the host-side builder is gone - `demo/mkfat12.py`, its `pyfatfs`
+route and `tests/test_demo_mkfat12.py` were deleted, and item 1's `demo/mkfat12_dump.py` was never
+written (rejected in [0087](0087-circuitpython-writable-circuitpy-over-the-raw-repl.md): the
+composition of a REPL write and `--dump-fs` already covers it). What that costs is exactly what was
+priced here - a format-from-blank boot per run - and `--fat12` still loads a prepared image when
+that matters.
+
+`demo/wifi_lcd_run.py` did not stay unchanged either. It is now one self-contained file: the guest
+code lives in it as a string, gets pushed as `code.py` over the REPL, and the run ends with a PNG
+of the panel. `demo/cp_wifi_lcd_demo.py` is gone into it.
+
+Three things had to be measured to make that work, none of them predictable from this record:
+
+1. **`supervisor.reload()` through `exec()` does nothing** - see 0087's closing section. The fix is
+   Ctrl-B then Ctrl-D over the console.
+2. **The panel runs behind the console, by minutes**, and not for want of pushes.
+   CircuitPython's terminal reveals a glyph or two per push - a frame reading `wifi tes` arrived
+   while the console had already printed all four lines - so the picture fills in over dozens of
+   frames, and it stalls for minutes at a time mid-line. Two rules were tried and measured wrong
+   before the third: "three identical frames in a row" stopped dead on `wifi test`, and "unchanged
+   for 600 s" stopped on `connected:` with the last line still to come. What works is counting the
+   text lines actually on the panel - bands of non-black rows below the status bar - and only then
+   waiting for it to go still. The guest also turns `auto_refresh` back on once the join is over,
+   which is what keeps the paint moving at all; refreshing by hand from its idle loop changed
+   nothing.
+3. **A frame caught mid-scroll is torn**, so the guest's last status line is the IP: a sixth line
+   would scroll this 5-row terminal, and the run would end on a picture that reads
+   `maci test / conrok / ip ected: True`. The gateway moved to a comment.
+
+The run therefore ends when the console has printed the last line **and** consecutive frames stop
+differing - not on a frame count, which is what the first version guessed at.
