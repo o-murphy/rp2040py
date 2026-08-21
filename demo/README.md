@@ -99,10 +99,10 @@ That IP comes from the emulator's own DHCP server, over the NAT bridge
 line on purpose: a sixth would scroll this 5-row terminal, and a frame caught mid-scroll is a torn
 picture. Expect the run to be slow - the CYW43's PIO/gSPI path is the heaviest thing in this
 emulator, which is also why the guest code refreshes the display by hand instead of leaving
-`auto_refresh` on. The panel also runs *minutes* behind the console - CircuitPython's terminal
-paints it a glyph or two at a time and stalls for minutes mid-line - which is why the run ends by
-counting the text lines actually on the panel (`--until-lines`, four of them) and then waiting for
-the picture to go still, rather than on a frame count, a timer, or the console alone.
+`auto_refresh` on. The run ends by counting the text lines actually on the panel
+(`--until-lines`, four of them) and then waiting for the picture to go still, rather than on a
+frame count or on the console alone - the console finishes first, and the panel is what the
+screenshot is of. About a minute and a half end to end, 30 s of which is that deliberate wait.
 
 ### `eink_run.py` - Waveshare 2.9″ e-Paper (G), 128×296
 

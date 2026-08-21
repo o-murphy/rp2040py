@@ -357,16 +357,24 @@ Three things had to be measured to make that work, none of them predictable from
 
 1. **`supervisor.reload()` through `exec()` does nothing** - see 0087's closing section. The fix is
    Ctrl-B then Ctrl-D over the console.
-2. **The panel runs behind the console, by minutes**, and not for want of pushes.
-   CircuitPython's terminal reveals a glyph or two per push - a frame reading `wifi tes` arrived
-   while the console had already printed all four lines - so the picture fills in over dozens of
-   frames, and it stalls for minutes at a time mid-line. Two rules were tried and measured wrong
-   before the third: "three identical frames in a row" stopped dead on `wifi test`, and "unchanged
-   for 600 s" stopped on `connected:` with the last line still to come. What works is counting the
-   text lines actually on the panel - bands of non-black rows below the status bar - and only then
-   waiting for it to go still. The guest also turns `auto_refresh` back on once the join is over,
-   which is what keeps the paint moving at all; refreshing by hand from its idle loop changed
-   nothing.
+2. **The panel appeared to paint at a crawl - and that was the demo's own fault, not the
+   route's.** Two host-side mistakes, both mine, and worth naming because either one alone looks
+   exactly like "the emulator is slow":
+   - `on_frame` fires on the emulator's **engine-room thread**. Decoding RGB565 into a PIL image
+     inside that callback - which every display demo here did - is time the emulated chip does not
+     get to run.
+   - The consumer decoded one frame per loop tick while the emulator produced hundreds, so the
+     queue grew and the picture being examined was minutes stale. Draining to the newest frame
+     first is the fix.
+
+   Turning `auto_refresh` back on in the guest's idle loop made it worse still - 60 fps of
+   full-framebuffer SPI pushes, exactly what the constructor comment warns about - and was
+   reverted. With all three fixed the REPL route takes **1 m 40 s** end to end (30 s of which is a
+   deliberate "has the panel gone still" wait) against **58 s** for the old image flow, and the
+   measured emulation speed is the same either way: 0.069x realtime for the REPL flow, 0.063x for
+   the image one. The A/B is in the record because the wrong conclusion - "the REPL route is
+   slow" - survived three rewrites of the stop rule before anyone measured the two flows against
+   each other.
 3. **A frame caught mid-scroll is torn**, so the guest's last status line is the IP: a sixth line
    would scroll this 5-row terminal, and the run would end on a picture that reads
    `maci test / conrok / ip ected: True`. The gateway moved to a comment.
