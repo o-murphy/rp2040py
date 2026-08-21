@@ -32,10 +32,11 @@ Nothing about either device knows the other exists. No RP2040 board has both an 
 an onboard display, so this wiring only exists in the emulator - which is exactly why the
 screenshot it produces cannot be taken any other way (docs/records/0085).
 
-Expect it to be slow even by this emulator's standards: the CYW43's PIO/gSPI hot path is the
-heaviest thing here (docs/records/0047) and the panel adds SPI traffic on top - hence
-`auto_refresh=False` in the guest code, a stop-when-the-console-goes-quiet rule rather than a
-frame count, and a half-hour ceiling behind it. `--image` defaults to
+Expect a minute and a half, most of it the CYW43's PIO/gSPI hot path - the heaviest thing in this
+emulator (docs/records/0047) - with the panel's SPI traffic on top. That is why the guest refreshes
+by hand (`auto_refresh=False`), why frames are decoded on *this* thread rather than in `on_frame`,
+and why the loop below drains to the newest frame instead of decoding every one: doing either the
+other way turned the same run into forty minutes. `--image` defaults to
 CircuitPython 10.2.1; 0048's live WiFi verification and `ci-circuitpython.yml`'s WLAN job both pin
 **9.2.9**, so `--image 9.2.9` is the fallback if 10.x ever misbehaves on the radio path.
 """
@@ -152,12 +153,9 @@ show(f"ip {wifi.radio.ipv4_address}")
 # enter the REPL" message the moment code.py finishes, which on a 5-row terminal scrolls the lines
 # above off the panel - i.e. off the screenshot this demo exists to produce.
 #
-# `auto_refresh` goes back on *here*, once the expensive part is over. Hand-refreshing is what keeps
-# the join affordable (each push is real SPI traffic interleaved with the CYW43's hot path), but a
-# hand refresh only pushes what the terminal has rendered so far - measured, the panel sat on
-# `wifi test` while the console had printed all four lines, and calling `refresh()` in this loop
-# changed nothing. Letting displayio drive it is what finishes the picture.
-display.auto_refresh = True
+# `auto_refresh` stays off in here too. Turning it back on once the join was over was tried, and it
+# is what made an early version of this demo take forty minutes instead of one: 60 fps of
+# full-framebuffer SPI pushes is exactly what the constructor comment above says it is.
 while True:
     time.sleep(1)
 '''
@@ -252,7 +250,7 @@ def main() -> None:
     parser.add_argument(
         "--settle",
         type=float,
-        default=2400.0,
+        default=300.0,
         help="after --until-text, give the panel at most N more seconds to catch up (%(default)s). "
         "It normally stops long before that, once frames stop changing",
     )
@@ -267,23 +265,27 @@ def main() -> None:
     parser.add_argument(
         "--stable-seconds",
         type=float,
-        default=180.0,
+        default=30.0,
         help="after --until-lines, keep going until the panel has been unchanged for N seconds "
         "(%(default)s), so the last line finishes drawing",
     )
     parser.add_argument(
         "--idle",
         type=float,
-        default=1800.0,
+        default=300.0,
         help="safety net: stop if the console says nothing for N seconds (%(default)s). Long, "
         "deliberately - the console finishes long before the panel does, and cutting the run off "
         "there costs you the last line",
     )
-    parser.add_argument("--timeout", type=float, default=5400.0, help="give up after N seconds (%(default)s)")
+    parser.add_argument("--timeout", type=float, default=900.0, help="give up after N seconds (%(default)s)")
     args = parser.parse_args()
 
-    frames: queue.Queue[Image.Image] = queue.Queue()
-    board = resolve_firmware(board_with(lambda buf: frames.put(decode_frame(buf))), "circuitpython", args.image)
+    # Raw bytes across the queue, decoded in the loop below. `on_frame` fires on the emulator's own
+    # engine-room thread, so anything done in it - `decode_frame()` above, above all - is time the
+    # emulated chip is not running. Measured: decoding inline throttled a run badly enough to look
+    # like the panel itself was slow.
+    frames: queue.Queue[bytes] = queue.Queue()
+    board = resolve_firmware(board_with(frames.put), "circuitpython", args.image)
     device = MicroPythonDevice(board=board, circuitpython=True, log_level=LogLevel.ERROR)
     print(f"booting {board.image} (this takes minutes, not seconds)")
     device.start_async(timeout=_START_TIMEOUT_SECONDS).result()
@@ -332,18 +334,31 @@ def main() -> None:
     try:
         while (args.frames <= 0 or seen < args.frames) and (deadline is None or time.monotonic() < deadline):
             try:
-                last = frames.get(timeout=0.5)
+                buffer = frames.get(timeout=0.5)
             except queue.Empty:
                 pass
             else:
-                seen += 1
+                # Drain to the newest frame before decoding. The emulator emits frames far faster
+                # than a Python RGB565 decode can consume them, and a queue that grows means the
+                # picture examined below is minutes stale - which looked exactly like a panel that
+                # paints slowly. `--all-frames` opts back into decoding every one, for debugging.
+                pending = [buffer]
+                while not args.all_frames:
+                    try:
+                        pending.append(frames.get_nowait())
+                    except queue.Empty:
+                        break
+                for raw in pending:
+                    last = decode_frame(raw)
+                    seen += 1
+                    if args.all_frames:
+                        last.save(f"{args.all_frames}_{seen - 1:03d}.png")
+                assert last is not None
                 current = last.tobytes()
                 if current != previous:
                     changed_at = time.monotonic()
                 previous = current
                 print(f"frame {seen}")
-                if args.all_frames:
-                    last.save(f"{args.all_frames}_{seen - 1:03d}.png")
             now = time.monotonic()
             if last is not None and text_lines(last) >= args.until_lines and now - changed_at > args.stable_seconds:
                 print(f"panel shows {args.until_lines} lines and has been still for {args.stable_seconds:.0f}s")
