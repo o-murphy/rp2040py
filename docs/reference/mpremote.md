@@ -14,7 +14,7 @@ mpremote` proxy subcommand (see "mpremote proxy" below) that patches around a re
 - **`--tcp-port`**: a plain TCP socket, via pySerial's built-in `socket://host:port` URL support -
   no serial port or pty needed on the host at all, useful for CI, scripting, and environments with
   no serial support (e.g.
-  [Pythonista on iOS](../README.md#environments-without-compiled-extension-support-ios)).
+  [Pythonista on iOS](../../README.md#installation)).
   `exec`/`fs`/`run`/... all work fine over it; the real (unpatched) `mpremote` binary's own **bare
   interactive REPL does not** - see "What doesn't work" below - but `rp2040py mpremote` (see
   "mpremote proxy" below) patches around exactly that, so use it instead if you want the
@@ -117,7 +117,7 @@ its port explicitly and never actually calls `comports()` to enumerate anything 
 import time, not at the point serial-port enumeration would happen. This is a real gap in
 pySerial's own platform dispatch, not an rp2040py bug. Going by the same platform-string logic,
 iOS's `sys.platform` (`'ios'`) isn't in pySerial's list either, so
-[Pythonista/PythonIDE](../README.md#environments-without-compiled-extension-support-ios)
+[Pythonista/PythonIDE](../../README.md#installation)
 hit the identical crash - confirmed on-device now, not just inferred from the platform-string logic
 (see the README's "Tested" list).
 
@@ -148,7 +148,7 @@ corrupt that protocol. Quit the `rp2040py` process itself instead:
   cleanup - simply not sending anything meant for `mpremote` isn't enough on its own.
 - **`--expect-text`** (optionally with `--expect-regex`) - stop once given text appears on the
   device's console, same as every other subcommand; see the main
-  [README](../README.md#micropython-code) for the current syntax.
+  [README](../../README.md#micropython-code) for the current syntax.
 
 ## What's verified working
 
@@ -168,7 +168,7 @@ combination outside what CI can assume either):
 | `mpremote connect ... fs cp/ls/cat/mkdir/rmdir/rm/touch/tree/sha256sum ...` | ✅ | `fs cp` over `socket://` is covered by an automated test. |
 | `mpremote connect ... mount ./local_dir` | ✅ | Including running a script straight out of the mounted directory. |
 | `mpremote connect ... repl` (bare interactive REPL) | ✅ over `--pty`; ✅ over `--tcp-port` via `rp2040py mpremote` | The real `mpremote` binary crashes over `--tcp-port`'s `socket://` transport - see "What doesn't work" below - unless run through `rp2040py mpremote` (see "mpremote proxy" above), which patches around it. |
-| `mpremote connect ... soft-reset` / Ctrl-D at the raw-REPL prompt | ✅ | Handled entirely by firmware's own soft-reset code - no emulator-side reset needed. |
+| `mpremote connect ... soft-reset` / Ctrl-D at the raw-REPL prompt | ✅ | Handled entirely by firmware's own soft-reset code - no emulator-side reset needed. **It restarts the VM but does not re-run `main.py`/`code.py`** - see "Soft reset: raw prompt vs friendly prompt" below. |
 | `mpremote connect ... resume` | ✅ | |
 | `mpremote connect ... rtc` | ✅ | |
 | `mpremote connect ... reset` | ✅ | Triggers a real device reset (see below) - reconnect with a fresh `mpremote` invocation afterward, same as a real board re-enumerating over USB. |
@@ -177,10 +177,129 @@ combination outside what CI can assume either):
 
 `reset`/`bootloader` are implemented by `RPWatchdog.on_watchdog_trigger` (wired up in
 `BaseDevice`): `machine.reset()`/`machine.bootloader()` write the watchdog's TRIGGER bit on real
-hardware, which now resets the emulated CPU core and USB-CDC enumeration state in place and jumps
+hardware, which resets the emulated CPU core and USB-CDC enumeration state in place and jumps
 back to flash's entry point - preserving flash/filesystem content and every externally-referenced
 peripheral object identity (no reconstruction), rather than leaving the emulated CPU spinning
 forever (the behavior before this was implemented).
+
+That handler is now one caller of a single hard-reset owner rather than the only reset path
+([record 0089](../records/0089-one-reset-for-every-trigger.md)). The others, reaching the same
+sequence: a **RESET button** (`external/reset_button.py` - `press()` holds the chip in reset,
+`release()` boots it), and a **host-side** `device.ahard_reset()`/`hard_reset_async()`. Since that
+record's Phase 5 the reset also covers what a real one covers - pads, IO, SIO, clocks and the
+peripheral blocks, gated by `PSM.WDSEL`/`RESETS.WDSEL` exactly as hardware gates them - so a GPIO
+the guest left driving is released, and the firmware reports the right `machine.reset_cause()`
+for the trigger that actually fired.
+
+### Soft reset: raw prompt vs friendly prompt
+
+A soft reset restarts the VM without resetting the chip, and **which prompt it is sent at decides
+whether the startup script re-runs**. Measured against real MicroPython v1.23.0 and CircuitPython
+10.2.1, byte for byte (0089's Appendix, point 1) - both families behave identically:
+
+| Ctrl-D sent at... | firmware prints | `main.py`/`code.py` re-runs? |
+| --- | --- | --- |
+| the **raw** prompt (what `mpremote soft-reset` does) | `OK`, then `MPY: soft reboot` / `soft reboot`, then the raw banner | **no** |
+| the **friendly** prompt | `MPY: soft reboot` / `soft reboot`, then the script's own output | **yes** |
+
+This matches both firmwares' source: `pyexec_raw_repl()` answers an empty line + Ctrl-D with `OK`
+and `PYEXEC_FORCED_EXIT`, and the main loop only re-runs the startup script when
+`pyexec_mode_kind == PYEXEC_MODE_FRIENDLY_REPL`.
+
+So `mpremote soft-reset` is not a way to re-run a script you just uploaded. Neither, it turns
+out, is asking the guest to restart itself from an `aexec()`/`exec_async()`:
+
+```python
+await device.aexec("import supervisor\nsupervisor.reload()")  # CircuitPython: does NOT re-run code.py
+```
+
+Measured 2026-08-20 on CircuitPython 10.2.1: the call returns cleanly, and then **nothing
+happens** - no `soft reboot`, no `code.py output:`, no console output at all, and a display demo
+driven this way sat for 20 minutes without a single frame. The reason is the same raw-vs-friendly
+split as the table above: `RawReplRunner` never sends Ctrl-B, so an exec leaves the device *in*
+the raw REPL, and a restart from there comes back to a raw prompt with the startup script skipped.
+
+What does work, from the device API, is sending the two bytes a person would type - Ctrl-B to
+leave the raw REPL, then Ctrl-D at the friendly prompt:
+
+```python
+from rp2040py.device import CTRL_B, CTRL_D
+
+for byte in (CTRL_B, CTRL_D):
+    device.simulator.schedule_threadsafe(lambda value=byte: device.cdc.send_serial_byte(value))
+```
+
+Measured on the same firmware, the console then shows `soft reboot` -> `code.py output:` -> the
+new file's output, and `demo/wifi_lcd_run.py` uses exactly this to run the `code.py` it just
+pushed. A *hard* reset (`ahard_reset()`) re-runs everything too, including `boot.py`, at the cost
+of re-enumerating USB.
+
+There is deliberately **no** `asoft_reset()` on the device API: a soft reset is bytes the firmware
+already answers, from paths that all already exist, so a second way to express it was built,
+verified and then dropped (0089's Phase 3). A *hard* reset - which does re-run everything, because
+the chip reboots - is `ahard_reset()`.
+
+### Against CircuitPython firmware
+
+Everything above was verified against MicroPython. `mpremote` is a MicroPython tool, and the split
+against CircuitPython is not "works / doesn't" but **per subcommand**, decided entirely by which
+`os` functions the firmware exposes. Measured 2026-08-20 against CircuitPython 10.2.1 (Pico W)
+under `rp2040py micropython --circuitpython --tcp-port`, `mpremote` 1.28.0; the MicroPython column
+is v1.23.0 in the same emulator for contrast.
+
+| Command | CircuitPython | Why |
+| --- | :---: | --- |
+| `exec` / `eval` / `run script.py` | ✅ | The raw REPL is family-agnostic - `RawReplRunner` has one banner constant for both. |
+| `soft-reset` | ✅ | Firmware's own; at the raw prompt it does not re-run `code.py` (see above) - same as MicroPython. |
+| `fs cat` / `sha256sum` / `mkdir` / `touch` / `rm` | ✅ | Plain `open()` / `os.mkdir` / `os.remove`, all present. Writes need the remount below. |
+| `fs cp` **device → host** | ✅ | Reads an existing file. |
+| `fs cp` **host → device** | ⚠️ only if the destination file **already exists** | See "the errno name" below. Onto a new name it fails with `OSError: [Errno 2]` before writing anything. |
+| `fs ls` / `fs tree` | ❌ | `AttributeError: 'module' object has no attribute 'ilistdir'`. |
+| `mount ./local_dir` | ❌ | `AttributeError: 'module' object has no attribute 'mount'`. |
+| `df` | ❌ | `ImportError: no module named 'vfs'` - the same shape as MicroPython ≤1.21 in the table above, for the same reason. |
+
+The firmware's own answer to `dir(os)` is the whole story, and is worth quoting rather than
+paraphrasing - CircuitPython 10.2.1:
+
+```
+['__class__', '__dict__', '__name__', 'chdir', 'getcwd', 'getenv', 'listdir', 'mkdir', 'remove',
+ 'rename', 'rmdir', 'sep', 'stat', 'statvfs', 'sync', 'uname', 'unlink', 'urandom', 'utime']
+```
+
+...against MicroPython v1.23.0, which has the three names the ❌ rows need (`ilistdir`, `mount`,
+plus `VfsFat`/`VfsLfs2`, and a separate `vfs` module):
+
+```
+['VfsFat', 'VfsLfs2', '__class__', '__dict__', '__name__', 'chdir', 'dupterm', 'dupterm_notify',
+ 'getcwd', 'ilistdir', 'listdir', 'mkdir', 'mount', 'remove', 'rename', 'rmdir', 'stat',
+ 'statvfs', 'sync', 'umount', 'uname', 'unlink', 'urandom']
+```
+
+**Two CircuitPython-specific things to know before any write.**
+
+1. **The filesystem starts read-only to the REPL** - `OSError: [Errno 30] Read-only filesystem`.
+   One line fixes it for the session: `import storage; storage.remount('/', readonly=False)`.
+   Measured: the flag **survives a soft reset** (`mpremote resume soft-reset`, then a write, still
+   works) but not a chip reset, since it is RAM state. On real hardware this line raises instead,
+   whenever a USB host holds the mass-storage lock - this emulator never claims that interface, so
+   it is permanently in the state a real board reaches only after the drive is ejected
+   ([record 0087](../records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
+2. **The errno name**, which is the entire reason for the `fs cp` caveat. `fs cp` first probes
+   whether the destination exists (`fs_exists` -> `os.stat`), expecting a catchable `OSError`.
+   MicroPython renders one as `OSError: [Errno 2] ENOENT`; CircuitPython renders it as
+   `OSError: [Errno 2] No such file/directory`. `mpremote`'s `_convert_filesystem_error`
+   (`transport.py`) matches the *name* - it scans the traceback for `ENOENT` and friends, then for
+   a bare `OSError: <number>` line - so the CircuitPython text matches neither, the raw
+   `TransportExecError` escapes `except OSError`, and the copy dies on the probe. Traced call by
+   call: the probe is the only thing that fails - `fs_writefile()` on the same connection writes
+   the file fine, and `fs cp` onto a name that already exists succeeds.
+
+None of this is an rp2040py limitation, and none of it is fixable here: it is `mpremote` talking
+to firmware it was not written for, and a real CircuitPython board on a real serial port answers
+identically. For pushing files at CircuitPython, use the guest itself - `remount()` plus
+`open()`/`write()` over `rp2040py micropython --circuitpython -c ...`, which is what
+`demo/mklittlefs_dump.py` does for MicroPython and what 0087 measured for CircuitPython.
+
 
 ## What doesn't work
 

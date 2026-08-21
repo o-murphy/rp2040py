@@ -24,6 +24,34 @@ that citation is what makes a device or board file checkable rather than folklor
 genuinely can't be sourced, say so and treat it as a documented "not modelled" gap, not a guess -
 `boards/vcc_gnd_yd_rp2040/__init__.py`'s RESET-button section is the pattern to copy for that.
 
+**Where a flash offset comes from, per family** - the one number in a board file that is easy to
+derive from a plausible-looking wrong source, and did get derived wrongly once
+([record 0085](../../../docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5,
+which cost a silent drive reformat):
+
+- **MicroPython**: `fs_start = PICO_FLASH_SIZE_BYTES - MICROPY_HW_FLASH_STORAGE_BYTES`, the latter
+  from the board's own `ports/rp2/boards/<BOARD>/mpconfigboard.h` (**not** `mpconfigboard.cmake`,
+  which carries `PICO_BOARD` and feature switches); `fs_blockcount` is that size / 4096.
+- **CircuitPython**: `fs_start = CIRCUITPY_FIRMWARE_SIZE + 4096` (the NVM), where
+  `CIRCUITPY_FIRMWARE_SIZE` defaults to `1020 * 1024` in `ports/raspberrypi/mpconfigport.h` and is
+  overridden **in the board's `mpconfigboard.mk`** (`CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE=...`).
+  **A board's `link.ld` is not the source**: it sizes the linker's section and can hold a
+  *different* number - `raspberry_pi_pico_w` says `firmware_size = 1532k` there while its
+  `mpconfigboard.mk` says `(1536 * 1024)`, and the drive follows the mk. Audited 2026-08-19: no
+  board under `boards/` overrides it at all, so every one of them is the `0x100000` default - if a
+  new board's `mpconfigboard.mk` *does* carry the flag, that is the number to use.
+  Not applicable to CircuitPython's **Zephyr-based** builds (slugs ending `_zephyr`), where
+  `ports/zephyr-cp/mpconfigport.h` says the sizes come "at runtime from the Zephyr partition
+  table" - source those from the board's devicetree `fixed-partitions` instead
+  ([record 0066](../../../docs/records/0066-board-support-expansion.md)'s note on them).
+- **Kaluma**: `targets/rp2/boards/<board>/board.h`'s `KALUMA_BINARY_MAX` plus
+  `KALUMA_PROG_SECTOR_BASE`/`_COUNT`, cross-checked against `board.js`'s own `new Flash(base,
+  count)`.
+
+Verify rather than trust: boot the board and read the filesystem back (`--dump-fs`, or
+`-c "import os; print(os.statvfs('/'))"`). A wrong `fs_start` is silent - the firmware simply
+formats its own drive where it expects one, and nothing errors.
+
 For a board specifically: `scripts/fetch_firmware.py list --family <family> --slug <slug>
 [--page <page>]` pulls a real firmware version history straight from the source
 (micropython.org / CircuitPython's S3 bucket / Kaluma's GitHub releases) - use it instead of
@@ -51,6 +79,13 @@ the script's own module docstring before using it on an unfamiliar board.
      high/low - that would mask a firmware bug the device exists to exercise).
    - [`src/rp2040py/external/bootsel_button.py`](../../../src/rp2040py/external/bootsel_button.py)
      - a button on a non-GPIO pad (`GPIO_QSPI_SS`), identical across every RP2040 board.
+   - [`src/rp2040py/external/reset_button.py`](../../../src/rp2040py/external/reset_button.py) -
+     a device that acts on the **chip** rather than on a pin: RESET pulls the RUN pin, which is not
+     a GPIO and has no pad, so it goes through `RP2040.set_run_pin()` plus the `on_run_pin_reset`
+     hook `BaseDevice` installs its own hard reset into. Also the template for **any device pressed
+     while the simulation is running**: every level change goes through `schedule_threadsafe()`,
+     since 0030 forbids touching engine-room state from another thread (`BootselButton` gets away
+     with a direct write only because it is pressed before `start_execution()`).
    - [`src/rp2040py/external/ws2812.py`](../../../src/rp2040py/external/ws2812.py) - decodes a
      pulse-width protocol from nothing but GPIO edge timestamps; the model for any one-wire/timing-
      coded protocol (DHT11/22, IR, servo PWM).
@@ -128,6 +163,11 @@ Match the test to what actually needs proving - these are additive, not alternat
    - [`tests/test_led_mock.py`](../../../tests/test_led_mock.py) - the minimal shape: a
      `_drive_gpio_high()` helper flips SIO's `GPIO_OUT`/`GPIO_OE` bits and calls
      `pin.check_for_updates()`, then asserts the device's resulting state.
+   - [`tests/test_reset_button.py`](../../../tests/test_reset_button.py) - a device driven at
+     runtime: assert the level change was **scheduled and not yet applied** (a recording fake in
+     place of `Simulator`), which is the difference a direct call would erase. Same file covers the
+     third execution state a held RESET introduces - a recurring alarm fires 0 times while the chip
+     is held and >0 once released.
    - [`tests/test_ws2812.py`](../../../tests/test_ws2812.py) - real-timing protocols: build test
      waveforms from a **real driver's own published timings** (a specific PIO program's cycle
      counts at its real clock), never round numbers - "testing against upstream's own numbers is

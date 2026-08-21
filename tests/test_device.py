@@ -7,6 +7,7 @@ import time
 import pytest
 
 from rp2040py.boards import BOARDS, BoardSpec
+from rp2040py.device.base_device import ResetCause
 from rp2040py.device.mp_device import DEFAULT_TIMEOUT, MicroPythonDevice
 from rp2040py.device.raw_repl import RawReplError
 
@@ -188,3 +189,139 @@ def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image)
     with pytest.raises(RawReplError):
         second.result(timeout=5)
     assert third.result(timeout=5) == (b"3\r\n", b"")
+
+
+# -- post-boot handshake (docs/records/0089-one-reset-for-every-trigger.md, Phase 0.1) ----------
+# Moved here from cli/__init__.py's `_micropython_async()`, which used to send these bytes itself
+# after `astart()` returned: a device-level reset has to re-run the handshake and cannot reach
+# into the CLI for it.
+
+
+def _record_sent_bytes(device, monkeypatch) -> bytearray:
+    sent = bytearray()
+    monkeypatch.setattr(device.cdc, "send_serial_byte", sent.append)
+    return sent
+
+
+def test_post_boot_handshake_sends_a_newline_for_micropython(garbage_image, monkeypatch):
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    device._post_boot_handshake()
+
+    assert bytes(sent) == b"\r\n"
+
+
+def test_post_boot_handshake_sends_a_newline_for_circuitpython_too(garbage_image, monkeypatch):
+    """Not Ctrl-C, even though the CLI used to send one here: measured on CircuitPython 8.0.2, a
+    newline gets the same banner and prompt out of an idle REPL, while Ctrl-C additionally kills a
+    running code.py (see `_post_boot_handshake()`'s own docstring)."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image), circuitpython=True)
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    device._post_boot_handshake()
+
+    assert bytes(sent) == b"\r\n"
+
+
+def test_connect_runs_the_post_boot_handshake_after_enumeration(garbage_image, monkeypatch):
+    """...and only after: the nudge is a reply to a device that's already on the bus, so sending it
+    any earlier would drop it into a USBCDC that isn't initialized yet."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    def _fake_start_execution() -> None:
+        assert bytes(sent) == b"", "handshake sent before the device enumerated"
+        device.cdc.on_device_connected()
+
+    monkeypatch.setattr(device.simulator, "start_execution", _fake_start_execution)
+
+    asyncio.run(device._aconnect(timeout=5))
+
+    assert bytes(sent) == b"\r\n"
+
+
+# -- host-initiated hard reset (0089 Phase 2) ---------------------------------------------------
+# No real firmware here: the garbage image never enumerates on its own, so these drive
+# `on_device_connected` the same way the handshake tests above do. The live-boot half (both
+# firmwares, a variable gone across the reset) is tests/hard_reset_run.py, run from CI.
+
+
+def _fake_reenumerating_reset(device, monkeypatch) -> list[ResetCause]:
+    """Stand in for the chip actually rebooting: record the cause, then fire the enumeration
+    callback `_arm_enumeration()` wired up."""
+    causes: list[ResetCause] = []
+
+    def _hard_reset(*, cause=ResetCause.RUN_PIN) -> None:
+        causes.append(cause)
+        device.cdc.on_device_connected()
+
+    monkeypatch.setattr(device, "hard_reset", _hard_reset)
+    return causes
+
+
+def test_hard_reset_async_before_start_raises(garbage_image):
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    with pytest.raises(RuntimeError):
+        device.hard_reset_async()
+
+
+def test_ahard_reset_waits_for_re_enumeration_then_redoes_the_handshake(garbage_image, monkeypatch):
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    causes = _fake_reenumerating_reset(device, monkeypatch)
+    sent = _record_sent_bytes(device, monkeypatch)
+
+    asyncio.run(device._ahard_reset(5, ResetCause.RUN_PIN))
+
+    assert causes == [ResetCause.RUN_PIN]
+    assert bytes(sent) == b"\r\n"  # the console the CLI used to nudge is usable again
+
+
+def test_ahard_reset_defaults_to_the_run_pin_cause(garbage_image, monkeypatch):
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    causes = _fake_reenumerating_reset(device, monkeypatch)
+    device._started = True
+
+    device.hard_reset_async(timeout=5).result(timeout=5)
+
+    assert causes == [ResetCause.RUN_PIN]
+    device.stop()
+
+
+def test_ahard_reset_raises_timeout_error_instead_of_hanging_forever(garbage_image, monkeypatch):
+    """A device that never comes back must fail the wait, not leave the caller pending forever."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    monkeypatch.setattr(device, "hard_reset", lambda **_kwargs: None)  # never re-enumerates
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(device._ahard_reset(0.3, ResetCause.RUN_PIN))
+
+
+def test_a_reset_is_not_a_second_start(garbage_image, monkeypatch):
+    """0089 §2.3: `_started` stays True across a reset - `start_async()` must keep raising."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    _fake_reenumerating_reset(device, monkeypatch)
+    device._started = True
+
+    device.hard_reset_async(timeout=5).result(timeout=5)
+
+    assert device._started is True
+    with pytest.raises(RuntimeError):
+        device.start_async()
+    device.stop()
+
+
+def test_a_host_reset_queues_behind_whatever_holds_the_repl_lock(garbage_image, monkeypatch):
+    """The device has one REPL channel: a reset must not interleave with an exec in flight."""
+    device = MicroPythonDevice(board=_pico_board(garbage_image))
+    causes = _fake_reenumerating_reset(device, monkeypatch)
+
+    async def scenario() -> None:
+        async with device._repl_lock:
+            reset = asyncio.ensure_future(device._ahard_reset(5, ResetCause.RUN_PIN))
+            await asyncio.sleep(0.05)
+            assert causes == [], "reset ran while the REPL lock was held"
+        await reset
+        assert causes == [ResetCause.RUN_PIN]
+
+    asyncio.run(scenario())

@@ -87,8 +87,12 @@ Onboard extras:
   (docs/records/0050/0051). SparkFun's board carries BOOT and RESET buttons, but neither firmware
   port declares a GPIO pushbutton (no `pins.csv` at all, and no `BUTTON` in CircuitPython's
   `pins.c`), so BOOT is the QSPI-SS pad `BootselButton` already models and nothing else is added.
-- Not modelled: the **RESET** button (pulls RUN directly - not a GPIO, no model here at all,
-  docs/records/0057, the same gap every other board file here documents), the Qwiic/STEMMA JST-SH
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). SparkFun's own product page lists it
+  twice - "boot button, reset button" in the overview and a bare "Buttons: Boot, Reset" in the
+  spec table - and presence is the only per-board fact needed, since RUN's net has no pin number
+  and no configurable pull (docs/records/0057's addendum). Modelled since docs/records/0089's
+  Phase 4.
+- Not modelled: the Qwiic/STEMMA JST-SH
   connector (a bare I2C breakout - no fixed onboard chip behind it, so there is nothing to
   emulate), USB-C, and the RP2040's own RTC (not board-specific).
 """
@@ -97,6 +101,7 @@ from collections.abc import Callable
 
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -104,7 +109,7 @@ __all__ = ("BOARD", "FIRMWARE", "RGB_GPIO", "board_with")
 
 RGB_GPIO = 25
 
-_EXTRAS = (lambda: Ws2812(gpio=RGB_GPIO), BootselButton)
+_EXTRAS = (lambda: Ws2812(gpio=RGB_GPIO), BootselButton, ResetButton)
 
 # Full version history from
 #   uv run scripts/fetch_firmware.py list --family micropython --slug SPARKFUN_PROMICRO

@@ -8,9 +8,17 @@ name: Test CircuitPython Releases
 
 on:
   push:
-    branches: [main]
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
-  workflow_dispatch:
+    branches: [main]
+    paths-ignore: *non-code-paths
+
+concurrency:
+  group: ci-circuitpython-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-circuitpython:
@@ -24,17 +32,33 @@ jobs:
         # full pypy/cpython-3.10/cpython-3.14 spread on every release it tests, and nothing about
         # CircuitPython exercises the host interpreter differently. Three jobs, one runtime.
         include:
-          # The project's own default (README), and the oldest thing we claim to support.
+          # The oldest release this project claims to support. **Not** the default any more - that
+          # is 10.2.1 (`firmware_specs.json`), and every test that needs a reset runs there. This
+          # row is deliberately boot-only: it proves the oldest supported firmware still comes up,
+          # which is coverage worth keeping, and nothing else is asserted on it.
+          # hard_reset: false - 8.0.2 does not come back over USB after a chip reset in this
+          # emulator (measured 2026-08-20: it re-boots and then spins in SRAM, never
+          # re-enumerating). This was expected to be the peripheral/pad state 0089's Phase 5
+          # clears - **it is not**: re-measured after that phase landed (2026-08-20), 8.0.2 still
+          # never comes back and ahard_reset() times out, while 9.2.9 and 10.2.1 both pass the same
+          # script. The boundary is 8.x vs 9.x; the cause is open in
+          # docs/records/0093-circuitpython-802-warm-boot-hang.md, so the gate stays.
           - tag: "8.0.2"
             wlan: false
-          # WiFi through the CYW43 NAT bridge. Pinned to 9.2.9 because that is the version
-          # tests/circuitpython/main-cyw43.py was actually verified against (0048); moving it to
-          # 10.x needs a live re-verification first, not just a matrix edit.
+            hard_reset: false
+          # WiFi through the CYW43 NAT bridge. 9.2.9 is the version
+          # tests/circuitpython/main-cyw43.py was originally verified against (0048), kept as the
+          # older of the two CYW43 host stacks this exercises.
           - tag: "9.2.9"
             wlan: true
-          # Regression test for 0050 - this is the version that used to hang forever.
+            hard_reset: true
+          # Regression test for 0050 - this is the version that used to hang forever - and, since
+          # 2026-08-19, WiFi as well: 0048 asked for a live re-verification before moving the
+          # CYW43 job to 10.x, and 0085 did it (scan/join/DHCP all the way to a DHCP address
+          # rendered on an emulated panel), so this stops being banner-only.
           - tag: "10.2.1"
-            wlan: false
+            wlan: true
+            hard_reset: true
 
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +83,43 @@ jobs:
       # allowance over that, not a guess - an earlier 10m here was ~40x the real cost and hid it.
       - name: Test CircuitPython ${{ matrix.tag }} boots
         run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} --expect-text "Adafruit CircuitPython"
+
+      # The CircuitPython half of 0089's Phase 1 reset-cause check (ci-micropython.yml has the
+      # other). Power-on only: this runs over the raw REPL, so a microcontroller.reset() would drop
+      # USB mid-exec with nothing waiting for the re-enumeration until 0089's Phase 2. It still
+      # guards the row that matters most here - CHIP_RESET.HAD_POR with a clear WATCHDOG.REASON is
+      # what makes a fresh boot report POWER_ON rather than a stale SOFTWARE/WATCHDOG.
+      - name: Test CircuitPython reset reason ${{ matrix.tag }}
+        run: timeout 5m uv run --no-dev -- rp2040py micropython --circuitpython --image ${{ matrix.tag }} tests/circuitpython/main-reset-cause.py
+
+      # 0089's Phase 2, CircuitPython half: a host-initiated hard reset must re-enumerate, leave
+      # the raw REPL usable, wipe the guest's RAM - and report RESET_PIN, which is the reset cause
+      # the record could only *derive* before this existed (its Appendix's "What was not measured").
+      - name: Test CircuitPython host-initiated hard reset ${{ matrix.tag }}
+        if: ${{ matrix.hard_reset }}
+        run: timeout 10m uv run --no-dev -- python tests/hard_reset_run.py --circuitpython --image ${{ matrix.tag }}
+
+      # 0089's Phase 4, CircuitPython half: the RESET button. Gated on the same `hard_reset` flag
+      # as the step above, and for the same reason - 8.0.2 never re-enumerates after a chip reset,
+      # whichever trigger caused it. This is the family that reports the cause precisely
+      # (`RESET_PIN`), so it is the sharper of the two live checks.
+      - name: Test CircuitPython RESET button ${{ matrix.tag }}
+        if: ${{ matrix.hard_reset }}
+        run: timeout 10m uv run --no-dev -- python tests/reset_button_run.py --circuitpython --image ${{ matrix.tag }}
+
+      # 0089's Phase 5, the sharper half: WiFi must still work after a hard reset. This could not
+      # pass before that phase - releasing the pads made the driver re-init, but the emulated
+      # CYW43439 had no WL_ON to see and still held the previous session's registers.
+      - name: Test CircuitPython CYW43 comes back after a chip reset ${{ matrix.tag }}
+        if: ${{ matrix.wlan && matrix.hard_reset }}
+        run: timeout 10m uv run --no-dev -- python tests/chip_reset_run.py --cyw43 --image ${{ matrix.tag }}
+
+      # 0088 section 1, the sharper half: CircuitPython *does* expose DTR as guest state
+      # (`supervisor.runtime.serial_connected` is TinyUSB's `tud_cdc_n_connected()`, i.e. the DTR
+      # bit), so the guest samples it while the host drops the line underneath it. Needs no
+      # `hard_reset` gate - nothing here resets the chip.
+      - name: Test CircuitPython CDC control lines ${{ matrix.tag }}
+        run: timeout 10m uv run --no-dev -- python tests/control_lines_run.py --circuitpython --image ${{ matrix.tag }}
 
       # CircuitPython's counterpart of ci-micropython.yml's pico-w WLAN step (33s measured
       # locally, 2026-08-16), and soft-failing for

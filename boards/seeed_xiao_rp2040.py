@@ -122,9 +122,11 @@ Onboard extras:
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051). Neither port declares a separate GPIO pushbutton (no `BUTTON`/`BOOT`
   entry in `pins.csv` or `pins.c`), unlike `adafruit_itsybitsy_rp2040`/`adafruit_qtpy_rp2040`.
-- Not modelled: the **RESET** button (Seeed's wiki documents BOOT and RESET pads; RESET pulls RUN
-  directly - not a GPIO, no model here at all, docs/records/0057, the same gap every other board
-  file here documents), the NeoPixel power-enable pin's actual gating (above), the
+- RESET: `ResetButton` (`rp2040py.external.reset_button`). Seeed's own wiki pin map is unusually
+  explicit here - it lists the **R** pad as connecting to `RUN`, described as "Reset input",
+  alongside the **B**/BOOT pad - so this board's RESET is sourced to the pin itself, not just to a
+  photograph of a button. Modelled since docs/records/0089's Phase 4 (which closes
+  docs/records/0057). Not modelled: the NeoPixel power-enable pin's actual gating (above), the
   `PICO_XOSC_STARTUP_DELAY_MULTIPLIER` crystal warm-up (above), USB-C, and the RP2040's own RTC
   (not board-specific).
 """
@@ -134,6 +136,7 @@ from collections.abc import Callable
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.led_mock import LEDMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -160,6 +163,7 @@ _EXTRAS = (
     lambda: LEDMock(gpio=LED_RED_GPIO, active_low=True),
     lambda: LEDMock(gpio=LED_BLUE_GPIO, active_low=True),
     BootselButton,
+    ResetButton,
 )
 
 # Full version history from

@@ -115,6 +115,37 @@ class RPSSI(BasePeripheral):
         self._rx_queue: deque[int] = deque()
         rp2040.qspi[1].add_listener(self._on_cs_pin_changed)
 
+    def reset(self) -> None:
+        """The SSI half of the XIP domain (`PSM.WDSEL`'s XIP bit - there is no `RESETS_RESET_SSI`;
+        0089 Phase 5). A real watchdog reboot resets it too, and the bootrom re-initialises it on
+        the way back up, which is what makes clearing an in-flight flash command safe here.
+
+        Two things are deliberately not reset, and both are landmines the constructor above already
+        documents:
+
+        - **The QSPI_SS listener is not re-added.** `_listeners` is a set of *bound methods*, and a
+          fresh `self._on_cs_pin_changed` is a new object each time - re-adding would leave two
+          listeners firing per edge.
+        - **`_cs_asserted` is re-synced from the pin, never hardcoded `False`.** An
+          `always_output_enabled` pad with nothing driving it resolves to LOW, i.e. already
+          asserted; hardcoding False desyncs the flag from the pin, the bootrom's first
+          `flash_cs_force(low)` then fires no edge, and its flash command hangs forever waiting for
+          RX bytes that are silently dropped. Read the constructor's own comment before touching
+          this.
+        """
+        self._txflr = 0
+        self._baudr = 0
+        self._crtlr0 = 0
+        self._crtlr1 = 0
+        self._ssienr = 0
+        self._spictlr0 = 0
+        self._rxsampldly = 0
+        self._txddriveedge = 0
+        self._write_enabled = False
+        self._cs_asserted = self.rp2040.qspi[1].value == GPIOPinState.LOW
+        self._tx_buffer = bytearray()
+        self._rx_queue.clear()
+
     def read_uint32(self, offset: int) -> int:
         if offset == SSI_TXFLR:
             return self._txflr

@@ -11,9 +11,28 @@ import dataclasses
 import struct
 
 from rp2040py.boards import BOARDS
+from rp2040py.device.base_device import ResetCause
 from rp2040py.device.mp_device import MicroPythonDevice
 from rp2040py.memory_map import FLASH_START_ADDRESS
-from rp2040py.peripherals.watchdog import CTRL, TRIGGER
+from rp2040py.peripherals.vreg_and_chip_reset import (
+    CHIP_RESET,
+    HAD_POR,
+    HAD_RUN,
+    PSM_RESTART_FLAG,
+)
+from rp2040py.peripherals.watchdog import (
+    CTRL,
+    ENABLE,
+    FORCE,
+    LOAD,
+    REASON,
+    SCRATCH4,
+    TICK,
+    TICK_ENABLE,
+    TIMER,
+    TRIGGER,
+)
+from rp2040py.rp2040 import RP2040
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157
@@ -98,3 +117,213 @@ def test_watchdog_reason_register_reports_force_after_trigger(tmp_path):
     _trigger_watchdog(device)
 
     assert device.mcu.watchdog.read_uint32(REASON) == FORCE
+
+
+def test_hard_reset_called_directly_runs_the_same_sequence(tmp_path):
+    """The watchdog hook is one caller of `BaseDevice.hard_reset()`, not the only way to reach it
+    (docs/records/0089-one-reset-for-every-trigger.md, Phase 0.2) - a RUN pin/RESET button and a
+    host-side API call are the others, and they must get this exact sequence rather than their own
+    variant of it."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.mcu.flash[0x100] = 0x42
+    device.cdc._initialized = True
+    usb_ctrl_before = device.mcu.usb_ctrl
+
+    device.hard_reset()
+
+    assert device.mcu.core.pc == FLASH_START_ADDRESS
+    assert device.mcu.flash[0x100] == 0x42
+    assert device.cdc._initialized is False
+    assert device.mcu.usb_ctrl is usb_ctrl_before
+
+
+# -- reset cause (docs/records/0089-one-reset-for-every-trigger.md §1.3, Phase 1) ---------------
+# The table every trigger has to satisfy, because both firmwares expose it to user code
+# (`machine.reset_cause()` on MicroPython, `microcontroller.cpu.reset_reason` on CircuitPython).
+# WATCHDOG_MAGIC is what pico-sdk's `watchdog_enable()` writes to SCRATCH[4] and
+# `watchdog_enable_caused_reboot()` checks, i.e. how CircuitPython tells a timeout (WATCHDOG) from
+# a deliberate `watchdog_reboot()` (SOFTWARE) - both of which set REASON.
+WATCHDOG_MAGIC = 0x6AB73121
+
+
+def _chip_reset(device: MicroPythonDevice) -> int:
+    return device.mcu.vreg_and_chip_reset.read_uint32(CHIP_RESET)
+
+
+def test_a_fresh_device_reads_as_a_power_on_reset(tmp_path):
+    device = _make_device(tmp_path)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_watchdog_reset_keeps_its_own_reason_and_scratch_and_leaves_chip_reset_alone(tmp_path):
+    """The watchdog block is not reset by a watchdog reboot on real silicon - that is what makes
+    REASON readable afterwards at all, and what keeps watchdog_enable()'s magic alive long enough
+    to distinguish a timeout from a deliberate reboot."""
+    device = _make_device(tmp_path)
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    _trigger_watchdog(device)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == FORCE
+    assert device.mcu.watchdog.read_uint32(SCRATCH4) == WATCHDOG_MAGIC
+    assert _chip_reset(device) == HAD_POR  # unchanged - a watchdog reset does not touch it
+
+
+def test_watchdog_timeout_reports_timer_not_force(tmp_path):
+    device = _make_device(tmp_path)
+
+    device.mcu.watchdog.alarm.callback()  # what Timer32PeriodicAlarm fires on a missed feed()
+
+    assert device.mcu.watchdog.read_uint32(REASON) == TIMER
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_run_pin_reset_clears_the_watchdog_and_records_had_run(tmp_path):
+    """A RUN-pin reset resets the watchdog block too, so firmware must *not* keep reading the
+    previous watchdog reboot's REASON and misreport why it came up - 0057's own open question."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_RUN
+
+
+def test_hard_reset_defaults_to_the_run_pin(tmp_path):
+    """0089's D4: a host-side "reset the board" is what pressing RESET corresponds to physically,
+    and the alternative - leaving REASON at whatever the last watchdog write set - makes the guest
+    report stale history instead of this reset."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)
+
+    device.hard_reset()
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert _chip_reset(device) == HAD_RUN
+
+
+def test_holding_the_run_pin_enters_reset_and_drops_off_the_usb_bus(tmp_path):
+    """The press, not the release, is when the chip enters reset - a real board held in RESET is
+    *gone* from the host, not idle. An earlier version fired only on release, which left the
+    emulated device enumerated for the whole hold (0089's Phase 4 shipped that as a known gap and
+    closed it the same day)."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.cdc._initialized = True
+
+    device.mcu.set_run_pin(low=True)
+
+    assert device.cdc._initialized is False, "held in reset, but still on the USB bus"
+    assert device.mcu.core.pc != 0x2000_1234, "held in reset, but the core kept its state"
+    assert _chip_reset(device) == HAD_RUN, "the cause is recorded on entry, not on release"
+
+
+def test_releasing_the_run_pin_runs_the_full_device_level_reset(tmp_path):
+    """0089's Phase 4/D3: `BaseDevice.__init__` installs its own reset into the MCU-owned hooks,
+    the same downward wiring it already uses for the watchdog. Without it an `ExternalDevice` -
+    which only ever gets `attach(rp2040)` - could restart the chip but never `cdc.reset()`,
+    leaving the host console stale."""
+    device = _make_device(tmp_path)
+    device.mcu.core.pc = 0x2000_1234
+    device.mcu.flash[0x100] = 0x42
+    device.cdc._initialized = True
+    usb_ctrl_before = device.mcu.usb_ctrl
+
+    device.mcu.set_run_pin(low=True)
+    device.mcu.set_run_pin(low=False)
+
+    assert device.mcu.core.pc == FLASH_START_ADDRESS
+    assert device.mcu.flash[0x100] == 0x42
+    assert device.cdc._initialized is False
+    assert device.mcu.usb_ctrl is usb_ctrl_before
+
+
+def test_a_watchdog_reset_reaches_the_wdsel_gated_path(tmp_path):
+    """`RP2040.reset()` grew `from_watchdog` in 0089's Phase 5 - and `hard_reset()` did not pass it,
+    so the device-level watchdog path silently kept resetting *everything* regardless of what the
+    guest selected. Found while splitting the reset in two; this is the regression test.
+
+    With no WDSEL bit set, a watchdog reset must leave the peripherals alone."""
+    device = _make_device(tmp_path)
+    device.mcu.uart[0]._interrupt_mask = 0xFF
+
+    _trigger_watchdog(device)
+
+    assert device.mcu.uart[0]._interrupt_mask == 0xFF, "watchdog reset ignored WDSEL"
+
+    device.mcu.psm.write_uint32(0x08, 0x1FFFC)  # what pico-sdk's watchdog_reboot() writes
+    _trigger_watchdog(device)
+
+    assert device.mcu.uart[0]._interrupt_mask == 0
+
+
+def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_path):
+    """The full path a RESET button takes, end to end: the same registers 0089 §1.3 requires, but
+    reached through the pin rather than through `hard_reset(cause=...)` directly."""
+    device = _make_device(tmp_path)
+    _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
+    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+
+    device.mcu.set_run_pin(low=True)
+    device.mcu.set_run_pin(low=False)
+
+    assert device.mcu.watchdog.read_uint32(REASON) == 0
+    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert _chip_reset(device) == HAD_RUN
+
+
+def test_power_on_reset_records_had_por(tmp_path):
+    device = _make_device(tmp_path)
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    device.hard_reset(cause=ResetCause.POWER_ON)
+
+    assert _chip_reset(device) == HAD_POR
+
+
+def test_recording_a_cause_leaves_the_debugger_owned_psm_restart_flag_alone(tmp_path):
+    """PSM_RESTART_FLAG is the block's one writable bit, cleared by the bootrom's write-1-to-clear
+    handshake (record 0050) - a reset cause must not forge or clear it."""
+    device = _make_device(tmp_path)
+    device.mcu.vreg_and_chip_reset.chip_reset |= PSM_RESTART_FLAG
+
+    device.hard_reset(cause=ResetCause.RUN_PIN)
+
+    assert _chip_reset(device) == HAD_RUN | PSM_RESTART_FLAG
+
+
+# --- the watchdog *timeout* path, which is a different trigger from TRIGGER -------------------
+
+
+def test_a_watchdog_timeout_fires_once_and_lets_the_clock_move_on():
+    """A timeout must reset the chip, not freeze it.
+
+    `Timer32PeriodicAlarm` re-armed itself at a **zero** delta after firing (counter sitting on
+    `target = 0`, DECREMENT, `top = 0xFFFFFFFF`), so the callback fired forever at one instant
+    inside a single `clock.tick()` and simulated time stopped for the whole chip.
+
+    This is the reset path MicroPython 1.16/1.17 take for `machine.reset()` itself: pico-sdk
+    1.2.0's `_watchdog_enable()` turns `watchdog_reboot(0, SRAM_END, 0)` into "load a 50 ms
+    timeout and enable", where a later SDK writes `CTRL.TRIGGER` instead (which
+    `test_watchdog_reason_register_reports_force_after_trigger` covers). Without the fix this
+    test does not fail - it hangs.
+    """
+    mcu = RP2040()
+    fired: list[float] = []
+    mcu.watchdog.on_watchdog_trigger = lambda: fired.append(mcu.clock.micros)
+
+    mcu.watchdog.write_uint32(TICK, 12 | TICK_ENABLE)
+    mcu.watchdog.write_uint32(LOAD, 50 * 1000 * 2)  # the SDK's 50 ms, counted at 2 MHz
+    mcu.watchdog.write_uint32(CTRL, ENABLE)  # ...and deliberately no TRIGGER
+
+    mcu.clock.tick(100_000_000)  # 100 ms - twice the timeout
+
+    assert fired == [50_000.0]  # once, at 50 ms, and the clock kept going
+    assert mcu.watchdog.read_uint32(REASON) == TIMER

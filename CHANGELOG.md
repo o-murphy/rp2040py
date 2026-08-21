@@ -7,6 +7,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The USB CDC control lines can be changed at runtime.** `BaseDevice.set_control_lines(dtr=...,
+  rts=...)` and `set_line_coding(baud_rate, ...)` (plus `USBCDC`'s own methods and `dtr`/`rts`/
+  `control_line_state`/`line_coding` read-backs) - until now DTR/RTS were asserted once at the end
+  of enumeration and could never move again. Guest-visible where the firmware exposes it:
+  CircuitPython's `supervisor.runtime.serial_connected` *is* the DTR bit, and dropping the line
+  makes the guest see the console go away, live-verified on 10.2.1. Every CDC class request is now
+  addressed the way the CDC PSTN spec (and a real host) addresses it - an **interface** recipient
+  with `wIndex` naming the CDC control interface - instead of the device recipient TinyUSB was
+  merely tolerating. The line coding is sent but guest-invisible on both firmware families here
+  (neither exposes it to Python), and the 1200-bps touch remains deliberately unbuilt.
+  [docs/records/0088](docs/records/0088-usb-host-side-msc-control-lines-and-reset.md).
+- **A chip reset now resets the chip.** `RP2040.reset()` covered `core`/`pwm`/`dma`/`ppb` only;
+  it now covers the pads and IO, SIO, the clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL and
+  the XIP domain (`XIP_CTRL` + `SSI`) - and it
+  honours `PSM.WDSEL`/`RESETS.WDSEL`, so a *watchdog* reset covers exactly what the guest selected
+  while a RUN-pin/power-on reset covers everything (bit positions from pico-sdk's own
+  `hardware/regs/psm.h`/`resets.h`). Two consequences visible to firmware, both live-verified: an
+  LED left on across `machine.reset()` now goes dark, and CircuitPython on a Pico W can bring WiFi
+  back up after a hard reset - the latter also needing `Cyw43439` to model **`WL_ON`**
+  (`CYW43_DEFAULT_PIN_WL_REG_ON`), so the emulated chip sees the power cycle its driver assumes.
+  The rule every new `reset()` follows: registers are reset, wiring is not - callbacks, GPIO
+  listeners, DREQ identity and analog inputs survive, because a chip reset does not unsolder
+  anything. `Peripheral` (the Protocol typing `RP2040.peripherals`) and `BasePeripheral` both grew
+  `reset()` as part of this, the latter as a documented no-op default - correct for read-only
+  identity blocks like `SYSINFO`/`TBMAN`, which are the only ones left using it.
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 5.
+- `ResetButton` (`rp2040py.external.reset_button`) - the RESET button, as an `ExternalDevice`, and
+  with it the **RUN pin** as a real level on `RP2040` (`run_pin_low`/`set_run_pin()` plus an
+  `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into). RUN is not a GPIO and has
+  no pad, so this is the first device that acts on the chip rather than on a pin. A press *holds*
+  the chip in reset - `execute_batch()` gained a third execution state in which nothing runs and no
+  simulated time passes, distinct from a WFI'd `core.waiting` core - and the release is what boots
+  it, with `machine.reset_cause()`/`microcontroller.cpu.reset_reason` reporting the RESET pin.
+  Sourced from a real vendor schematic (`3V3 -[R12 10k]- RUN`, switch to GND, in VCC-GND Studio's
+  own YD-2040 sheet), which is what makes the button a level rather than a pulse. Attached to the
+  boards whose vendor documentation establishes one - 12 of the 19 files under `boards/`. The other
+  seven are documented rather than guessed: `pimoroni_picolipo` genuinely has **no** RESET button
+  (an on/off power button, which reboots by cutting power - a different reset cause), and six more
+  have no sourceable answer either way. This corrects
+  [docs/records/0066](docs/records/0066-board-support-expansion.md)'s claim that every board has
+  one. Live-boot-verified on real MicroPython v1.23.0 and
+  CircuitPython 10.2.1, both now in CI (`tests/reset_button_run.py`).
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 4, closing
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md).
+- **A host-side reset in the device API**: `BaseDevice.hard_reset()` (synchronous, does not wait),
+  `hard_reset_async()` (a `concurrent.futures.Future`) and `await device.ahard_reset()` reboot the
+  emulated chip from the host, as pulling RUN would. The awaiting forms resolve only once the
+  firmware has re-enumerated over USB and its console is usable again, so a caller can reset and
+  immediately keep talking instead of guessing at a sleep - and they queue behind an `aexec()`
+  already in flight on the same REPL rather than interleaving with it. The trigger is a real
+  argument: `ResetCause` (`POWER_ON`/`RUN_PIN`/`WATCHDOG`, now exported from `rp2040py.device`,
+  default `RUN_PIN`) decides what the firmware reads back as `machine.reset_cause()` /
+  `microcontroller.cpu.reset_reason`, because the three are different signatures in the CHIP_RESET
+  and watchdog registers rather than labels on one event.
+  [docs/records/0089](docs/records/0089-one-reset-for-every-trigger.md)'s Phase 2.
+- `docs/reference/mpremote.md` gained a "Soft reset: raw prompt vs friendly prompt" section: a
+  soft reset restarts the VM but **does not** re-run `main.py`/`code.py` unless the Ctrl-D is sent
+  at the *friendly* prompt - measured on both firmware families, and the thing to know before
+  reaching for `mpremote soft-reset` to run a script you just uploaded.
+- `demo/lcd_run.py --code/--boot/--fat12/--dump-fs` plus `demo/cp_lcd_demo.py` - guest
+  CircuitPython code on the Waveshare RP2040-LCD-0.96, and reading the drive back afterwards.
+  `--code`/`--boot` write the files onto the running device over the REPL and restart the
+  firmware - `storage.remount('/', readonly=False)`, `open()`/`write()`, `os.sync()` - so nothing
+  is built on the host and long names and subdirectories come from CircuitPython's own FatFS
+  ([docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md)).
+  What the resulting screenshots show: `code.py` output *does* reach the panel (it is
+  CircuitPython's console on that board), while `boot.py` output never can - CircuitPython sends
+  it to `boot_out.txt`, which is what `--dump-fs` is for.
+- `demo/wifi_lcd_run.py` - a Pico W with an ST7735S wired to it, showing a real
+  `wifi.radio.connect()` and the DHCP address on the panel, and saving the frame as a PNG. One
+  self-contained file: it carries its own guest code, pushes it as `code.py` over the REPL,
+  restarts the firmware and screenshots the result. The Waveshare LCD board cannot do this at all -
+  no CYW43439, so its CircuitPython build ships no `wifi` module. See
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md).
+
+### Changed
+- **The display demos no longer decode frames on the emulator's thread.** `on_frame` fires on the
+  engine-room thread, so the RGB565->PIL decode `lcd_run.py`, `eink_run.py` and `wifi_lcd_run.py`
+  all did inside that callback was time the emulated chip did not get to run; the queues now carry
+  raw bytes and the decode happens in each runner's own loop, which also drains to the newest frame
+  rather than falling seconds behind a burst that is only seconds long (measured: 171 frames in
+  7.6 s out, ~15/s consumed, 3.7 s peak backlog). Measured on the WiFi demo: 1 m 40 s end to end, against forty
+  minutes with the decode inline (and `auto_refresh` back on in the guest, which was the other half
+  of it). Emulation speed itself was never the difference - 0.069x realtime pushing `code.py` over
+  the REPL, 0.063x booting the same code from a prepared image.
+- **Re-running a guest script from the device API takes two bytes, not a call.** Measured on
+  CircuitPython 10.2.1: `aexec("import supervisor\nsupervisor.reload()")` is a **no-op** - it
+  returns cleanly and nothing happens, because an exec leaves the device in the *raw* REPL and a
+  restart from there skips the startup script. Send Ctrl-B then Ctrl-D over the console instead
+  (`demo/wifi_lcd_run.py` does), or `ahard_reset()` if `boot.py` has to run too.
+  `docs/reference/mpremote.md` documents both, and its earlier `supervisor.reload()` advice is
+  corrected there.
+- **A chip reset is now the chip's own operation.** `RP2040.enter_reset(from_watchdog=...)` and
+  `leave_reset()` hold the sequence that lived in `BaseDevice` (reset the blocks, notify the USB
+  host side, point the core at flash); `USBCDC` installs itself into the new
+  `RPUSBController.on_reset` the same way it already installs its four other controller hooks, so
+  the chip resets whatever is on its bus without knowing a CDC exists. `BaseDevice._enter_reset()`/
+  `_leave_reset()` keep their names and still own the `ResetCause` bookkeeping. Consequence worth
+  knowing: with no hook installed, a watchdog TRIGGER/timeout and a RUN-pin pull now **reset the
+  chip** instead of logging "no reset handler provided" - so a guest calling `machine.reset()`
+  under `rp2040py run` (a bare `RP2040` + `USBCDC`, no device layer) reboots rather than hangs.
+  [docs/records/0057](docs/records/0057-run-pin-reset-hook.md)'s option B.
+- **One filesystem image, not two flags. Breaking:** `MicroPythonDevice(littlefs=..., fat12=...)`
+  is now `MicroPythonDevice(filesystem=...)`, interpreted by the firmware family the device was
+  constructed for - littlefs for MicroPython, FAT12 for `circuitpython=True`. The format was never
+  the caller's choice, and the pair made two invalid combinations expressible: passing both
+  silently dropped one, and the wrong one for the family was accepted and then ignored.
+  `dump_flash_image()` already branched on `circuitpython` for exactly this reason; loading now
+  matches it. The CLI's `--littlefs`/`--fat12` keep both spellings but reject the mismatch up
+  front - `--fat12` without `--circuitpython` used to boot cleanly with no filesystem at all and no
+  hint as to why, and the check now runs before any firmware is resolved or downloaded. A
+  named-but-missing image is still skipped rather than an error, as documented.
+  [docs/records/0036](docs/records/0036-littlefs-fat12-exclusivity.md).
+- **The post-boot nudge is a newline for both firmware families.** The console sends a byte the
+  moment the device enumerates, so a host that missed the banner still gets a prompt; that was
+  `\r\n` for MicroPython and **Ctrl-C** for CircuitPython. Ctrl-C only produces a prompt on an
+  *idle* REPL - against a script that is still running it is an interrupt, and both families
+  auto-run one. Measured: CircuitPython 8.0.2 with a looping `code.py` is killed by it ("Code done
+  running.") and does not even reach a prompt, while a newline leaves it printing; with no
+  `code.py` the two are byte-identical. Attaching to a board must not disturb what it is doing - a
+  user who wants to interrupt can still type Ctrl-C themselves. It also moved out of the CLI onto
+  `MicroPythonDevice._post_boot_handshake()`, which is what lets a device-level reset re-run it.
+  [docs/records/0090](docs/records/0090-post-boot-nudge-is-a-newline.md).
+- **CI covers the reset paths and a second CircuitPython WiFi version.** The reset-cause check
+  (0089's Phase 1), the host-initiated `ahard_reset()` round trip (Phase 2) and the RESET button
+  (Phase 4) now run live on both firmware families; the CircuitPython CYW43 job runs on **10.2.1**
+  as well as 9.2.9, which 0048 had asked for a live re-verification before allowing and
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md) supplied
+  (scan/join/DHCP through to an address rendered on an emulated panel). The CircuitPython workflow
+  also stopped being the odd one out: same triggers, same `paths-ignore`, same `concurrency`
+  cancellation as every other CI workflow, and no `workflow_dispatch`.
+
+### Fixed
+- **A watchdog *timeout* froze the chip instead of resetting it.** `Timer32PeriodicAlarm`
+  re-armed at a zero delta whenever the counter sat on its target - which is exactly what happens
+  right after it fires - so the callback ran forever at one instant inside a single `clock.tick()`
+  and simulated time stopped for the whole chip. Measured: six watchdog triggers, all at
+  50000.0 us, none returning to the caller. Any guest that lets a `machine.WDT(timeout=...)` lapse
+  hit this; it surfaced as MicroPython 1.16/1.17 never coming back from `machine.reset()`, because
+  pico-sdk 1.2.0's `_watchdog_enable()` reboots by loading a 50 ms timeout where later SDKs write
+  `CTRL.TRIGGER` (the only path this emulator handled).
+- **Double-buffered USB endpoint writes went out back-to-front.** When the firmware armed both
+  halves in one buffer-control write, buffer 1 was transferred before buffer 0, so any response
+  longer than one 64-byte packet reached the host in the wrong order. It split a raw-REPL answer
+  across the protocol's own `\x04` marker - visible as MicroPython 1.19.1 failing a reset check
+  with a message its own output disproved.
+- **`SIE_STATUS.CONNECTED` was a latch, so a chip reset could strand the USB link.** The bit says a
+  host is on the other end of the bus, and pico-sdk's `rp2040_usb_device_enumeration_fix()`
+  busy-waits on it from inside a timer alarm; modelling it as write-once-clear-forever meant
+  TinyUSB's ISR could take it away permanently and leave the firmware spinning there with the
+  emulator running. It is now a level, with `INTR_DEV_CONN_DIS` coming off a separate event latch
+  so a permanently-true level cannot re-raise the interrupt. This is what kept a reset from ever
+  completing on MicroPython 1.16/1.17. CircuitPython 8.0.2 still does not come back
+  ([docs/records/0093](docs/records/0093-circuitpython-802-warm-boot-hang.md)) - measured after the
+  fix, so that record's cause is a different one.
+- **A watchdog reset ignored `PSM.WDSEL`/`RESETS.WDSEL`.** `RP2040.reset()` grew a `from_watchdog`
+  parameter and the whole WDSEL model behind it, and `BaseDevice.hard_reset()` never passed it - so
+  every device-level reset took the "reset everything" path regardless of what the guest selected.
+  A parameter with a default is a silent seam: the unit tests called `RP2040.reset()` directly and
+  the live test drove the device path, and neither could see the two were not connected.
+- **A RESET button held down left the emulated device on the USB bus.** A real board held in RESET
+  is gone from the host, not idle. `RP2040` now fires `on_run_pin_held` on the falling edge as well,
+  and `BaseDevice.hard_reset()` splits into `_enter_reset()`/`_leave_reset()` - the press runs the
+  first, the release the second, and every other trigger runs both back to back, so there is still
+  one owner of the sequence.
+- **`XOSC` survived a power-on reset.** It is a `PSM.WDSEL` domain, so the gate that already
+  existed gets both paths right once the block has a `reset()`: excluded from a watchdog reboot
+  (pico-sdk clears that bit deliberately - the oscillators clock the reset itself) and reset by a
+  RUN-pin/power-on one, as on silicon.
+- **The TIMER did not restart across a reset.** It read the simulation clock, which is shared with
+  USB SOF and every other peripheral and must not be rewound; it now keeps its own epoch, so guest
+  `time.ticks_ms()`/`time.monotonic()` starts over after a reset, as on silicon.
+- README said CircuitPython **8.0.2** was the default firmware; it has been **10.2.1** since the
+  default tag was bumped in `firmware_specs.json`. The 8.0.2 row in CI is now documented as what it
+  actually is - a boot-only check of the oldest supported release, deliberately not running the
+  reset tests, because 8.0.2 never re-enumerates after a chip reset in this emulator
+  ([docs/records/0093](docs/records/0093-circuitpython-802-warm-boot-hang.md), open: 9.2.9 and
+  10.2.1 both pass the same script, so the boundary is 8.x vs 9.x).
+- CircuitPython's `pico_w` filesystem offset: `0x180000` -> `0x181000`. The board carries **two**
+  different firmware sizes in two different files - `link.ld`'s `firmware_size = 1532k` sizes the
+  linker's section, while `mpconfigboard.mk`'s `-DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` is what
+  `CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` is computed from - and the offset here was derived from
+  the first. A `--fat12` image was therefore invisible to the firmware, which silently reformatted
+  the drive instead of mounting it (and `--dump-fs` read back the wrong region). Confirmed by
+  scanning the whole emulated flash for the volume CircuitPython itself writes: it lands at
+  `0x181000`, sized exactly `(2 MiB - 0x181000) / 512` sectors. `pico` is unaffected. See
+  [docs/records/0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5,
+  and the appended correction in
+  [docs/records/0035](docs/records/0035-board-aware-fs-flash-offset.md).
+
 ## [0.3.0] - 2026-08-19
 
 ### Added

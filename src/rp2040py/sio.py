@@ -119,6 +119,30 @@ class RPSIO:
         self.interp0 = Interpolator(0)
         self.interp1 = Interpolator(1)
 
+    def reset(self) -> None:
+        """SIO's own registers, back to power-on (0089 Phase 5).
+
+        `gpio_output_enable` is the one that matters most: together with each pad's own `ctrl`
+        (`GPIOPin.reset()`), it is what makes a GPIO stop driving across a reset - an LED left on
+        by firmware goes dark, the way it does on silicon. `rp2040` is wiring, not state, and is
+        left alone.
+
+        Note SIO is not in `RESETS`/`PSM.WDSEL` at all on real hardware - it sits in the core's own
+        domain - so unlike the peripherals in `RP2040.reset()`'s WDSEL-gated list, this runs on
+        every reset path."""
+        self.gpio_value = 0
+        self.gpio_output_enable = 0
+        self.qspi_gpio_value = 0
+        self.qspi_gpio_output_enable = 0
+        self.div_dividend = 0
+        self.div_divisor = 1
+        self.div_quotient = 0
+        self.div_remainder = 0
+        self.div_csr = 0
+        self.spin_lock = 0
+        self.interp0.reset()
+        self.interp1.reset()
+
     def update_hardware_divider(self, signed: bool) -> None:
         if self.div_divisor == 0:
             self.div_quotient = -1 if self.div_dividend > 0 else 1

@@ -84,8 +84,10 @@ Onboard extras:
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051).
 - Not modelled: any **RESET/BOOT pushbutton** beyond BOOTSEL - `pins.c` declares no `BUTTON` of any
-  kind, and a RESET control pulls RUN rather than a GPIO (docs/records/0057, the same gap every
-  other board file here documents). Also not modelled: the `VBUS_SENSE` ADC pin (a voltage-divider
+  kind, and firmware config can never declare a RESET one anyway (RUN is not a GPIO). A
+  `ResetButton` exists since docs/records/0089's Phase 4, so this is a sourcing gap, not a
+  capability one: re-checked 2026-08-20, the guide URL cited above now 404s and no 0xCB hardware
+  repository was findable, so whether this board carries a RESET control is simply unestablished. Also not modelled: the `VBUS_SENSE` ADC pin (a voltage-divider
   sense input, no fixed chip behind it - see `pins.c` above), the split-keyboard half-to-half link
   hardware itself (out of scope - a second physical PCB, not a chip on *this* board), and the
   RP2040's own RTC (not board-specific).

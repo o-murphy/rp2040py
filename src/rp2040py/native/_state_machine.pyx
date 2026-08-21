@@ -722,6 +722,50 @@ cdef class StateMachine:
         )
         return result << self.index
 
+    def reset(self):
+        """Every state-machine register back to power-on (0089 Phase 5).
+
+        Distinct from `restart()` above, which is `CTRL.SM_RESTART` - a *guest-requested* partial
+        restart that deliberately keeps `x`/`y`/the OSR and the divider phase. A chip reset keeps
+        nothing: this is what makes a PIO-driven pin stop driving after a reset instead of the
+        state machine picking up mid-waveform.
+
+        `rp2040`/`pio`/`index` and the two DREQ channel numbers are identity, not state. The DMA
+        re-publish at the end matters for the same reason it does in `RPSPI.reset()` - DREQ state
+        lives in the DMA block, so a silently-cleared FIFO would otherwise leave DMA still
+        believing this machine wants service."""
+        self.enabled = False
+        self.x = 0
+        self.y = 0
+        self.pc = 0
+        self.input_shift_reg = 0
+        self.input_shift_count = 0
+        self.output_shift_reg = 0
+        self.output_shift_count = 0
+        self.cycles = 0
+        self.exec_opcode = 0
+        self.exec_valid = False
+        self.update_pc = True
+        self.clock_div_int = 1
+        self.clock_div_frac = 0
+        self.div_fp = 1 << 8
+        self.next_due_fp = 0
+        self.due_rearmed = False
+        self.exec_ctrl = 0x1F << 12
+        self.shift_ctrl = 0b11 << 18
+        self.pin_ctrl = 0x5 << 26
+        self.rx_fifo.reset()
+        self.tx_fifo.reset()
+        self.out_pin_values = 0
+        self.out_pin_direction = 0
+        self.waiting = False
+        self.wait_index = 0
+        self.wait_polarity = False
+        self.wait_delay = -1
+        self._update_dma_rx()
+        self._update_dma_tx()
+        self.wait_type = WAIT_TYPE_NONE
+
     cpdef restart(self):
         self.cycles = 0
         self.next_due_fp = self.pio.cycle_fp

@@ -272,7 +272,7 @@ Landed as designed. What exists now:
   free half of `flash_layout()`, which now delegates to it).
 - The CLI resolves through `_board_source()` + `resolve_firmware()` on `run`/`micropython`/
   `kaluma`/`mklittlefs` — `_resolve_board()` takes a family *name* now, not a `FirmwareSpec`, which
-  incidentally makes [0061](0061-one-firmware-command-family.md)'s step 1 nearly free. `--image`
+  incidentally makes [0061](0061-cli-family-flag.md)'s step 1 nearly free. `--image`
   and `--fetch-fw-only` work with `--board-spec`; `_validate_board_spec_flags()` is gone.
 - `boards/` reorganised as designed: `boards/waveshare_rp2040_lcd_0_96/` (one file, both families —
   the two former per-family files had identical `extras`) and `boards/weactstudio/`, with the
@@ -292,7 +292,7 @@ several families and passing neither `--target` nor `--block-size`/`--block-coun
 says so, rather than a silent pick. This is the same "the family key stays explicit, a silent pick
 would be a trap" rule the record already argued for `--circuitpython`.
 
-One consequence worth naming, since [0061](0061-one-firmware-command-family.md) lists it as an open
+One consequence worth naming, since [0061](0061-cli-family-flag.md) lists it as an open
 question: `--target`'s `choices` are still the three built-in family names, so a board file that
 invented a fourth family key could not be selected through it. Nothing needs one today.
 

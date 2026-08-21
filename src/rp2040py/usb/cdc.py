@@ -13,17 +13,23 @@ from rp2040py.utils.fifo import FIFO
 
 __all__ = (
     "USBCDC",
+    "LineCoding",
+    "extract_control_interface_number",
     "extract_endpoint_numbers",
 )
 
 # CDC stuff
+CDC_REQUEST_SET_LINE_CODING = 0x20
 CDC_REQUEST_SET_CONTROL_LINE_STATE = 0x22
 
 CDC_DTR = 1 << 0
 CDC_RTS = 1 << 1
 
+CDC_COMM_CLASS = 2
 CDC_DATA_CLASS = 10
 ENDPOINT_BULK = 2
+
+LINE_CODING_SIZE = 7
 
 TX_FIFO_SIZE = 512
 
@@ -34,6 +40,60 @@ CONFIGURATION_DESCRIPTOR_SIZE = 9
 class EndpointNumbers(NamedTuple):
     in_endpoint: int
     out_endpoint: int
+
+
+class LineCoding(NamedTuple):
+    """The 7-byte payload of CDC PSTN's `SET_LINE_CODING` (0x20), in the order the spec lays it
+    out (USB CDC PSTN 1.2, table 17). The defaults are what both firmware families here come up
+    with anyway - 115200 8N1 - so `set_line_coding(1200)` changes exactly one field.
+
+    `stop_bits`/`parity` keep the spec's own encodings rather than friendlier ones: this is a wire
+    format, and a `1` here means 1.5 stop bits, not one."""
+
+    baud_rate: int = 115200
+    stop_bits: int = 0  # 0 = 1, 1 = 1.5, 2 = 2
+    parity: int = 0  # 0 = none, 1 = odd, 2 = even, 3 = mark, 4 = space
+    data_bits: int = 8  # 5, 6, 7, 8 or 16
+
+    def to_bytes(self) -> bytes:
+        return bytes(
+            (
+                self.baud_rate & 0xFF,
+                (self.baud_rate >> 8) & 0xFF,
+                (self.baud_rate >> 16) & 0xFF,
+                (self.baud_rate >> 24) & 0xFF,
+                self.stop_bits & 0xFF,
+                self.parity & 0xFF,
+                self.data_bits & 0xFF,
+            )
+        )
+
+
+def extract_control_interface_number(descriptors: Sequence[int]) -> int:
+    """`bInterfaceNumber` of the CDC *communications* (control) interface, or -1 if there is none.
+
+    Which interface a CDC class request names is not decoration: PSTN specifies an **interface**
+    recipient with `wIndex` naming this interface, and a stack is free to reject anything else.
+    TinyUSB happens to accept the device-recipient form this project used to send (0088 section 1
+    measured it reaching the firmware), but that is leniency rather than correctness, so the
+    requests are now addressed the way a real host addresses them.
+
+    The control interface is the one carrying class 0x02 - separate from the data interface
+    (class 0x0A) `extract_endpoint_numbers()` above looks for, and always the lower of the two in
+    every descriptor set here (0 on MicroPython, CircuitPython and the pico-sdk alike)."""
+    index = 0
+    while index < len(descriptors):
+        length = descriptors[index]
+        if length < 2 or len(descriptors) < index + length:
+            break
+        if (
+            descriptors[index + 1] == DescriptorType.INTERFACE
+            and length == 9
+            and descriptors[index + 5] == CDC_COMM_CLASS
+        ):
+            return descriptors[index + 2]
+        index += length
+    return -1
 
 
 def extract_endpoint_numbers(descriptors: Sequence[int]) -> EndpointNumbers:
@@ -75,6 +135,10 @@ class USBCDC:
         self._descriptors: list[int] = []
         self._out_endpoint = -1
         self._in_endpoint = -1
+        self._control_interface = -1
+        self._control_line_state = 0
+        self._line_coding = LineCoding()
+        self._pending_line_coding: LineCoding | None = None
 
         def _on_usb_enabled() -> None:
             self.usb.reset_device()
@@ -109,6 +173,7 @@ class USBCDC:
                     endpoints = extract_endpoint_numbers(self._descriptors)
                     self._in_endpoint = endpoints.in_endpoint
                     self._out_endpoint = endpoints.out_endpoint
+                    self._control_interface = extract_control_interface_number(self._descriptors)
 
                     # Now configure the device
                     self.usb.send_setup_packet(set_device_configuration_packet(1))
@@ -116,6 +181,16 @@ class USBCDC:
                 self.on_serial_data(buffer)
 
         def _on_endpoint_read(endpoint: int, size: int) -> None:
+            # The data stage of the one control request here that has one: the firmware arms EP0
+            # OUT for `wLength` bytes after accepting SET_LINE_CODING's setup packet, and this is
+            # the host handing them over. Cleared as it is served, so an unrelated EP0 OUT
+            # transfer never gets a stale line coding fed to it.
+            if endpoint == ENDPOINT_ZERO and self._pending_line_coding is not None:
+                coding = self._pending_line_coding
+                self._pending_line_coding = None
+                self._line_coding = coding
+                self.usb.endpoint_read_done(ENDPOINT_ZERO, coding.to_bytes()[:size])
+                return
             if endpoint == self._out_endpoint:
                 buffer = bytearray(min(size, self.tx_fifo.item_count))
                 for i in range(len(buffer)):
@@ -126,36 +201,123 @@ class USBCDC:
         self.usb.on_reset_received = _on_reset_received
         self.usb.on_endpoint_write = _on_endpoint_write
         self.usb.on_endpoint_read = _on_endpoint_read
+        # Whenever the controller is reset - by a chip-level reset or directly - this host side
+        # clears itself. Installed downward, like the four hooks above, so the *chip* can own a
+        # reset without knowing a CDC exists (0057's option B): before this, only `BaseDevice`
+        # knew both halves had to be reset together, and anything holding a bare `RP2040` reset
+        # the chip and left the console stale.
+        self.usb.on_reset = self._on_controller_reset
 
-    def _cdc_set_control_line_state(self, value: int | None = None, interface_number: int = 0) -> None:
+    def _cdc_set_control_line_state(self, value: int | None = None, interface_number: int | None = None) -> None:
         if value is None:
             value = CDC_DTR | CDC_RTS
+        self._send_class_request(CDC_REQUEST_SET_CONTROL_LINE_STATE, value, interface_number, w_length=0)
+        self._control_line_state = value
+        self._initialized = True
+
+    def _send_class_request(self, b_request: int, w_value: int, interface_number: int | None, *, w_length: int) -> None:
+        """One shape for every CDC class request this host sends.
+
+        `recipient=INTERFACE` with `wIndex` naming the CDC control interface, per PSTN - see
+        `extract_control_interface_number()` for why it is not the `recipient=DEVICE` this used to
+        send. Falls back to interface 0 before enumeration has read the descriptors, which is the
+        control interface on every descriptor set here anyway."""
+        if interface_number is None:
+            interface_number = max(self._control_interface, 0)
         self.usb.send_setup_packet(
             create_setup_packet(
                 ISetupPacketParams(
                     data_direction=DataDirection.HOST_TO_DEVICE,
                     type=SetupType.CLASS,
-                    recipient=SetupRecipient.DEVICE,
-                    b_request=CDC_REQUEST_SET_CONTROL_LINE_STATE,
-                    w_value=value,
+                    recipient=SetupRecipient.INTERFACE,
+                    b_request=b_request,
+                    w_value=w_value,
                     w_index=interface_number,
-                    w_length=0,
+                    w_length=w_length,
                 )
             )
         )
-        self._initialized = True
+
+    @property
+    def control_line_state(self) -> int:
+        """The DTR/RTS bits as last sent (`CDC_DTR | CDC_RTS`), not as the firmware reports them -
+        this host has no way to read them back."""
+        return self._control_line_state
+
+    @property
+    def dtr(self) -> bool:
+        return bool(self._control_line_state & CDC_DTR)
+
+    @property
+    def rts(self) -> bool:
+        return bool(self._control_line_state & CDC_RTS)
+
+    @property
+    def line_coding(self) -> LineCoding:
+        """The line coding this host last successfully sent. `LineCoding()`'s defaults until
+        `set_line_coding()` is called - nothing is read back from the firmware."""
+        return self._line_coding
+
+    def set_control_lines(self, *, dtr: bool, rts: bool) -> None:
+        """Assert or drop DTR/RTS after enumeration - what a terminal opening or closing the port
+        does to a real board (0088 section 1).
+
+        Both firmware families here watch DTR: TinyUSB's `tud_cdc_n_connected()` *is* the DTR bit,
+        so CircuitPython's `supervisor.runtime.serial_connected`/`usb_cdc.console.connected`
+        follow it, and MicroPython's `tud_cdc_line_state_cb()` uses it to arm its TX flush delay.
+        Dropping DTR therefore stops the guest seeing a console attached - which is the point.
+
+        Engine-room state: call this from the simulator's own loop (`schedule_threadsafe()` from
+        any other thread, per 0030), not inline from a host thread."""
+        self._cdc_set_control_line_state((CDC_DTR if dtr else 0) | (CDC_RTS if rts else 0))
+
+    def set_line_coding(self, baud_rate: int, *, stop_bits: int = 0, parity: int = 0, data_bits: int = 8) -> None:
+        """Send CDC PSTN's `SET_LINE_CODING` (0x20) - baud rate, stop bits, parity, data bits.
+
+        Emulated USB, so the baud rate is not a wire speed and changes nothing about how fast bytes
+        move; it is guest-visible state (CircuitPython's `usb_cdc.console.baudrate`, TinyUSB's
+        `tud_cdc_n_get_line_coding()`). The one gesture that would give it a *behaviour* - the
+        1200-bps touch - is deliberately not built: no firmware this project runs honours it, and
+        its destination is the bootrom's USB mass-storage mode, which is out of scope (0088's
+        2026-08-20 update, and 0089 section 5).
+
+        Same threading rule as `set_control_lines()`."""
+        coding = LineCoding(baud_rate=baud_rate, stop_bits=stop_bits, parity=parity, data_bits=data_bits)
+        # Armed *before* the setup packet: the firmware may well arm EP0 OUT synchronously inside
+        # the register write that this send_setup_packet() triggers.
+        self._pending_line_coding = coding
+        self._send_class_request(CDC_REQUEST_SET_LINE_CODING, 0, None, w_length=LINE_CODING_SIZE)
 
     def send_serial_byte(self, data: int) -> None:
         self.tx_fifo.push(data)
 
     def reset(self) -> None:
-        """For RPWatchdog.on_watchdog_trigger's live device reset (see base_device.py) - `self.usb`
-        (the RP2040 object's own usb_ctrl) is reset in place rather than reconstructed, since this
-        object holds a direct reference to it that must stay valid across the reset."""
+        """Reset this host side *and* the controller it drives.
+
+        `self.usb` (the RP2040 object's own usb_ctrl) is reset in place rather than reconstructed,
+        since this object holds a direct reference to it that must stay valid across the reset.
+        The host-side clearing itself lives in `_on_controller_reset()`, which a chip-level reset
+        reaches directly through `usb_ctrl.on_reset` without going through this method at all."""
+        self._on_controller_reset()
+        self.usb.reset()
+
+    def _on_controller_reset(self) -> None:
+        """Installed on `usb_ctrl.on_reset`; runs whenever the controller is reset, from wherever.
+
+        Everything here is host-side bookkeeping about a device that has just dropped off the bus:
+        enumeration state, the endpoints found in its descriptors, the control lines it was
+        asserting. `on_device_connected` and `on_serial_data` are deliberately *not* cleared - they
+        are wiring, and the re-enumeration that follows a reset is what fires them again."""
         self.tx_fifo.reset()
         self._initialized = False
         self._descriptors_size = None
         self._descriptors = []
         self._out_endpoint = -1
         self._in_endpoint = -1
-        self.usb.reset()
+        self._control_interface = -1
+        # A chip that dropped off the bus is asserting nothing, and the firmware coming back up
+        # starts from its own defaults - so both are back to what a fresh USBCDC has, and the
+        # re-enumeration asserts DTR/RTS again through the same path a first boot uses.
+        self._control_line_state = 0
+        self._line_coding = LineCoding()
+        self._pending_line_coding = None

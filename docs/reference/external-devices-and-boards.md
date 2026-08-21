@@ -71,6 +71,53 @@ richer end of the same spectrum) and `Cyw43439` build on - `rp2040.gpio[n]` for 
 or the relevant peripheral object (`rp2040.spi[n]`, ...) for anything else your device needs to
 watch or drive.
 
+### When the device acts on the chip, not on a pin
+
+`ResetButton` (`external/reset_button.py`) is the worked example for the case `attach(rp2040)` does
+*not* obviously cover: the RESET button pulls the RP2040's **RUN** pin, which is not a GPIO, is not
+memory-mapped, and has no pad, no pull configuration and no register. There is nothing in
+`rp2040.gpio[n]` to grab.
+
+The answer is a level plus a hook on `RP2040` itself, and it is worth copying if you ever model
+something at chip level ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 4):
+
+```python
+def attach(self, rp2040: "RP2040") -> None:
+    self._rp2040 = rp2040  # no initial drive: the board's own pull-up holds RUN high
+
+
+def press(self) -> None:  # RUN low - the chip stops executing and stays stopped
+    self._drive(True)
+
+
+def release(self) -> None:  # RUN high - *this* edge resets and boots the chip
+    self._drive(False)
+
+
+def _drive(self, low: bool) -> None:
+    mcu = self._mcu
+    mcu.schedule_threadsafe(lambda: mcu.set_run_pin(low=low))
+```
+
+Three things in that shape are the point:
+
+- **A press is a level, not a pulse.** The board grounds RUN for as long as the button is held, so
+  `press()` holds the chip in reset (nothing executes, no simulated time passes) and `release()` is
+  what boots it. A single `reset()` method would model a tap and quietly lie about a hold.
+- **`schedule_threadsafe()`, not a direct call.** Unlike `BootselButton` - pressed before
+  `start_execution()` - a RESET button is pressed *while the simulation runs*, from whatever thread
+  the caller is on. An `ExternalDevice` may not touch engine-room state from another thread
+  ([record 0030](../records/0030-external-device-concurrency.md)); this is the mechanism for that, and
+  it applies to any device a human drives at runtime.
+- **The device does not perform the reset.** `RP2040.on_run_pin_reset` is a hook `BaseDevice`
+  installs its own hard reset into - so the device reaches the full sequence, including the USB
+  half (`cdc.reset()`) it could never reach on its own.
+
+The same pattern answers "how does an attached device see a chip reset". It does not get a
+callback - it sees the GPIO the firmware drives, exactly as on real hardware. `Cyw43439` listens on
+`WL_ON` and drops its bus to power-on state when that line falls, which is what happens once a
+reset releases the pads (0089's D7 and Phase 5).
+
 Attaching your own device to an existing board (scenario 1 above) needs no new library code -
 `demo/eink_run.py` is a complete worked example:
 
@@ -172,6 +219,32 @@ so a board that pins a local `.uf2` works offline by construction. `layout` uses
 convention `firmware_specs.json` does, and `prog_start` is Kaluma-only (its separate YMODEM "user
 program" region) - leave it out for MicroPython/CircuitPython, which keep user code inside the
 filesystem itself.
+
+The numbers above are an illustration; a real board's come from that firmware's own config, and
+each family reads a different field:
+
+| family | `fs_start` | source |
+|---|---|---|
+| MicroPython | `PICO_FLASH_SIZE_BYTES - MICROPY_HW_FLASH_STORAGE_BYTES` | the board's `ports/rp2/boards/<BOARD>/mpconfigboard.h` |
+| CircuitPython | `CIRCUITPY_FIRMWARE_SIZE + 4096` (NVM) | `ports/raspberrypi/mpconfigport.h`'s default `1020 * 1024`, overridden in the board's **`mpconfigboard.mk`** |
+| Kaluma | `KALUMA_BINARY_MAX + base * 4096` | `targets/rp2/boards/<board>/board.h` + `board.js`'s `new Flash(base, count)` |
+
+The CircuitPython row is the one with a trap in it. A board may also carry a `link.ld` with its own
+`firmware_size`, and that is **not** what the drive start is computed from - `raspberry_pi_pico_w`
+has `firmware_size = 1532k` in `link.ld` and `-DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'` in
+`mpconfigboard.mk`, and the filesystem follows the second one. Reading the first is what put a
+wrong `0x180000` in this project's own specs until 2026-08-19; see
+[record 0085](../records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 for how it
+presented (a `--fat12` image the firmware silently ignored, then reformatted over).
+
+The table covers CircuitPython's classic `ports/raspberrypi` builds. Its **Zephyr-based** builds
+(slugs ending `_zephyr`) size their regions from Zephyr's own partition table at runtime, so none
+of the above applies to them - see [record 0066](../records/0066-board-support-expansion.md)'s note,
+which also records that no such image has been made to boot here yet.
+
+Getting it wrong is silent, so verify it on a real boot rather than by reading alone: `--dump-fs`
+should return an image the firmware itself wrote, and `-c "import os; print(os.statvfs('/'))"`
+should report the geometry you expect.
 
 Add a second key to serve a second firmware for the same hardware - the devices, pin map and
 flash geometry belong to the board, not to whichever firmware is flashed:
@@ -366,8 +439,22 @@ Two practical notes both runners now encode, learned the hard way:
   0043](../records/0043-pio-dma-first-batch-race.md)), and for the same reason PIO does not run
   through a CPU idle jump. Anything asking for a divider above ~1.4 - which is every pulse-width
   driver - is exact.
-- **`ExternalDevice`'s surface is attach-only.** There's no `detach()`, no reset hook, no shutdown
+- **A device can reach more than pins, but only through what `RP2040` itself exposes.** Almost
+  every device here wires itself to `rp2040.gpio[n]`/`rp2040.spi[n]` and nothing else, but
+  `ResetButton` (`external/reset_button.py`) is the case that does not fit: RESET pulls the **RUN**
+  pin, which is not a GPIO, not memory-mapped and has no pad. It works through `RP2040.set_run_pin()`
+  plus the `on_run_pin_reset` hook `BaseDevice` installs its own hard reset into
+  ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 4) - the pattern to copy if
+  you ever need a device that acts on the *chip* rather than on a pin. Note what it implies: while
+  RUN is held low nothing executes at all, and no simulated time passes.
+- **`ExternalDevice`'s surface is attach-only - and a device still sees a chip reset.** There's no
+  `detach()`, no reset hook, no shutdown
   participation - fine for in-tree use (every implementation is reviewed here), but worth knowing
   if you're relying on a custom device to clean up after itself. See
   [record 0049](../records/0049-external-device-authoring-docs.md) for the open question this
-  leaves.
+  leaves. The reason it is survivable is worth knowing, though: a real external chip is not wired
+  to the RP2040's reset either - it sees one only through whatever GPIO the firmware drives. So the
+  emulated equivalent is a **listener on that pin**, not a callback on the protocol. `Cyw43439`
+  is the worked example: it listens on `WL_ON` and drops its bus to power-on state when the line
+  falls, which is exactly what happens once a chip reset releases the pads
+  ([record 0089](../records/0089-one-reset-for-every-trigger.md)'s Phase 5 and its D7).

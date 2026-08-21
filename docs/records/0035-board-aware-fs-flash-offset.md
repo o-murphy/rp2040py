@@ -205,3 +205,50 @@ pass - flagged as a new, separate open item in 0027 rather than pursued here.
   v1.28.0, current CircuitPython/Kaluma `main`/`master`).
 - The still-open `[PIO1] clkDivRestart not implemented` stall noted above - real root cause not
   yet investigated.
+
+## Correction (2026-08-19)
+
+**`pico_w`'s CircuitPython `fs_start` recorded here was wrong: `0x180000`, actually `0x181000`.**
+The audit above read the drive start off `boards/raspberry_pi_pico_w/link.ld`
+(`firmware_size = 1532k`), but that file sizes the *linker's* section only. The C macro the drive
+start is computed from is set separately, in the same board's `mpconfigboard.mk`
+(`CFLAGS += -DCIRCUITPY_FIRMWARE_SIZE='(1536 * 1024)'`), so
+`CIRCUITPY_CIRCUITPY_DRIVE_START_ADDR` = 1536K + 4K = `0x181000`. Two firmware sizes, two files,
+and only one of them governs the filesystem.
+
+Found (and live-confirmed by scanning the whole emulated flash for the volume the firmware itself
+writes) while building the CircuitPython WiFi-on-a-panel demo - see
+[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 for the evidence and the fix.
+
+**Audit of everything else this project ships (same day), because one wrong number of this shape
+implies nothing about the others until they are checked:**
+
+- *MicroPython* `pico` (`0xa0000`/352) and `pico_w` (`0x12c000`/212): correct, and **stable across
+  every tag shipped here** - `MICROPY_HW_FLASH_STORAGE_BYTES` is `1408 * 1024` / `848 * 1024` in
+  `ports/rp2/boards/{RPI_PICO,RPI_PICO_W}/mpconfigboard.h` at v1.21.0, v1.23.0, v1.25.0 and
+  v1.28.0 alike, and `rp2_flash.c`'s `MICROPY_HW_FLASH_STORAGE_BASE = PICO_FLASH_SIZE_BYTES -
+  MICROPY_HW_FLASH_STORAGE_BYTES` is unchanged over that range. That answers this record's own
+  first open question for MicroPython.
+- *CircuitPython* `pico` (`0x100000`): correct. `boards/raspberry_pi_pico/mpconfigboard.mk`
+  carries no `CIRCUITPY_FIRMWARE_SIZE` and the board ships no `link.ld`, at 8.0.2, 9.2.9 and
+  10.2.1 alike, so `mpconfigport.h`'s `1020 * 1024` default applies at all three.
+- *Kaluma* `pico`/`pico-w` (`prog_start 0x100000`, `fs_start 0x180000`, 128 blocks): correct.
+  `targets/rp2/boards/{pico,pico-w}/board.h` give `KALUMA_BINARY_MAX = 0xFC000`,
+  `KALUMA_PROG_SECTOR_BASE = 4`, `KALUMA_PROG_SECTOR_COUNT = 128`, and `board.js` `new Flash(132,
+  128)` - so `0xFC000 + 4*4096 = 0x100000` and `0xFC000 + 132*4096 = 0x180000`, identical between
+  the two boards, and `4 + 128 + 128 = 260` matches their own `KALUMA_FLASH_SECTOR_COUNT`.
+- *All 17 board files under `boards/`* (20 CircuitPython slugs, counting flash variants): correct
+  by the same check as `pico` - **none** of them overrides `CIRCUITPY_FIRMWARE_SIZE` in its
+  `mpconfigboard.mk` and none ships a `link.ld`, so `0x100000` is right for every one. `pico_w` is
+  the only board this project touches that overrides it at all, which fits: it is the only one
+  whose firmware does not fit in 1020 KiB (CYW43 driver + lwIP + mbedtls).
+
+So the bug was singular, not systemic. What was systemic is that **the derivation rule was written
+down nowhere a board author would look** - only in `scripts/fetch_firmware.py`'s comments and in
+this record. Fixed the same day: the rule now lives in the
+`external-devices-and-boards` skill's own 3g-rule section and in
+`docs/reference/external-devices-and-boards.md`, both naming `mpconfigboard.mk` (not `link.ld`) as
+CircuitPython's source and both saying to verify it on a real boot, since a wrong value is silent.
+This record's own first open question, above, is exactly the class of thing that turned out to
+bite. `pico` is unaffected: it overrides neither size, so the 1020K + 4K default this record
+derived stands.

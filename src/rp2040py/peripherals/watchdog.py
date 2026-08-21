@@ -81,7 +81,35 @@ class RPWatchdog(BasePeripheral):
         self.alarm.enable = False
 
     def _default_watchdog_trigger(self) -> None:
-        self.rp2040.logger.warning(self.name, "Watchdog triggered, but no reset handler provided")
+        """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this
+        hook: reset the chip.
+
+        It used to log "no reset handler provided" and leave the guest spinning forever waiting for
+        a reset that never came - correct only while the sequence lived in `BaseDevice`, which a
+        bare `RP2040` has no access to. It does not any more (0057's option B), so the honest
+        default is to do it: `rp2040py run` builds a bare `RP2040` + `USBCDC` and a guest calling
+        `machine.reset()` there used to hang."""
+        self.rp2040.enter_reset(from_watchdog=True)
+        self.rp2040.leave_reset()
+
+    def reset(self) -> None:
+        """Clear the reset-cause bookkeeping this block carries across a reboot: REASON and the
+        eight scratch registers.
+
+        Deliberately *not* called on the watchdog's own reset path. On real silicon the watchdog
+        block is not reset by a watchdog reboot - which is exactly why REASON still reads back the
+        bit that caused it, and why `watchdog_enable()`'s `0x6ab73121` magic in SCRATCH[4] survives
+        long enough for `watchdog_enable_caused_reboot()` to tell a timeout from a deliberate
+        `watchdog_reboot()`. A RUN-pin/power-on reset does reset the block, and CircuitPython
+        relies on the difference (`Processor.c`: "watchdog doesn't clear chip_reset, while
+        chip_reset clears the watchdog"). See docs/records/0089-one-reset-for-every-trigger.md
+        §1.3 for the full per-trigger table.
+
+        Scoped to the reset-*cause* state on purpose: the timer/alarm/tick enables this block also
+        owns are part of 0089's Phase 5 (the fuller `RP2040.reset()`), not of Phase 1.
+        """
+        self._reason = 0
+        self.scratch_data = [0] * 8
 
     def read_uint32(self, offset: int) -> int:
         if offset == CTRL:

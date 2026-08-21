@@ -44,7 +44,7 @@ from os import PathLike
 from typing import TypeVar
 
 from rp2040py.boards import BoardSpec
-from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice
+from rp2040py.device.base_device import DEFAULT_TIMEOUT, BaseDevice, ResetCause
 from rp2040py.device.load_flash import (
     dump_circuitpython_flash_image,
     dump_micropython_flash_image,
@@ -52,7 +52,6 @@ from rp2040py.device.load_flash import (
     load_micropython_flash_image,
 )
 from rp2040py.device.raw_repl import RawReplError, RawReplRunner
-from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.utils.logging import LogLevel
 
 _T = TypeVar("_T")
@@ -82,19 +81,23 @@ class MicroPythonDevice(BaseDevice):
         self,
         *,
         board: BoardSpec,
-        littlefs: "PathLike | None" = None,
-        fat12: "PathLike | None" = None,
+        filesystem: "PathLike | None" = None,
         circuitpython: bool = False,
         bootrom_words: "list[int] | None" = None,
         log_level: LogLevel = LogLevel.ERROR,
     ) -> None:
         super().__init__(board=board, bootrom_words=bootrom_words, log_level=log_level)
-        if littlefs is not None:
-            assert board.layout is not None, "board.layout must be set to load a littlefs image"
-            load_micropython_flash_image(littlefs, self.mcu, board.layout)
-        if fat12 is not None:
-            assert board.layout is not None, "board.layout must be set to load a fat12 image"
-            load_circuitpython_flash_image(fat12, self.mcu, board.layout)
+        # One `filesystem` argument, not the `littlefs=`/`fat12=` pair this used to take: which
+        # format an image is in is decided by the firmware family, never by the caller - a littlefs
+        # image on CircuitPython (or a FAT12 one on MicroPython) was never a valid combination, and
+        # passing both meant one of them was silently ignored. `dump_flash_image()` below already
+        # branched on `circuitpython` for exactly this reason; loading now matches it.
+        if filesystem is not None:
+            assert board.layout is not None, "board.layout must be set to load a filesystem image"
+            if circuitpython:
+                load_circuitpython_flash_image(filesystem, self.mcu, board.layout)
+            else:
+                load_micropython_flash_image(filesystem, self.mcu, board.layout)
         self.circuitpython = circuitpython
         # Serializes start_async()/exec_async() coroutines running on the engine room (see
         # simulator.submit() below) the same way ThreadPoolExecutor(max_workers=1) used to -
@@ -111,16 +114,49 @@ class MicroPythonDevice(BaseDevice):
     # start_async()/exec_async() calls made back-to-back queue behind each other instead of
     # racing.
 
+    def _post_boot_handshake(self) -> None:
+        """Nudge the just-enumerated firmware into printing a prompt: a bare newline, both families.
+
+        A host that attaches after the boot banner has gone by sees nothing until it sends
+        something - MicroPython answers a newline with its prompt, and CircuitPython treats it as
+        the "press any key to enter the REPL" it is waiting on once `code.py` has finished. Without
+        it a fresh console just sits there, which is why `cli/__init__.py` used to send these bytes
+        itself after `astart()`.
+
+        **A newline, never Ctrl-C, and the same one for both families.** Ctrl-C also produces a
+        prompt - but only on an *idle* REPL; against a script that is still running it is an
+        interrupt, and both firmwares auto-run one. Measured 2026-08-20:
+
+        - MicroPython v1.23.0 + an auto-run `main.py`: Ctrl-C raises `KeyboardInterrupt` inside it
+          and drops to the REPL, so `--littlefs ... --expect-text "Hello, MicroPython!"` (three CI
+          jobs, all of which rely on a script that keeps printing) never sees its text again.
+        - CircuitPython 8.0.2 + a looping `code.py`: Ctrl-C kills it the same way ("Code done
+          running.") and does not even reach a prompt afterwards, while a newline leaves it
+          printing. With *no* `code.py`, the two are byte-identical - banner plus `>>>` - so Ctrl-C
+          buys nothing here that the newline does not already give.
+
+        Attaching to a board must not disturb what it is doing; a user who wants to interrupt a
+        running script can still type Ctrl-C into the console themselves, exactly as on hardware.
+
+        Lives here rather than in `cli/__init__.py` after `astart()`: a device-level reset has to
+        re-run it and cannot reach into the CLI for it - 0089's Phase 0.1, and [0087]'s item 4.
+        """
+        self.cdc.send_serial_byte(ord("\r"))
+        self.cdc.send_serial_byte(ord("\n"))
+
     async def _aconnect(self, timeout: "float | None") -> None:
         async with self._repl_lock:
-            connected = asyncio.Event()
-            self.cdc.on_device_connected = connected.set
-            self.mcu.core.pc = FLASH_START_ADDRESS
-            self.simulator.start_execution()
-            try:
-                await self.simulator.wait_for(connected, timeout)
-            except asyncio.TimeoutError as exc:
-                raise TimeoutError(f"device did not enumerate over USB within {timeout}s") from exc
+            await super()._aconnect(timeout)
+
+    async def _ahard_reset(self, timeout: "float | None", cause: ResetCause) -> None:
+        """Same lock as `_aconnect()`/`_aexec()`, for the same reason: the device has one REPL
+        channel, so a host-driven reset must not interleave with an exec already in flight - it
+        queues behind it and runs when its turn comes. A *guest*-triggered reset (the watchdog
+        path) cannot take this lock - it runs synchronously inside an emulated register write -
+        which is exactly why the awaiting form is a separate entry point rather than a flag on
+        `hard_reset()` (0089 §2.1)."""
+        async with self._repl_lock:
+            await super()._ahard_reset(timeout, cause)
 
     def start_async(self, timeout: "float | None" = DEFAULT_TIMEOUT) -> "Future[None]":
         """Boot the device. Returns a Future that resolves once it enumerates over USB, or fails

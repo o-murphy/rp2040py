@@ -240,9 +240,9 @@ To run the CircuitPython demo, follow the directions above for MicroPython but a
 rp2040py micropython --circuitpython
 ```
 
-and start the CircuitPython REPL! As with MicroPython, the firmware (**8.0.2** by default) is
+and start the CircuitPython REPL! As with MicroPython, the firmware (**10.2.1** by default) is
 downloaded automatically on first use; a different version or a local file can be given via
-`--image` (e.g. `--image 10.2.1` or a path to an already-downloaded UF2). The rest of the experience
+`--image` (e.g. `--image 8.0.2` or a path to an already-downloaded UF2). The rest of the experience
 is the same as the MicroPython demo (Ctrl+X to exit, the `--gdb` option, etc). Filesystem support
 (a FAT12 image, not littlefs) and WiFi both work here too - see
 [Filesystem support](#filesystem-support) and [WiFi (Pico W / CYW43439)](#wifi-pico-w--cyw43439)
@@ -349,13 +349,26 @@ only mount `2.0`, 1.28's reads both - see
   rp2040py micropython --circuitpython --fat12 fat12.img
   ```
 
-  CircuitPython doesn't typically write to its own filesystem at runtime the way MicroPython does,
-  so this path hasn't been separately exercised - the underlying flash-write mechanism is the same
-  SSI peripheral either way.
+  It can also write its own drive, which is usually the easier route: `storage.remount('/',
+  readonly=False)` at the REPL, then plain `open()`/`write()`. On real hardware that raises while a
+  USB host holds the mass-storage lock; this emulator claims only the CDC interface, so the lock is
+  free and the firmware builds the volume itself - long names and subdirectories included. Restart
+  it afterwards (Ctrl-B then Ctrl-D at the console) to make CircuitPython re-run `code.py`, and
+  `--dump-fs` if you want to keep the image. `demo/lcd_run.py --code` and `demo/wifi_lcd_run.py`
+  both work this way; see
+  [docs/records/0087](docs/records/0087-circuitpython-writable-circuitpy-over-the-raw-repl.md).
 
-`--dump-fs <path>` dumps a device's littlefs flash region back out to a local file on exit (Ctrl+X,
-`--expect-text`, or the end of a run) - the same layout `--littlefs` reads back in, so it
-round-trips for persistence across runs. Works for both **MicroPython** and **Kaluma**; MicroPython
+The format is a property of the firmware family, not a choice, so the two flags are mutually
+exclusive *and* family-checked: `--fat12` needs `--circuitpython`, `--littlefs` needs its absence,
+and the wrong one is a startup error rather than a flag that is quietly ignored (a
+`--fat12 image.img` run without `--circuitpython` used to boot with no filesystem at all and no
+hint as to why). A named image that doesn't exist is still skipped silently - that is about the
+file, not the flag.
+
+`--dump-fs <path>` dumps a device's filesystem flash region back out to a local file on exit
+(Ctrl+X, `--expect-text`, or the end of a run) - the same layout `--littlefs`/`--fat12` reads back
+in, so it round-trips for persistence across runs. Works for all three families - littlefs for
+**MicroPython** and **Kaluma**, FAT12 for **CircuitPython**; MicroPython
 additionally supports scripting it non-interactively via `-c`/`-m`/`<filename>` (see
 [demo/mklittlefs_dump.py](demo/mklittlefs_dump.py), which builds such a script from local files) -
 Kaluma has no non-interactive exec mode, so use `require('fs')` at its REPL instead. This makes
@@ -443,7 +456,7 @@ the ROM image on the fly, no separate conversion step needed. A local `.bin` (e.
 
 ## Library API
 
-Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a UF2 image (optionally for a specific `board`, e.g. `board="pico_w"`) and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image).
+Everything above is the CLI, but the emulator is also usable programmatically - e.g. to run code against a device and check its output the way [Thonny](https://thonny.org/) does over a real serial port, from a test suite or another tool. `rp2040py.device.MicroPythonDevice` boots a board and lets you run code on it via the same raw-REPL protocol `mpremote run`/`tools/pyboard.py` use, interrupting anything already running on the device first (e.g. an auto-run `main.py` from a littlefs image). `board` is keyword-only and is the *only* board-related argument - a resolved `BoardSpec` carrying its own firmware image, never a board-name string or a separate `image=` kwarg; see [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md#using-a-boardspec) for building one of your own.
 
 > [!NOTE]
 > **Async-native only, no blocking API.** `MicroPythonDevice`/`KalumaDevice`/`BaseDevice` boot and
@@ -458,11 +471,15 @@ Everything above is the CLI, but the emulator is also usable programmatically - 
 
 ```python
 import asyncio
+from rp2040py.boards import BOARDS, resolve_firmware
 from rp2040py.device import MicroPythonDevice
 
 
 async def main():
-    async with MicroPythonDevice("RPI_PICO-20231005-v1.21.0.uf2") as device:
+    # Downloads and caches the family's default firmware; pass a third argument
+    # ("1.23.0", a local .uf2 path, a URL) to pin a different one.
+    board = resolve_firmware(BOARDS["pico"], "micropython")
+    async with MicroPythonDevice(board=board) as device:
         stdout, stderr = await device.aexec("print(1 + 1)")
         assert stdout == b"2\r\n"
 
@@ -492,8 +509,9 @@ hardware it doesn't model out of the box:
 
 - **`ExternalDevice`** (`rp2040py.external.device`) - a device implements `attach(rp2040)` and gets
   wired up via `attach_external_devices()`. Devices already shipping in-tree this way: the onboard
-  LED, the BOOTSEL button, a generic button/key, the CYW43439 WiFi chip behind `pico_w`, a Waveshare
-  2.9″ e-Paper panel, an ST7735S TFT controller, and a WS2812/WS2812B "NeoPixel" RGB LED.
+  LED, the BOOTSEL button, the RESET button (the RUN pin), a generic button/key, the CYW43439 WiFi
+  chip behind `pico_w`, a Waveshare 2.9″ e-Paper panel, an ST7735S TFT controller, and a
+  WS2812/WS2812B "NeoPixel" RGB LED.
 - **`boards.BoardSpec`** (what `--board` itself resolves to internally) - a public dataclass you
   build your own instance of: your own device mix on an existing firmware family, or a fully custom
   board with its own firmware and flash layout. Hand it to any `Device` class (`board=...`) or the
@@ -589,14 +607,22 @@ embedding the emulator as a library (rp2040js's own primary use case, e.g. insid
   second, independent USB-CDC-console JS runtime for RP2040 - unrelated to rp2040js despite both
   being JS) all boot and run against this emulator; a built-in GDB server (`--gdb`) works against
   any of them.
-- **`machine.reset()`/`machine.bootloader()` actually reset the device**: rp2040js's own
+- **A real chip reset, from every trigger that has one**: rp2040js's own
   `RPWatchdog.onWatchdogTrigger` (`src/peripherals/watchdog.ts`) defaults to logging "Watchdog
   triggered, but no reset handler provided" and does nothing else - the emulated CPU spins forever
-  waiting for a reset that never happens. rp2040py's `RPWatchdog.on_watchdog_trigger` performs a
-  real in-place reset (CPU core, PWM/DMA/USB-CDC peripheral state) and jumps back to flash's entry
-  point, preserving flash/filesystem content and every externally-referenced peripheral object's
-  identity - `mpremote reset`/`mpremote bootloader` (the latter performs the same reset rather than
-  entering actual BOOTSEL mode, which isn't implemented) both return promptly instead of hanging.
+  waiting for a reset that never happens. Here `machine.reset()`/`machine.bootloader()` work, and
+  they are one caller of a single reset owner rather than the only path: a **RESET button**
+  (`external/reset_button.py` - a real RUN-pin level, so holding it holds the chip in reset) and a
+  host-side **`device.ahard_reset()`** reach the same sequence. What that sequence covers is the
+  blocks a real reset covers - pads, IO, SIO, clocks, UART/SPI/I2C/PIO/TIMER/ADC/USB/RTC/BUSCTRL
+  and the XIP domain - gated by
+  `PSM.WDSEL`/`RESETS.WDSEL` exactly as hardware gates them, so a GPIO the guest left driving is
+  released and WiFi comes back up on a Pico W. Flash/filesystem content and every
+  externally-referenced peripheral object's identity survive (the reset is in place, never a
+  reconstruction), and the firmware reports the right `machine.reset_cause()` /
+  `microcontroller.cpu.reset_reason` for the trigger that actually fired. `mpremote reset`/
+  `mpremote bootloader` (the latter performs the same reset rather than entering actual BOOTSEL
+  mode, which isn't implemented) both return promptly instead of hanging.
 - **Configurable bootrom revision** (`--bootrom b0`/`b1`/`b2`, or a local `.elf`/`.bin`) - see
   [Bootrom revisions](#bootrom-revisions) below - auto-downloaded and cached the same way firmware
   images are. rp2040js ships exactly one hardcoded bootrom build (`demo/bootrom.ts`, revision B1),

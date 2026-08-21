@@ -19,9 +19,15 @@ strict reading order (top-to-bottom, left-to-right). The same note is reused (sa
 the same reason applies.
 
 > [!IMPORTANT]
-> One limitation is **not** per-OS and so has no meaningful row above: rp2040py emulates a single
-> core. Firmware that launches `core1` does not work anywhere — see the last row and note
-> [[16]](#fn16).
+> Two limitations are **not** per-OS, so neither gets a meaningful row above.
+> **Single core**: rp2040py emulates one. Firmware that launches `core1` does not work anywhere —
+> see the last row and note [[16]](#fn16).
+> **`mpremote` against CircuitPython**: `exec`/`eval`/`run`/`soft-reset` and most of `fs` work,
+> but `fs ls`/`tree`, `mount` and `df` fail on every host OS, because CircuitPython's `os` has no
+> `ilistdir`/`mount` and there is no `vfs` module — `mpremote` is a MicroPython tool, and a real
+> CircuitPython board on a real serial port answers the same way. Per-subcommand table, with the
+> `fs cp` caveat and the one-line `storage.remount()` writes need:
+> [mpremote.md](mpremote.md#against-circuitpython-firmware).
 
 | Feature | Linux | macOS | Windows | Android (Termux / Pydroid 3) | iOS (Pythonista) | iOS (PythonIDE) |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -33,6 +39,7 @@ the same reason applies.
 | WiFi (Pico W / CYW43439, `--board pico_w`) — scan/join against the built-in fake AP | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> | ⚠️ <sup>[[4]](#fn4)</sup> |
 | …and real network access through its NAT bridge (guest TCP/UDP → host sockets) | ✅ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ⚠️ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> | ❓ <sup>[[5]](#fn5)</sup> |
 | BOOTSEL button (`external/bootsel_button.py`, both boards) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| RESET button (`external/reset_button.py`) and host-side `device.ahard_reset()` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Waveshare 2.9″ e-Paper (`Epd2in9G` external device) | ✅ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> | ❓ <sup>[[6]](#fn6)</sup> |
 | GDB server (`run`, TCP port 3333) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `--tcp-port` (socket REPL, `socket://host:port`) | ✅ | ✅ | ✅ | ✅ | ✅ <sup>[[7]](#fn7)</sup> | ✅ <sup>[[7]](#fn7)</sup> |

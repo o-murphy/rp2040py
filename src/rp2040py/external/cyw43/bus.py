@@ -563,6 +563,43 @@ class GSPIBus:
         # drop-the-payload DATA_HEADER behavior for any caller that constructs a bare GSPIBus().
         self.nat_bridge: NatBridge | None = None
 
+    def power_off(self) -> None:
+        """Drop the chip back to its power-on state, as pulling `WL_ON` low does on real hardware.
+
+        Every field below is restored to exactly what `__init__` sets, and the *wiring* is not
+        touched: `_data_pin` (the pin this bus samples/drives) and `nat_bridge` survive, because
+        cutting the chip's regulator does not unsolder it from the RP2040 or take the host's
+        network away. Same "registers, not wiring" rule the chip-level resets follow
+        (docs/records/0089-one-reset-for-every-trigger.md, Phase 5).
+
+        Why this exists at all: 0089's D7 says an external chip only ever sees a reset through the
+        GPIO firmware drives, and `WL_ON` is that GPIO. Before this, a chip reset released the pad
+        - so the driver's own re-init sequence started over - while this bus still held every
+        register, credit and clock-availability flag from the *previous* session, and CircuitPython
+        on a Pico W could never bring WiFi back up after a reset (measured: 0089's Appendix,
+        point 5).
+        """
+        self._f0 = bytearray(_F0_SPACE_SIZE)
+        self._write_f0(SPI_STATUS_REGISTER, 4, STATUS_F2_RX_READY | STATUS_F3_RX_READY)
+        self._f1 = bytearray(_F1_REGISTER_SPACE_SIZE)
+        self._backplane_window = 0
+        self._backplane_memory = {}
+        for core in (CORE_WLAN_ARM, CORE_SOCRAM):
+            self._backplane_memory[core + AI_RESETCTRL_OFFSET] = AIRC_RESET
+        self._word_length_32 = False
+        self._selected = False
+        self._shift_reg = 0
+        self._bits_in_word = 0
+        self._pending_command = None
+        self._pending_write_words = []
+        self._response_bytes = b""
+        self._response_bit_index = 0
+        self._rx_packet = b""
+        self._rx_queue = []
+        self._bus_data_credit = 1
+        self._alp_available = False
+        self._ht_available = False
+
     # -- wire word-length/endian transform ------------------------------------------------------
 
     def _word(self, word: int) -> int:

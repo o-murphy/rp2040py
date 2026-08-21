@@ -38,6 +38,13 @@ class RPBUSCTRL(BasePeripheral):
         self.perf_ctr = [0, 0, 0, 0]
         self.perf_sel = [0x1F, 0x1F, 0x1F, 0x1F]
 
+    def reset(self) -> None:
+        """`RESETS_RESET_BUSCTRL` (0089 Phase 5). The four performance counters and their selectors
+        are the block's whole state; `0x1F` is each selector's own reset value, not a placeholder."""
+        self.voltage_select = 0
+        self.perf_ctr = [0, 0, 0, 0]
+        self.perf_sel = [0x1F, 0x1F, 0x1F, 0x1F]
+
     def read_uint32(self, offset: int) -> int:
         if offset == BUS_PRIORITY_ACK:
             return 1

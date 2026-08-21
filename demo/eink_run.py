@@ -121,10 +121,13 @@ class TkinterRenderer(Renderer):
         self.root.update()
 
 
-def _drain(frame_queue: queue.Queue[Image.Image], renderer: Renderer) -> None:
+def _drain(frame_queue: queue.Queue[bytes], renderer: Renderer) -> None:
+    """Decodes here rather than in `on_frame`: that callback runs on the emulator's engine-room
+    thread, where time spent turning a raw framebuffer into a picture is time the emulated chip is
+    not running."""
     while True:
         try:
-            renderer.show(frame_queue.get_nowait())
+            renderer.show(_decode_frame(frame_queue.get_nowait()))
         except queue.Empty:
             return
 
@@ -155,9 +158,9 @@ def main() -> None:
     # frame_queue exists because Epd2in9G.on_frame fires from MicroPythonDevice's own
     # engine-room thread (Simulator._ensure_loop()'s lazily-created background thread, since this
     # script never calls astart()/bind_loop() - see the device.start_async() comment below), not
-    # this one; Tkinter widgets may only be touched from the thread that created them, so frames
-    # are decoded and handed off here, only ever drawn from this loop below.
-    frame_queue: queue.Queue[Image.Image] = queue.Queue()
+    # this one; Tkinter widgets may only be touched from the thread that created them, so raw
+    # frames are handed off here and only ever decoded and drawn from the loop below.
+    frame_queue: queue.Queue[bytes] = queue.Queue()
 
     image_path = retrieve(MICROPYTHON, args.image)
     if image_path is None:
@@ -170,7 +173,7 @@ def main() -> None:
     # attach_external_devices() (external/device.py) is only safe before Simulator.start_execution()
     # - so this runs before start_async() below, not after.
     epd = Epd2in9G(
-        on_frame=lambda buf: frame_queue.put(_decode_frame(buf)),
+        on_frame=frame_queue.put,
         busy_nanos_power=_DEMO_BUSY_NANOS_POWER,
         busy_nanos_refresh=_DEMO_BUSY_NANOS_REFRESH,
     )

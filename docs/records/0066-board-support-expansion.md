@@ -330,3 +330,100 @@ wouldn't unblock them:
   three separate `LEDMock` instances or deserve a small `RGBLEDMock` combinator - not designed here.
 - Whether one Ethernet-PHY `ExternalDevice` can cover both W5500 and W5100S, or whether they need
   two - not investigated at the register level.
+
+## Note (2026-08-19): read the flash-offset rule before adding any board off these checklists
+
+Every row here ends in a board file with a `layout={"fs_start": ...}`, and that number has exactly
+one correct source per firmware family - now written down in the
+`external-devices-and-boards` skill's 3g-rule section and in
+`docs/reference/external-devices-and-boards.md`. For CircuitPython it is the board's
+`mpconfigboard.mk` (`CIRCUITPY_FIRMWARE_SIZE`, default `1020 * 1024`), **not** its `link.ld`,
+which can carry a different number for the linker's own use;
+[0085](0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5 is what happens when the two
+are confused, and [0035](0035-board-aware-fs-flash-offset.md)'s appended correction audits every
+board this project already ships (all correct - `pico_w` was the only one affected, and none of
+the boards on these checklists overrides the default).
+
+A wrong value here is silent: the firmware just formats its own drive where it expects one, and
+nothing errors. So the live-boot check a new board gets should read the filesystem back
+(`--dump-fs`, or `-c "import os; print(os.statvfs('/'))"`), not only the banner.
+
+## Note (2026-08-19): CircuitPython's Zephyr-based RP2040 builds are not in any checklist above
+
+This record's board lists were built from CircuitPython's classic (`ports/raspberrypi`) board set.
+Upstream now also ships **Zephyr-based** builds for RP2040 boards, under slugs that do not share
+the classic prefix - which is why a `bin/raspberry_pi_pico*` search misses them entirely:
+
+- `raspberrypi_rpi_pico_zephyr` (circuitpython.org/board/raspberrypi_rpi_pico_zephyr/)
+- `adafruit_feather_rp2040_zephyr` (circuitpython.org/board/adafruit_feather_rp2040_zephyr/)
+
+Both exist at 10.2.0 and 10.2.1 in the S3 bucket, and each ships a `.elf` alongside the `.uf2`.
+
+They are **not** a device-count question like every row above, and belong with "Flagged: not a
+device-count problem at all". Two reasons:
+
+- **Different software underneath.** `ports/zephyr-cp/README.md` says it plainly: "This is an
+  initial port of CircuitPython onto Zephyr. **We intend on migrating all existing boards onto
+  Zephyr.** To start, we'll only support new boards." So this is not one more board to add - it is
+  a second CircuitPython implementation on the same silicon, with Zephyr's own startup, drivers and
+  USB stack between the emulator and anything recognisable. Long-horizon, it is also a risk to
+  every board file here, since upstream intends the classic port to be replaced.
+- **The flash layout rule does not apply.** `ports/zephyr-cp/mpconfigport.h` carries
+  `CIRCUITPY_INTERNAL_NVM_SIZE 1` with the comment "NVM size is determined at runtime from the
+  Zephyr partition table" - so `fs_start` is not
+  `CIRCUITPY_FIRMWARE_SIZE + 4096` on these builds; it comes from Zephyr's devicetree
+  `fixed-partitions`. Anyone adding one has to source it from there, not from the rule in
+  [0035](0035-board-aware-fs-flash-offset.md)/the skill.
+
+**Does such an image run here? Unresolved, and worth its own investigation.** Measured
+2026-08-19: `rp2040py micropython --circuitpython --board pico --image
+adafruit-circuitpython-raspberrypi_rpi_pico_zephyr-en_US-10.2.1.uf2 --tcp-port 8766 --expect-text
+"CircuitPython"` loads the image and runs, but emits **no console output at all within 7 minutes**,
+where the classic 10.2.1 build prints its banner in well under one. Slow-but-progressing versus
+genuinely stuck was not established - that needs the same kind of tracing
+[0035](0035-board-aware-fs-flash-offset.md) and [0050](0050-qspi-pad-reset-values.md) used, not a
+longer timeout.
+
+
+## Note (2026-08-20): the RESET button every board on these lists has
+
+Orthogonal to which boards are addable, but it accumulates with them: three board files already
+say the RESET button is **not modelled** (`boards/vcc_gnd_yd_rp2040/__init__.py`,
+`boards/waveshare_rp2040_lcd_0_96/__init__.py`, `boards/weactstudio/__init__.py`), and every board
+still on the checklists above has one, because it is not a board feature at all - it is the
+RP2040's RUN pin. So this is the one gap that does *not* shrink as the lists get worked through.
+
+It now has a plan rather than a per-board apology: [0089](0089-one-reset-for-every-trigger.md)'s
+Phase 4 (a RUN level on `RP2040`, `BaseDevice` installing the hard reset into it downward, and an
+`external/reset_button.py` with `press()`/`release()`), on top of [0057](0057-run-pin-reset-hook.md).
+Once that lands, a RESET button is one more entry in a board's `extras` and needs no new analysis
+per board - the same way `Ws2812`/`LEDMock`/`KeyMock` became free after their first board.
+
+
+## Correction (2026-08-20): "every board on these lists has one" is wrong
+
+The note above says a RESET button "is not a board feature at all - it is the RP2040's RUN pin", and
+concludes that every board on these checklists has one. [0089](0089-one-reset-for-every-trigger.md)'s
+Phase 4 landed, `boards/` was then swept board by board for it, and that conclusion does not
+survive the sweep. RUN exists on every RP2040; a *button wired to it* is very much a board decision,
+and the Raspberry Pi Pico itself is the counterexample sitting in this repo's own registry - it has
+BOOTSEL and no RESET button, only a RUN test point.
+
+Two ways a board fails to have one, both found in `boards/`:
+
+- **No RESET control at all**, or one that is not a RUN short. `boards/pimoroni_picolipo.py` has an
+  on/off **power** button; Pimoroni's own page says a reboot is "double press it to cut and
+  reinstate the power". That is a power cycle, so on silicon it reports `HAD_POR`, not `HAD_RUN`
+  (0089 §1.3) - attaching a `ResetButton` there would make the board lie about why it rebooted.
+- **Nothing sourceable says either way.** Waveshare's wiki/product pages return HTTP 403 to this
+  project (re-checked 2026-08-20; waveshare.net refuses the connection), the 0xCB guide URL cited in
+  `boards/0xcb_gemini.py` now 404s with no findable hardware repository, and nullbits' page text
+  mentions no buttons at all. Firmware config cannot fill the gap: RUN is not a GPIO, so `pins.csv`/
+  `pins.c` never declare it, and MicroPython's `board.json` `features` lists (checked for seven of
+  these boards) carry things like "USB-C"/"RGB LED" and never buttons.
+
+What *is* true is the second half: once the device exists, a RESET button costs one `extras` entry
+and no new analysis - the only per-board fact left is presence, since 0057's addendum settled that
+the net has no pin number and no configurable pull. The sweep's result, 12 of 19 board files
+carrying one, is in [0089](0089-one-reset-for-every-trigger.md)'s Phase 4 progress-log entry.
+

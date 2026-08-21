@@ -421,14 +421,42 @@ def _validate_console_mode(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _validate_littlefs_fat12(args: argparse.Namespace) -> None:
-    """`--littlefs` and `--fat12` are for two different, mutually-exclusive modes (plain
-    MicroPython filesystem vs. CircuitPython's FAT12 filesystem) - which one actually took effect
-    used to be decided implicitly by `--circuitpython`, silently dropping the other flag with no
-    warning if both were given (docs/records/0036-littlefs-fat12-exclusivity.md)."""
+def _validate_filesystem(args: argparse.Namespace) -> "Path | None":
+    """Validates `--littlefs`/`--fat12` **and** returns the one filesystem image to load, or None.
+
+    One function rather than a validator plus a separate resolve-and-log block, because both
+    answer the same question - which of the two flags is meaningful here - and answering it twice
+    is how they drift apart.
+
+    `--littlefs` and `--fat12` are two different, mutually-exclusive modes (plain MicroPython
+    filesystem vs. CircuitPython's FAT12 filesystem); which one actually took effect used to be
+    decided implicitly by `--circuitpython`, silently dropping the other flag with no warning if
+    both were given (docs/records/0036-littlefs-fat12-exclusivity.md).
+
+    The format is a property of the firmware family, never a choice: MicroPython on rp2 reads
+    littlefs, CircuitPython reads FAT12, and `MicroPythonDevice` therefore takes a single
+    `filesystem` argument that it interprets by family. So the *wrong* flag for the selected family
+    is rejected here too, rather than accepted and then ignored somewhere further in - a
+    `--fat12 fat12.img` run without `--circuitpython` used to boot cleanly with no filesystem at
+    all and no hint as to why. A named-but-missing image is still skipped rather than an error
+    ("silently skipped if absent", per the README) - that is about the file, not the flag.
+
+    Called before any firmware is resolved or downloaded, so a bad combination fails immediately.
+    """
     if args.littlefs is not None and args.fat12 is not None:
         _logger.error("--littlefs and --fat12 are mutually exclusive")
         sys.exit(1)
+    if args.circuitpython and args.littlefs is not None:
+        _logger.error("--littlefs is a MicroPython filesystem - use --fat12 with --circuitpython")
+        sys.exit(1)
+    if not args.circuitpython and args.fat12 is not None:
+        _logger.error("--fat12 is a CircuitPython filesystem - pass --circuitpython, or use --littlefs")
+        sys.exit(1)
+
+    # A real Path, not the raw string argparse handed over: `MicroPythonDevice` takes a PathLike,
+    # and this is the boundary where the CLI's strings stop being strings.
+    image = args.fat12 if args.circuitpython else args.littlefs
+    return Path(image) if image and Path(image).exists() else None
 
 
 def _load_board_spec_target(target_attr: str) -> "BoardSpec | None":
@@ -549,7 +577,7 @@ async def _await_shutdown(simulator: Simulator) -> "int | None":
 
 async def _micropython_async(args: argparse.Namespace) -> "int | None":
     _validate_console_mode(args)
-    _validate_littlefs_fat12(args)
+    filesystem = _validate_filesystem(args)
     # -c/-m/<filename> ("exec mode") runs one device.exec() call and exits based on its own
     # stdout/stderr (see below) - it never reaches the interactive/--tcp-port/--pty console loop
     # that either replaces, or that --expect-text's on_data watcher is wired into, so combining any
@@ -573,22 +601,14 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
 
     _logger.info("Loading uf2 image: %s", board.image)
     _maybe_exit_after_fetch(args, image_path=Path(board.image), bootrom_source=args.bootrom)
-    littlefs = (
-        args.littlefs if not args.circuitpython and args.littlefs is not None and Path(args.littlefs).exists() else None
-    )
-    fat12 = args.fat12 if args.circuitpython and args.fat12 is not None and Path(args.fat12).exists() else None
 
-    if littlefs is not None:
-        _logger.info("Loading littlefs image: %s", littlefs)
-
-    if fat12 is not None:
-        _logger.info("Loading fat12 image: %s", fat12)
+    if filesystem is not None:
+        _logger.info("Loading %s image: %s", "fat12" if args.circuitpython else "littlefs", filesystem)
 
     try:
         device = MicroPythonDevice(
             board=board,
-            littlefs=littlefs,
-            fat12=fat12,
+            filesystem=filesystem,
             circuitpython=args.circuitpython,
             bootrom_words=_resolve_bootrom_words(args.bootrom),
             log_level=_console_log_level(args),
@@ -645,13 +665,12 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
         )
         cleanup.push_async_callback(repl.stop)
 
+        # No prompt nudge here anymore: MicroPythonDevice._post_boot_handshake() sends it from
+        # inside its own connect, so a device-level reset can re-run it without reaching into the
+        # CLI - see 0089 Phase 0.1. It is a bare newline for both families now, including
+        # CircuitPython, which this branch used to send a Ctrl-C to; that Ctrl-C also killed a
+        # running code.py, which nothing here ever wanted.
         await device.astart(timeout=None)
-        if not args.circuitpython:
-            # We send a newline so the user sees the MicroPython prompt
-            cdc.send_serial_byte(ord("\r"))
-            cdc.send_serial_byte(ord("\n"))
-        else:
-            cdc.send_serial_byte(3)
 
         return await _await_shutdown(device.simulator)
 

@@ -95,8 +95,11 @@ Onboard extras:
 - BOOTSEL: `BootselButton`, wired identically on every RP2040 board that boots from QSPI flash
   (docs/records/0050/0051) - the *real* BOOTSEL mechanism, independent of GPIO21's own button.
 - Not modelled: no plain LED exists on this board at all - confirmed absent from every source cited
-  above, not merely left out. Also not modelled: the **RESET** button (pulls RUN, not a GPIO -
-  docs/records/0057), the NeoPixel power-enable semantics described above, the diode/BOOTSEL
+  above, not merely left out.
+- RESET: `ResetButton` (`rp2040py.external.reset_button`) - Adafruit's own specifications state
+  "Both Reset button and Bootloader select buttons for quick restarts". Modelled since
+  docs/records/0089's Phase 4 (which closes docs/records/0057).
+- Not modelled: the NeoPixel power-enable semantics described above, the diode/BOOTSEL
   coupling above, the STEMMA QT I2C connector (electrically just `I2C(1)`, nothing board-specific),
   and USB-C.
 """
@@ -106,6 +109,7 @@ from collections.abc import Callable
 from rp2040py.boards import BoardSpec
 from rp2040py.external.bootsel_button import BootselButton
 from rp2040py.external.key_mock import KeyMock
+from rp2040py.external.reset_button import ResetButton
 from rp2040py.external.ws2812 import Ws2812
 from rp2040py.utils.firmware_retrieve import BoardFirmwareSpec
 
@@ -118,6 +122,7 @@ _EXTRAS = (
     lambda: Ws2812(gpio=RGB_GPIO),
     lambda: KeyMock(gpio=BOOT_BUTTON_GPIO, active_high=False),
     BootselButton,
+    ResetButton,
 )
 
 # Full version history from

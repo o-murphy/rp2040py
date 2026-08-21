@@ -6,26 +6,30 @@ Engineering notes live as numbered, append-only records under [docs/records/](do
 indexed by [docs/0000-TRACKER.md](docs/0000-TRACKER.md) (the scheme itself is
 [record 0032](docs/records/0032-docs-restructure.md)). Working notes for an investigation that
 isn't root-caused (or otherwise ready to become a record) yet live under
-[docs/tasks/](docs/tasks/) instead - the tracker's own "In progress / Proposed" section says which
+`docs/tasks/` instead - the tracker's own "In progress / Proposed" section says which
 ones are still open; a task file gets folded into a proper record once it's actually resolved (see
 e.g. 0041/0044, both created from a `docs/tasks/*.md` note). "Folded in" is literal: the note is
 appended verbatim to that record as an `## Appendix: folded-in working note ...` section and the
-`docs/tasks/` file is then **deleted**, so `docs/tasks/` only ever holds still-open notes. Older
+`docs/tasks/` file is then **deleted**, so `docs/tasks/` only ever holds still-open notes - and the
+directory itself simply doesn't exist whenever there are none. Older
 records still cite the pre-fold-in `docs/tasks/<name>.md` paths - the tracker's "Conventions"
 section maps each one to the record that now carries it.
 
-Two records track the active work - check both before assuming what's done:
+**What is currently being worked on is not listed here - read the tracker.** Its
+"In progress / Proposed" section is the only maintained answer, newest first, so the top rows are
+the active work; "Implemented" below it is everything already landed. A summary duplicated into
+this file would go stale within a session or two, which is exactly what happened to the one that
+used to sit here (it still named 0026/0027 as "the active work" long after both closed).
 
-- [docs/records/0026-main-thread-asyncio.md](docs/records/0026-main-thread-asyncio.md) - engine-room
-  concurrency model. **Done**, all 5 phases landed and verified.
-- [docs/records/0027-cyw43-wifi.md](docs/records/0027-cyw43-wifi.md) - CYW43439/Pico W WiFi emulation.
-  In progress: steps 0-3g done and live-boot-verified against real MicroPython Pico W firmware
-  (v1.23.0/v1.28.0); step 4 (bridging to a real network) not started. The record's own header
-  states exactly which step is current - don't assume this summary stays accurate as work
-  continues.
+From there, drill down rather than infer:
 
-Records keep a "Progress log"/inline status markers per phase/step - read those rather than
-assuming from the filename alone whether something landed.
+- Each record's own header carries its `Status:` line, and multi-phase records keep a
+  "Progress log" plus inline per-phase/step status markers. Read those - a filename, a merged
+  commit, or a `[x]` in the tracker does not tell you which phase is current.
+- A `[ ]` row can still mean "code shipped, record has open gaps against itself" (the tracker's
+  Conventions section says so explicitly) - so check the record before treating a row as unstarted.
+- `docs/tasks/` only exists while some investigation is still open; an absent directory means
+  there are none, not that something is missing.
 
 ## Verification
 
@@ -97,6 +101,11 @@ real upstream source, never guessed), and 0059's promotion checklist for graduat
 example into real `--board` support. It sits on top of, and doesn't duplicate,
 [docs/reference/external-devices-and-boards.md](docs/reference/external-devices-and-boards.md) (the
 design/API how-to) - read that first if this area hasn't come up yet this session.
+
+Both now spell out **where a board's flash offset comes from, per firmware family** - the one
+number that is easy to take from a plausible-looking wrong file (CircuitPython's drive start is in
+the board's `mpconfigboard.mk`, *not* its `link.ld`) and whose wrongness is completely silent. See
+[record 0085](docs/records/0085-circuitpython-code-py-and-wifi-on-screen.md)'s finding 5.
 
 ## "Document" vs. "implement"
 
