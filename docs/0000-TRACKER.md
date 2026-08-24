@@ -54,6 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0094] a Zephyr guest boots here - MicroPython's `ports/zephyr` on `rpi_pico` | measured, nothing built - the RP2040 model needed no changes; its console is USB CDC, so the `micropython` subcommand sees silence
 - [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
 - [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause exists; a trigger and an SRAM/USB decision do not
 - [ ] [0091] ESP32-C3 port feasibility | idea only - the CPU core is the easy part; the closed boot ROM and on-die WiFi are the blockers
@@ -269,3 +270,4 @@ record is added.
 [0091]: records/0091-esp32-c3-port-feasibility.md
 [0092]: records/0092-power-button-and-power-cycle.md
 [0093]: records/0093-circuitpython-802-warm-boot-hang.md
+[0094]: records/0094-zephyr-guest-boots-on-the-emulator.md

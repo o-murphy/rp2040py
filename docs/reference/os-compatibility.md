@@ -155,8 +155,12 @@ hand on Android under **both** Termux and Pydroid 3. Where `[fs]` is unavailable
 
 <a id="fn16"></a>
 **[16]** Host-independent: there is no second `CortexM0Core` at all, and SIO's inter-core FIFO
-(`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) is unimplemented — those reads log `"Read from invalid SIO
-address"` and return `0xFFFFFFFF`, writes are dropped, and `CPUID` always reads `0`. Implementing
+(`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) is **recognised but non-functional**. The three addresses are
+named in `sio.py`, so a read no longer logs the generic `"Read from invalid SIO address"` it did
+before 2026-08-18 — it logs `"Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is
+unsupported"` and returns `0xFFFFFFFF`. Writes are not silent either, but they were left on the
+generic path: they log `"Write to invalid SIO address"` and the value is discarded. `CPUID` always
+reads `0`. Implementing
 the FIFO registers alone would be worse than leaving them out: `multicore_launch_core1()` blocks
 reading back an echo of what it pushed, so a faithful-looking FIFO with nothing behind it hangs
 silently instead of failing loudly. See

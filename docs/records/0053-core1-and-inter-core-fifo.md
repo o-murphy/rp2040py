@@ -76,8 +76,11 @@ explicitly in `read_uint32()` - a read there still returns `0xFFFFFFFF` (unchang
 not the real FIFO), but logs "Inter-core FIFO (0x50-0x58) is not implemented. core1/_thread is
 unsupported (see docs/records/0053-core1-and-inter-core-fifo.md)" instead of the generic "Read from
 invalid SIO address: 50" a caller would otherwise have to trace back to this gap by hand. Writes
-are untouched (still silently dropped, as before) - the record's own interim proposal was read-side
-only, since that is the half `multicore_fifo_pop_blocking()`'s handshake actually blocks on.
+are untouched: having no branch of their own in `write_uint32()` they reach its closing `else`, so
+they log "Write to invalid SIO address: 54, value=..." (`sio.py:421-422`) before the value is
+discarded - not silently, as an earlier draft of this paragraph claimed. The record's own interim
+proposal was read-side only, since that is the half `multicore_fifo_pop_blocking()`'s handshake
+actually blocks on.
 `tests/test_sio.py::test_reading_inter_core_fifo_addresses_names_0053_instead_of_generic_invalid_address`
 covers it. Nothing else in this record changed: core1 itself, the real FIFO pair, and the
 scheduling/addendum sections above remain proposed, not built.

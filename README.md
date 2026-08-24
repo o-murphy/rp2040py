@@ -14,8 +14,11 @@ See [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md) f
 
 > [!IMPORTANT]
 > **Single-core only.** rp2040py emulates `core0`; there is no `core1`, and SIO's inter-core FIFO
-> registers (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) are unimplemented — reads log a warning and return
-> all-ones, writes are dropped, and `CPUID` always reads `0`. Firmware that starts the second core
+> registers (`FIFO_ST`/`FIFO_WR`/`FIFO_RD`) are *recognised but non-functional*. The three
+> addresses are named rather than falling through as unknown, so a read logs `"Inter-core FIFO
+> (0x50-0x58) is not implemented. core1/_thread is unsupported"` and returns all-ones; a write is
+> still on the generic path, logging `"Write to invalid SIO address"` before the value is
+> discarded. `CPUID` always reads `0`. Firmware that starts the second core
 > (`multicore_launch_core1()`, MicroPython's `_thread`) will not work. This is deliberate rather
 > than pending: adding the FIFO registers *without* a second core to answer them would turn today's
 > loud failure into a silent infinite hang inside `multicore_fifo_pop_blocking()`, which is strictly
