@@ -11,11 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The `setup-rp2040py` GitHub Action moved to the repo root**, from
   `.github/actions/setup-rp2040py/action.yml` to `action.yml`, with a `branding` block added -
   needed for GitHub Marketplace publishing, which requires the action metadata file at the
-  repository root. Same two inputs (`version`, `python_version`), same composite steps - only the
-  path changed: `uses: o-murphy/rp2040py@<tag>` replaces `uses:
+  repository root. `uses: o-murphy/rp2040py@<tag>` replaces `uses:
   o-murphy/rp2040py/.github/actions/setup-rp2040py@<ref>`. **Breaking for any workflow still on the
   old path against a moving ref** (`@main`/a branch) - a ref/SHA already pinned before this change
-  keeps working. [docs/records/0095](docs/records/0095-github-action-at-repo-root.md).
+  keeps working.
+- **The action installs rp2040py from its own checkout, not PyPI.** `uv tool install` now points
+  at `github.action_path` (the ref the caller pinned via `uses: o-murphy/rp2040py@<tag>`) instead
+  of `rp2040py[fs]==<version>` off PyPI - the running version and the pinned tag can no longer
+  disagree, matching the pattern in
+  [ballistics-lab/cibuildmp](https://github.com/ballistics-lab/cibuildmp)'s own action. The
+  `version` input is gone (the `uses:` ref *is* the version now); `extras` (default `"fs"`)
+  replaces the previous hardcoded `[fs]`.
+  [docs/records/0095](docs/records/0095-github-action-at-repo-root.md).
 
 ## [0.3.1] - 2026-08-26
 

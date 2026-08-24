@@ -54,3 +54,30 @@ make this action Marketplace-publishable.
     sync`/`uv run`, not via this action - so there is no in-repo workflow that exercises the
     published action end-to-end. Worth a dedicated smoke-test workflow at some point (not built
     here).
+
+## Addendum (2026-08-24): install from the action's own checkout, not PyPI
+
+The `version`/`python_version` inputs above installed `rp2040py[fs]` from PyPI, pinned by a
+separate `version` string the caller had to keep in sync with whatever `uses:` ref they pinned -
+two numbers naming the same thing, with no way to notice if they drifted (e.g. `uses:
+o-murphy/rp2040py@v0.4.0` paired with `version: "0.3.1"` silently runs the older PyPI release
+against whatever composite-step logic `v0.4.0`'s checkout carries).
+
+Pointed out by the user: `ballistics-lab/cibuildmp`'s own root `action.yml` avoids exactly this by
+installing `uv tool install "${{ github.action_path }}"` - `github.action_path` is where the
+runner already checked out *this* action's repo, at the ref the caller pinned, so the installed
+tool and the pinned ref are structurally the same thing rather than two values a caller must keep
+matched. rp2040py now does the same:
+
+* Dropped the `version` input entirely - the `uses: o-murphy/rp2040py@<tag>` ref *is* the version;
+  there is no second place to pin one.
+* `uv tool install --python "${{ inputs.python_version }}" "$SPEC"`, where `SPEC` starts as
+  `github.action_path` and gets `[extras]` appended when the (new) `extras` input is non-empty.
+* Added an `extras` input (default `"fs"`, matching the previous hardcoded `rp2040py[fs]`) so the
+  extras list is still overridable, same shape as cibuildmp's own `extras` input - default `""`
+  there since cibuildmp has no equivalent of `fs` that most callers want on.
+* README's CI usage example and the `[Unreleased]` CHANGELOG entry updated to match (no `version:`
+  key; new `extras:` key).
+
+No change to `Consequences` above - still Marketplace-eligible only once a release is tagged and
+published by hand, and this repo's own CI still doesn't exercise the action end-to-end.

@@ -109,14 +109,17 @@ from `$SHELL`) - a one-time setup step, not something run on every invocation.
 
 This repository is itself a composite [GitHub Action](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action)
 ([`action.yml`](action.yml) at the repo root, ready for GitHub Marketplace publishing): it installs
-`rp2040py` as a standalone tool (via `uv tool install`, same as the [Installation](#installation)
-instructions above) so later steps in the same job can run the `rp2040py` command directly.
+`rp2040py` as a standalone tool (via `uv tool install`) so later steps in the same job can run the
+`rp2040py` command directly. Unlike the plain [Installation](#installation) instructions above,
+it installs from the action's own checkout (`github.action_path`) rather than from PyPI - the
+version that runs is exactly the ref the caller pins below, with no separate package index to keep
+in sync with the action tag:
 
 ```yaml
 - uses: o-murphy/rp2040py@v0.1.0   # pin a released tag; @main tracks the default branch
   with:
-    version: "0.1.0"        # optional: pin a specific PyPI release; defaults to latest
     python_version: "pypy-3.10"   # optional: interpreter for rp2040py's own tool env; defaults to PyPy
+    extras: "fs"                  # optional: comma-separated extras to install; defaults to "fs"
 - run: rp2040py micropython -c "print(1 + 1)"
 ```
 
