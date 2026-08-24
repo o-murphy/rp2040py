@@ -44,6 +44,7 @@ to [External devices & custom boards](#external-devices--custom-boards) if you'r
 - [Quick start](#quick-start)
 - [Installation](#installation)
   - [Shell completions](#shell-completions)
+  - [Use in CI (GitHub Action)](#use-in-ci-github-action)
 - [Run the demo project](#run-the-demo-project)
   - [Native code](#native-code)
   - [MicroPython code](#micropython-code)
@@ -103,6 +104,25 @@ source ~/.bashrc   # or ~/.zshrc
 
 This appends the shell's `register-python-argcomplete` hook to `~/.bashrc`/`~/.zshrc` (detected
 from `$SHELL`) - a one-time setup step, not something run on every invocation.
+
+### Use in CI (GitHub Action)
+
+This repository is itself a composite [GitHub Action](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action)
+([`action.yml`](action.yml) at the repo root, ready for GitHub Marketplace publishing): it installs
+`rp2040py` as a standalone tool (via `uv tool install`, same as the [Installation](#installation)
+instructions above) so later steps in the same job can run the `rp2040py` command directly.
+
+```yaml
+- uses: o-murphy/rp2040py@v0.1.0   # pin a released tag; @main tracks the default branch
+  with:
+    version: "0.1.0"        # optional: pin a specific PyPI release; defaults to latest
+    python_version: "pypy-3.10"   # optional: interpreter for rp2040py's own tool env; defaults to PyPy
+- run: rp2040py micropython -c "print(1 + 1)"
+```
+
+See [Used by](#used-by) below for a real project consuming this action from outside this repo (this
+repository's own CI tests the local checkout directly via `uv sync`/`uv run`, so its workflows
+under [.github/workflows/](.github/workflows/) aren't examples of consuming the published action).
 
 ## Run the demo project
 
@@ -657,7 +677,8 @@ not just added features).
 
 - [ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc) — tests
   its RP2040 `usermod`/`natmod` builds in CI by actually booting real firmware through this
-  emulator (`o-murphy/rp2040py/.github/actions/setup-rp2040py`), not just compiling it.
+  emulator (`uses: o-murphy/rp2040py@<tag>`, see [Use in CI](#use-in-ci-github-action) above), not
+  just compiling it.
 
 ## Learn more
 

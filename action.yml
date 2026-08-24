@@ -15,9 +15,13 @@ inputs:
     description: >
       Python interpreter to install rp2040py's tool environment under (e.g. "pypy-3.10",
       "cpython-3.12"). Defaults to PyPy for its large real-firmware-boot speedup - see
-      docs/PORTING.md#known-differences-from-rp2040js.
+      docs/records/0013-cython-core.md.
     required: false
     default: "pypy-3.10"
+
+branding:
+  icon: "cpu"
+  color: "blue"
 
 runs:
   using: composite
