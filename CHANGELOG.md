@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-26
+## [0.3.2] - 2026-08-26
+
+### Added
+- **MicroPython 1.29.0 (stable) is a fetchable `--image`/board tag.** `firmware_specs.json`'s
+  `pico`/`pico_w` version maps, and every `--board-spec` example board's own `fw` map, now carry
+  `"1.29.0"` alongside the `1.29.0-preview.*` snapshots already tracked - added the same way as any
+  other release, via `uv run scripts/fetch_firmware.py` (built-in boards) / `... list --family
+  micropython --slug <SLUG>` (each example board). CI's `Test MicroPython Releases` matrix moved its
+  `1.29.0-preview` row to the real `1.29.0` tag, with `pico_w` now exercised for it too.
+
+### Changed
+- **The `setup-rp2040py` GitHub Action moved to the repo root**, from
+  `.github/actions/setup-rp2040py/action.yml` to `action.yml`, with a `branding` block added -
+  needed for GitHub Marketplace publishing, which requires the action metadata file at the
+  repository root. `uses: o-murphy/rp2040py@<tag>` replaces `uses:
+  o-murphy/rp2040py/.github/actions/setup-rp2040py@<ref>`. **Breaking for any workflow still on the
+  old path against a moving ref** (`@main`/a branch) - a ref/SHA already pinned before this change
+  keeps working.
+- **The action installs rp2040py from its own checkout, not PyPI.** `uv tool install` now points
+  at `github.action_path` (the ref the caller pinned via `uses: o-murphy/rp2040py@<tag>`) instead
+  of `rp2040py[fs]==<version>` off PyPI - the running version and the pinned tag can no longer
+  disagree, matching the pattern in
+  [ballistics-lab/cibuildmp](https://github.com/ballistics-lab/cibuildmp)'s own action. The
+  `version` input is gone (the `uses:` ref *is* the version now); `extras` (default `"fs"`)
+  replaces the previous hardcoded `[fs]`.
+  [docs/records/0095](docs/records/0095-github-action-at-repo-root.md).
+
+## [0.3.1] - 2026-08-21
 
 ### Added
 - **The USB CDC control lines can be changed at runtime.** `BaseDevice.set_control_lines(dtr=...,
@@ -1668,7 +1695,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/o-murphy/rp2040py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/o-murphy/rp2040py/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...v0.3.0
 [0.3.0rc2]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc1...v0.3.0rc2

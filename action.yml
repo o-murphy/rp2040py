@@ -1,0 +1,46 @@
+name: Setup rp2040py
+description: >
+  Installs rp2040py emulator globally as a standalone tool.
+  After this action, you can use rp2040py command directly
+  in subsequent steps.
+
+inputs:
+  python_version:
+    description: >
+      Python interpreter to install rp2040py's tool environment under (e.g. "pypy-3.10",
+      "cpython-3.12"). Defaults to PyPy for its large real-firmware-boot speedup - see
+      docs/records/0013-cython-core.md.
+    required: false
+    default: "pypy-3.10"
+  extras:
+    description: >
+      Comma-separated list of rp2040py extras to install (e.g. "fs"). Defaults to "fs" for
+      mklittlefs/--dump-fs support; pass "" for a leaner install without it.
+    required: false
+    default: "fs"
+
+branding:
+  icon: "cpu"
+  color: "blue"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+    - name: Install rp2040py and verify
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Install rp2040py from this action's own checkout, so the version that runs is exactly
+        # the ref the caller pinned (`uses: o-murphy/rp2040py@<tag>`) - no separate package index
+        # (PyPI) to keep in sync with the action tag, and no way for the two to disagree.
+        # github.action_path is where the runner put this repo at that ref.
+        SPEC="${{ github.action_path }}"
+        if [ -n "${{ inputs.extras }}" ]; then
+          SPEC="${SPEC}[${{ inputs.extras }}]"
+        fi
+        uv tool install --python "${{ inputs.python_version }}" "$SPEC"
+        rp2040py --version

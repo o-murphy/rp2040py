@@ -69,6 +69,8 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0095] `setup-rp2040py` action moved to the repo root, with branding | Marketplace-publishable; external consumers on the old `.github/actions/...` path need to update
+
 - [x] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | closed 2026-08-20 - the demos push `code.py` over the REPL; the host-side FAT12 builder is gone
 
 - [x] [0088] USB host side: mass storage, CDC control lines, and reset | closed 2026-08-20 - runtime DTR/RTS and `SET_LINE_CODING`, addressed to the CDC control interface
@@ -271,3 +273,4 @@ record is added.
 [0092]: records/0092-power-button-and-power-cycle.md
 [0093]: records/0093-circuitpython-802-warm-boot-hang.md
 [0094]: records/0094-zephyr-guest-boots-on-the-emulator.md
+[0095]: records/0095-github-action-at-repo-root.md

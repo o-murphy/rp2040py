@@ -129,6 +129,7 @@ _MICROPYTHON_4MB: dict[str, str] = {
     "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260813-v1.29.0-preview.707.g1827631282.uf2",
     "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
     "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
+    "1.29.0": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260824-v1.29.0.uf2",
 }
 
 _MICROPYTHON_16MB: dict[str, str] = {
@@ -143,6 +144,7 @@ _MICROPYTHON_16MB: dict[str, str] = {
     "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260813-v1.29.0-preview.707.g1827631282.uf2",
     "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
     "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
+    "1.29.0": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260824-v1.29.0.uf2",
 }
 
 _CIRCUITPYTHON_4MB: dict[str, str] = {
