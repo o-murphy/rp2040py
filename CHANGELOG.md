@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **MicroPython 1.29.0 (stable) is a fetchable `--image`/board tag.** `firmware_specs.json`'s
+  `pico`/`pico_w` version maps, and every `--board-spec` example board's own `fw` map, now carry
+  `"1.29.0"` alongside the `1.29.0-preview.*` snapshots already tracked - added the same way as any
+  other release, via `uv run scripts/fetch_firmware.py` (built-in boards) / `... list --family
+  micropython --slug <SLUG>` (each example board). CI's `Test MicroPython Releases` matrix moved its
+  `1.29.0-preview` row to the real `1.29.0` tag, with `pico_w` now exercised for it too.
+
 ### Changed
 - **The `setup-rp2040py` GitHub Action moved to the repo root**, from
   `.github/actions/setup-rp2040py/action.yml` to `action.yml`, with a `branding` block added -
