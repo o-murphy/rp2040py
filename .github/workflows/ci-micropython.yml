@@ -77,7 +77,8 @@ jobs:
             pico_w: true
           - tag: "1.28.0"
             pico_w: true
-          - tag: "1.29.0-preview"
+          - tag: "1.29.0"
+            pico_w: true
         python_runtime:
           - pypy-3.10
           - cpython-3.10
