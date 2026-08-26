@@ -120,6 +120,7 @@ FIRMWARE = {
             "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/NULLBITS_BIT_C_PRO-20260813-v1.29.0-preview.707.g1827631282.uf2",
             "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/NULLBITS_BIT_C_PRO-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
             "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/NULLBITS_BIT_C_PRO-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
+            "1.29.0": "https://micropython.org/resources/firmware/NULLBITS_BIT_C_PRO-20260824-v1.29.0.uf2",
         },
         layout={"fs_start": "0x80000", "fs_blockcount": 896, "fs_blocksize": 4096},
     ),
