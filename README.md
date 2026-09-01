@@ -116,12 +116,16 @@ version that runs is exactly the ref the caller pins below, with no separate pac
 in sync with the action tag:
 
 ```yaml
-- uses: o-murphy/rp2040py@v0.1.0   # pin a released tag; @main tracks the default branch
+- uses: o-murphy/rp2040py@v0.3.3   # pin a released tag; @main tracks the default branch
   with:
     python_version: "pypy-3.10"   # optional: interpreter for rp2040py's own tool env; defaults to PyPy
     extras: "fs"                  # optional: comma-separated extras to install; defaults to "fs"
 - run: rp2040py micropython -c "print(1 + 1)"
 ```
+
+The root-level `uses: o-murphy/rp2040py@<tag>` form above needs `v0.3.2` or newer - that release
+moved `action.yml` to the repo root and added the `extras` input; older tags are reachable only
+through the previous `o-murphy/rp2040py/.github/actions/setup-rp2040py@<ref>` path.
 
 See [Used by](#used-by) below for a real project consuming this action from outside this repo (this
 repository's own CI tests the local checkout directly via `uv sync`/`uv run`, so its workflows

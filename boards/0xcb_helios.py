@@ -225,6 +225,8 @@ FIRMWARE = {
             "9.2.7": "https://adafruit-circuit-python.s3.amazonaws.com/bin/0xcb_helios/en_US/adafruit-circuitpython-0xcb_helios-en_US-9.2.7.uf2",
             "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/0xcb_helios/en_US/adafruit-circuitpython-0xcb_helios-en_US-9.2.8.uf2",
             "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/0xcb_helios/en_US/adafruit-circuitpython-0xcb_helios-en_US-9.2.9.uf2",
+            "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/0xcb_helios/en_US/adafruit-circuitpython-0xcb_helios-en_US-10.3.0-rc.0.uf2",
+            "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/0xcb_helios/en_US/adafruit-circuitpython-0xcb_helios-en_US-10.3.0.uf2",
         },
         layout={"fs_start": "0x100000", "fs_blockcount": 512, "fs_blocksize": 4096},
     ),

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-01
+
+### Added
+- **CircuitPython 10.3.0 and the MicroPython 1.30.0 previews are fetchable `--image`/board tags.**
+  A full refresh of every tracked firmware version map, across every board: `firmware_specs.json`'s
+  `pico`/`pico_w` entries and all 40 `fw` maps in the 19 `--board-spec` example boards under
+  `boards/` (flash-size variants included - `PIMORONI_TINY2040-FLASH_8M`,
+  `WAVESHARE_RP2040_PLUS-FLASH_16M`, `WEACTSTUDIO-FLASH_{2,4,8}M`, `pimoroni_picolipo_{4,16}mb`
+  and friends each get their own). New this round: CircuitPython `10.3.0-rc.0`/`10.3.0` everywhere,
+  MicroPython `1.30.0-preview.8.gf668077be2`/`1.30.0-preview.24.g8162451850` everywhere, plus
+  `1.29.0-preview.731.g1c3c201149` for the example boards (the built-in ones already carried it).
+  Kaluma and the bootrom have published nothing new since 0.3.2 and are unchanged. Added the same
+  way as any other release - `uv run scripts/fetch_firmware.py` for the built-in boards, `... list
+  --family <family> --slug <slug>` for each example board.
+
+  Purely additive: no `default_tag` moved (each stays the editorial pin to a known-good version it
+  already was), and tags that have since aged off `micropython.org/download/<BOARD>/`, which lists
+  only the most recent handful, are kept rather than dropped.
+
+### Fixed
+- **The GitHub Action snippet in the README pinned a tag the action doesn't exist at.** Its
+  `uses: o-murphy/rp2040py@v0.1.0` predated 0.3.2's move of `action.yml` to the repo root, so
+  copying it verbatim resolved to a ref with no root-level action metadata (and no `extras` input);
+  now pinned to `v0.3.3`. The root `uses: o-murphy/rp2040py@<tag>` form needs `v0.3.2` or newer -
+  older tags still work only via the previous
+  `o-murphy/rp2040py/.github/actions/setup-rp2040py@<ref>` path.
+
 ## [0.3.2] - 2026-08-26
 
 ### Added
@@ -1695,7 +1722,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/o-murphy/rp2040py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/o-murphy/rp2040py/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/o-murphy/rp2040py/compare/v0.3.0rc2...v0.3.0

@@ -31,7 +31,9 @@
           "1.29.0-preview.718.g2e3304a128": "https://micropython.org/resources/firmware/RPI_PICO-20260816-v1.29.0-preview.718.g2e3304a128.uf2",
           "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/RPI_PICO-20260813-v1.29.0-preview.707.g1827631282.uf2",
           "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
-          "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO-20260824-v1.29.0.uf2"
+          "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO-20260824-v1.29.0.uf2",
+          "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO-20260831-v1.30.0-preview.24.g8162451850.uf2",
+          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO-20260827-v1.30.0-preview.8.gf668077be2.uf2"
         },
         "layout": {
           "fs_start": "0xa0000",
@@ -63,7 +65,9 @@
           "1.29.0-preview.718.g2e3304a128": "https://micropython.org/resources/firmware/RPI_PICO_W-20260816-v1.29.0-preview.718.g2e3304a128.uf2",
           "1.29.0-preview.707.g1827631282": "https://micropython.org/resources/firmware/RPI_PICO_W-20260813-v1.29.0-preview.707.g1827631282.uf2",
           "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO_W-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
-          "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO_W-20260824-v1.29.0.uf2"
+          "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO_W-20260824-v1.29.0.uf2",
+          "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO_W-20260831-v1.30.0-preview.24.g8162451850.uf2",
+          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO_W-20260827-v1.30.0-preview.8.gf668077be2.uf2"
         },
         "layout": {
           "fs_start": "0x12c000",
@@ -237,7 +241,9 @@
           "9.2.7": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-9.2.7.uf2",
           "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-9.2.8.uf2",
           "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-9.2.9.uf2",
-          "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2"
+          "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2",
+          "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.0-rc.0.uf2",
+          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.0.uf2"
         },
         "layout": {
           "fs_start": "0x100000",
@@ -352,7 +358,9 @@
           "9.2.7": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.7.uf2",
           "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.8.uf2",
           "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.9.uf2",
-          "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-8.0.2.uf2"
+          "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-8.0.2.uf2",
+          "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.0-rc.0.uf2",
+          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.0.uf2"
         },
         "layout": {
           "fs_start": "0x181000",

@@ -142,6 +142,9 @@ _MICROPYTHON_2MB: dict[str, str] = {
     "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
     "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
     "1.29.0": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260824-v1.29.0.uf2",
+    "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260831-v1.30.0-preview.24.g8162451850.uf2",
+    "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260827-v1.30.0-preview.8.gf668077be2.uf2",
+    "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
 }
 
 _MICROPYTHON_8MB: dict[str, str] = {
@@ -157,6 +160,9 @@ _MICROPYTHON_8MB: dict[str, str] = {
     "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
     "1.29.0-preview.678.g5f2181f938": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260807-v1.29.0-preview.678.g5f2181f938.uf2",
     "1.29.0": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260824-v1.29.0.uf2",
+    "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260831-v1.30.0-preview.24.g8162451850.uf2",
+    "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260827-v1.30.0-preview.8.gf668077be2.uf2",
+    "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/PIMORONI_TINY2040-FLASH_8M-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
 }
 
 _CIRCUITPYTHON_2MB: dict[str, str] = {
@@ -289,6 +295,8 @@ _CIRCUITPYTHON_2MB: dict[str, str] = {
     "9.2.7": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040_2mb/en_US/adafruit-circuitpython-pimoroni_tiny2040_2mb-en_US-9.2.7.uf2",
     "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040_2mb/en_US/adafruit-circuitpython-pimoroni_tiny2040_2mb-en_US-9.2.8.uf2",
     "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040_2mb/en_US/adafruit-circuitpython-pimoroni_tiny2040_2mb-en_US-9.2.9.uf2",
+    "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040_2mb/en_US/adafruit-circuitpython-pimoroni_tiny2040_2mb-en_US-10.3.0-rc.0.uf2",
+    "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040_2mb/en_US/adafruit-circuitpython-pimoroni_tiny2040_2mb-en_US-10.3.0.uf2",
 }
 
 _CIRCUITPYTHON_8MB: dict[str, str] = {
@@ -449,6 +457,8 @@ _CIRCUITPYTHON_8MB: dict[str, str] = {
     "9.2.7": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040/en_US/adafruit-circuitpython-pimoroni_tiny2040-en_US-9.2.7.uf2",
     "9.2.8": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040/en_US/adafruit-circuitpython-pimoroni_tiny2040-en_US-9.2.8.uf2",
     "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040/en_US/adafruit-circuitpython-pimoroni_tiny2040-en_US-9.2.9.uf2",
+    "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040/en_US/adafruit-circuitpython-pimoroni_tiny2040-en_US-10.3.0-rc.0.uf2",
+    "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_tiny2040/en_US/adafruit-circuitpython-pimoroni_tiny2040-en_US-10.3.0.uf2",
 }
 
 BOARD = BoardSpec(
