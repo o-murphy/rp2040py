@@ -100,6 +100,19 @@ ignore_missing_imports = true
 where = ["src"]
 include = ["rp2040py*"]
 
+[tool.setuptools.package-data]
+# Without this, setuptools only picks up firmware_specs.json (a non-.py runtime resource read via
+# importlib.resources in utils/firmware_retrieve.py) through setuptools_scm's git-file-finder
+# integration, which enumerates git-tracked files - that silently no-ops whenever the build runs
+# against a plain checkout with no .git (e.g. the setup-rp2040py GitHub Action: its `uses:
+# o-murphy/rp2040py@<tag>` step downloads a tarball of the repo at that ref, not a git clone, so
+# `uv tool install` from that action_path builds a wheel missing this file - confirmed via
+# ballistics-lab/micropython-bclibc CI, "FileNotFoundError: ... utils/firmware_specs.json"). Every
+# normal git-checkout build (cibuildwheel in publish.yml, `uv build` from a local clone) already
+# includes it via that git integration, which is why this went unnoticed until a non-git install
+# path exercised it.
+"rp2040py.utils" = ["firmware_specs.json"]
+
 [tool.setuptools_scm]
 root = "."
 fallback_version = "0.0.0.dev0"
