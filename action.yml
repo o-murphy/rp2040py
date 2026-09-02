@@ -1,8 +1,6 @@
 name: Setup rp2040py
 description: >
   Installs rp2040py emulator globally as a standalone tool.
-  After this action, you can use rp2040py command directly
-  in subsequent steps.
 
 inputs:
   python_version:
