@@ -30,10 +30,11 @@ builds cp311-abi3 and cp3XXt separately for exactly this reason.
 import platform
 import sys
 import sysconfig
-from os import environ
+from os import cpu_count, environ
 from pathlib import Path
 
 from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext as _build_ext
 
 # Cross-compiled target detection.
 # NOTE: platform.system() reports the *host* OS under cross-compilation
@@ -173,10 +174,27 @@ def _build_ext_modules() -> list[Extension]:
         ext_modules,
         compiler_directives={"language_level": "3", "boundscheck": False, "wraparound": False},
         annotate=True,
+        # Parallelizes the .pyx -> .c translation step (one per native module, see the sources
+        # glob above) across CPU cores, mirroring py-ballisticcalc's py_ballisticcalc.exts/setup.py.
+        nthreads=cpu_count() or 1,
     )
 
 
-cmdclass = {}
+class _parallel_build_ext(_build_ext):
+    """Compile the native extension modules across CPU cores (like `-j`).
+
+    Each module here has its own single .pyx source (no shared sources duplicated across
+    extensions, unlike py-ballisticcalc's bclibc case), so plain `--parallel` build_temp
+    isolation is already safe without a per-extension build_temp subdirectory.
+    """
+
+    def finalize_options(self):
+        super().finalize_options()
+        if self.parallel is None:
+            self.parallel = cpu_count() or 1
+
+
+cmdclass = {"build_ext": _parallel_build_ext}
 if USE_LIMITED_API:
     from wheel.bdist_wheel import bdist_wheel
 

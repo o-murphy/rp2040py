@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-03
+
+### Changed
+- **The eight `rp2040py.native` Cython extension modules now build in parallel across CPU cores.**
+  `setup.py`'s `cythonize()` call translates all `.pyx` sources concurrently
+  (`nthreads=os.cpu_count()`), and a `_parallel_build_ext` `build_ext` subclass turns on
+  `--parallel` by default for the subsequent C-compile step - mirrors the pattern in
+  py-ballisticcalc's `py_ballisticcalc.exts/setup.py`. Unlike that project, no per-extension
+  `build_temp` isolation is needed: each module here has its own single `.pyx` source, with no
+  sources shared/duplicated across extensions the way py-ballisticcalc's bclibc ones are. Verified
+  via `uv build --wheel`: ~50s of CPU work compressed into ~15s wall-clock on an 8-core machine.
+
+### Fixed
+- **`firmware_specs.json` could go missing from wheels built outside a real git checkout,
+  breaking `rp2040py --image <tag>`/`--board` entirely.** The file was never declared as package
+  data - it only ended up in wheels via `setuptools_scm`'s git-file-finder integration, which
+  enumerates git-tracked files and silently contributes nothing when `.git` isn't present. Every
+  build that had exercised this path until now ran inside a real git checkout (cibuildwheel in
+  `publish.yml`, a local `uv build`, PyPI installs), so it went unnoticed - until 0.3.2's
+  `setup-rp2040py` action (see 0.3.2's changelog: installs from `github.action_path` instead of
+  PyPI) hit it: GitHub Actions provisions a called action from a tarball, not a git clone, so `uv
+  tool install` from that checkout built a wheel with no `firmware_specs.json`, and any command
+  touching firmware resolution crashed with `FileNotFoundError`. Found via
+  [ballistics-lab/micropython-bclibc](https://github.com/ballistics-lab/micropython-bclibc)'s CI.
+  Fixed with an explicit `[tool.setuptools.package-data]` entry, independent of git metadata -
+  verified by building a wheel from a `git archive` export (no `.git` present) both before (file
+  missing) and after (file included) the fix.
+
 ## [0.3.3] - 2026-09-01
 
 ### Added
@@ -1722,7 +1750,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/o-murphy/rp2040py/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/o-murphy/rp2040py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/o-murphy/rp2040py/compare/v0.3.0...v0.3.1
