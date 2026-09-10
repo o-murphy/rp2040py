@@ -138,6 +138,8 @@ _MICROPYTHON_FW: dict[str, dict[str, str]] = {
         "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_2M-20260831-v1.30.0-preview.24.g8162451850.uf2",
         "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_2M-20260827-v1.30.0-preview.8.gf668077be2.uf2",
         "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_2M-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+        "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_2M-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+        "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_2M-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
     },
     "flash_4m": {
         "1.28.0": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260406-v1.28.0.uf2",
@@ -155,6 +157,8 @@ _MICROPYTHON_FW: dict[str, dict[str, str]] = {
         "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260831-v1.30.0-preview.24.g8162451850.uf2",
         "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260827-v1.30.0-preview.8.gf668077be2.uf2",
         "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+        "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+        "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_4M-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
     },
     "flash_8m": {
         "1.28.0": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260406-v1.28.0.uf2",
@@ -172,6 +176,8 @@ _MICROPYTHON_FW: dict[str, dict[str, str]] = {
         "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260831-v1.30.0-preview.24.g8162451850.uf2",
         "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260827-v1.30.0-preview.8.gf668077be2.uf2",
         "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+        "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+        "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/WEACTSTUDIO-FLASH_8M-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
     },
     # Bare/default variant (no BOARD_VARIANT) - 16 MiB. Note upstream's own history gap here: no
     # FLASH_2M/4M/8M assets existed before 1.24.0 (WEACTSTUDIO shipped only this one image back
@@ -198,6 +204,8 @@ _MICROPYTHON_FW: dict[str, dict[str, str]] = {
         "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/WEACTSTUDIO-20260831-v1.30.0-preview.24.g8162451850.uf2",
         "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/WEACTSTUDIO-20260827-v1.30.0-preview.8.gf668077be2.uf2",
         "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/WEACTSTUDIO-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+        "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/WEACTSTUDIO-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+        "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/WEACTSTUDIO-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
     },
 }
 

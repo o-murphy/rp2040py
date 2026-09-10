@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-10
+
+### Changed
+- **Updated known firmware indexes: the MicroPython 1.30.0 previews `.26.g8cb7558d00` and
+  `.58.g14e9793c91` are now fetchable `--image`/board tags.** The routine refresh of every tracked
+  firmware version map, run the same way as always - `uv run scripts/fetch_firmware.py` for the
+  built-in `pico`/`pico_w` entries in `firmware_specs.json`, `... list --family <family> --slug
+  <slug>` for each example board under `boards/`. Both new tags land in both built-in boards and in
+  all 20 MicroPython `fw` maps across the 14 example boards that carry one (flash-size variants
+  included - `PIMORONI_PICOLIPO-FLASH_16M`, `PIMORONI_TINY2040-FLASH_8M`,
+  `WAVESHARE_RP2040_PLUS-FLASH_16M` and `WEACTSTUDIO-FLASH_{2,4,8}M` each get their own).
+  CircuitPython (still 10.3.0) and the bootrom have published nothing new since 0.3.3 and are
+  unchanged. Kaluma *has* released 1.3.0 (plus `1.3.0-beta.{1,2}`) since then, but those releases
+  carry only `kaluma-rp2-pico2-*`/`kaluma-rp2-pico2-w-*` assets - no RP2040 `pico`/`pico-w` build
+  at all - so nothing there is fetchable by this project, which emulates the RP2040 and not the
+  RP2350. `1.2.1` remains both the newest RP2040 Kaluma image in existence and the `default_tag`
+  it already was; `fetch_firmware.py`'s "0 new" for Kaluma is the correct answer, not a missed
+  release.
+
+  Purely additive, as in 0.3.3: no `default_tag` moved (each stays the editorial pin to a
+  known-good version it already was), and tags that have since aged off
+  `micropython.org/download/<BOARD>/`, which lists only the most recent handful, are kept rather
+  than dropped.
+
 ## [0.3.4] - 2026-09-03
 
 ### Changed
@@ -1750,7 +1774,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/o-murphy/rp2040py/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/o-murphy/rp2040py/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/o-murphy/rp2040py/compare/v0.3.1...v0.3.2

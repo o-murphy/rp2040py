@@ -106,6 +106,8 @@ FIRMWARE = {
             "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/GARATRONIC_PYBSTICK26_RP2040-20260831-v1.30.0-preview.24.g8162451850.uf2",
             "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/GARATRONIC_PYBSTICK26_RP2040-20260827-v1.30.0-preview.8.gf668077be2.uf2",
             "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/GARATRONIC_PYBSTICK26_RP2040-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
+            "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/GARATRONIC_PYBSTICK26_RP2040-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+            "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/GARATRONIC_PYBSTICK26_RP2040-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
         },
         layout={"fs_start": "0xa0000", "fs_blockcount": 96, "fs_blocksize": 4096},
     ),

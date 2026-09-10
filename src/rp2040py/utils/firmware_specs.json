@@ -33,7 +33,9 @@
           "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
           "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO-20260824-v1.29.0.uf2",
           "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO-20260831-v1.30.0-preview.24.g8162451850.uf2",
-          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO-20260827-v1.30.0-preview.8.gf668077be2.uf2"
+          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO-20260827-v1.30.0-preview.8.gf668077be2.uf2",
+          "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/RPI_PICO-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO-20260902-v1.30.0-preview.26.g8cb7558d00.uf2"
         },
         "layout": {
           "fs_start": "0xa0000",
@@ -67,7 +69,9 @@
           "1.29.0-preview.697.g2aa39667b4": "https://micropython.org/resources/firmware/RPI_PICO_W-20260812-v1.29.0-preview.697.g2aa39667b4.uf2",
           "1.29.0": "https://micropython.org/resources/firmware/RPI_PICO_W-20260824-v1.29.0.uf2",
           "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO_W-20260831-v1.30.0-preview.24.g8162451850.uf2",
-          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO_W-20260827-v1.30.0-preview.8.gf668077be2.uf2"
+          "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO_W-20260827-v1.30.0-preview.8.gf668077be2.uf2",
+          "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/RPI_PICO_W-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
+          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO_W-20260902-v1.30.0-preview.26.g8cb7558d00.uf2"
         },
         "layout": {
           "fs_start": "0x12c000",
