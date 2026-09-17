@@ -35,7 +35,8 @@
           "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO-20260831-v1.30.0-preview.24.g8162451850.uf2",
           "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO-20260827-v1.30.0-preview.8.gf668077be2.uf2",
           "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/RPI_PICO-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
-          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO-20260902-v1.30.0-preview.26.g8cb7558d00.uf2"
+          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
+          "1.30.0-preview.65.g52b5fbcb4b": "https://micropython.org/resources/firmware/RPI_PICO-20260911-v1.30.0-preview.65.g52b5fbcb4b.uf2"
         },
         "layout": {
           "fs_start": "0xa0000",
@@ -71,7 +72,8 @@
           "1.30.0-preview.24.g8162451850": "https://micropython.org/resources/firmware/RPI_PICO_W-20260831-v1.30.0-preview.24.g8162451850.uf2",
           "1.30.0-preview.8.gf668077be2": "https://micropython.org/resources/firmware/RPI_PICO_W-20260827-v1.30.0-preview.8.gf668077be2.uf2",
           "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/RPI_PICO_W-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
-          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO_W-20260902-v1.30.0-preview.26.g8cb7558d00.uf2"
+          "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/RPI_PICO_W-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
+          "1.30.0-preview.65.g52b5fbcb4b": "https://micropython.org/resources/firmware/RPI_PICO_W-20260911-v1.30.0-preview.65.g52b5fbcb4b.uf2"
         },
         "layout": {
           "fs_start": "0x12c000",
@@ -247,7 +249,8 @@
           "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-9.2.9.uf2",
           "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-8.0.2.uf2",
           "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.0-rc.0.uf2",
-          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.0.uf2"
+          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.0.uf2",
+          "10.3.1": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-10.3.1.uf2"
         },
         "layout": {
           "fs_start": "0x100000",
@@ -364,7 +367,8 @@
           "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.9.uf2",
           "8.0.2": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-8.0.2.uf2",
           "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.0-rc.0.uf2",
-          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.0.uf2"
+          "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.0.uf2",
+          "10.3.1": "https://adafruit-circuit-python.s3.amazonaws.com/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-10.3.1.uf2"
         },
         "layout": {
           "fs_start": "0x181000",

@@ -135,6 +135,7 @@ _MICROPYTHON_4MB: dict[str, str] = {
     "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
     "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
     "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
+    "1.30.0-preview.65.g52b5fbcb4b": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-20260911-v1.30.0-preview.65.g52b5fbcb4b.uf2",
 }
 
 _MICROPYTHON_16MB: dict[str, str] = {
@@ -155,6 +156,7 @@ _MICROPYTHON_16MB: dict[str, str] = {
     "1.29.0-preview.731.g1c3c201149": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260818-v1.29.0-preview.731.g1c3c201149.uf2",
     "1.30.0-preview.58.g14e9793c91": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260904-v1.30.0-preview.58.g14e9793c91.uf2",
     "1.30.0-preview.26.g8cb7558d00": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260902-v1.30.0-preview.26.g8cb7558d00.uf2",
+    "1.30.0-preview.65.g52b5fbcb4b": "https://micropython.org/resources/firmware/PIMORONI_PICOLIPO-FLASH_16M-20260911-v1.30.0-preview.65.g52b5fbcb4b.uf2",
 }
 
 _CIRCUITPYTHON_4MB: dict[str, str] = {
@@ -312,6 +314,7 @@ _CIRCUITPYTHON_4MB: dict[str, str] = {
     "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_4mb/en_US/adafruit-circuitpython-pimoroni_picolipo_4mb-en_US-9.2.9.uf2",
     "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_4mb/en_US/adafruit-circuitpython-pimoroni_picolipo_4mb-en_US-10.3.0-rc.0.uf2",
     "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_4mb/en_US/adafruit-circuitpython-pimoroni_picolipo_4mb-en_US-10.3.0.uf2",
+    "10.3.1": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_4mb/en_US/adafruit-circuitpython-pimoroni_picolipo_4mb-en_US-10.3.1.uf2",
 }
 
 _CIRCUITPYTHON_16MB: dict[str, str] = {
@@ -468,6 +471,7 @@ _CIRCUITPYTHON_16MB: dict[str, str] = {
     "9.2.9": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_16mb/en_US/adafruit-circuitpython-pimoroni_picolipo_16mb-en_US-9.2.9.uf2",
     "10.3.0-rc.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_16mb/en_US/adafruit-circuitpython-pimoroni_picolipo_16mb-en_US-10.3.0-rc.0.uf2",
     "10.3.0": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_16mb/en_US/adafruit-circuitpython-pimoroni_picolipo_16mb-en_US-10.3.0.uf2",
+    "10.3.1": "https://adafruit-circuit-python.s3.amazonaws.com/bin/pimoroni_picolipo_16mb/en_US/adafruit-circuitpython-pimoroni_picolipo_16mb-en_US-10.3.1.uf2",
 }
 
 BOARD = BoardSpec(
