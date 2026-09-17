@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-17
+
+## Added
+- CircuitPython v10.3.1
+
 ## [0.3.5] - 2026-09-10
 
 ### Changed
@@ -1774,7 +1779,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/o-murphy/rp2040py/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/o-murphy/rp2040py/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/o-murphy/rp2040py/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/o-murphy/rp2040py/compare/v0.3.2...v0.3.3
