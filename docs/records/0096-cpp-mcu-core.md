@@ -299,6 +299,36 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 4c - the batch loop is C++ (`core/batch.hpp`). Phase 2's measured table.**
+  - `run_batch()` is `Simulator._execute_batch()`'s loop (the Cython `_simulator.pyx` one, itself translated from `_execute_batch.py`) over the C++ `Cpu`, `Bus` and `Clock`:
+    instruction ceiling, the 5 ms real-time budget checked every 256 iterations, the idle jump to the next alarm floored at one clock, batched or per-instruction clock ticks,
+    PIO stepping. **No Python object is touched per iteration** unless something the loop drives touches one. The three couplings that were Python are now bytes and pointers:
+    `Simulator.stopped` is a property over a one-byte buffer (`_stop_flag`) the loop reads directly, so a `stop()` from another thread or from an `on_break` in the middle of an
+    instruction is seen at the next iteration exactly as before; each PIO's `stopped` is read through the address of its own `cdef public bint` field and only a *running* PIO costs a
+    call (`RPPIO.advance`, a C-level call); `time.monotonic()` is called once per 256 iterations. A Python error from an alarm, a peripheral or a PIO is parked and re-raised after
+    the loop returns, with the machine left where the exception would have left it (the pending tick time is not flushed, as before).
+  - Refused up front rather than silently bypassed: a `SimulationClock` subclass that overrides `tick()` (the loop ticks the C++ clock directly; `MockClock` only adds `advance()`),
+    and a PIO that is not the native `RPPIO` (the pure-Python loop handles those).
+  - Proof: `tests/cpp/test_batch.cpp`; `tests/test_batch_parity.py` runs the **pure-Python loop and the native one on identical native chips** (the pure loop only uses the Python API) -
+    a counting program with 0-4 alarms at awkward times, an idle core woken by an alarm, with `tick_batch` 1 and 16: registers, flags, cycles, simulated time and every alarm's firing time
+    must match; a failing alarm callback and a failing peripheral during a load must surface the same exception with the same machine state. The whole suite on both builds.
+  - **Phase 2 measured table** (this machine, CPython 3.10 normal build, noisy +-15%; the synthetic loop ticks the clock after every instruction):
+
+    | | synthetic loop, Minstr/s | + `TIMER.TIMELR` read every 8 instr | CircuitPython boot (`cp-boot`) |
+    |---|---|---|---|
+    | Cython core, Python TIMER (Phase 0) | 13.4 - 16.7 | 7.7 - 8.4 | 12.4 s |
+    | + C++ memory map, window registry (Phase 1) | 18.7 - 19.7 | 8.6 - 9.1 | - |
+    | + C++ clock and TIMER (2 steps 1-2) | 17.7 - 21.4 | - | 4.3 - 4.7 s |
+    | + C++ SIO (step 3) | - | - | 4.5 s (about 5% from SIO alone) |
+    | + C++ bus and CPU (step 4a-b) | 25.5 | - | 3.5 s |
+    | **+ C++ batch loop (step 4c)** | **104 - 114** | **105** | **1.1 s** |
+
+    The C++ proxy of the Phase 0 table runs the same synthetic loop at ~315-336 Minstr/s with no Python boundary at all: what remains between 114 and that is the per-instruction
+    `Clock::tick`/PIO-flag bookkeeping and the bus's window table, not the language of the loop.
+  - **What Phase 2 deliberately did not move: the PPB** (NVIC/SysTick/SCB, 32 accesses in a whole boot, 0.1% of the traffic - Phase 0's profile). It stays a Python window
+    behind the C++ bus; the bus calls it through the same trampoline a user's replacement would use. Moving it is no longer on any critical path and waits for a profile that
+    says otherwise. Also still Python: the interrupt line (`rp2040.set_interrupt` -> `core.set_interrupt`, the TIMER and SIO trampolines), which Phase 3 removes together with the pins.
+
 - 2026-10-03: **Phase 2, step 4b - the Cortex-M0+ core is C++ (`core/cpu.hpp` + `core/cpu_ops.hpp`); `CortexM0Core` is a shell over it.**
   - `Cpu` owns all architectural state (registers, flags, stack banking, the exception model, NVIC-side priorities) and the decode/execute loop: ~90 Thumb handlers
     transcribed from the Cython `op_*` functions, the same `match_pattern`/`resolve_wide` decode, a 64K-entry dispatch table built once per shared object. It calls the

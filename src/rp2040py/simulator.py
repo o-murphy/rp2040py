@@ -59,6 +59,10 @@ class Simulator:
         # `rp2040.schedule_threadsafe()` without needing a separate reference threaded through
         # `attach()` - see docs/CYW43_WIFI_BACKLOG.md's "Concurrency model" section.
         self.rp2040.simulator = self
+        # One byte, not a plain attribute: the native batch loop (native/_simulator.pyx) reads it directly on every iteration, so a stop()
+        # from another thread - or from an `on_break` callback in the middle of an instruction - is seen without a Python call. `stopped`
+        # below is the property over it; the pure-Python loop uses the property.
+        self._stop_flag = bytearray(1)
         self.stopped = True
         # Owned here (rather than a separately-constructed, separately-passed-around object) so
         # anyone with a reference to this Simulator can request a shutdown - a REPL, a
@@ -85,6 +89,14 @@ class Simulator:
         # exception here left every awaiter blocked on device state that could now never arrive
         # genuinely stuck forever (0% CPU, not merely slow) instead of failing loudly.
         self.engine_room_error: BaseException | None = None
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop_flag[0] != 0
+
+    @stopped.setter
+    def stopped(self, value: bool) -> None:
+        self._stop_flag[0] = 1 if value else 0
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None:
