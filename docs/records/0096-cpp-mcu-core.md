@@ -299,6 +299,23 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Before Phase 2 - both prerequisites the record named are done.**
+  - **PIO's `write_uint32_atomic` override read, as D2's amendment required:** `native/_pio.pyx`'s `RPPIO.write_uint32_atomic` is line for line
+    `BasePeripheral`'s (store `raw_write_value`; if the alias is not 0, `atomic_update(self.read_uint32(offset), type, value)`; then `write_uint32`).
+    It exists only because a `cdef class` cannot inherit `BasePeripheral`. So the window handler signature `(offset, raw_value, atomic_type)` fits every
+    block, PIO included, and the C++ bus's "alias decode as the default" has one definition to reproduce - including that **an alias write first performs a
+    read of the register**, with whatever read side effect that block has.
+  - **The trace oracle now has a pin-level input channel.** `tests/utils/mmio_trace.py` records kind `p` events - the 30 GPIO and 6 QSPI *effective*
+    input levels (`input_value`: what SIO's `GPIO_IN`/`GPIO_HI_IN` actually return) - just before an SIO read of those registers whenever they differ from
+    the last sample, and replay drives the pins from outside to those levels (switching each pad's input-enable on through the PADS block first: a fresh chip's
+    GPIO pads reset with it off, which the self-test found by *measuring* rather than assuming - as it did for the QSPI pads, which reset pulled up, so
+    `GPIO_HI_IN` is already non-zero on a chip nobody has touched). Self-test: `tests/test_mmio_trace.py` (12 tests, green on pure and native), including
+    that dropping the `p` events makes the replay diverge and that a wrong `p` event is reported as the read that depends on it.
+  - **Acceptance on real firmware, replayed against a fresh Python SIO:** CircuitPython boot **153,011 events, 0 mismatches** (it had 20+ before: the
+    `GPIO_HI_IN` reads, 1 pin sample needed); Pico W CYW43 scan **312,034 events, 0 mismatches** (3 pin samples); MicroPython boot + print 16,837 events,
+    0 mismatches. TIMER stays clean on the MicroPython runs from Phase 0 (1.3M events). Recording TIMER through the CircuitPython boot (23M events) does not fit
+    `astart()`'s default timeout - the recorder's per-call cost times 23M - so that combination was not run; it is a scale limit of the recorder, not a divergence.
+  So the SIO port is no longer blocked on the oracle, and TIMER never was.
 - 2026-10-03: **Phase 1, second half - the window registry landed; the C++ build is now `-fno-exceptions -fno-rtti` end to end.**
   - `native/core/window_map.hpp`: header-only C++17, no allocation. A fixed table of window handlers keyed by `address >> 14` (the bus's
     own 16 KiB peripheral windows), each `{read32(ctx, offset), write32(ctx, offset, raw_value, atomic_type), ctx}`; attach on an occupied
