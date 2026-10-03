@@ -152,7 +152,9 @@ unreachable there unless it is in the module. Cold blocks are "last", not "never
   after `run()` returns. No per-event callback unless a window or alarm below demands it.
 - *Python windows:* `attach_window(base, size, handler)` with `handler = {read32, write32, reset, ctx}` as C function pointers.
   A Python window **overrides** a native block at the same address (that is how a user replaces the ADC). The set/xor/clear alias
-  decode (`atomic_update`, today in `BasePeripheral`) moves into the C++ bus so a Python block writes only `read32`/`write32`.
+  decode (`atomic_update`, today in `BasePeripheral`) moves into the C++ bus as the *default*, so a simple Python block writes only
+  `read32`/`write32` - **amended 2026-10-03 (see the progress log): the write entry point also receives the raw pre-alias value and
+  the atomic type**, because TIMER/IO/UART/DMA/USB read `raw_write_value` today.
   Cython supplies trampolines to Python methods (~0.5 us, Section 2).
 - *Time and IRQ:* `SimulationClock` alarms stay creatable from Python (the C++ clock calls back at the deadline); IRQ lines are a
   bitmap in the core with `set_irq(n, level)` callable from a window handler, so the contract must be **re-entrant for `set_irq`,
@@ -297,5 +299,71 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 0 done - harness merged, workloads measured, parity oracle self-tested (and it found something).**
+  Committed: `scripts/bench/synthetic.py` (the 8-instruction loop, `--mmio` variant), `scripts/bench/profile_access.py`
+  (per-block access counting through `MicroPythonDevice`, per phase; four workloads), `scripts/bench/trace_block.py`
+  (record a real boot's traffic to one block, replay, diff), `tests/utils/mmio_trace.py` + `tests/test_mmio_trace.py`
+  (the record/replay/diff library and its 8-test self-test, green on the pure and native builds).
+
+  *Access profile, more workloads* (Cython build, 3.10; counts are exact, accesses are those reaching a Python block through
+  the bus; "boot" = until USB enumerates, so it is short for MicroPython):
+
+  | workload / phase | simulated | accesses | by block |
+  |---|---|---|---|
+  | `mp-idle` MicroPython 1.21, Pico: boot | 15 ms | 18.3k | SIO 60%, TIMER 18%, SSI 14%, USB 5% |
+  | `mp-idle`: a print | 6 ms | 11.6k | SIO 47%, TIMER 44%, USB 9% |
+  | `mp-idle`: `sleep_ms(1000)` | 1009 ms | 2.25M | SIO 45%, TIMER 45%, USB 9% |
+  | `cp-boot` CircuitPython 10.2.1, Pico: boot | **2265 ms** | **23.7M** | **TIMER 97.6%**, SSI 2.3%, SIO 0.05% |
+  | `cp-boot`: a print | 55 ms | 315k | TIMER 55%, SIO 45% |
+  | `cp-boot`: `sleep(1)` | 1009 ms | 2.12M | SIO 51%, TIMER 37%, USB 12% |
+  | `picow-scan` MicroPython (resolver default for `pico_w`: 1.23.0): boot | 21 ms | 18k | SIO 58%, TIMER 16%, SSI 14%, USB 7% |
+  | `picow-scan`: CYW43 up + scan | 694 ms | 1.93M | **PIO1 65%** (1.09M reads), SIO 16%, TIMER 12%, USB 4%, DMA 2.4% |
+  | `pio-dma` MicroPython 1.23, Pico (`rp2.DMA` is not in 1.21) | 51 ms | 64k | SIO 81%, USB 9%, TIMER 7%, PIO0 1.6%, DMA 1.6% |
+
+  What this changes in the plan:
+  - **TIMER and SIO stay the first targets** - they lead or nearly lead every workload except the Pico W scan, so Phase 2's scope holds.
+  - **CircuitPython's boot is the strongest argument for porting TIMER:** 23.1M TIMER reads in 2.27 simulated seconds
+    (~10k per simulated ms), i.e. a boot that costs 20.5 s of wall clock on the Cython build, most of it crossing into
+    the Python TIMER at ~0.5 us each.
+  - **USB is warmer than the plan assumed:** 5-12% of accesses in every idle/sleep window (its own SOF-driven polling),
+    even before any data moves. Phase 4 lists it among the "communication blocks"; it should be ordered by this count, not by
+    category, and probably sits before UART/SPI/I2C.
+  - **On Pico W the hottest block is PIO1** (the CYW43 gSPI driver polling FIFO status), not the CYW43 Python code itself:
+    Phase 3 (PIO) is therefore also what unblocks Phase 5's question, and Phase 5's gate should be evaluated *after* PIO
+    is native, not before.
+  - **DMA is small in these workloads** (1.6-2.4%) - but `pio-dma` is a light script (51 ms); do not demote DMA on this evidence alone.
+
+  *Synthetic benchmark, re-taken with the committed script* (`synthetic.py`, best of 2): Cython 3.10 13.4 Minstr/s,
+  PyPy 3.10 24.4 (warmed), CPython 3.11 pure 0.73 - same order as Section 1 (single runs move +-20%, more on PyPy's JIT warm-up).
+
+  *Parity oracle (`tests/utils/mmio_trace.py`)* - replaying a block's recorded session against a fresh instance of the same
+  Python block:
+  - **TIMER: 0 mismatches** on MicroPython boot + print (5,632 events: 4,126 reads, 478 writes, 1,028 interrupt changes), on a
+    run including the 1 s sleep (**1,313,577 events**, replayed in 1.3 s), and on the pure-Python build. A trace of 1.3M events
+    is 5.5 MB gzipped.
+  - **PPB** (32 events) and **SIO** on MicroPython (17,715 events): 0 mismatches.
+  - **SIO on the CircuitPython boot (152,254 events): mismatches** - reads of `0x08` (`GPIO_HI_IN`) recorded as `30`, replayed as `2`.
+    That is an input that is not bus traffic (the QSPI pad levels, driven while the flash is being accessed), exactly the case the
+    module docstring warns about. The harness is *correct to flag it*; the consequence is a **Phase 2 prerequisite: SIO's
+    trace needs a pin-level input channel** (record the GPIO/QSPI level changes as events and feed them to the replay)
+    before an SIO port can be judged by this oracle. TIMER's inputs are bus accesses and time, so TIMER can be ported against
+    it as it stands.
+  - **A contract fact the C++ bus has to match:** the bus sends *every* peripheral write through `write_uint32_atomic()`
+    (a plain write is `atomic_type` 0), while SIO and PPB get `write_uint32()` directly. Only `PIO`'s Cython `RPPIO`
+    overrides `write_uint32_atomic` (plus `BasePeripheral`'s default) - the other blocks inherit the default, which stores the
+    raw written value in `self.raw_write_value`, reads the block's own register, applies the alias, then writes. **But TIMER, IO,
+    UART, DMA, USB (and the pure-Python PIO) read `raw_write_value` themselves**, i.e. they depend on seeing the *pre-alias*
+    value. So D2's "the C++ bus decodes the aliases itself" is only faithful if the handler is also told the raw value: the
+    window handler's write entry point must carry `(offset, raw_value, atomic_type)` and let the block decide, with the alias
+    decode as the default. That is an amendment to D2 (made here and in D2, not silently); Phase 1 fixes the signature, and
+    PIO's own override has to be read first.
+  - Not captured, by design of the first version: pin levels, direct method calls between blocks, and `reset()` calls that bypass the
+    dispatch table (none showed up as a mismatch for TIMER).
+
+  Exit criteria of Phase 0, against the plan: harness merged (yes); workload table with the three additional workloads (yes -
+  four, the fourth being the PIO+DMA script; "an idle USB CDC session" is covered by `mp-idle`/`cp-boot`'s sleep phases, which
+  run with the CDC attached); parity harness self-tested on a Python block against itself (yes - TIMER, PPB, SIO-on-MicroPython; one
+  honest failure on SIO-on-CircuitPython, recorded above). Not done: re-taking Sections 1-4 on a CI-comparable machine (this
+  environment is a shared 4-core sandbox).
 - 2026-10-03: language level fixed at C++17 (D4).
 - 2026-10-03: proposed. Measurements above taken; harness not committed; no phase started.
