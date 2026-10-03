@@ -54,6 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | proposed, phased plan (phases 0-7), nothing built - Python API unchanged; measured ceiling ~20x over Cython on a synthetic loop, real-core gain unmeasured
 - [ ] [0094] a Zephyr guest boots here - MicroPython's `ports/zephyr` on `rpi_pico` | measured, nothing built - the RP2040 model needed no changes; its console is USB CDC, so the `micropython` subcommand sees silence
 - [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
 - [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause exists; a trigger and an SRAM/USB decision do not
@@ -274,3 +275,4 @@ record is added.
 [0093]: records/0093-circuitpython-802-warm-boot-hang.md
 [0094]: records/0094-zephyr-guest-boots-on-the-emulator.md
 [0095]: records/0095-github-action-at-repo-root.md
+[0096]: records/0096-cpp-mcu-core.md
