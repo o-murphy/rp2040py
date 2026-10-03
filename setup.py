@@ -94,6 +94,14 @@ _CORE_DIR = _NATIVE_DIR / "core"
 # the shipped wheel, only symbols the (much larger, unstripped) sdist->local rebuild path needs.
 _DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
 
+# All C++ in this project is built without exceptions and without RTTI (docs/records/0096-cpp-mcu-core.md, D4): the
+# MCU core never throws and must build unchanged into a bare wasm32 module, which has neither - so the Cython-generated
+# translation units are held to the same rule as the core's own headers (a stray `try`/`throw`/`dynamic_cast`, in our
+# code or in what Cython emits, is then a compile error here rather than a surprise on the wasm build). Cython only
+# emits C++ exception handling for calls declared `except +`; nothing here does.
+_NO_EXCEPTIONS_GNU = ["-fno-exceptions", "-fno-rtti"]
+_NO_EXCEPTIONS_MSVC = ["/EHs-c-", "/GR-"]
+
 # Platform-specific compiler flags
 is_msvc = platform.system() == "Windows"
 is_macos = platform.system() == "Darwin"
@@ -107,10 +115,10 @@ is_macos = platform.system() == "Darwin"
 # optimization pass available, and this is a small, self-contained extension where -O3's usual
 # risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
 if is_msvc:
-    _EXTRA_COMPILE_ARGS = ["/O2", "/W3", "/std:c++17"]
+    _EXTRA_COMPILE_ARGS = ["/O2", "/W3", "/std:c++17", *_NO_EXCEPTIONS_MSVC]
     _EXTRA_LINK_ARGS: list[str] = []
 elif is_macos:
-    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17"]
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17", *_NO_EXCEPTIONS_GNU]
     # No -Wl,-strip-all here: that's GNU ld syntax (see the Linux branch below) - Apple's linker
     # rejects it outright ("ld: unknown options: -strip-all"), which broke every macOS wheel build
     # the one time this was tried unconditionally on "not Windows" instead of "Linux specifically"
@@ -127,10 +135,10 @@ elif IS_EMSCRIPTEN:
     # duplicate what the cross-build environment already applies.
     # "-Wl,-strip-all" is dropped: em++'s linker wrapper does not reliably
     # support arbitrary native-ld passthrough flags for stripping.
-    _EXTRA_COMPILE_ARGS = ["-std=c++17"]
+    _EXTRA_COMPILE_ARGS = ["-std=c++17", *_NO_EXCEPTIONS_GNU]
     _EXTRA_LINK_ARGS = []
 else:
-    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17"]
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17", *_NO_EXCEPTIONS_GNU]
     # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
     # wheel, marginally faster load - doesn't touch the optimizations above, which happen at
     # compile time on the .c GCC/Clang already emitted from Cython's own generated source). GNU ld
