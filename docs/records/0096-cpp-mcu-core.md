@@ -299,6 +299,18 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2 follow-up - MicroPython (the reference firmware) measured against the pre-0096 Cython build, and what the profile says.**
+  - Same script, old Cython (`6aeef40`, own venv) vs now, best of 2, MicroPython 1.21 on Pico, outputs identical: `sum(i*i for i in range(60000))` 11.3 -> 2.67 s (4.2x);
+    3000 x `time.ticks_us()` 0.33 -> 0.096 s (3.4x); 3000 x `Pin.value()` 0.39 -> 0.11 s (3.5x); `sleep_ms(1000)` 7.9 -> 2.0 s (3.9x). **On MicroPython the gain is 3.4-4.2x**, not
+    the 7x of the synthetic loop or the 11x of the CircuitPython boot quoted in the step 4c table.
+  - Where the time is now (cProfile of the compute phase, 2.78 s): 2.37 s is inside the C++ batch loop itself, ~0.4 s is Python callbacks - `logger.info` for every SEV/YIELD
+    (232 688 calls, 0.19 s) and the USB controller/CDC (0.1 s). The firmware runs 220 Mcycles in 2.5 s = ~85 Mcycles/s, about 0.7x of the real chip's 125 MHz. Clock-tick batching
+    (`RP2040PY_CLOCK_TICK_BATCH` 16/64) changes nothing, so the per-instruction clock is not the cost. Phase 3's blocks (pins, PIO, flash path) are therefore **not** what limits
+    MicroPython compute; the C++ per-instruction path (flash fetch through the memory map, the bus's decode order) is, and needs a real profiler (valgrind/callgrind are installed here, `perf` is not).
+  - API: direct `dir()` comparison of the old and the new build over `RP2040`, the core, SIO, TIMER, the clock, `Simulator`, a GPIO pin and the PPB: one name added (`sio.name`), one removed -
+    `timer.alarms`, the Python TIMER's list of alarm objects. Nothing outside the pure `_timer.py` reads it; the native TIMER keeps its alarm nodes inside the C++ clock. Decision: no
+    compatibility shim (an implementation detail, not a contract).
+
 - 2026-10-03: **Phase 2, step 4c - the batch loop is C++ (`core/batch.hpp`). Phase 2's measured table.**
   - `run_batch()` is `Simulator._execute_batch()`'s loop (the Cython `_simulator.pyx` one, itself translated from `_execute_batch.py`) over the C++ `Cpu`, `Bus` and `Clock`:
     instruction ceiling, the 5 ms real-time budget checked every 256 iterations, the idle jump to the next alarm floored at one clock, batched or per-instruction clock ticks,
