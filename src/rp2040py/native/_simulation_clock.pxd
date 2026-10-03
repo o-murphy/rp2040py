@@ -1,36 +1,32 @@
 # Declaration file paired with _simulation_clock.pyx. See that file's module docstring for the
 # overall port rationale.
 #
-# ClockAlarm's next/nanos/scheduled/callback and SimulationClock's link_alarm/unlink_alarm stay
-# plain `cdef` (module-private, not `public`/`cpdef`) - nothing outside this one file ever touches
-# them (confirmed via grep this session - every external caller only uses IClock/IAlarm's own
-# create_alarm()/alarm.schedule()/alarm.cancel(), plus SimulationClock's own extra nanos/micros/
-# tick()/nanos_to_next_alarm/has_scheduled_alarm).
+# Since docs/records/0096-cpp-mcu-core.md Phase 2 the time and the sorted alarm list live in a C++
+# `Clock` (core/clock.hpp) embedded in `SimulationClock`; `ClockAlarm` embeds the C++ `Alarm` node the
+# clock links by pointer. `SimulationClock._armed` is the Python-side owner of every linked alarm: the C++
+# list holds raw pointers, so something the garbage collector can see has to keep a *scheduled* alarm
+# alive (a fire-and-forget `clock.create_alarm(cb).schedule(n)` must still fire) and has to make the
+# clock <-> alarm cycle collectable once the clock itself is dropped.
 #
-# ClockAlarm.next is typed as the concrete ClockAlarm (not object): SimulationClock.tick() walks
-# this pointer chain on the per-instruction hot path, so it must resolve as a direct C-level
-# struct-field read, not a Python attribute lookup. ClockAlarm._clock stays `object`, not
-# SimulationClock: it's only read from schedule()/cancel() (armed/re-armed far less often than
-# every instruction, unlike tick()), and typing it would need SimulationClock and ClockAlarm to
-# forward-declare each other in this one module for no hot-path benefit - not worth the added
-# fragility. Defining ClockAlarm first (SimulationClock needs the already-complete ClockAlarm type
-# for its own _next_alarm field and link_alarm/unlink_alarm signatures) sidesteps the issue
-# entirely.
+# `_clock` is declared here, not hidden, so a module that cimports SimulationClock (native/_simulator.pyx's
+# per-instruction loop) can call the C++ `tick()`/`nanos_to_next_alarm()` directly. ClockAlarm._clock stays
+# `object`-typed, not SimulationClock: it is only read from schedule()/cancel(), and typing it would need
+# the two classes to forward-declare each other for no hot-path benefit.
+from rp2040py.native._clock cimport Alarm, Clock
+
+
 cdef class ClockAlarm:
     cdef object _clock
     cdef object callback
-    cdef ClockAlarm next
-    cdef double nanos
-    cdef bint scheduled
+    cdef Alarm _node
 
     cpdef schedule(self, double delta_nanos)
     cpdef cancel(self)
 
 
 cdef class SimulationClock:
-    cdef public double frequency
-    cdef ClockAlarm _next_alarm
-    cdef double _nanos_counter
+    cdef Clock _clock
+    cdef set _armed
 
     cpdef ClockAlarm create_alarm(self, callback)
     cpdef ClockAlarm link_alarm(self, double nanos, ClockAlarm alarm)

@@ -29,9 +29,9 @@ def _cxx() -> "str | None":
 def test_core_headers_pass_their_cpp_checks(source, tmp_path):
     exe = tmp_path / source.removesuffix(".cpp")
     cmd = [_cxx(), *FLAGS, f"-I{CORE}", str(ROOT / "tests" / "cpp" / source), "-o", str(exe)]
-    build = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    build = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
     assert build.returncode == 0, build.stderr
-    run = subprocess.run([str(exe)], capture_output=True, text=True, check=False)
+    run = subprocess.run([str(exe)], capture_output=True, text=True, check=False, timeout=60)
     assert run.returncode == 0, run.stdout + run.stderr
 
 
@@ -40,5 +40,5 @@ def test_core_headers_pass_their_cpp_checks(source, tmp_path):
 def test_every_core_header_is_self_contained_under_the_core_flags(header):
     """Each header compiles on its own - no hidden include-order dependency, no exceptions/RTTI/STL."""
     cmd = [_cxx(), *FLAGS, f"-I{CORE}", "-fsyntax-only", "-x", "c++", str(CORE / header)]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
     assert result.returncode == 0, result.stderr

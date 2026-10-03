@@ -299,6 +299,29 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 1 of 4 - the clock and alarm scheduler are C++.** (Plan order inside Phase 2: clock -> TIMER -> SIO/PPB -> CPU and batch loop;
+  the clock first because TIMER, PIO, DMA and every `ExternalDevice` alarm sit on it.)
+  - `native/core/clock.hpp`: header-only C++17 `Clock` + `Alarm`: time as a double of nanoseconds, a due-time-sorted list, `tick(delta)` that fires each
+    alarm at its own time, a re-read of the list after every callback, and the FIFO tie-break for equal due times (the 0044 starvation rule). Allocation-free:
+    an `Alarm` is a node the caller owns and the clock links by pointer. A callback is a function pointer returning `bool`; `false` means "I failed, the
+    failure is pending with the caller" and `tick` returns at once with the clock left at that alarm's time (where an exception from the callback leaves the
+    pure-Python clock). Standalone checks in `tests/cpp/test_clock.cpp`.
+  - `native/_simulation_clock.pyx/.pxd`: `SimulationClock`/`ClockAlarm` keep their API (including `MockClock` subclassing the cdef class) and become a shell
+    over the C++ `Clock`; the callbacks are still Python callables, run by a Cython trampoline; a raising callback still propagates out of `tick()`.
+    **One thing changed that the arithmetic did not need to**: the old Python-object list *was* what kept a scheduled alarm alive, and made the
+    clock <-> alarm cycle visible to the garbage collector. Raw C++ pointers do neither, so `SimulationClock._armed` (a `set`) owns every linked alarm.
+    Without it a fire-and-forget `clock.create_alarm(cb).schedule(n)` would never fire, and a dropped chip with alarms pending would leak 16 MiB of flash
+    (this was weighed before writing it, not found afterwards).
+  - Verified against the pure-Python clock, which stays the oracle: `tests/test_simulation_clock_parity.py` - 40 randomized scripts (alarms that re-arm
+    themselves, arm or cancel others, or raise; reschedule; cancel; ticks including 0) compared on the firing log, every observable after every operation and the
+    exceptions that escape; plus fire-and-forget, "dropped clock is collected", "raising callback leaves the clock at that alarm's time", and 50 reschedules from
+    inside the callback. A deliberately broken FIFO tie-break is caught by 39 of the 40 scripts. The whole existing suite passes unchanged (900 passed).
+  - Speed: the synthetic loop, which ticks the clock after every instruction, 16.7-18.1 -> 18.7-19.7 Minstr/s (three paired best-of-2 runs, +-15% noise);
+    the TIMER-polling loop 9.1-9.2 -> 9.3-9.9. Modest on purpose: the batch loop still reaches the clock through Python-visible properties
+    (`nanos_to_next_alarm`, `has_scheduled_alarm`), and the C++ `Clock` it could call directly is declared in the `.pxd` for that step (CPU and batch loop, step 4).
+  - A test-design lesson worth keeping: two alarms that re-arm each other with zero delay loop forever inside one `tick()` - in the reference as much as in
+    the port - so the randomized scripts bound every callback action; the first version hung CI-style, and `pkill -f` on a test binary's name killed the
+    shell that ran it (the command line contained the pattern). The C++ test runner now has timeouts.
 - 2026-10-03: **Before Phase 2 - both prerequisites the record named are done.**
   - **PIO's `write_uint32_atomic` override read, as D2's amendment required:** `native/_pio.pyx`'s `RPPIO.write_uint32_atomic` is line for line
     `BasePeripheral`'s (store `raw_write_value`; if the alias is not 0, `atomic_update(self.read_uint32(offset), type, value)`; then `write_uint32`).

@@ -27,96 +27,116 @@ subclass their own pure-Python protocol/reference type either.
 whichever `SimulationClock` the `clock.simulation_clock` facade resolves to - a plain Python class
 subclassing a non-`final` `cdef class` is standard, supported Cython/CPython behavior, so this
 stays correct with this native class active exactly as it did with the pure-Python one.
+
+
+Since docs/records/0096-cpp-mcu-core.md (Phase 2) the arithmetic itself - the clock's time, the sorted
+alarm list, `tick()` - is the C++ `Clock` of `core/clock.hpp`, and this file is the Python-facing shell
+around it with the same API. What did not move: the callbacks are still Python callables (a Cython
+trampoline calls them), and a callback that raises still propagates out of `tick()` with the clock left
+at that alarm's time, exactly as before. The pure-Python reference stays the oracle -
+tests/test_simulation_clock_parity.py replays randomized alarm scripts against both.
 """
+
+from libcpp cimport bool
+
+# A C++ frame cannot carry a Python exception: a trampoline that fails parks it here and tells the clock to
+# stop; `tick()` re-raises it the moment the C++ call returns.
+cdef object _pending_error = None
+
+
+cdef int _raise_pending() except -1:
+    global _pending_error
+    cdef object error = _pending_error
+    _pending_error = None
+    if error is None:
+        raise RuntimeError("clock stopped without a pending error")
+    raise error
+
+
+cdef bool _fire_alarm(void* ctx) noexcept:
+    """What the C++ clock calls when an alarm comes due: drop the alarm's keep-alive (it is no longer
+    linked), then run its Python callback. False stops the tick - the callback raised."""
+    global _pending_error
+    cdef ClockAlarm alarm = <ClockAlarm> ctx
+    (<SimulationClock> alarm._clock)._armed.discard(alarm)
+    try:
+        alarm.callback()
+    except BaseException as error:
+        _pending_error = error
+        return False
+    return True
 
 
 cdef class ClockAlarm:
+    def __cinit__(self, *args, **kwargs):
+        self._node.fire = _fire_alarm
+        self._node.ctx = <void*> self
+
     def __init__(self, clock, callback):
         self._clock = clock
         self.callback = callback
-        self.next = None
-        self.nanos = 0.0
-        self.scheduled = False
 
     cpdef schedule(self, double delta_nanos):
-        if self.scheduled:
+        cdef SimulationClock clock = <SimulationClock> self._clock
+        if self._node.scheduled:
             self.cancel()
-        self._clock.link_alarm(delta_nanos, self)
+        clock.link_alarm(delta_nanos, self)
 
     cpdef cancel(self):
-        self._clock.unlink_alarm(self)
-        self.scheduled = False
+        cdef SimulationClock clock = <SimulationClock> self._clock
+        clock.unlink_alarm(self)
+        self._node.scheduled = False
 
 
 cdef class SimulationClock:
+    def __cinit__(self, *args, **kwargs):
+        self._armed = set()
+
     def __init__(self, double frequency=125e6):
-        self.frequency = frequency
-        self._next_alarm = None
-        self._nanos_counter = 0.0
+        self._clock.frequency = frequency
+
+    @property
+    def frequency(self):
+        return self._clock.frequency
+
+    @frequency.setter
+    def frequency(self, double value):
+        self._clock.frequency = value
 
     @property
     def nanos(self):
-        return self._nanos_counter
+        return self._clock.nanos()
 
     @property
     def micros(self):
-        return self._nanos_counter / 1000
+        return self._clock.nanos() / 1000
 
     cpdef ClockAlarm create_alarm(self, callback):
         return ClockAlarm(self, callback)
 
     cpdef ClockAlarm link_alarm(self, double nanos, ClockAlarm alarm):
-        cdef ClockAlarm alarm_list_item = self._next_alarm
-        cdef ClockAlarm last_item = None
-        alarm.nanos = self._nanos_counter + nanos
-        # `<=`, not `<`: a same-timestamp alarm already in the list must fire before one just
-        # inserted "at" that same instant (FIFO tie-break), or a self-rescheduling zero-delay
-        # producer (e.g. a DMA TX channel) can perpetually cut in front of an already-pending
-        # zero-delay consumer alarm (e.g. that same transfer's paired RX channel) and starve it -
-        # see docs/tasks/main-spi-hang.md.
-        while alarm_list_item is not None and alarm_list_item.nanos <= alarm.nanos:
-            last_item = alarm_list_item
-            alarm_list_item = alarm_list_item.next
-        if last_item is not None:
-            last_item.next = alarm
-            alarm.next = alarm_list_item
-        else:
-            self._next_alarm = alarm
-            alarm.next = alarm_list_item
-        alarm.scheduled = True
+        # Same due time as alarms already linked: this one goes AFTER them (FIFO) - see core/clock.hpp for why
+        # (a zero-delay producer must not starve a pending zero-delay consumer, docs/records/0044).
+        if alarm._node.scheduled:
+            self._clock.unlink(&alarm._node)  # never link one alarm twice
+        self._clock.link(&alarm._node, nanos)
+        self._armed.add(alarm)
         return alarm
 
     cpdef bint unlink_alarm(self, ClockAlarm alarm) except -1:
-        cdef ClockAlarm alarm_list_item = self._next_alarm
-        cdef ClockAlarm last_item = None
-        if alarm_list_item is None:
-            return False
-        while alarm_list_item is not None:
-            if alarm_list_item is alarm:
-                if last_item is not None:
-                    last_item.next = alarm_list_item.next
-                else:
-                    self._next_alarm = alarm_list_item.next
-                return True
-            last_item = alarm_list_item
-            alarm_list_item = alarm_list_item.next
-        return False
+        cdef bint found = self._clock.unlink(&alarm._node)
+        if found:
+            alarm._node.scheduled = False
+            self._armed.discard(alarm)
+        return found
 
     cpdef tick(self, double delta_nanos):
-        cdef double target_nanos = self._nanos_counter + delta_nanos
-        cdef ClockAlarm alarm = self._next_alarm
-        while alarm is not None and alarm.nanos <= target_nanos:
-            self._next_alarm = alarm.next
-            self._nanos_counter = alarm.nanos
-            alarm.callback()
-            alarm = self._next_alarm
-        self._nanos_counter = target_nanos
+        if not self._clock.tick(delta_nanos):
+            _raise_pending()
 
     @property
     def nanos_to_next_alarm(self):
-        if self._next_alarm is not None:
-            return self._next_alarm.nanos - self._nanos_counter
-        return 0
+        return self._clock.nanos_to_next_alarm()
 
     @property
     def has_scheduled_alarm(self):
@@ -124,4 +144,4 @@ cdef class SimulationClock:
         property from `nanos_to_next_alarm == 0` - distinguishes "no alarm scheduled" from "an
         alarm is scheduled and due right now", which matters for `simulator.py`'s opt-in
         clock-tick-batching (RP2040PY_CLOCK_TICK_BATCH)."""
-        return self._next_alarm is not None
+        return self._clock.has_alarm()
