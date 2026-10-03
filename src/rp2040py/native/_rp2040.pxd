@@ -12,6 +12,7 @@
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._memory_map cimport MemoryMap
+from rp2040py.native._window_map cimport WindowMap
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 
@@ -38,6 +39,12 @@ cdef class RP2040:
     # The caller-owned memory map (record 0096, Phase 1): a table of pointers into the four buffers below,
     # which stay allocated and owned here as Python objects. The C++ side never allocates or copies.
     cdef MemoryMap _mem
+    # The peripheral window registry (record 0096, Phase 1): which handler serves each 16 KiB window. The
+    # `peripherals` dict stays the Python-visible source of truth and mirrors every change into it
+    # (_PeripheralTable); `_window_owners` keeps the handlers' Python-side contexts alive.
+    cdef WindowMap _windows
+    cdef dict _window_owners
+    cdef object _peripherals
     cdef unsigned char[:] _sram
     cdef unsigned char[:] _flash
     cdef unsigned char[:] _usb_dpram

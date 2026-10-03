@@ -19,7 +19,7 @@ statically-typed local and call tick()/nanos_to_next_alarm/has_scheduled_alarm a
 dispatch - see native/_simulation_clock.pyx's own module docstring for the full rationale.
 """
 
-from libc.stdint cimport uint8_t, uint32_t
+from libc.stdint cimport int64_t, uint8_t, uint32_t
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._memory_map cimport (
@@ -30,6 +30,7 @@ from rp2040py.native._memory_map cimport (
     kSubWord,
     kWordIndexed,
 )
+from rp2040py.native._window_map cimport WindowHandler, WindowMap, kNoWindow
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
@@ -128,6 +129,97 @@ cdef unsigned int DPRAM_START = <unsigned int> DPRAM_START_ADDRESS
 cdef unsigned int SIO_START = <unsigned int> SIO_START_ADDRESS
 
 
+cdef class _PythonWindow:
+    """The context of one window handler whose peripheral is a Python object: the C++ window map calls
+    the trampolines below with a pointer to this. The peripheral's methods are looked up on every call
+    (never cached as bound methods), so a test or board that replaces `peripheral.read_uint32` on the
+    instance after the window was attached still gets what it asked for."""
+
+    cdef object peripheral
+
+    def __cinit__(self, peripheral):
+        self.peripheral = peripheral
+
+
+# A C++ caller cannot propagate a Python exception, so a trampoline that fails parks the exception here and
+# returns 0; the Cython bus re-raises it the moment the window map's call returns (_raise_if_deferred).
+cdef object _deferred_error = None
+
+
+cdef int _raise_if_deferred() except -1:
+    global _deferred_error
+    cdef object error = _deferred_error
+    if error is not None:
+        _deferred_error = None
+        raise error
+    return 0
+
+
+cdef uint32_t _python_window_read32(void* ctx, uint32_t offset) noexcept:
+    global _deferred_error
+    try:
+        return <unsigned int> (<_PythonWindow> ctx).peripheral.read_uint32(offset)
+    except BaseException as error:
+        _deferred_error = error
+        return 0
+
+
+cdef void _python_window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) noexcept:
+    global _deferred_error
+    try:
+        (<_PythonWindow> ctx).peripheral.write_uint32_atomic(offset, raw_value, atomic_type)
+    except BaseException as error:
+        _deferred_error = error
+
+
+class _PeripheralTable(dict):
+    """`RP2040.peripherals`: still an ordinary dict (blocks, boards and tests read, add and replace entries
+    exactly as before) - but every change to it is mirrored into the chip's C++ window registry, which is
+    what the bus actually dispatches through."""
+
+    def __init__(self, chip, items=()):
+        dict.__init__(self)
+        self._chip = chip
+        self.update(items)
+
+    def __setitem__(self, key, value):
+        dict.__setitem__(self, key, value)
+        self._chip._attach_window(key, value)
+
+    def __delitem__(self, key):
+        dict.__delitem__(self, key)
+        self._chip._detach_window(key)
+
+    def update(self, *args, **kwargs):
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return dict.__getitem__(self, key)
+
+    def pop(self, key, *default):
+        present = key in self
+        value = dict.pop(self, key, *default)
+        if present:
+            self._chip._detach_window(key)
+        return value
+
+    def popitem(self):
+        key, value = dict.popitem(self)
+        self._chip._detach_window(key)
+        return key, value
+
+    def clear(self):
+        dict.clear(self)
+        self._chip._clear_windows()
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
 cdef class RP2040:
     def __cinit__(self):
         # Buffer-backed memoryview fields are allocated here, not __init__: __cinit__ is
@@ -148,6 +240,7 @@ cdef class RP2040:
         self._usb_dpram = bytearray(4 * KB)
         self.dpram_byte_size = len(self._usb_dpram)
         self._attach_memory_regions()
+        self._window_owners = {}
         self.core = CortexM0Core(self)
 
     cdef void _attach_memory_regions(self):
@@ -585,12 +678,50 @@ cdef class RP2040:
             # read path.
             return <unsigned int> (int(self.sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFFU)
 
-        peripheral = self.find_peripheral(addr)
-        if peripheral is not None:
-            return <unsigned int> peripheral.read_uint32(addr & 0x3FFF)
+        if self._windows.read32(addr, &word) != kNoWindow:
+            _raise_if_deferred()
+            return word
 
         self.logger.warning(LOG_NAME, f"Read from invalid memory address: {addr:x}")
         return 0xFFFFFFFFU
+
+    @property
+    def peripherals(self):
+        return self._peripherals
+
+    @peripherals.setter
+    def peripherals(self, value) -> None:
+        # Whatever mapping is assigned becomes the chip's table (and the window registry is rebuilt from
+        # it), so `chip.peripherals = {...}` keeps meaning what it always did.
+        self._clear_windows()
+        self._peripherals = _PeripheralTable(self, value)
+
+    def _attach_window(self, key, peripheral) -> None:
+        """Mirrors `peripherals[key] = peripheral` into the C++ window registry. `key` is the bus's own
+        dictionary key, `(address >> 14) << 2`; one that no address can produce was never reachable and is
+        not registered."""
+        cdef WindowHandler handler
+        cdef _PythonWindow owner
+        cdef unsigned long long k
+        if not isinstance(key, int) or key < 0 or key >= (1 << 20) or (key & 3):
+            return
+        k = key
+        owner = _PythonWindow(peripheral)
+        self._window_owners[k] = owner
+        handler.read32 = _python_window_read32
+        handler.write32 = _python_window_write32
+        handler.ctx = <void*> owner
+        self._windows.attach(<uint32_t> (k << 12), handler)
+
+    def _detach_window(self, key) -> None:
+        if not isinstance(key, int) or key < 0 or key >= (1 << 20) or (key & 3):
+            return
+        self._windows.detach(<uint32_t> (<unsigned long long> key << 12))
+        self._window_owners.pop(key, None)
+
+    def _clear_windows(self) -> None:
+        self._windows.clear()
+        self._window_owners.clear()
 
     def find_peripheral(self, address):
         return self.peripherals.get((u32(address) >> 14) << 2)
@@ -617,8 +748,6 @@ cdef class RP2040:
     cpdef write_uint32(self, long long address, long long value):
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int val = <unsigned int> (value & 0xFFFFFFFFU)
-        cdef unsigned int atomic_type
-        cdef unsigned int offset
         cdef int region
         # Same range order as read_uint32() - RAM/flash/bootrom checked first via cheap integer
         # comparisons, find_peripheral() (a dict lookup) only as the fallback for what's left.
@@ -636,36 +765,23 @@ cdef class RP2040:
             self.sio.write_uint32(addr - SIO_START, value)
         elif (addr >> 12) == 0xE000E:
             self.ppb.write_uint32(addr & 0xFFF, value)
+        elif self._windows.write32(addr, value) != kNoWindow:
+            _raise_if_deferred()
         else:
-            peripheral = self.find_peripheral(addr)
-            if peripheral is not None:
-                atomic_type = (addr & 0x3000) >> 12
-                offset = addr & 0xFFF
-                peripheral.write_uint32_atomic(offset, value, atomic_type)
-            else:
-                self.logger.warning(LOG_NAME, f"Write to undefined address: {addr:x}")
+            self.logger.warning(LOG_NAME, f"Write to undefined address: {addr:x}")
 
     cpdef write_uint8(self, long long address, long long value):
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
         cdef unsigned int val = <unsigned int> (value & 0xFF)
         cdef unsigned int aligned_address
         cdef unsigned int offset
-        cdef unsigned int atomic_type
-        cdef unsigned int peripheral_offset
         if self._mem.write8(addr, val) != kNotHandled:
             return
 
         aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
-        peripheral = self.find_peripheral(addr)
-        if peripheral is not None:
-            atomic_type = (aligned_address & 0x3000) >> 12
-            peripheral_offset = aligned_address & 0xFFF
-            peripheral.write_uint32_atomic(
-                peripheral_offset,
-                val | (val << 8) | (val << 16) | (val << 24),
-                atomic_type,
-            )
+        if self._windows.write32(aligned_address, <int64_t> (<unsigned int> (val | (val << 8) | (val << 16) | (val << 24)))) != kNoWindow:
+            _raise_if_deferred()
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray((<unsigned int> original_value).to_bytes(4, "little"))
@@ -679,18 +795,13 @@ cdef class RP2040:
         cdef unsigned int val = <unsigned int> (value & 0xFFFF)
         cdef unsigned int aligned_address
         cdef unsigned int offset
-        cdef unsigned int atomic_type
-        cdef unsigned int peripheral_offset
         if self._mem.write16(addr, val) != kNotHandled:
             return
 
         aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
-        peripheral = self.find_peripheral(addr)
-        if peripheral is not None:
-            atomic_type = (aligned_address & 0x3000) >> 12
-            peripheral_offset = aligned_address & 0xFFF
-            peripheral.write_uint32_atomic(peripheral_offset, val | (val << 16), atomic_type)
+        if self._windows.write32(aligned_address, <int64_t> (<unsigned int> (val | (val << 16)))) != kNoWindow:
+            _raise_if_deferred()
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray((<unsigned int> original_value).to_bytes(4, "little"))

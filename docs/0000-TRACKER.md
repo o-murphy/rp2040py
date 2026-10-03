@@ -54,7 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phased plan (phases 0-7) - Phase 0 done, Phase 1 half done (C++17 memory map linked through Cython, parity-tested); Python API unchanged
+- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phased plan (phases 0-7) - Phase 0 done, Phase 1 done (C++17 memory map + window registry linked through Cython, `-fno-exceptions`; CI toolchain results pending); Python API unchanged
 - [ ] [0094] a Zephyr guest boots here - MicroPython's `ports/zephyr` on `rpi_pico` | measured, nothing built - the RP2040 model needed no changes; its console is USB CDC, so the `micropython` subcommand sees silence
 - [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
 - [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause exists; a trigger and an SRAM/USB decision do not

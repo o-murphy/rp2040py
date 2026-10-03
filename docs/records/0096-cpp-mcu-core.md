@@ -299,6 +299,37 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 1, second half - the window registry landed; the C++ build is now `-fno-exceptions -fno-rtti` end to end.**
+  - `native/core/window_map.hpp`: header-only C++17, no allocation. A fixed table of window handlers keyed by `address >> 14` (the bus's
+    own 16 KiB peripheral windows), each `{read32(ctx, offset), write32(ctx, offset, raw_value, atomic_type), ctx}`; attach on an occupied
+    window **replaces** the handler (the override rule: last attached wins), detach/clear, a last-hit cache. This is the D2 amendment made
+    concrete: a read gets the offset with its alias bits, a write gets the register offset, the alias as `atomic_type` and the caller's
+    **full 64-bit value** (blocks that read `raw_write_value` - and SIO's signed divider - have always seen the unmasked number).
+    The handler pointer types are deliberately not `noexcept` (Cython does not emit the specifier); the `WindowMap` methods are.
+  - `native/_rp2040.pyx`: the bus now dispatches peripheral reads/writes (including the replicated-word 8/16-bit writes) through the C++
+    registry. `chip.peripherals` is still an ordinary `dict` - a `dict` subclass whose every mutation (`[]=`, `del`, `update`, `setdefault`,
+    `pop`, `popitem`, `clear`, `|=`, and assigning a whole new dict) is mirrored into the registry - so blocks, boards and tests behave as before.
+    Handlers are Python trampolines that look the block's method up **on every call** (a method replaced on an instance later is still the one
+    called); an exception cannot cross the C++ frame, so a failing block parks it and the bus re-raises it the moment the lookup returns.
+    A block may call back into the bus from inside a handler, including a nested read that fails.
+  - Tests: `tests/cpp/test_window_map.cpp`; `tests/test_peripheral_windows.py` (the dict API, replace/restore/delete, the offset/alias/value a
+    block sees on reads, 8-, 16- and 32-bit writes, exceptions, re-entrancy, and 3 seeds of randomized accesses to the same blocks on a
+    pure and a native chip, compared call for call); `tests/utils/chip_pair.py` (the pure/native chip pair, shared with the memory-map parity test).
+    The whole existing suite passes unchanged.
+  - Measured: a firmware loop reading a Python peripheral (`TIMER.TIMELR`) every 8 instructions, 7.7-8.4 -> 8.6-9.1 Minstr/s (three paired
+    best-of-2 runs, +-15% noise): the registry removes ~60-110 ns of the ~500 ns a Python-peripheral access costs. The plain SRAM loop is unchanged
+    (18.8 -> 19.5). The bulk of the cost is the Python block itself, which is Phase 2's job; this phase's job was to make the dispatch a C++ table.
+  - **`-fno-exceptions -fno-rtti` everywhere** (the user's rule: all C++ in this project is exception-free, not just the core's headers): `setup.py`
+    now passes it (`/EHs-c- /GR-` on MSVC) to every extension, so the Cython-generated translation units are held to the same rule as the core.
+    It builds under gcc; the extensions import no C++ exception/RTTI runtime (`nm -D` shows only libc's `__cxa_finalize`). That would have been
+    equally true without the flag - there are no throw sites - so the flag is the guard, not the symbol check, and no symbol-check test was added.
+    MSVC's `/EHs-c- /GR-` is untested here; the `RP2040PY_REQUIRE_NATIVE` CI leg on Windows is what will say.
+  - Found and fixed separately, because they are bugs in existing code and not part of this work: `Timer32` raised `ZeroDivisionError` for a
+    ZIGZAG counter with `TOP == 0` (found by this phase's random writes into the PWM registers; rp2040js reads 0 there), and
+    `MockClock.advance()` counted the current time twice (nothing used it). Each has its own commit and its own test.
+  Still open from Phase 1: the other toolchains' results (CI will say: macOS and Windows built the earlier memory-map commit and passed their
+  hooks; whether the *extension* built there was not provable from the logs, hence the `RP2040PY_REQUIRE_NATIVE` guard) and nothing else - the window
+  registry was the last item of the plan's Phase 1 list. The CPU is still the Cython `CortexM0Core` (Phase 2).
 - 2026-10-03: **Phase 1, first half - the C++ skeleton and the caller-owned memory map landed and are verified; the window
   registry and the cross-toolchain checks did not, so Phase 1 stays open.**
   Done:

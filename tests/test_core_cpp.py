@@ -25,9 +25,10 @@ def _cxx() -> "str | None":
 
 
 @pytest.mark.skipif(_cxx() is None, reason="no C++ compiler on PATH")
-def test_core_headers_pass_their_cpp_checks(tmp_path):
-    exe = tmp_path / "test_memory_map"
-    cmd = [_cxx(), *FLAGS, f"-I{CORE}", str(ROOT / "tests" / "cpp" / "test_memory_map.cpp"), "-o", str(exe)]
+@pytest.mark.parametrize("source", sorted(p.name for p in (ROOT / "tests" / "cpp").glob("test_*.cpp")))
+def test_core_headers_pass_their_cpp_checks(source, tmp_path):
+    exe = tmp_path / source.removesuffix(".cpp")
+    cmd = [_cxx(), *FLAGS, f"-I{CORE}", str(ROOT / "tests" / "cpp" / source), "-o", str(exe)]
     build = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert build.returncode == 0, build.stderr
     run = subprocess.run([str(exe)], capture_output=True, text=True, check=False)

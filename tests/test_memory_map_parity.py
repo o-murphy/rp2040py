@@ -17,13 +17,7 @@ C++ map reports those as "not handled", which the caller turns into an ordinary 
 import random
 
 import pytest
-
-pytest.importorskip("rp2040py.native._rp2040", reason="the native extension is not built")
-
-import rp2040py._cortex_m0_core as pure_core
-import rp2040py._rp2040 as pure_rp2040
-from rp2040py._rp2040 import RP2040 as PurePython
-from rp2040py.native._rp2040 import RP2040 as Native
+from utils.chip_pair import Native, PurePython, make_chip
 
 BOOTROM, BOOTROM_SIZE = 0x00000000, 16 * 1024
 FLASH, FLASH_SIZE, FLASH_WINDOW = 0x10000000, 16 * 1024 * 1024, 0x04000000
@@ -37,32 +31,6 @@ REGIONS = [
     ("sram", SRAM, SRAM_SIZE, SRAM_SIZE),
     ("dpram", DPRAM, DPRAM_SIZE, DPRAM_SIZE),
 ]
-
-
-class _Quiet:
-    """A logger that says nothing: the two buses warn identically on unmapped/unaligned accesses."""
-
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
-
-def _chip(cls, bootrom_words):
-    if cls is PurePython:
-        # The pure chip builds its CPU through the facade, which hands back the *native* core whenever
-        # the extension is installed - and a native core only accepts a native chip. Give this one the
-        # pure core, as the RP2040PY_SKIP_CYTHON=1 build would.
-        saved, pure_rp2040.CortexM0Core = pure_rp2040.CortexM0Core, pure_core.CortexM0Core
-        try:
-            chip = cls()
-        finally:
-            pure_rp2040.CortexM0Core = saved
-    else:
-        chip = cls()
-    chip.logger = _Quiet()
-    chip.load_bootrom(bootrom_words)
-    chip.hook_calls = []
-    chip.usb_ctrl.dpram_updated = lambda offset, value: chip.hook_calls.append((offset, value))
-    return chip
 
 
 def _addresses(rng):
@@ -130,7 +98,7 @@ def _apply(chip, kind, width, address, value):
 def test_the_native_bus_matches_the_pure_python_bus(seed):
     rng = random.Random(seed * 7919)
     bootrom_words = [rng.getrandbits(32) for _ in range(BOOTROM_SIZE // 4)]
-    pure, native = _chip(PurePython, bootrom_words), _chip(Native, bootrom_words)
+    pure, native = make_chip(PurePython, bootrom_words), make_chip(Native, bootrom_words)
 
     for index, (kind, width, address, value) in enumerate(_operations(seed, 6000)):
         expected = _apply(pure, kind, width, address, value)
@@ -145,7 +113,7 @@ def test_the_native_bus_matches_the_pure_python_bus(seed):
 
 
 def test_a_dpram_write_reports_its_offset_and_the_original_value():
-    chip = _chip(Native, [0] * (BOOTROM_SIZE // 4))
+    chip = make_chip(Native, [0] * (BOOTROM_SIZE // 4))
 
     chip.write_uint32(DPRAM + 0x20, 0xDEADBEEF)
     chip.write_uint32(DPRAM + 0x24, -1)  # a signed Python int reaches the hook untouched, as before
@@ -156,7 +124,7 @@ def test_a_dpram_write_reports_its_offset_and_the_original_value():
 
 def test_the_buffers_are_the_chips_own_memory_not_copies():
     """Zero-copy (record 0096, D2): the C++ map reads and writes the very bytes the Python views expose."""
-    chip = _chip(Native, [0] * (BOOTROM_SIZE // 4))
+    chip = make_chip(Native, [0] * (BOOTROM_SIZE // 4))
 
     chip.sram[0x100] = 0x5A  # a Python-side write is visible to the C++ bus ...
     assert chip.read_uint8(SRAM + 0x100) == 0x5A
