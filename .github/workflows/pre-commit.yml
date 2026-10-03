@@ -22,6 +22,12 @@ jobs:
   pre-commit:
     name: pre-commit run --all-files
     runs-on: ${{ matrix.os }}
+    env:
+      # setup.py builds the native extension with optional=True (a missing toolchain must not break
+      # `pip install`), which also means a broken C++ build on one OS would otherwise leave that
+      # leg silently running the pure-Python path and "passing". This makes CI say so loudly
+      # (tests/test_native_extension_built.py) - docs/records/0096-cpp-mcu-core.md, Phase 1.
+      RP2040PY_REQUIRE_NATIVE: "1"
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       # false: a windows/macos failure must NOT cancel the ubuntu leg mid-run -- ubuntu is
