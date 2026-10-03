@@ -5,4 +5,6 @@ __all__ = ("MockClock",)
 
 class MockClock(SimulationClock):
     def advance(self, delta_micros: float) -> None:
-        self.tick(self.nanos + delta_micros * 1000)
+        # tick() takes a *delta*; passing `self.nanos + ...` here advanced the clock by its whole current
+        # reading again on every call (advance(1) twice gave 1 us, then 3 us).
+        self.tick(delta_micros * 1000)
