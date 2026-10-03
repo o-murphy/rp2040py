@@ -39,30 +39,17 @@ tests/test_simulation_clock_parity.py replays randomized alarm scripts against b
 
 from libcpp cimport bool
 
-# A C++ frame cannot carry a Python exception: a trampoline that fails parks it here and tells the clock to
-# stop; `tick()` re-raises it the moment the C++ call returns.
-cdef object _pending_error = None
-
-
-cdef int _raise_pending() except -1:
-    global _pending_error
-    cdef object error = _pending_error
-    _pending_error = None
-    if error is None:
-        raise RuntimeError("clock stopped without a pending error")
-    raise error
-
+from rp2040py.native._pending cimport has_pending_error, park_error, raise_if_pending
 
 cdef bool _fire_alarm(void* ctx) noexcept:
     """What the C++ clock calls when an alarm comes due: drop the alarm's keep-alive (it is no longer
     linked), then run its Python callback. False stops the tick - the callback raised."""
-    global _pending_error
     cdef ClockAlarm alarm = <ClockAlarm> ctx
     (<SimulationClock> alarm._clock)._armed.discard(alarm)
     try:
         alarm.callback()
     except BaseException as error:
-        _pending_error = error
+        park_error(error)
         return False
     return True
 
@@ -132,7 +119,9 @@ cdef class SimulationClock:
 
     cpdef tick(self, double delta_nanos):
         if not self._clock.tick(delta_nanos):
-            _raise_pending()
+            if not has_pending_error():
+                raise RuntimeError("the clock stopped ticking without a pending error")
+            raise_if_pending()
 
     @property
     def nanos_to_next_alarm(self):

@@ -30,7 +30,8 @@ from rp2040py.native._memory_map cimport (
     kSubWord,
     kWordIndexed,
 )
-from rp2040py.native._window_map cimport WindowHandler, WindowMap, kNoWindow
+from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._window_map cimport Read32Fn, Write32Fn, WindowHandler, WindowMap, kNoWindow
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
@@ -141,35 +142,19 @@ cdef class _PythonWindow:
         self.peripheral = peripheral
 
 
-# A C++ caller cannot propagate a Python exception, so a trampoline that fails parks the exception here and
-# returns 0; the Cython bus re-raises it the moment the window map's call returns (_raise_if_deferred).
-cdef object _deferred_error = None
-
-
-cdef int _raise_if_deferred() except -1:
-    global _deferred_error
-    cdef object error = _deferred_error
-    if error is not None:
-        _deferred_error = None
-        raise error
-    return 0
-
-
 cdef uint32_t _python_window_read32(void* ctx, uint32_t offset) noexcept:
-    global _deferred_error
     try:
         return <unsigned int> (<_PythonWindow> ctx).peripheral.read_uint32(offset)
     except BaseException as error:
-        _deferred_error = error
+        park_error(error)
         return 0
 
 
 cdef void _python_window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) noexcept:
-    global _deferred_error
     try:
         (<_PythonWindow> ctx).peripheral.write_uint32_atomic(offset, raw_value, atomic_type)
     except BaseException as error:
-        _deferred_error = error
+        park_error(error)
 
 
 class _PeripheralTable(dict):
@@ -679,7 +664,7 @@ cdef class RP2040:
             return <unsigned int> (int(self.sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFFU)
 
         if self._windows.read32(addr, &word) != kNoWindow:
-            _raise_if_deferred()
+            raise_if_pending()
             return word
 
         self.logger.warning(LOG_NAME, f"Read from invalid memory address: {addr:x}")
@@ -706,11 +691,23 @@ cdef class RP2040:
         if not isinstance(key, int) or key < 0 or key >= (1 << 20) or (key & 3):
             return
         k = key
-        owner = _PythonWindow(peripheral)
-        self._window_owners[k] = owner
-        handler.read32 = _python_window_read32
-        handler.write32 = _python_window_write32
-        handler.ctx = <void*> owner
+        # A native block (a C++ block behind a Cython shell, e.g. the TIMER) offers its own C++ read/write functions
+        # through `_native_window`, and the window is served without any Python on the access path. Looked up on the
+        # TYPE, never the instance: a recorder or profiler that forwards attributes with __getattr__ must not lend its
+        # target's fast path (it would be bypassed), and a Mock must not answer for every name.
+        native_window = getattr(type(peripheral), "_native_window", None)
+        if native_window is not None:
+            read_ptr, write_ptr, ctx_ptr = native_window(peripheral)
+            handler.read32 = <Read32Fn> <size_t> read_ptr
+            handler.write32 = <Write32Fn> <size_t> write_ptr
+            handler.ctx = <void*> <size_t> ctx_ptr
+            self._window_owners[k] = peripheral  # keeps the block (and so the context pointer) alive
+        else:
+            owner = _PythonWindow(peripheral)
+            self._window_owners[k] = owner
+            handler.read32 = _python_window_read32
+            handler.write32 = _python_window_write32
+            handler.ctx = <void*> owner
         self._windows.attach(<uint32_t> (k << 12), handler)
 
     def _detach_window(self, key) -> None:
@@ -766,7 +763,7 @@ cdef class RP2040:
         elif (addr >> 12) == 0xE000E:
             self.ppb.write_uint32(addr & 0xFFF, value)
         elif self._windows.write32(addr, value) != kNoWindow:
-            _raise_if_deferred()
+            raise_if_pending()
         else:
             self.logger.warning(LOG_NAME, f"Write to undefined address: {addr:x}")
 
@@ -781,7 +778,7 @@ cdef class RP2040:
         aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
         if self._windows.write32(aligned_address, <int64_t> (<unsigned int> (val | (val << 8) | (val << 16) | (val << 24)))) != kNoWindow:
-            _raise_if_deferred()
+            raise_if_pending()
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray((<unsigned int> original_value).to_bytes(4, "little"))
@@ -801,7 +798,7 @@ cdef class RP2040:
         aligned_address = addr & 0xFFFFFFFCU
         offset = addr & 0x3
         if self._windows.write32(aligned_address, <int64_t> (<unsigned int> (val | (val << 16)))) != kNoWindow:
-            _raise_if_deferred()
+            raise_if_pending()
             return
         original_value = self.read_uint32(aligned_address)
         patched = bytearray((<unsigned int> original_value).to_bytes(4, "little"))

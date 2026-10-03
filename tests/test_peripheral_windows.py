@@ -11,6 +11,8 @@ import random
 import pytest
 from utils.chip_pair import Native, PurePython, make_chip
 
+from rp2040py.peripherals._timer import RPTimer as PureTimer
+
 FREE_KEY = 0x40068  # APB address 0x40068000: no built-in block lives there
 FREE_BASE = FREE_KEY << 12
 OTHER_KEY = 0x40070  # a second free window (0x40070000)
@@ -122,7 +124,10 @@ def test_deleting_a_block_makes_its_window_unmapped(chip):
 
 
 def test_a_method_replaced_on_the_instance_after_the_block_was_added_is_the_one_called(chip):
-    timer = chip.timer
+    # A Python block (the pure-Python TIMER here; the chip's own TIMER is a native, un-patchable block when the
+    # extension is built): the trampoline looks the method up on every call, so a later replacement is honoured.
+    timer = PureTimer(chip, "TIMER_BASE")
+    chip.peripherals[TIMER_KEY] = timer
     timer.read_uint32 = lambda offset: 0x1234
 
     assert chip.read_uint32(TIMER_BASE + TIMELR) == 0x1234

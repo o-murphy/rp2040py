@@ -36,12 +36,29 @@ BLOCKS = {
 }
 
 
-async def record_workload(workload_name: str, block: "int | str", irqs: "tuple[int, ...]", *, sleep: bool) -> "list":
+def _chip_with_timer(kind: str):
+    """A bare chip whose TIMER is the native block ("native", the default) or the pure-Python reference ("pure")."""
+    from rp2040py.peripherals._timer import RPTimer as PureTimer
+    from rp2040py.rp2040 import RP2040
+
+    chip = RP2040()
+    if kind == "pure":
+        chip.peripherals[0x40054] = PureTimer(chip, "TIMER_BASE")
+    return chip
+
+
+async def record_workload(
+    workload_name: str, block: "int | str", irqs: "tuple[int, ...]", *, sleep: bool, timer: str = "native"
+) -> "list":
     workload = next(w for w in WORKLOADS if w.name == workload_name)
     spec = CIRCUITPYTHON if workload.circuitpython else MICROPYTHON
     device = MicroPythonDevice(
         board=resolve_board_spec(workload.board, spec, workload.tag), circuitpython=workload.circuitpython
     )
+    if block == 0x40054 and timer == "pure":  # record the pure-Python TIMER instead of the native one
+        from rp2040py.peripherals._timer import RPTimer as PureTimer
+
+        device.mcu.peripherals[0x40054] = PureTimer(device.mcu, "TIMER_BASE")
     events = record(device.mcu, block, irqs)  # before anything runs: replay starts a fresh block at t=0
     try:
         await device.astart()
@@ -60,11 +77,20 @@ def main() -> int:
     parser.add_argument("--workload", default="mp-idle", choices=[w.name for w in WORKLOADS])
     parser.add_argument("--sleep", action="store_true", help="also run the workload's 1 s sleep phase (~10^6 events)")
     parser.add_argument("--save", help="write the trace here (gzip JSON lines)")
+    parser.add_argument(
+        "--record-timer", choices=["native", "pure"], default="native", help="which TIMER to record (timer block only)"
+    )
+    parser.add_argument(
+        "--replay-timer",
+        choices=["native", "pure"],
+        default="native",
+        help="which TIMER to replay against (timer block only)",
+    )
     args = parser.parse_args()
 
     key, irqs = BLOCKS[args.block]
     start = time.perf_counter()
-    events = asyncio.run(record_workload(args.workload, key, irqs, sleep=args.sleep))
+    events = asyncio.run(record_workload(args.workload, key, irqs, sleep=args.sleep, timer=args.record_timer))
     kinds: dict[str, int] = {}
     for event in events:
         kinds[event[1]] = kinds.get(event[1], 0) + 1
@@ -74,7 +100,7 @@ def main() -> int:
         print(f"saved {args.save}")
 
     start = time.perf_counter()
-    mismatches = replay(events, key, irqs)
+    mismatches = replay(events, key, irqs, factory=lambda: _chip_with_timer(args.replay_timer))
     print(f"replayed in {time.perf_counter() - start:.1f}s: {len(mismatches)} mismatches")
     for mismatch in mismatches[:10]:
         print("  ", mismatch)

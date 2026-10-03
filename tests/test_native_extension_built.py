@@ -8,6 +8,7 @@ RP2040PY_REQUIRE_NATIVE=1 (.github/workflows/pre-commit.yml); locally the test i
 
 import importlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -16,10 +17,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize(
-    "module",
-    ["_bit", "_cortex_m0_core", "_gpio_pin", "_pio", "_rp2040", "_simulation_clock", "_simulator", "_state_machine"],
+# Every .pyx next to this package's sources is an extension setup.py builds: a module added later is required here
+# without anyone remembering to list it (a stale or failed build of the newest one is exactly what this guards).
+NATIVE_MODULES = sorted(
+    p.stem for p in (Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native").glob("*.pyx")
 )
+
+
+def test_the_list_of_native_modules_is_not_empty():
+    assert {"_rp2040", "_timer", "_simulation_clock"} <= set(NATIVE_MODULES)
+
+
+@pytest.mark.parametrize("module", NATIVE_MODULES)
 def test_every_native_module_was_built_and_imports(module):
     importlib.import_module(f"rp2040py.native.{module}")
 

@@ -299,6 +299,34 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 2 of 4 - the TIMER is C++, and a firmware's TIMELR poll no longer touches Python.**
+  - `native/core/timer.hpp`: `TimerBlock`, a translation of `peripherals/timer.py` (kept as the pure-Python reference and the oracle): the counter
+    epoch, the latched high word, INTR/INTE/INTF, PAUSE and four alarms scheduled on the C++ `Clock`. The two things it cannot own reach the outside through
+    a `TimerHost` of function pointers - the interrupt line (`rp2040.set_interrupt` today, the NVIC later) and the logger. Every observable of the Python block is
+    kept, because trace replay is the acceptance test: each INTR/INTE/INTF change and each alarm fire re-announces **all four** lines in order; which accesses
+    warn and with exactly what text; the `raw_write_value` the alias path gives INTR and ARMED; an alias write first *reads* the register (TIMELR's latch included).
+    A failing interrupt-line call stops the work at once, as the exception would.
+  - `native/_timer.pyx`: the Python-facing shell with `BasePeripheral`'s surface (`read_uint32`, `write_uint32`, `write_uint32_atomic`, `reset`, `warn`..., `name`,
+    `rp2040`, `clock`, `raw_write_value`) plus `int_status`. `peripherals/timer.py` became the facade (as `pio.py` is) and the pure class moved to
+    `peripherals/_timer.py`. **The block is served by its own C++ functions**: the bus's window registry gained a native path - a block that has `_native_window`
+    *on its type* hands over the addresses of its C++ read/write functions and context, and the window is registered with those instead of a Python trampoline.
+    The lookup is on the type on purpose: a recorder/profiler that forwards attributes with `__getattr__` must not lend its target's fast path (it would be
+    bypassed), and a `Mock` must not answer for every name - both are tested.
+  - `native/_pending.pyx`: the deferred-error slot became one shared module (it was a global in the bus and another in the clock), because the thing that fails and the
+    thing that re-raises are now in different modules: a TIMER's interrupt callback fails inside `SimulationClock.tick()`. Alarm nodes live inside the block, so
+    its `__dealloc__` unlinks them from the clock; the clock reference it needs there is a manual `Py_INCREF` that a cycle collection's `tp_clear` cannot drop.
+  - **Verified** against the pure TIMER, which stays the oracle: `tests/test_timer_parity.py` - 60 randomized sessions (8/16/32-bit bus accesses, every alias, implemented and
+    unimplemented registers, awkward values, direct method calls, resets, clock ticks up to 2^33 us, injected interrupt-line failures) compared on every value read, every
+    interrupt-line call, every logged message, `int_status`, `raw_write_value` and the clock; plus failure-surfacing, the dropped-chip/armed-alarm case, and the wrapper bypass.
+    Two deliberately broken C++ versions (INTR cleared by the decoded value instead of the raw one; `reset()` not re-announcing the lines) are caught by 28 and 60 of the 65 tests.
+    Real firmware, ~1.3M TIMER events of a MicroPython boot + print + 1 s sleep, all four combinations of record/replay on native/pure: **0 mismatches** each.
+    `tests/cpp/test_timer.cpp` covers the block on its own. The whole suite passes (903 + the new ones).
+  - **Speed, measured on real boots** (wall clock, no profiling proxies; two runs each): CircuitPython boot **12.4 s -> 4.3-4.7 s (2.7-2.9x)** for the same 2.27 simulated seconds - it was
+    97.6% TIMER accesses; its print 0.45-0.5 -> 0.33-0.34 s; MicroPython's 1 s `sleep_ms` 6.8-7.0 -> 6.3-6.9 s (it is SIO-bound next, as the access profile said).
+  - Found along the way and fixed in its **own commit** (`fix: TIMER ALARMn registers hold 32 bits`): the pure block stored whatever Python int was written to ALARMn, so a
+    negative or wider write made the bus's 32-bit read-back raise `OverflowError`; it now stores what the 32-bit register holds, which also removed the one "deliberate
+    difference" the first C++ draft had. `tests/test_peripheral_windows.py`'s "method replaced on the instance" test now patches a pure-Python block - a native block, being
+    a `cdef class`, does not allow per-instance method replacement, which is the price of serving it from C++ and is stated here rather than discovered.
 - 2026-10-03: **Phase 2, step 1 of 4 - the clock and alarm scheduler are C++.** (Plan order inside Phase 2: clock -> TIMER -> SIO/PPB -> CPU and batch loop;
   the clock first because TIMER, PIO, DMA and every `ExternalDevice` alarm sit on it.)
   - `native/core/clock.hpp`: header-only C++17 `Clock` + `Alarm`: time as a double of nanoseconds, a due-time-sorted list, `tick(delta)` that fires each
