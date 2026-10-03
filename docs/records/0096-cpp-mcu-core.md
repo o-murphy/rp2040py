@@ -299,6 +299,18 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2 follow-up - callgrind profile of the C++ loop on a MicroPython boot, and three cheap wins.**
+  - Method: the boot run in-process (`time.monotonic` stubbed so the 5 ms budget does not cut batches under valgrind), 25 batches = 25 M instructions, `RP2040PY_DISABLE_STRIP=1` for symbols.
+    6.76 G x86 instructions, ~130 per emulated instruction: batch loop 45, CPU `execute()` 38, memory map 31, clock 13 - plus ~25% of the total in Python (alarm callbacks
+    into USB, `_PyEval`).
+  - Fixed: (1) the per-iteration PIO check re-loaded each flag's pointer from the host struct (24 Ir/instr with both PIOs stopped) - the flag addresses are now held in registers
+    (the flags are still read every iteration: a firmware write that starts a PIO must make it step on the next instruction); (2) a memory-map lookup walked the region table - an
+    instruction fetch from flash tested the boot ROM first - now indexed by the address's top four bits (a block no region touches serves nothing, a block several regions touch
+    falls back to the ordered walk that decides ties; new cases in `test_memory_map.cpp`); (3) the "wide instruction" test is one compare (`opcode >= 0xE800`).
+  - Effect, honestly: instructions executed in the profile fell 9% (6.76 -> 6.17 G); the synthetic loop went 114 -> 132 Minstr/s; **MicroPython compute is unchanged within noise (2.6 s)**.
+    So the C++ loop's own bookkeeping is no longer the lever for MicroPython: what is left is the handler dispatch (an indirect call per instruction), the generic bus path of every
+    load/store and the Python callbacks (USB alarms, `logger.info` per SEV). Taking those further is a design question (specialised fetch/load paths, a C++ USB), not another tuning pass.
+
 - 2026-10-03: **Phase 2 follow-up - MicroPython (the reference firmware) measured against the pre-0096 Cython build, and what the profile says.**
   - Same script, old Cython (`6aeef40`, own venv) vs now, best of 2, MicroPython 1.21 on Pico, outputs identical: `sum(i*i for i in range(60000))` 11.3 -> 2.67 s (4.2x);
     3000 x `time.ticks_us()` 0.33 -> 0.096 s (3.4x); 3000 x `Pin.value()` 0.39 -> 0.11 s (3.5x); `sleep_ms(1000)` 7.9 -> 2.0 s (3.9x). **On MicroPython the gain is 3.4-4.2x**, not

@@ -382,7 +382,7 @@ public:
         const uint32_t opcode_pc = registers[15] & 0xFFFFFFFEu;  // ensure no LSB set PC are executed
         const uint32_t opcode = bus_->read16(opcode_pc);
         if (failed()) return kCpuFault;
-        const bool wide = (opcode >> 12) == 0b1111 || (opcode >> 11) == 0b11101;
+        const bool wide = opcode >= 0xE800;  // 0b11101xxx.. and 0b1111xxx.. : the two 32-bit encodings' first halfwords
         uint32_t opcode2 = 0;
         if (wide) {
             opcode2 = bus_->read16(opcode_pc + 2);

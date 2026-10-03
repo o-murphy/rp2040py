@@ -53,6 +53,11 @@ inline int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchP
     double pending_nanos = 0.0;
     int pending_count = 0;
     double nanos_budget = clock.has_alarm() ? clock.nanos_to_next_alarm() : kInfinity;
+    // The flag addresses in registers instead of reloaded from the host struct on every iteration (the flags themselves are still
+    // read every time: a firmware write that starts a PIO must make it step on the very next instruction).
+    const volatile int* const pio_flag0 = host.pio_count > 0 ? host.pio_stopped[0] : nullptr;
+    const volatile int* const pio_flag1 = host.pio_count > 1 ? host.pio_stopped[1] : nullptr;
+    const int pio_rest = host.pio_count > 2 ? host.pio_count : 0;
 
     while (i < params.instruction_ceiling && !*host.stopped) {
         ticks_since_check += 1;
@@ -93,7 +98,9 @@ inline int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchP
                 }
             }
         }
-        for (int p = 0; p < host.pio_count; ++p) {
+        if (pio_flag0 != nullptr && !*pio_flag0 && !host.pio_advance(host.ctx, 0, cycles)) return kBatchFault;
+        if (pio_flag1 != nullptr && !*pio_flag1 && !host.pio_advance(host.ctx, 1, cycles)) return kBatchFault;
+        for (int p = 2; p < pio_rest; ++p) {
             if (!*host.pio_stopped[p] && !host.pio_advance(host.ctx, p, cycles)) return kBatchFault;
         }
         i += 1;

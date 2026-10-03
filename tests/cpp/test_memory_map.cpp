@@ -80,6 +80,35 @@ int main() {
     small.clear();
     CHECK(small.count() == 0 && small.read32(0, &v) == kNotHandled);
 
+    // The 256 MiB-block index: regions that share a block still resolve in attach order, a region whose window spans a block boundary is found
+    // from both blocks, a block no region touches serves nothing, and clear() forgets everything.
+    {
+        static uint8_t a[0x100], b[0x100], big[0x40];
+        MemoryMap m;
+        CHECK(m.attach({0x20000000u, 0x100, 0x100, 0xFFFFFFFFu, a, kSubWord}) == 0);
+        CHECK(m.attach({0x20001000u, 0x100, 0x100, 0xFFFFFFFFu, b, kSubWord}) == 1);
+        a[0] = 0x11;
+        b[0] = 0x22;
+        uint32_t w = 0;
+        CHECK(m.read8(0x20000000u, &w) == 0 && w == 0x11);
+        CHECK(m.read8(0x20001000u, &w) == 1 && w == 0x22);
+        CHECK(m.read8(0x20000800u, &w) == kNotHandled);  // between them, same block
+        CHECK(m.read8(0x30000000u, &w) == kNotHandled && m.write32(0x40000000u, 1) == kNotHandled);
+        // Overlap inside one block: the first attached wins, as the ordered walk always decided.
+        CHECK(m.attach({0x20000000u, 0x100, 0x100, 0xFFFFFFFFu, b, kSubWord}) == 2);
+        a[4] = 0x5A;
+        CHECK(m.read8(0x20000004u, &w) == 0 && w == 0x5A);
+        // A window across the block boundary.
+        MemoryMap n;
+        CHECK(n.attach({0x0FFFFFF0u, 0x20, 0x20, 0xFFFFFFFFu, big, kSubWord}) == 0);
+        big[0] = 0x77;
+        big[0x10] = 0x88;
+        CHECK(n.read8(0x0FFFFFF0u, &w) == 0 && w == 0x77);
+        CHECK(n.read8(0x10000000u, &w) == 0 && w == 0x88);
+        n.clear();
+        CHECK(n.read8(0x10000000u, &w) == kNotHandled);
+    }
+
     std::printf(failures ? "FAILED: %d\n" : "memory_map: all checks passed\n", failures);
     return failures ? 1 : 0;
 }

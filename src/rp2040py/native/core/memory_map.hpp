@@ -55,10 +55,15 @@ public:
             return kNotHandled;
         }
         regions_[count_] = region;
-        return count_++;
+        const int index = count_++;
+        reindex();
+        return index;
     }
 
-    void clear() noexcept { count_ = 0; }
+    void clear() noexcept {
+        count_ = 0;
+        reindex();
+    }
     int count() const noexcept { return count_; }
     const Region& region(int index) const noexcept { return regions_[index]; }
 
@@ -66,7 +71,9 @@ public:
     // Reads fill *out; writes return the index so the caller can test kNotifyOnWrite.
 
     int read32(uint32_t address, uint32_t* out) const noexcept {
-        for (int i = 0; i < count_; ++i) {
+        int lo, hi;
+        candidates(address, &lo, &hi);
+        for (int i = lo; i < hi; ++i) {
             const Region& r = regions_[i];
             const uint32_t rel = address - r.base;  // wraps below base into a huge value: one compare is enough
             if (rel >= r.window) continue;
@@ -96,7 +103,9 @@ public:
     }
 
     int write32(uint32_t address, uint32_t value) const noexcept {
-        for (int i = 0; i < count_; ++i) {
+        int lo, hi;
+        candidates(address, &lo, &hi);
+        for (int i = lo; i < hi; ++i) {
             const Region& r = regions_[i];
             uint32_t offset = address - r.base;
             if (offset >= r.size) continue;  // the mirror is read-only: a write above `size` is the caller's problem
@@ -133,7 +142,9 @@ private:
     // The region a `width`-byte sub-word access falls entirely inside, or kNotHandled. Sub-word
     // accesses never use the mirror: only the first `size` bytes of a window.
     int find_sub_word(uint32_t address, uint32_t width) const noexcept {
-        for (int i = 0; i < count_; ++i) {
+        int lo, hi;
+        candidates(address, &lo, &hi);
+        for (int i = lo; i < hi; ++i) {
             const Region& r = regions_[i];
             const uint32_t offset = address - r.base;
             if (offset >= r.size) continue;
@@ -143,7 +154,35 @@ private:
         return kNotHandled;
     }
 
+    // Which regions can possibly serve an address, found from its top four bits instead of by walking the table: the RP2040's regions
+    // sit in different 256 MiB blocks (boot ROM 0x0, flash 0x1, SRAM 0x2, DPRAM 0x5), so an instruction fetch looks at one entry
+    // instead of testing the boot ROM and then the flash. A block no region touches serves nothing; a block more than one region
+    // touches falls back to the ordered walk, which is what decides ties ("the first region attached wins").
+    static constexpr uint8_t kNoRegion = 0xFE, kSeveral = 0xFF;
+
+    void candidates(uint32_t address, int* lo, int* hi) const noexcept {
+        const uint8_t block = block_[address >> 28];
+        if (block < kMaxRegions) {
+            *lo = block;
+            *hi = block + 1;
+        } else {
+            *lo = 0;
+            *hi = block == kNoRegion ? 0 : count_;
+        }
+    }
+
+    void reindex() noexcept {
+        for (uint8_t& b : block_) b = kNoRegion;
+        for (int i = 0; i < count_; ++i) {
+            const uint64_t first = regions_[i].base >> 28;
+            const uint64_t last = (static_cast<uint64_t>(regions_[i].base) + regions_[i].window - 1) >> 28;
+            for (uint64_t n = first; n <= last && n < 16; ++n) block_[n] = block_[n] == kNoRegion ? static_cast<uint8_t>(i) : kSeveral;
+        }
+    }
+
     Region regions_[kMaxRegions]{};
+    uint8_t block_[16] = {kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion,
+                          kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion};
     int count_ = 0;
 };
 
