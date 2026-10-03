@@ -327,9 +327,13 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   - Found and fixed separately, because they are bugs in existing code and not part of this work: `Timer32` raised `ZeroDivisionError` for a
     ZIGZAG counter with `TOP == 0` (found by this phase's random writes into the PWM registers; rp2040js reads 0 there), and
     `MockClock.advance()` counted the current time twice (nothing used it). Each has its own commit and its own test.
-  Still open from Phase 1: the other toolchains' results (CI will say: macOS and Windows built the earlier memory-map commit and passed their
-  hooks; whether the *extension* built there was not provable from the logs, hence the `RP2040PY_REQUIRE_NATIVE` guard) and nothing else - the window
-  registry was the last item of the plan's Phase 1 list. The CPU is still the Cython `CortexM0Core` (Phase 2).
+  **CI result for this commit (`9c8391f`), all green:** Pre-commit on ubuntu, windows and macos - with `RP2040PY_REQUIRE_NATIVE=1`
+  (`tests/test_native_extension_built.py`, added after the first Phase 1 CI round could not prove from its logs that the extension had built
+  off Linux), so the extension **was built** on Windows (MSVC, `/std:c++17 /EHs-c- /GR-`) and macOS (clang, `-std=c++17 -fno-exceptions -fno-rtti`) and
+  the parity tests ran there; plus the Pico SDK, Kaluma, CircuitPython and MicroPython firmware workflows. That closes the "other toolchains" item
+  below for the desktop targets. **Still untried:** Android, iOS, Emscripten/Pyodide and the cibuildwheel matrix (`publish.yml` runs on release, not
+  per push); the abi3 (3.11) build was built and run locally with the earlier memory-map commit but not with the window registry.
+  Phase 1 is complete against the plan's list; the CPU is still the Cython `CortexM0Core` (Phase 2).
 - 2026-10-03: **Phase 1, first half - the C++ skeleton and the caller-owned memory map landed and are verified; the window
   registry and the cross-toolchain checks did not, so Phase 1 stays open.**
   Done:
