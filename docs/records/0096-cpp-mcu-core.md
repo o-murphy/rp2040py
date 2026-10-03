@@ -299,6 +299,30 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 4b - the Cortex-M0+ core is C++ (`core/cpu.hpp` + `core/cpu_ops.hpp`); `CortexM0Core` is a shell over it.**
+  - `Cpu` owns all architectural state (registers, flags, stack banking, the exception model, NVIC-side priorities) and the decode/execute loop: ~90 Thumb handlers
+    transcribed from the Cython `op_*` functions, the same `match_pattern`/`resolve_wide` decode, a 64K-entry dispatch table built once per shared object. It calls the
+    `Bus` of step 4a directly. Three things leave C++ through a `CpuHost`: `on_break` (BKPT/UDF), `bl_taken` and `log`. `bl_taken` is a call-tracing hook that used to
+    be a Python lambda called on **every** BL/BLX; it is now invoked only while a real hook is installed (`bl_hook_enabled`), the default no-op never leaves C++.
+  - **Failure model.** A Python error raised inside a bus access or a host call cannot unwind through C++; it is parked in `_pending.pyx`, whose new `pending_flag()` exposes
+    a plain `int` the core polls after each such call (a header-level global would be one copy per extension, so the flag lives in the one module everyone cimports). The
+    instruction returns `kCpuFault` at that point - a failed load never writes its register, a failed instruction never counts cycles, earlier effects stay - and
+    `execute_instruction()` re-raises. Same state the Python exception left.
+  - `native/_cortex_m0_core.pyx` shrank from 1.7k lines to a shell: every field is a property onto the C++ struct (same names, same masking), `registers` and
+    `interrupt_priorities` are memoryviews over the C++ arrays (zero-copy; `core.registers[i] = x` writes what the instruction loop reads). `_simulator.pyx` reads
+    `core._cpu.waiting` as a C field.
+  - **Proof.** (1) The state of the old Cython core and the new one after every 100 000 instructions of a real boot - MicroPython (2 M instructions) and CircuitPython (3 M):
+    pc, cycles, all 16 registers, flags, IPSR, mode, pending interrupts and an MD5 of SRAM - is byte-identical. (2) `tests/test_cpu_parity.py`: 24 x 1 500 single-step trials
+    against the **pure-Python** core - a complete random machine state (registers, flags, mode, stack selection, pending/enabled interrupts, priorities, VTOR, SRAM) and a random
+    opcode (biased towards the wide encodings and the data-processing group), one instruction, then registers, flags, exception state, SRAM, the log and `on_break` calls must
+    match. Mutants (LSRS carry at shift 32, MOV to SP, LDRSH sign, SXTB, the EXC_RETURN value, the PendSV priority test) all fail it; the first version of the opcode
+    distribution let the LSRS-by-32 mutant survive, which is why it is biased. (3) The whole suite, `tests/cpp/test_cpu.cpp`, and trace replay.
+  - **Two bugs in the existing code, found by (2), fixed in their own commit before this one** (`fix: banked stack pointer is masked on a stack switch; pure ROR by a
+    multiple of 32`): the Cython `switch_stack` copied the banked word into SP unmasked (the pure core masks it); the pure `ROR` by a multiple of 32 pushed `input << 32` into the
+    native `u32` helper. An unaligned halfword access is deliberately not compared (undefined in both, as in the bus parity test): the trial moves its base register instead.
+  - Speed (this machine, noisy): CircuitPython boot 4.5 s -> 3.5 s; synthetic loop (clock ticked after every instruction) 19-21 -> 25.5 Minstr/s. The loop itself is still
+    the Cython `_execute_batch`, one `execute_instruction()` call per instruction; step 4c moves it.
+
 - 2026-10-03: **Phase 2, step 4a - the system bus is one C++ object (`core/bus.hpp`); the CPU can now call it directly.**
   - What `RP2040.read/write_uint8/16/32` of `_rp2040.pyx` decoded is now `Bus`: the caller-owned `MemoryMap`, the `WindowMap`, a handler each for the PPB and SIO,
     and a `BusHost` (`warn`, `dpram_written`) for the two things it cannot do itself (log, tell the USB controller). Every quirk moved with it (unaligned 32-bit reads

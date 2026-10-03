@@ -92,7 +92,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
             ticks_since_check = 0
             if time.monotonic() - batch_start > BATCH_YIELD_BUDGET_SECONDS:
                 break
-        if core.waiting:
+        if core._cpu.waiting:
             if pending_nanos:
                 clock.tick(pending_nanos)
                 pending_nanos = 0.0

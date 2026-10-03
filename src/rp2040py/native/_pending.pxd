@@ -8,3 +8,7 @@
 cdef void park_error(object error) noexcept
 cdef bint has_pending_error() noexcept
 cdef int raise_if_pending() except -1
+# The address of a flag that is nonzero exactly while an error is parked: what a C++ core polls after a bus access or a
+# callback instead of calling `has_pending_error()` (a Python-module function it has no way to reach). Valid for the life of
+# the process.
+cdef const int* pending_flag() noexcept
