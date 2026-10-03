@@ -12,7 +12,7 @@
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._memory_map cimport MemoryMap
-from rp2040py.native._window_map cimport WindowMap
+from rp2040py.native._window_map cimport WindowHandler, WindowMap
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 
@@ -43,6 +43,11 @@ cdef class RP2040:
     # `peripherals` dict stays the Python-visible source of truth and mirrors every change into it
     # (_PeripheralTable); `_window_owners` keeps the handlers' Python-side contexts alive.
     cdef WindowMap _windows
+    # SIO sits outside the window table (0xD0000000+). `sio` is a property: a block that lends a native handler
+    # (`_native_window`, looked up on its type) is called through it directly; anything else goes through Python.
+    cdef object _sio
+    cdef bint _sio_native
+    cdef WindowHandler _sio_handler
     cdef dict _window_owners
     cdef object _peripherals
     cdef unsigned char[:] _sram

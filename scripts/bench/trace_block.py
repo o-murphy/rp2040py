@@ -47,6 +47,17 @@ def _chip_with_timer(kind: str):
     return chip
 
 
+def _chip_with_sio(kind: str):
+    """A bare chip whose SIO is the native block ("native", the default) or the pure-Python reference ("pure")."""
+    from rp2040py._sio import RPSIO as PureSIO
+    from rp2040py.rp2040 import RP2040
+
+    chip = RP2040()
+    if kind == "pure":
+        chip.sio = PureSIO(chip)
+    return chip
+
+
 async def record_workload(
     workload_name: str, block: "int | str", irqs: "tuple[int, ...]", *, sleep: bool, timer: str = "native"
 ) -> "list":
@@ -55,6 +66,10 @@ async def record_workload(
     device = MicroPythonDevice(
         board=resolve_board_spec(workload.board, spec, workload.tag), circuitpython=workload.circuitpython
     )
+    if block == SIO and timer == "pure":  # record the pure-Python SIO instead of the native one
+        from rp2040py._sio import RPSIO as PureSIO
+
+        device.mcu.sio = PureSIO(device.mcu)
     if block == 0x40054 and timer == "pure":  # record the pure-Python TIMER instead of the native one
         from rp2040py.peripherals._timer import RPTimer as PureTimer
 
@@ -78,13 +93,16 @@ def main() -> int:
     parser.add_argument("--sleep", action="store_true", help="also run the workload's 1 s sleep phase (~10^6 events)")
     parser.add_argument("--save", help="write the trace here (gzip JSON lines)")
     parser.add_argument(
-        "--record-timer", choices=["native", "pure"], default="native", help="which TIMER to record (timer block only)"
+        "--record-timer",
+        choices=["native", "pure"],
+        default="native",
+        help="which TIMER/SIO to record (timer and sio blocks)",
     )
     parser.add_argument(
         "--replay-timer",
         choices=["native", "pure"],
         default="native",
-        help="which TIMER to replay against (timer block only)",
+        help="which TIMER/SIO to replay against (timer and sio blocks)",
     )
     args = parser.parse_args()
 
@@ -100,7 +118,8 @@ def main() -> int:
         print(f"saved {args.save}")
 
     start = time.perf_counter()
-    mismatches = replay(events, key, irqs, factory=lambda: _chip_with_timer(args.replay_timer))
+    make_chip = _chip_with_sio if key == SIO else _chip_with_timer
+    mismatches = replay(events, key, irqs, factory=lambda: make_chip(args.replay_timer))
     print(f"replayed in {time.perf_counter() - start:.1f}s: {len(mismatches)} mismatches")
     for mismatch in mismatches[:10]:
         print("  ", mismatch)

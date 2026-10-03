@@ -299,6 +299,27 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 3 of 4 - SIO is C++ (registers, spinlocks, the divider and both interpolators), reached by the bus without Python.**
+  - `native/core/interpolator.hpp` and `native/core/sio.hpp` (`SioBlock`): a line-for-line translation of `interpolator.py` / `sio.py` (now `_sio.py`, kept as the
+    pure-Python reference and the oracle; `sio.py` became the facade, re-exporting `RPSIO` and every register offset). Quirks kept on purpose, because trace
+    replay is the acceptance test: the divider's quotient is a genuinely fractional `double` (only the bus truncates it); the divide-by-zero result tests
+    the dividend as written with `> 0`; pin re-evaluation after a write is GPIO-only and skipped for spinlock writes; an invalid write warns with the *unmasked*
+    value. The one way the Python block raises - a divisor that is non-zero as written but zero as 32 bits (2**32) - is reported by the block
+    (`kSioFailDivideByZero`) and re-raised as `ZeroDivisionError` by the shell, with quotient/remainder/CSR/cycles untouched, as in Python.
+  - Everything the block cannot own goes through a `SioHost` of function pointers (Python trampolines today, the C++ GPIO block and CPU in Phase 3 / step 4): pin
+    input levels, `check_for_updates()` of the pins whose SIO-driven state changed, the divider's 8 cycles, the logger - same messages, word for word.
+  - `native/_sio.pyx`: the shell (`gpio_value`, `gpio_output_enable`, the QSPI pair, the divider operands as properties; `interp0`/`interp1` views with the pure
+    `Interpolator`'s attribute names). SIO is not a peripheral-table window (0xD0000000+), so `RP2040.sio` became a property: a block whose **type** has
+    `_native_window` is called by the bus through its C++ handler (a wrapper/recorder that merely forwards attributes is not bypassed and keeps the Python path).
+  - Proof: `tests/cpp/test_sio.cpp` (expectations cross-checked against the Python block, not assumed); `tests/test_sio_parity.py` - 80 randomized register
+    sessions plus 120 structured interpolator sessions (every control-word field drawn on purpose) against the pure block on a stand-in chip that records pin
+    updates, cycles and logs; `tests/test_sio_bus.py` - native chip vs pure chip over random 8/16/32-bit SIO bus traffic, a wrapper still seeing every access,
+    and divide-by-zero / failing pin update surfacing from the bus write. Mutation checks (cycles 8->9, divide-by-zero `>` -> `>=`, a skipped pin, blend alpha mask,
+    interpolator mask) all fail the suite. The first interpolator mutants *survived* the uniform-random session (blend only acts from INTERP0's CTRL_LANE0), which
+    is why the structured one exists. Real firmware: `scripts/bench/trace_block.py sio` (mp-idle and cp-boot, recorded and replayed across native/pure
+    combinations) gives 0 mismatches.
+  - Not yet: the SIO share of a boot's wall-clock gain is not measured separately; step 4 (CPU + batch loop) is what removes the trampolines' Python.
+
 - 2026-10-03: **Phase 2, step 2 of 4 - the TIMER is C++, and a firmware's TIMELR poll no longer touches Python.**
   - `native/core/timer.hpp`: `TimerBlock`, a translation of `peripherals/timer.py` (kept as the pure-Python reference and the oracle): the counter
     epoch, the latched high word, INTR/INTE/INTF, PAUSE and four alarms scheduled on the C++ `Clock`. The two things it cannot own reach the outside through

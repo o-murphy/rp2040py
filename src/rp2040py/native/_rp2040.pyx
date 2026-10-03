@@ -661,7 +661,11 @@ cdef class RP2040:
             # consumer (typed-array store, bitwise op) truncates it immediately via ToUint32, so
             # truncate here rather than letting a float leak into the rest of the bus/CPU/DMA
             # read path.
-            return <unsigned int> (int(self.sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFFU)
+            if self._sio_native:
+                word = self._sio_handler.read32(self._sio_handler.ctx, addr - SIO_START)
+                raise_if_pending()
+                return word
+            return <unsigned int> (int(self._sio.read_uint32(addr - SIO_START)) & 0xFFFFFFFFU)
 
         if self._windows.read32(addr, &word) != kNoWindow:
             raise_if_pending()
@@ -669,6 +673,27 @@ cdef class RP2040:
 
         self.logger.warning(LOG_NAME, f"Read from invalid memory address: {addr:x}")
         return 0xFFFFFFFFU
+
+    @property
+    def sio(self):
+        return self._sio
+
+    @sio.setter
+    def sio(self, value) -> None:
+        # The native fast path is looked up on the TYPE, as for the peripheral windows: a recorder or profiler that
+        # forwards attributes must still see every access, and a Mock must not answer for every name.
+        cdef WindowHandler handler
+        native_window = getattr(type(value), "_native_window", None)
+        self._sio = value
+        if native_window is None:
+            self._sio_native = False
+            return
+        read_ptr, write_ptr, ctx_ptr = native_window(value)
+        handler.read32 = <Read32Fn> <size_t> read_ptr
+        handler.write32 = <Write32Fn> <size_t> write_ptr
+        handler.ctx = <void*> <size_t> ctx_ptr
+        self._sio_handler = handler
+        self._sio_native = True  # `_sio` holds the block, and so keeps the context pointer alive
 
     @property
     def peripherals(self):
@@ -759,7 +784,11 @@ cdef class RP2040:
             if self._mem.region(region).flags & kNotifyOnWrite:
                 self.usb_ctrl.dpram_updated(addr - self._mem.region(region).base, value)
         elif SIO_START <= addr < SIO_START + 0x10000000:
-            self.sio.write_uint32(addr - SIO_START, value)
+            if self._sio_native:
+                self._sio_handler.write32(self._sio_handler.ctx, addr - SIO_START, value, 0)
+                raise_if_pending()
+            else:
+                self._sio.write_uint32(addr - SIO_START, value)
         elif (addr >> 12) == 0xE000E:
             self.ppb.write_uint32(addr & 0xFFF, value)
         elif self._windows.write32(addr, value) != kNoWindow:
