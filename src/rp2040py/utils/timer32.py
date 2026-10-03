@@ -66,6 +66,11 @@ class Timer32:
         zigzag = timer_mode == TimerMode.ZIGZAG
         ticks = ((self.clock.nanos - base_nanos) / 1e9) * (base_freq / prescaler_value)
         top_modulo = self._top_value * 2 if zigzag else self._top_value + 1
+        if top_modulo == 0:
+            # ZIGZAG with TOP == 0: a counter with one state (it counts 0 -> 0), so there is nothing to
+            # take a modulo of. rp2040js's timer32.ts, which this mirrors, computes `x % 0` there - NaN in
+            # JS, which `& 0xFFFFFFFF` turns into 0 - so the counter reads 0. Python raises instead.
+            return 0
         delta = top_modulo - (ticks % top_modulo) if timer_mode == TimerMode.DECREMENT else ticks
         current_value = _js_round(base_value + delta)
         if self._top_value != 0xFFFFFFFF:
