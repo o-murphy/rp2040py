@@ -79,6 +79,8 @@ USE_LIMITED_API = (
 # rejects absolute paths in Extension sources ("setup() arguments must *always* be /-separated
 # paths relative to the setup.py directory").
 _NATIVE_DIR = Path("src/rp2040py/native")
+# The C++17 MCU core (docs/records/0096-cpp-mcu-core.md): header-only today, statically compiled into the Cython modules.
+_CORE_DIR = _NATIVE_DIR / "core"
 
 # Explicit optimization flags rather than relying on the ambient interpreter's own sysconfig
 # CFLAGS: those happen to already include -O3 on a normal CPython build, but that's an implicit
@@ -105,10 +107,10 @@ is_macos = platform.system() == "Darwin"
 # optimization pass available, and this is a small, self-contained extension where -O3's usual
 # risks (code bloat, aggressive inlining hurting icache on a large codebase) don't apply.
 if is_msvc:
-    _EXTRA_COMPILE_ARGS = ["/O2", "/W3"]
+    _EXTRA_COMPILE_ARGS = ["/O2", "/W3", "/std:c++17"]
     _EXTRA_LINK_ARGS: list[str] = []
 elif is_macos:
-    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17"]
     # No -Wl,-strip-all here: that's GNU ld syntax (see the Linux branch below) - Apple's linker
     # rejects it outright ("ld: unknown options: -strip-all"), which broke every macOS wheel build
     # the one time this was tried unconditionally on "not Windows" instead of "Linux specifically"
@@ -125,10 +127,10 @@ elif IS_EMSCRIPTEN:
     # duplicate what the cross-build environment already applies.
     # "-Wl,-strip-all" is dropped: em++'s linker wrapper does not reliably
     # support arbitrary native-ld passthrough flags for stripping.
-    _EXTRA_COMPILE_ARGS = ["-std=c99"]
+    _EXTRA_COMPILE_ARGS = ["-std=c++17"]
     _EXTRA_LINK_ARGS = []
 else:
-    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c99"]
+    _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17"]
     # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
     # wheel, marginally faster load - doesn't touch the optimizations above, which happen at
     # compile time on the .c GCC/Clang already emitted from Cython's own generated source). GNU ld
@@ -159,6 +161,13 @@ def _build_ext_modules() -> list[Extension]:
         Extension(
             f"rp2040py.native.{path.stem}",
             [str(path)],
+            # C++17 for every module, not just the one that links the core: `_rp2040.pxd` (and so every
+            # module that cimports it) carries C++ members of the MCU core (docs/records/0096, D3), and a
+            # C translation unit cannot compile a struct with a C++ member. The core itself is header-only
+            # for now (core/*.hpp), so there are no extra sources to link - only the include path.
+            language="c++",
+            include_dirs=[str(_CORE_DIR)],
+            depends=[str(p) for p in sorted(_CORE_DIR.glob("*.hpp"))],
             py_limited_api=USE_LIMITED_API,
             define_macros=[("Py_LIMITED_API", _ABI3_HEX)] if USE_LIMITED_API else [],
             extra_compile_args=_EXTRA_COMPILE_ARGS,

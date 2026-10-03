@@ -99,6 +99,7 @@ tmp/
 # native
 src/**/*.html
 src/**/*.c
+src/**/*.cpp
 
 # C extensions
 src/**/*.dll

@@ -11,6 +11,7 @@
 # `rp2040.core` resolve as an attribute from outside Cython in the first place.
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
+from rp2040py.native._memory_map cimport MemoryMap
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 
@@ -34,6 +35,9 @@ cdef class RP2040:
     # clock.simulation_clock facade resolves to, so it satisfies this typed field too - see that
     # module's docstring for why this doesn't shut out other IClock implementations.
     cdef public SimulationClock clock
+    # The caller-owned memory map (record 0096, Phase 1): a table of pointers into the four buffers below,
+    # which stay allocated and owned here as Python objects. The C++ side never allocates or copies.
+    cdef MemoryMap _mem
     cdef unsigned char[:] _sram
     cdef unsigned char[:] _flash
     cdef unsigned char[:] _usb_dpram
@@ -43,6 +47,8 @@ cdef class RP2040:
     cdef unsigned int flash_byte_size
     cdef unsigned int dpram_byte_size
     cdef dict __dict__
+
+    cdef void _attach_memory_regions(self)
 
     # `address`/`value` typed `long long` (not left as plain `object`, the implicit default for
     # an untyped cpdef parameter): every call site on the hot path (execute_instruction's opcode

@@ -19,7 +19,17 @@ statically-typed local and call tick()/nanos_to_next_alarm/has_scheduled_alarm a
 dispatch - see native/_simulation_clock.pyx's own module docstring for the full rationale.
 """
 
+from libc.stdint cimport uint8_t, uint32_t
+
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
+from rp2040py.native._memory_map cimport (
+    MemoryMap,
+    Region,
+    kNotHandled,
+    kNotifyOnWrite,
+    kSubWord,
+    kWordIndexed,
+)
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
@@ -83,7 +93,7 @@ from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.peripherals.watchdog import RPWatchdog
 from rp2040py.peripherals.xosc import RPXOSC
 from rp2040py.sio import RPSIO
-from rp2040py.native._bit cimport read_uint16_le, read_uint32_le, u32, write_uint16_le, write_uint32_le
+from rp2040py.native._bit cimport u32, write_uint16_le
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 # Deliberately NOT `from cpython cimport array`: that pulls in CPython-internal array.array
@@ -137,7 +147,48 @@ cdef class RP2040:
         self.flash_byte_size = len(self._flash)
         self._usb_dpram = bytearray(4 * KB)
         self.dpram_byte_size = len(self._usb_dpram)
+        self._attach_memory_regions()
         self.core = CortexM0Core(self)
+
+    cdef void _attach_memory_regions(self):
+        """Hands the C++ memory map pointers into the four buffers above (record 0096, Phase 1, D2).
+        Zero-copy: the map holds the buffers' own addresses; they never move because the typed
+        memoryviews pin them (a bytearray/array.array cannot be resized while exported). The
+        per-region flags and mirror masks reproduce the pre-Phase-1 behaviour exactly - see
+        core/memory_map.hpp and tests/test_memory_map_parity.py."""
+        cdef Region region
+        # Boot ROM: word-indexed, no sub-word fast path (composed from 32-bit reads, as before).
+        region.base = 0
+        region.window = self.bootrom_byte_size
+        region.size = self.bootrom_byte_size
+        region.mask = 0xFFFFFFFFU
+        region.data = <uint8_t*> &self._bootrom[0]
+        region.flags = kWordIndexed
+        self._mem.attach(region)
+        # Flash: four 16 MiB aliases for reads (XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC); writes and
+        # sub-word accesses only below the real flash size.
+        region.base = FLASH_START
+        region.window = FLASH_END - FLASH_START
+        region.size = self.flash_byte_size
+        region.mask = 0x00FFFFFFU
+        region.data = <uint8_t*> &self._flash[0]
+        region.flags = kSubWord
+        self._mem.attach(region)
+        region.base = RAM_START
+        region.window = self.ram_byte_size
+        region.size = self.ram_byte_size
+        region.mask = 0xFFFFFFFFU
+        region.data = <uint8_t*> &self._sram[0]
+        region.flags = kSubWord
+        self._mem.attach(region)
+        # USB DPRAM: a completed 32-bit write must reach `usb_ctrl.dpram_updated()`.
+        region.base = DPRAM_START
+        region.window = self.dpram_byte_size
+        region.size = self.dpram_byte_size
+        region.mask = 0xFFFFFFFFU
+        region.data = <uint8_t*> &self._usb_dpram[0]
+        region.flags = kNotifyOnWrite
+        self._mem.attach(region)
 
     def __init__(self, clock: IClock | None = None):
         # NOTE: must be set before constructing any peripheral below - several of them
@@ -517,24 +568,14 @@ cdef class RP2040:
             self._flash[:] = filler
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
-        cdef unsigned int offset
+        cdef uint32_t word
         if addr & 0x3:
             self.logger.warning(LOG_NAME, f"read from address {addr:x}, which is not 32 bit aligned")
 
-        if addr < self.bootrom_byte_size:
-            return self._bootrom[addr // 4]
-        if FLASH_START <= addr < FLASH_END:
-            # Flash is mirrored four times:
-            # - 0x10000000 XIP
-            # - 0x11000000 XIP_NOALLOC
-            # - 0x12000000 XIP_NOCACHE
-            # - 0x13000000 XIP_NOCACHE_NOALLOC
-            offset = addr & 0x00FFFFFF
-            return read_uint32_le(self._flash, offset)
-        if RAM_START <= addr < RAM_START + self.ram_byte_size:
-            return read_uint32_le(self._sram, addr - RAM_START)
-        if DPRAM_START <= addr < DPRAM_START + self.dpram_byte_size:
-            return read_uint32_le(self._usb_dpram, addr - DPRAM_START)
+        # Boot ROM, flash (mirrored four times: XIP 0x10000000, XIP_NOALLOC 0x11000000, XIP_NOCACHE
+        # 0x12000000, XIP_NOCACHE_NOALLOC 0x13000000), SRAM and USB DPRAM: the C++ memory map.
+        if self._mem.read32(addr, &word) != kNotHandled:
+            return word
         if (addr >> 12) == 0xE000E:
             return <unsigned int> self.ppb.read_uint32(addr & 0xFFF)
         if SIO_START <= addr < SIO_START + 0x10000000:
@@ -557,25 +598,18 @@ cdef class RP2040:
     cpdef unsigned int read_uint16(self, long long address):
         """We assume the address is 16-bit aligned."""
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
-        cdef unsigned int offset
-        cdef unsigned int value
-        if FLASH_START <= addr < FLASH_START + self.flash_byte_size:
-            offset = addr - FLASH_START
-            return read_uint16_le(self._flash, offset)
-        if RAM_START <= addr < RAM_START + self.ram_byte_size:
-            offset = addr - RAM_START
-            return read_uint16_le(self._sram, offset)
+        cdef uint32_t value
+        if self._mem.read16(addr, &value) != kNotHandled:
+            return value
 
         value = self.read_uint32(addr & 0xFFFFFFFCU)
         return (value & 0xFFFF0000U) >> 16 if (addr & 0x2) else (value & 0xFFFF)
 
     cpdef unsigned int read_uint8(self, long long address):
         cdef unsigned int addr = <unsigned int> (address & 0xFFFFFFFFU)
-        cdef unsigned int value
-        if FLASH_START <= addr < FLASH_START + self.flash_byte_size:
-            return self._flash[addr - FLASH_START]
-        if RAM_START <= addr < RAM_START + self.ram_byte_size:
-            return self._sram[addr - RAM_START]
+        cdef uint32_t value
+        if self._mem.read8(addr, &value) != kNotHandled:
+            return value
 
         value = self.read_uint16(addr & 0xFFFFFFFEU)
         return <unsigned int> ((value & 0xFF00) >> 8 if (addr & 0x1) else (value & 0xFF))
@@ -585,6 +619,7 @@ cdef class RP2040:
         cdef unsigned int val = <unsigned int> (value & 0xFFFFFFFFU)
         cdef unsigned int atomic_type
         cdef unsigned int offset
+        cdef int region
         # Same range order as read_uint32() - RAM/flash/bootrom checked first via cheap integer
         # comparisons, find_peripheral() (a dict lookup) only as the fallback for what's left.
         #
@@ -593,16 +628,10 @@ cdef class RP2040:
         # `self.div_dividend > 0` check) relies on receiving the true signed Python int, not its
         # unsigned 32-bit truncation; s32()/u32() are idempotent either way, but a raw `> 0`
         # comparison on a pre-masked value is not.
-        if addr < self.bootrom_byte_size:
-            self._bootrom[addr // 4] = val
-        elif FLASH_START <= addr < FLASH_START + self.flash_byte_size:
-            write_uint32_le(self._flash, addr - FLASH_START, val)
-        elif RAM_START <= addr < RAM_START + self.ram_byte_size:
-            write_uint32_le(self._sram, addr - RAM_START, val)
-        elif DPRAM_START <= addr < DPRAM_START + self.dpram_byte_size:
-            offset = addr - DPRAM_START
-            write_uint32_le(self._usb_dpram, offset, val)
-            self.usb_ctrl.dpram_updated(offset, value)
+        region = self._mem.write32(addr, val)
+        if region != kNotHandled:
+            if self._mem.region(region).flags & kNotifyOnWrite:
+                self.usb_ctrl.dpram_updated(addr - self._mem.region(region).base, value)
         elif SIO_START <= addr < SIO_START + 0x10000000:
             self.sio.write_uint32(addr - SIO_START, value)
         elif (addr >> 12) == 0xE000E:
@@ -623,8 +652,7 @@ cdef class RP2040:
         cdef unsigned int offset
         cdef unsigned int atomic_type
         cdef unsigned int peripheral_offset
-        if RAM_START <= addr < RAM_START + self.ram_byte_size:
-            self._sram[addr - RAM_START] = val
+        if self._mem.write8(addr, val) != kNotHandled:
             return
 
         aligned_address = addr & 0xFFFFFFFCU
@@ -653,8 +681,7 @@ cdef class RP2040:
         cdef unsigned int offset
         cdef unsigned int atomic_type
         cdef unsigned int peripheral_offset
-        if RAM_START <= addr < RAM_START + self.ram_byte_size:
-            write_uint16_le(self._sram, addr - RAM_START, val)
+        if self._mem.write16(addr, val) != kNotHandled:
             return
 
         aligned_address = addr & 0xFFFFFFFCU

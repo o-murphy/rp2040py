@@ -299,6 +299,38 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 1, first half - the C++ skeleton and the caller-owned memory map landed and are verified; the window
+  registry and the cross-toolchain checks did not, so Phase 1 stays open.**
+  Done:
+  - `src/rp2040py/native/core/memory_map.hpp`: header-only C++17, no exceptions/RTTI/STL, no allocation. A table of caller-owned
+    regions `{base, window, size, mask, data, flags}`; `kWordIndexed`, `kSubWord` and `kNotifyOnWrite` reproduce the old bus's
+    quirks exactly (flash mirrors are read-only and never used by sub-word accesses; the boot ROM is word-indexed; a DPRAM write
+    is reported so the caller can run `usb_ctrl.dpram_updated`).
+  - `setup.py`: every native module is now compiled as **C++17** (`language="c++"`, `-std=c++17` / `/std:c++17`, `include_dirs`,
+    `depends` on the headers). All of them, not just `_rp2040`, because `_rp2040.pxd` now carries a C++ member and every module
+    that cimports it compiles that struct - a C translation unit cannot. Built and run here: CPython 3.10 (normal build) and
+    **3.11 abi3 (`Py_LIMITED_API`)** - C++ under the limited API works.
+  - `native/_rp2040.pyx`: `_attach_memory_regions()` hands the map pointers into the four existing buffers (zero-copy: they stay
+    Python-owned and pinned by the typed memoryviews), and the 8/16/32-bit reads and writes of boot ROM, flash, SRAM and DPRAM go
+    through it. The Python API is untouched (`rp2040.sram`, `.flash`, ... are the same memoryviews; the CPU still calls
+    `RP2040.read_uint32` etc.).
+  - Tests: `tests/cpp/test_memory_map.cpp` run by `tests/test_core_cpp.py` (built with the core's own flags, `-fno-exceptions
+    -fno-rtti -Wall -Wextra -Werror`, which the extension build does not use; every header must also compile on its own);
+    `tests/test_memory_map_parity.py` replays 4 seeds x ~6,000 randomized and edge-case accesses (all four flash mirrors, region ends,
+    the gaps, unaligned 32-bit) on the pure-Python and the native chip and compares every read, the final bytes and the DPRAM hook
+    calls. A deliberately wrong flash mirror mask in the native build is caught by all four seeds.
+  - Speed, as expected for a translation: synthetic loop 15.2-17.9 Minstr/s before, 17.7-21.4 after (three paired best-of-2 runs, +-15% noise) -
+    not worse; the abi3 build still runs ~6.3 (the same ~2.5-3x abi3 penalty as before, not changed by this).
+  - Found by the parity test: an odd-address 16-bit write is outside the old contract (`write_uint16`: "we assume that address is
+    16-bit aligned") - the pure bus drops the high byte and the old Cython bus wrote past a 4-byte scratch buffer. The parity test keeps
+    16-bit accesses aligned and says so; the C++ map answers "not handled" for any access whose bytes would run past a buffer
+    (the old answer was undefined behaviour or `IndexError`).
+  Not done, so Phase 1 is not closed:
+  - The **window registry** (`attach_window`, the handler table with `(offset, raw_value, atomic_type)` per D2's amendment): everything
+    that is not memory is still dispatched by the Cython `RP2040`'s dict lookup.
+  - **Other toolchains.** Only Linux/gcc was built (3.10 normal, 3.11 abi3). MSVC (`/std:c++17`), clang/macOS, Android, iOS, Emscripten
+    and the cibuildwheel matrix are unverified; the per-toolchain flags in `setup.py` are a best reading, tested on none of them.
+  - The `.pyi` stubs and mypy coverage need no change here (no Python-visible name changed) - noted so the next phase checks it again.
 - 2026-10-03: **Phase 0 done - harness merged, workloads measured, parity oracle self-tested (and it found something).**
   Committed: `scripts/bench/synthetic.py` (the 8-instruction loop, `--mmio` variant), `scripts/bench/profile_access.py`
   (per-block access counting through `MicroPythonDevice`, per phase; four workloads), `scripts/bench/trace_block.py`
