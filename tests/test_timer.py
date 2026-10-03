@@ -57,3 +57,21 @@ def test_intf_forces_interrupt_even_when_inte_is_zero(rp2040_factory):
     rp2040.write_uint32(INTF, 0x4)
     # The corresponding interrupt bit should be 1
     assert rp2040.read_uint32(INTS) == 0x4
+
+
+ALARM0 = 0x40054010
+
+
+def test_alarm_registers_hold_32_bits(rp2040_factory):
+    """ALARMn is a 32-bit register: a write wider than that (or negative) reads back masked. The stored value used to be the
+    raw Python int, so the bus's 32-bit read-back of it raised OverflowError."""
+    rp2040 = rp2040_factory(MockClock())
+
+    rp2040.write_uint32(ALARM0, -1)
+    assert rp2040.read_uint32(ALARM0) == 0xFFFFFFFF
+
+    rp2040.write_uint32(ALARM0, 0x1_0000_0005)
+    assert rp2040.read_uint32(ALARM0) == 5
+
+    rp2040.write_uint32(ALARM0, 0x1234)
+    assert rp2040.read_uint32(ALARM0) == 0x1234

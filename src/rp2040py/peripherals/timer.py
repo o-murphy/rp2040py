@@ -156,7 +156,9 @@ class RPTimer(BasePeripheral):
             alarm = self.alarms[alarm_index]
             delta_micros = _to_uint32(value - self._micros())
             alarm.armed = True
-            alarm.target_micros = value
+            # ALARMn is a 32-bit register: keep what a read of it would return, not the raw Python int the caller passed
+            # (a negative or wider one made the bus's 32-bit read-back raise OverflowError).
+            alarm.target_micros = value & 0xFFFFFFFF
             alarm.clock_alarm.schedule(delta_micros * 1000)
 
         elif offset == ARMED:
