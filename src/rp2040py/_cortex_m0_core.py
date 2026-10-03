@@ -1164,8 +1164,10 @@ class CortexM0Core:
         rdn = opcode & 0x7
         input_value = self.registers[rdn]
         shift = (self.registers[rm] & 0xFF) % 32
-        result = (input_value >> shift) | (input_value << (32 - shift))
-        self.registers[rdn] = result & 0xFFFFFFFF
+        # Masked before anything else uses it: for shift == 0 the left-shift term is `input_value << 32`, and `u32()` below may be
+        # the native helper, which takes a C `long long`.
+        result = ((input_value >> shift) | (input_value << (32 - shift))) & 0xFFFFFFFF
+        self.registers[rdn] = result
         self.n = bool(result & 0x80000000)
         self.z = u32(result) == 0
         self.c = bool(result & 0x80000000)

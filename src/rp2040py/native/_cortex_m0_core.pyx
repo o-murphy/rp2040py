@@ -283,7 +283,7 @@ cdef class CortexM0Core:
         cdef unsigned int temp
         if self.sp_sel != stack:
             temp = self.registers[13]
-            self.registers[13] = self.banked_sp
+            self.registers[13] = self.banked_sp & 0xFFFFFFFCU  # as the `sp` setter does (and the pure core's switch_stack)
             self.banked_sp = temp
             self.sp_sel = stack
 
