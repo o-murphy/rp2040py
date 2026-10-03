@@ -11,8 +11,8 @@
 # `rp2040.core` resolve as an attribute from outside Cython in the first place.
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
-from rp2040py.native._memory_map cimport MemoryMap
-from rp2040py.native._window_map cimport WindowHandler, WindowMap
+from rp2040py.native._bus cimport Bus
+from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 
@@ -38,16 +38,16 @@ cdef class RP2040:
     cdef public SimulationClock clock
     # The caller-owned memory map (record 0096, Phase 1): a table of pointers into the four buffers below,
     # which stay allocated and owned here as Python objects. The C++ side never allocates or copies.
-    cdef MemoryMap _mem
+    cdef Bus _bus
     # The peripheral window registry (record 0096, Phase 1): which handler serves each 16 KiB window. The
     # `peripherals` dict stays the Python-visible source of truth and mirrors every change into it
     # (_PeripheralTable); `_window_owners` keeps the handlers' Python-side contexts alive.
-    cdef WindowMap _windows
     # SIO sits outside the window table (0xD0000000+). `sio` is a property: a block that lends a native handler
     # (`_native_window`, looked up on its type) is called through it directly; anything else goes through Python.
     cdef object _sio
-    cdef bint _sio_native
-    cdef WindowHandler _sio_handler
+    cdef object _ppb
+    cdef object _sio_owner  # the trampoline context of a Python SIO/PPB (a native block is its own context)
+    cdef object _ppb_owner
     cdef dict _window_owners
     cdef object _peripherals
     cdef unsigned char[:] _sram
@@ -61,6 +61,7 @@ cdef class RP2040:
     cdef dict __dict__
 
     cdef void _attach_memory_regions(self)
+    cdef WindowHandler _direct_handler(self, object block, bint is_sio)
 
     # `address`/`value` typed `long long` (not left as plain `object`, the implicit default for
     # an untyped cpdef parameter): every call site on the hot path (execute_instruction's opcode

@@ -299,6 +299,22 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-03: **Phase 2, step 4a - the system bus is one C++ object (`core/bus.hpp`); the CPU can now call it directly.**
+  - What `RP2040.read/write_uint8/16/32` of `_rp2040.pyx` decoded is now `Bus`: the caller-owned `MemoryMap`, the `WindowMap`, a handler each for the PPB and SIO,
+    and a `BusHost` (`warn`, `dpram_written`) for the two things it cannot do itself (log, tell the USB controller). Every quirk moved with it (unaligned 32-bit reads
+    warn and are served anyway; a sub-word access nobody serves is a read-modify-write of the aligned word, but a *window* is tried first with the value replicated; the
+    handlers get the caller's unmasked int64; the 256 MiB at 0xD0000000 is all SIO's). The Cython methods are now three lines: call, `raise_if_pending()`, return.
+  - `RP2040.sio` and `RP2040.ppb` are properties; assigning a block registers a native handler if its **type** has `_native_window`, otherwise a Python trampoline that
+    looks the methods up on every call (so a recorder/profiler/test double that replaces the PPB or SIO keeps seeing every access). The Python SIO trampoline keeps the
+    old `int(...) & 0xFFFFFFFF` truncation of the divider's quotient.
+  - Proof: `tests/cpp/test_bus.cpp`; the whole existing suite unchanged (1208 passed on the native build) - `test_memory_map_parity`, `test_peripheral_windows`,
+    `test_sio_bus` exercise every path - plus `tests/test_bus_host.py` (warning texts identical to the pure bus, a raising logger/PPB/DPRAM hook surfaces from the access,
+    a replaced PPB sees offsets and the read-modify-write), and `trace_block.py sio` on cp-boot: 0 mismatches.
+  - Design notes for 4b: the "a Python callback failed" flag is deliberately *not* a C++ global - every extension is its own shared object, so a header-level `inline` variable
+    would be one copy per module. It stays the single slot in `_pending.pyx`; the C++ CPU will ask for it through a host function (`bool (*failed)(void*)`) after each bus access.
+    The batch loop cannot be pure C++ until Phase 3: it calls `pio.advance()` (Cython, `_pio.pyx`) every iteration and polls `Simulator.stopped`; both stay host
+    callbacks until then.
+
 - 2026-10-03: **Phase 2, step 3 of 4 - SIO is C++ (registers, spinlocks, the divider and both interpolators), reached by the bus without Python.**
   - `native/core/interpolator.hpp` and `native/core/sio.hpp` (`SioBlock`): a line-for-line translation of `interpolator.py` / `sio.py` (now `_sio.py`, kept as the
     pure-Python reference and the oracle; `sio.py` became the facade, re-exporting `RPSIO` and every register offset). Quirks kept on purpose, because trace
@@ -318,7 +334,9 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
     interpolator mask) all fail the suite. The first interpolator mutants *survived* the uniform-random session (blend only acts from INTERP0's CTRL_LANE0), which
     is why the structured one exists. Real firmware: `scripts/bench/trace_block.py sio` (mp-idle and cp-boot, recorded and replayed across native/pure
     combinations) gives 0 mismatches.
-  - Not yet: the SIO share of a boot's wall-clock gain is not measured separately; step 4 (CPU + batch loop) is what removes the trampolines' Python.
+  - Measured on its own (CircuitPython boot, `cp-boot`, two runs each, pure `_sio.RPSIO` vs native on the same chip): 4.82/4.70 s -> 4.45/4.61 s, i.e. about 5%.
+    Small on purpose: every SIO access still crosses into Python for the *edges* (pin levels, `check_for_updates`, cycles, log) and the CPU still lives in Cython; step 4
+    (CPU + batch loop) is what removes those trampolines. `mp-idle` is too short (0.13 s) to show anything.
 
 - 2026-10-03: **Phase 2, step 2 of 4 - the TIMER is C++, and a firmware's TIMELR poll no longer touches Python.**
   - `native/core/timer.hpp`: `TimerBlock`, a translation of `peripherals/timer.py` (kept as the pure-Python reference and the oracle): the counter
