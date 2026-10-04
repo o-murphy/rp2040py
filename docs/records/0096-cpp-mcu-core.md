@@ -305,6 +305,16 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Tried and dropped: a `pin_wait_mask` to skip the per-input-change walk of the PIO state machines. No gain; the walk is not the cost.**
+  - Idea: every input change (`set_input_value`, 740k on the Pico W scan's data pin) makes the pin layer walk both PIOs' eight machines looking for one parked on `wait gpio`/`wait pin` for that index. A conservative mask on each `RPPIO` (bit set by
+    `StateMachine.wait()`, recomputed from the machines' real states after a delivery, a PIO without it always walked) lets a PIO that nobody waits on for the pin be skipped. Implemented, with tests of the wake-up behaviour on both builds and of the mask's contract
+    on the native one; a mutant that never set the mask failed 9 of the 10 tests; the order hash of the pin-event stream stayed identical to `main`'s on all four workloads and the three pin traces still replayed with 0 mismatches.
+  - Measured, A/B interleaved against the commit just before, three rounds of best-of-two: Pico W scan without the mask 7.24 / 7.28 / 7.49 s, with it 7.34 / 7.41 / 7.07 s (means 7.34 vs 7.27 s, inside the round-to-round spread), PIO+DMA 0.162 / 0.183 / 0.167 s vs 0.162 / 0.163 / 0.162 s.
+    So the walk is cheap (`machine.enabled and machine.waiting` fails fast for an idle machine) and the 38% of the Pico W scan is the Python *listener*, not what the pin layer does around it - as the profile said.
+  - Decision: not kept (complexity without a measured gain). The wake-up tests are kept as regression tests (`tests/test_pio_pin_wait.py`, 7 tests, both builds): they fail if a waiting machine is ever missed, whatever changes how input changes reach the machines later (for instance once PIO state is in C++).
+  - So the order stays: (1) the CYW43 gSPI split designed from `bus.py`'s per-edge path - the bit shifter on CLK/CS in C++, `read_register`/`write_register`/SDPCM in Python once per completed 32-bit word - written into this record before code; (2) the C++ shifter on the direct-listener registry;
+    (3) benchmark on the Pico W scan. Expected from the profile: the per-edge Python listener (4.05M calls, 38%) becomes ~125k word callbacks.
+
 - 2026-10-04: **Phase 3 re-planned from a profile: the rest of the pin layer is not where the time is; the CYW43 gSPI listener is.** Decision (the user's: "as you think necessary").
   - Measured with `cProfile` on the native build (no counting proxies): the paths the planned step 3 would have moved - SIO's two Python trampolines (`rp2040.gpio_values`, `update_pins`), the IO_BANK0/PADS_BANK0 windows, `update_io_interrupt`,
     `check_for_updates`, `set_input_value` - stay below 2% of the run in every workload tried: a MicroPython loop of 20,000 `Pin.value()` writes and 20,000 reads (1.2 s profiled), and the Pico W scan (11.5 s profiled). The only function over that
