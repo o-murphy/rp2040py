@@ -8,7 +8,7 @@
 # The pin's own state lives in a C++ `PinBank` of one pin (core/pin.hpp); everything below the two
 # public objects is that bank and a pointer to its only pin.
 
-from rp2040py.native._pin cimport Pin, PinBank
+from rp2040py.native._pin cimport Pin, PinBank, PinChangeFn
 
 cdef class GPIOPin:
     cdef public object rp2040
@@ -18,3 +18,10 @@ cdef class GPIOPin:
     cdef Pin* _pin
 
     cpdef check_for_updates(self)
+
+    # For C++-backed consumers that must answer in the same cycle (the CYW43 gSPI shifter): a direct listener is a function
+    # pointer called from check_for_updates() before the Python listeners, so it never crosses into Python; `bank_ptr()` is the
+    # pin's own C++ state, to read its level and drive its input from C++.
+    cdef bint add_direct_listener(self, PinChangeFn fn, void* ctx)
+    cdef bint remove_direct_listener(self, PinChangeFn fn, void* ctx)
+    cdef PinBank* bank_ptr(self)

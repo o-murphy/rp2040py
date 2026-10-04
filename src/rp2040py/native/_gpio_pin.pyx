@@ -28,6 +28,8 @@ from libcpp cimport bool as cppbool
 
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._pin cimport (
+    PinBank,
+    PinChangeFn,
     PinHost,
     apply_override,
     kSrcPio0Oe,
@@ -181,6 +183,15 @@ cdef class GPIOPin:
         after this call, the same way construction does it."""
         if not self._bank.reset(0, bool(io), bool(pads)):
             raise_if_pending()
+
+    cdef bint add_direct_listener(self, PinChangeFn fn, void* ctx):
+        return self._bank.add_direct_listener(0, fn, ctx)
+
+    cdef bint remove_direct_listener(self, PinChangeFn fn, void* ctx):
+        return self._bank.remove_direct_listener(0, fn, ctx)
+
+    cdef PinBank* bank_ptr(self):
+        return &self._bank
 
     cpdef check_for_updates(self):
         # Announces a change of the pin's state to the listeners - once, recording it first (core/pin.hpp).

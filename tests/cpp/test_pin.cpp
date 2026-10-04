@@ -219,6 +219,78 @@ static void test_a_bank_of_one_pin_uses_its_own_number() {
     CHECK(r.inputs == 1 && r.input_pin[0] == 7);
 }
 
+struct Direct {
+    int calls = 0;
+    int order_stamp = -1;
+    uint32_t pin = 0;
+    int new_state = -1;
+    int old_state = -1;
+    bool fail = false;
+    Recorder* rec = nullptr;
+    int host_changes_seen = -1;
+};
+static bool direct_fn(void* ctx, uint32_t pin, int new_state, int old_state) {
+    Direct* d = static_cast<Direct*>(ctx);
+    ++d->calls;
+    d->pin = pin;
+    d->new_state = new_state;
+    d->old_state = old_state;
+    d->host_changes_seen = d->rec != nullptr ? d->rec->changes : -1;  // how many host announcements had happened by the time this ran
+    return !d->fail;
+}
+
+static void test_direct_listeners_run_before_the_host_and_can_stop_it() {
+    Recorder r;
+    PinBank bank;
+    CHECK(bank.init(1, host_for(&r), nullptr, 5));
+    bank.pin(0).ctrl = kFuncSio;
+    r.sources[kSrcSioOe] = 1u << 5;
+    r.sources[kSrcSioValue] = 1u << 5;
+    Direct a, b;
+    a.rec = b.rec = &r;
+    CHECK(bank.add_direct_listener(0, direct_fn, &a));
+    CHECK(bank.add_direct_listener(0, direct_fn, &b));
+    CHECK(bank.check_for_updates(0));
+    CHECK(a.calls == 1 && b.calls == 1 && r.changes == 1);
+    CHECK(a.host_changes_seen == 0 && b.host_changes_seen == 0);  // both ran before the host's listener set
+    CHECK(a.pin == 5 && a.new_state == kPinHigh && a.old_state == kPinInput);
+    CHECK(bank.check_for_updates(0) && a.calls == 1);  // no change, no call
+    // A failing direct listener stops everything after it (the host included), with the pin already updated.
+    a.fail = true;
+    r.sources[kSrcSioValue] = 0;
+    CHECK(!bank.check_for_updates(0));
+    CHECK(a.calls == 2 && b.calls == 1 && r.changes == 1);
+    CHECK(bank.pin(0).last_state == kPinLow);
+    // Removal: the second listener is gone, the first still runs.
+    a.fail = false;
+    CHECK(bank.remove_direct_listener(0, direct_fn, &b));
+    CHECK(!bank.remove_direct_listener(0, direct_fn, &b));
+    r.sources[kSrcSioValue] = 1u << 5;
+    CHECK(bank.check_for_updates(0));
+    CHECK(a.calls == 3 && b.calls == 1 && r.changes == 2);
+    // Removing the *first* of several keeps the rest, in order.
+    {
+        Recorder r2;
+        PinBank bank2;
+        CHECK(bank2.init(1, host_for(&r2), nullptr, 2));
+        bank2.pin(0).ctrl = kFuncSio;
+        r2.sources[kSrcSioOe] = 1u << 2;
+        r2.sources[kSrcSioValue] = 1u << 2;
+        Direct x, y;
+        CHECK(bank2.add_direct_listener(0, direct_fn, &x));
+        CHECK(bank2.add_direct_listener(0, direct_fn, &y));
+        CHECK(bank2.remove_direct_listener(0, direct_fn, &x));
+        CHECK(bank2.check_for_updates(0));
+        CHECK(x.calls == 0 && y.calls == 1);
+    }
+    // The table is bounded.
+    Direct many[kMaxDirectListeners + 1];
+    PinBank other;
+    CHECK(other.init(1, host_for(&r)));
+    for (uint32_t n = 0; n < kMaxDirectListeners; ++n) CHECK(other.add_direct_listener(0, direct_fn, &many[n]));
+    CHECK(!other.add_direct_listener(0, direct_fn, &many[kMaxDirectListeners]));
+}
+
 static void test_pulls_and_bus_keeper() {
     Recorder r;
     PinBank bank;
@@ -389,6 +461,7 @@ int main() {
     test_sio_driven_level_and_announcement();
     test_direct_source_replaces_the_host_call();
     test_a_bank_of_one_pin_uses_its_own_number();
+    test_direct_listeners_run_before_the_host_and_can_stop_it();
     test_pulls_and_bus_keeper();
     test_input_edges_and_the_io_interrupt();
     test_level_bits_follow_the_input_and_the_interrupt_only_when_it_changes();

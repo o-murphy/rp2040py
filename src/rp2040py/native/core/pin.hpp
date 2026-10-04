@@ -69,6 +69,14 @@ struct PinHost {
     void* ctx = nullptr;
 };
 
+// A consumer that must answer in the same cycle (the CYW43 gSPI shifter on the falling clock edge) registers a direct listener: a function
+// pointer called from `check_for_updates()` *before* the host's `on_change` (the Python listener set), so it never crosses into Python.
+constexpr uint32_t kMaxDirectListeners = 4;
+struct PinListener {
+    bool (*fn)(void* ctx, uint32_t pin, int new_state, int old_state) = nullptr;  // false: it failed
+    void* ctx = nullptr;
+};
+
 struct Pin {
     uint32_t index = 0;  // the pin's number: the bit it owns in every source register and what the host is told
     uint32_t ctrl = 0;  // IO_BANK0.GPIOn_CTRL
@@ -80,6 +88,8 @@ struct Pin {
     bool raw_input_value = false;  // what the outside world drives (or its last value)
     bool driven = false;           // something is driving it (else the pad's pull decides)
     bool always_output_enabled = false;
+    PinListener direct[kMaxDirectListeners];
+    uint32_t direct_count = 0;
 };
 
 inline bool apply_override(bool value, uint32_t override_type) noexcept {
@@ -126,6 +136,29 @@ public:
 
     // A direct pointer replaces the host call for that source (e.g. SIO's own `gpio_output_enable`); nullptr goes back to the host.
     void bind_source(PinSource source, const uint32_t* direct) noexcept { direct_[source] = direct; }
+
+    // Direct listeners are called in registration order, before the host's `on_change`. They must not add or remove listeners from inside a
+    // call. Returns false if the table is full (add) or the listener is not registered (remove).
+    bool add_direct_listener(uint32_t i, bool (*fn)(void*, uint32_t, int, int), void* ctx) noexcept {
+        Pin& p = pins_[i];
+        if (p.direct_count >= kMaxDirectListeners) return false;
+        p.direct[p.direct_count].fn = fn;
+        p.direct[p.direct_count].ctx = ctx;
+        ++p.direct_count;
+        return true;
+    }
+    bool remove_direct_listener(uint32_t i, bool (*fn)(void*, uint32_t, int, int), void* ctx) noexcept {
+        Pin& p = pins_[i];
+        for (uint32_t n = 0; n < p.direct_count; ++n) {
+            if (p.direct[n].fn == fn && p.direct[n].ctx == ctx) {
+                for (uint32_t m = n + 1; m < p.direct_count; ++m) p.direct[m - 1] = p.direct[m];
+                --p.direct_count;
+                p.direct[p.direct_count] = PinListener();
+                return true;
+            }
+        }
+        return false;
+    }
 
     // --- levels -----------------------------------------------------------------------------------------------------------
 
@@ -241,6 +274,8 @@ public:
         const int last = p.last_state;
         if (s == last) return true;
         p.last_state = s;
+        for (uint32_t n = 0; n < p.direct_count; ++n)
+            if (!p.direct[n].fn(p.direct[n].ctx, p.index, s, last)) return false;
         return host_.on_change == nullptr || host_.on_change(host_.ctx, p.index, s, last);
     }
 

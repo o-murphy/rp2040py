@@ -305,6 +305,19 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 3 re-planned from a profile: the rest of the pin layer is not where the time is; the CYW43 gSPI listener is.** Decision (the user's: "as you think necessary").
+  - Measured with `cProfile` on the native build (no counting proxies): the paths the planned step 3 would have moved - SIO's two Python trampolines (`rp2040.gpio_values`, `update_pins`), the IO_BANK0/PADS_BANK0 windows, `update_io_interrupt`,
+    `check_for_updates`, `set_input_value` - stay below 2% of the run in every workload tried: a MicroPython loop of 20,000 `Pin.value()` writes and 20,000 reads (1.2 s profiled), and the Pico W scan (11.5 s profiled). The only function over that
+    threshold in the Pico W scan is the CYW43 clock listener, `external/cyw43/bus.py` `_clk_listener`: **38%** (4.4 s cumulative, 4,048,855 calls).
+  - Why it is expensive and not the pin layer: each CLK edge calls into Python, compares `GPIOPinState` IntEnum members, reads `data_pin.value` (a property that evaluates the level sources) and calls `set_input_value`. A faster pin makes that crossing cheaper, not absent;
+    only a consumer that does not leave C++ removes it.
+  - Done (committed with this entry): a **direct-listener registry in the C++ pin** (`PinBank::add_direct_listener`/`remove_direct_listener`, up to 4 per pin): function pointers called from `check_for_updates()` in registration order, *before* the Python listener set,
+    each able to stop the rest by failing (as a raising Python listener does); the pin's state is already recorded when they run. Exposed to Cython consumers as `GPIOPin.add_direct_listener()` / `bank_ptr()`. Standalone C++ checks, mutation-checked (5 mutants killed, one initially survived a removal test that only removed the last listener).
+    Existing Python listeners keep their order; only a new C++ consumer is ahead of them.
+  - Next, in this order: (1) read the per-edge path of `external/cyw43/bus.py` (`_on_clock_rising`, `_on_clock_falling`, the CS listener, how the data pin is driven) and design the split - the bit shifter on the CLK/CS edges in C++, the command/word decode and `chip.py` in Python called once per completed word or
+    transaction (so ~4M callbacks become a number of the order of the transactions); written into this record before any code; (2) the C++ shifter behind that interface, judged by the pin-event order hash (`scripts/bench/pin_events.py`), the pin trace oracle and the live CYW43 boot test (0027); (3) benchmark against the Python listener on the Pico W scan.
+  - Deferred, not dropped: the shared 30+6 pin banks with SIO calling them directly, IO_BANK0/PADS_BANK0 as native windows and `update_io_interrupt` in C++. No speed-up on any measured workload, but they are what the headless WASM profile needs (no register access reaching Python), so they belong before Phase 4's exit.
+
 - 2026-10-04: **Phase 3, step 2 done: the native `GPIOPin` is a shell over the C++ pin (`core/pin.hpp`).** Performance-neutral by design; the gain is step 3's.
   - What changed: each `GPIOPin` owns a `PinBank` of one pin (the C++ pin holds its number, so a source register's bit and what the host is told are the pin's own); the Cython class keeps the whole attribute surface as properties over the C++ fields
     (`ctrl`, `pad_value`, the three IRQ words, `index`, `_raw_input_value`, `_driven`, `_always_output_enabled`) and implements only the host: one trampoline for the level *sources* (`rp.sio`/`rp.pio[i]`/`rp.pwm` attributes, read exactly as before), the listener `set`, `update_io_interrupt()`, and
