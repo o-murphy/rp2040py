@@ -305,6 +305,29 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Measured speed-up against `main` (`6aeef40`, the pre-0096 Cython build) at the end of Phase 2.** Same machine, both builds Cython, best of two runs, outputs identical
+  (`scripts/bench/profile_access.py` workloads; MicroPython rows from the per-phase script of the earlier MicroPython-vs-Cython entry).
+
+  | Workload / phase | main | branch | speed-up |
+  |---|---|---|---|
+  | MicroPython 1.21 Pico: boot + enumerate | 0.076 s | 0.041 s | 1.9x |
+  | MicroPython: `sum(i*i for i in range(60000))` | 12.56 s | 2.92 s | 4.3x |
+  | MicroPython: `time.ticks_us()` x3000 | 0.363 s | 0.106 s | 3.4x |
+  | MicroPython: `Pin.value()` x3000 | 0.428 s | 0.126 s | 3.4x |
+  | MicroPython: `time.sleep_ms(1000)` | 8.66 s | 2.17 s | 4.0x |
+  | MicroPython: `print(1+1)` | 0.051 s | 0.046 s | 1.1x |
+  | CircuitPython Pico: boot | 15.86 s | 1.17 s | 13.5x |
+  | CircuitPython: `print` | 0.515 s | 0.061 s | 8.4x |
+  | CircuitPython: `time.sleep(1)` | 8.11 s | 2.19 s | 3.7x |
+  | Pico W: boot | 0.071 s | 0.041 s | 1.7x |
+  | Pico W: `WLAN.scan()` | 9.83 s | 6.59 s | 1.5x |
+  | PIO+DMA (MicroPython 1.23): boot | 0.066 s | 0.041 s | 1.6x |
+  | PIO+DMA: 4 x 256-word transfers | 0.383 s | 0.167 s | 2.3x |
+
+  - Short/cold phases gain least because the asynchronous REPL round trip dominates them (`print`: 1.1x).
+  - Pico W gains least of the long workloads (1.5x) because its cost is the CYW43 gSPI listener and DMA, still Python (see the profile in the previous entry): that is what Phases 3-5 are for.
+  - One machine, one platform; run-to-run variance a few percent.
+
 - 2026-10-04: **Phase order amended again - USB deferred; pins/PIO, then DMA, then the CYW43 gate.** Supersedes the order in the entry below.
   - Decision (the user's): do not port the USB controller / CDC host now. A port could silently break enumeration, raw-REPL and the
     DTR/RTS handling (all of which have live-boot CI), and the measurement below does not show a gain big enough to take that risk first.
