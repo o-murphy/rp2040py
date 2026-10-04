@@ -5,6 +5,8 @@ its docstring says what a trace does and does not capture).
     python scripts/bench/trace_block.py timer                    # MicroPython boot + a print
     python scripts/bench/trace_block.py sio --workload cp-boot   # another block / firmware
     python scripts/bench/trace_block.py timer --sleep --save timer.jsonl.gz
+    python scripts/bench/trace_block.py pins                     # IO_BANK0 + PADS_BANK0 (+ the SIO writes that drive pins)
+    python scripts/bench/trace_block.py pins --workload pins-mp  # a MicroPython script with an external button and a pin interrupt
 
 A clean run (``0 mismatches``) of the Python block against *itself* is the precondition for using the
 same trace on a C++ implementation: if the harness cannot reproduce Python-vs-Python, it has missed
@@ -22,6 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from profile_access import WORKLOADS
 from utils.mmio_trace import PPB, SIO, record, replay, save
+from utils.pin_trace import record_pins, replay_pins
 
 from rp2040py.boards import resolve_board_spec
 from rp2040py.device import MicroPythonDevice
@@ -86,10 +89,54 @@ async def record_workload(
     return events
 
 
+# A script that exercises what a boot's idle REPL never does: an output pin, an input with each pull, an edge interrupt - the host plays the
+# button (it drives GPIO 14 from outside, which no register access shows, so pin_trace samples it).
+PINS_SETUP = """\
+from machine import Pin
+hits = []
+out = Pin(15, Pin.OUT)
+up = Pin(14, Pin.IN, Pin.PULL_UP)
+down = Pin(13, Pin.IN, Pin.PULL_DOWN)
+up.irq(lambda p: hits.append(p.value()), Pin.IRQ_FALLING | Pin.IRQ_RISING)
+for i in range(8):
+    out.value(i & 1)
+print('ready', up.value(), down.value())
+"""
+PINS_REPORT = "print('hits', hits, up.value(), down.value(), out.value())"
+
+
+async def record_pins_workload(workload_name: str) -> "list":
+    spec_workload = "mp-idle" if workload_name == "pins-mp" else workload_name
+    workload = next(w for w in WORKLOADS if w.name == spec_workload)
+    spec = CIRCUITPYTHON if workload.circuitpython else MICROPYTHON
+    device = MicroPythonDevice(
+        board=resolve_board_spec(workload.board, spec, workload.tag), circuitpython=workload.circuitpython
+    )
+    events = record_pins(device.mcu)
+    try:
+        await device.astart()
+        if workload_name == "pins-mp":
+            await device.aexec(PINS_SETUP)
+            button = device.mcu.gpio[14]
+            for level in (False, True, False, True):  # press, release, press, release
+                device.simulator.schedule_threadsafe(lambda level=level: button.set_input_value(level))
+                await device.aexec("pass")
+            device.simulator.schedule_threadsafe(button.release_input)
+            await device.aexec(PINS_REPORT)
+        else:
+            for label, source, _ in workload.scripts:
+                if label.startswith("sleep"):
+                    continue
+                await device.aexec(source)
+    finally:
+        device.stop()
+    return events
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("block", choices=sorted(BLOCKS))
-    parser.add_argument("--workload", default="mp-idle", choices=[w.name for w in WORKLOADS])
+    parser.add_argument("block", choices=sorted(BLOCKS) + ["pins"])
+    parser.add_argument("--workload", default="mp-idle", choices=[w.name for w in WORKLOADS] + ["pins-mp"])
     parser.add_argument("--sleep", action="store_true", help="also run the workload's 1 s sleep phase (~10^6 events)")
     parser.add_argument("--save", help="write the trace here (gzip JSON lines)")
     parser.add_argument(
@@ -106,6 +153,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.block == "pins":
+        return _main_pins(args)
     key, irqs = BLOCKS[args.block]
     start = time.perf_counter()
     events = asyncio.run(record_workload(args.workload, key, irqs, sleep=args.sleep, timer=args.record_timer))
@@ -120,6 +169,24 @@ def main() -> int:
     start = time.perf_counter()
     make_chip = _chip_with_sio if key == SIO else _chip_with_timer
     mismatches = replay(events, key, irqs, factory=lambda: make_chip(args.replay_timer))
+    print(f"replayed in {time.perf_counter() - start:.1f}s: {len(mismatches)} mismatches")
+    for mismatch in mismatches[:10]:
+        print("  ", mismatch)
+    return 1 if mismatches else 0
+
+
+def _main_pins(args: argparse.Namespace) -> int:
+    start = time.perf_counter()
+    events = asyncio.run(record_pins_workload(args.workload))
+    kinds: dict[str, int] = {}
+    for event in events:
+        kinds[event[1]] = kinds.get(event[1], 0) + 1
+    print(f"recorded {len(events)} events in {time.perf_counter() - start:.1f}s: {kinds}")
+    if args.save:
+        save(events, args.save)
+        print(f"saved {args.save}")
+    start = time.perf_counter()
+    mismatches = replay_pins(events)
     print(f"replayed in {time.perf_counter() - start:.1f}s: {len(mismatches)} mismatches")
     for mismatch in mismatches[:10]:
         print("  ", mismatch)

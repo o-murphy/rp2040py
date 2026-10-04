@@ -305,6 +305,19 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 3 baseline, step 2: an IO_BANK0 + PADS_BANK0 trace oracle (`tests/utils/pin_trace.py`).** Decision (the user's): Phase 3 starts with the pin layer
+  (`GPIOPin`, IO_BANK0, PADS_BANK0), PIO second; the CYW43 gSPI question stays open until the pin layer's direct-callback mode is designed.
+  - Why a new module and not `mmio_trace.py`: IO_BANK0/PADS_BANK0 are thin windows over the state of 30 `GPIOPin` objects, and that state is also written by other things.
+    So a pin trace records, besides the two blocks' reads/writes/resets and the IO interrupt line: (1) SIO *writes* as a driver (a pad's output level and direction are what
+    `STATUS` reports; replayed, not compared, SIO has its own oracle), and (2) who drives each pin from outside (`_raw_input_value`/`_driven`, sampled before every register access and logged
+    as a `q` event when it changed - a button changes no register). Interrupts compare by `(irq, value)` in order, not by time, because an external edge raises its line when the drive happened in the
+    original run but when its sample is applied in the replay. Not modelled: PIO, PWM and the CYW43 as pin drivers (their traffic is covered by `scripts/bench/pin_events.py`).
+  - Self-test `tests/test_pin_trace.py` (6 tests, both builds): a scripted bare-chip session replays exactly, and the oracle reports a wrong `STATUS` read, a missing SIO driver write, a missing external
+    drive and a missing interrupt. `scripts/bench/trace_block.py pins [--workload mp-idle|cp-boot|pins-mp]` records a real boot and replays it.
+  - Measured (current Cython pins against themselves, 0 mismatches each): `mp-idle` 13.5k events, `cp-boot` 68k, and `pins-mp` (a MicroPython script with an output pin, both pulls, a rising/falling pin interrupt, and the host playing a
+    button) 44k events including 14 IO interrupt changes and 5 external-drive samples. A clean self-replay is the precondition for judging a C++ pin layer with it.
+  - Next: the C++ pin layer itself, ported from `_gpio_pin.pyx` keeping its attribute surface and its `check_for_updates` semantics and listener order, first with Python listeners only; then the direct-callback mode.
+
 - 2026-10-04: **Phase 3 baseline, step 1: the pin-event stream, and an open question about the order.**
   - New tool `scripts/bench/pin_events.py`: hooks a listener on every `RP2040.gpio[n]` before anything runs and records `(nanos, pin, new, old)` in the order listeners are told -
     exactly what an `ExternalDevice` (the CYW43 gSPI listener included) sees. `--save`/`--compare` keep and diff a stream.
