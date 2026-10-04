@@ -70,6 +70,7 @@ struct PinHost {
 };
 
 struct Pin {
+    uint32_t index = 0;  // the pin's number: the bit it owns in every source register and what the host is told
     uint32_t ctrl = 0;  // IO_BANK0.GPIOn_CTRL
     uint32_t pad_value = 0;  // PADS_BANK0.GPIOn
     uint32_t irq_enable_mask = 0;
@@ -98,14 +99,16 @@ public:
     PinBank(const PinBank&) = delete;
     PinBank& operator=(const PinBank&) = delete;
 
-    // `count` pins (<= kMaxPins). Mirrors `GPIOPin.__init__`: `_last_state` is computed with ctrl = 0 and pad = 0 *before* the real
+    // `count` pins (<= kMaxPins), numbered `first_index`, `first_index + 1`, ... (a bank of one pin per Python `GPIOPin` until the pins
+    // share a bank). Mirrors `GPIOPin.__init__`: `_last_state` is computed with ctrl = 0 and pad = 0 *before* the real
     // defaults are written (deterministically INPUT for an ordinary pin, LOW for one that is always output-enabled).
-    bool init(uint32_t count, const PinHost& host, const bool* always_output_enabled = nullptr) noexcept {
+    bool init(uint32_t count, const PinHost& host, const bool* always_output_enabled = nullptr, uint32_t first_index = 0) noexcept {
         count_ = count > kMaxPins ? kMaxPins : count;
         host_ = host;
         for (uint32_t i = 0; i < count_; ++i) {
             Pin& p = pins_[i];
             p = Pin();
+            p.index = first_index + i;
             p.always_output_enabled = always_output_enabled != nullptr && always_output_enabled[i];
             int code = 0;
             if (!state_code(i, &code)) return false;
@@ -118,6 +121,7 @@ public:
 
     uint32_t count() const noexcept { return count_; }
     Pin& pin(uint32_t i) noexcept { return pins_[i]; }
+    Pin* pin_ptr(uint32_t i) noexcept { return &pins_[i]; }  // for Cython, which cannot take the address of a reference result
     const Pin& pin(uint32_t i) const noexcept { return pins_[i]; }
 
     // A direct pointer replaces the host call for that source (e.g. SIO's own `gpio_output_enable`); nullptr goes back to the host.
@@ -138,11 +142,12 @@ public:
         }
         uint32_t bits = 0;
         if (!read_source(source, &bits)) return false;
-        *out = ((bits >> i) & 1u) != 0;
+        *out = ((bits >> p.index) & 1u) != 0;
         return true;
     }
 
     bool raw_output_value(uint32_t i, uint32_t fsel, bool* out) const noexcept {
+        const Pin& p = pins_[i];
         uint32_t source = 0;
         if (!source_for(fsel, /*value=*/true, &source)) {
             *out = false;
@@ -150,7 +155,7 @@ public:
         }
         uint32_t bits = 0;
         if (!read_source(source, &bits)) return false;
-        *out = ((bits >> i) & 1u) != 0;
+        *out = ((bits >> p.index) & 1u) != 0;
         return true;
     }
 
@@ -236,7 +241,7 @@ public:
         const int last = p.last_state;
         if (s == last) return true;
         p.last_state = s;
-        return host_.on_change == nullptr || host_.on_change(host_.ctx, i, s, last);
+        return host_.on_change == nullptr || host_.on_change(host_.ctx, p.index, s, last);
     }
 
     bool set_input_value(uint32_t i, bool value) noexcept {
@@ -261,7 +266,7 @@ public:
             p.irq_status &= ~pin_bits::kIrqLevelHigh;
         }
         if (irq_value(i) != prev_irq_value && !io_interrupt()) return false;
-        return host_.input_changed == nullptr || host_.input_changed(host_.ctx, i, (p.ctrl & 0x1F) == kFuncPwm);
+        return host_.input_changed == nullptr || host_.input_changed(host_.ctx, p.index, (p.ctrl & 0x1F) == kFuncPwm);
     }
 
     // INTR write: acknowledge edge interrupts (`value` is the raw written nibble).

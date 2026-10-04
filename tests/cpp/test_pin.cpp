@@ -201,6 +201,24 @@ static void test_direct_source_replaces_the_host_call() {
     CHECK(bank.state_code(1, &s) && s == kPinPullDown && r.source_calls == 1);
 }
 
+static void test_a_bank_of_one_pin_uses_its_own_number() {
+    Recorder r;
+    PinBank bank;
+    CHECK(bank.init(1, host_for(&r), nullptr, /*first_index=*/7));
+    CHECK(bank.pin(0).index == 7);
+    bank.pin(0).ctrl = kFuncSio;
+    r.sources[kSrcSioOe] = 1u << 7;
+    r.sources[kSrcSioValue] = 1u << 7;
+    CHECK(bank.check_for_updates(0));
+    CHECK(r.changes == 1 && r.change_pin[0] == 7 && r.change_new[0] == kPinHigh);  // the source bit and the number the host hears are 7, not 0
+    r.sources[kSrcSioValue] = 1u;  // bit 0 is another pin's
+    CHECK(bank.check_for_updates(0));
+    CHECK(r.changes == 2 && r.change_new[1] == kPinLow);
+    bank.pin(0).pad_value |= pin_bits::kPadInputEnable;
+    CHECK(bank.set_input_value(0, true));
+    CHECK(r.inputs == 1 && r.input_pin[0] == 7);
+}
+
 static void test_pulls_and_bus_keeper() {
     Recorder r;
     PinBank bank;
@@ -370,6 +388,7 @@ int main() {
     test_defaults_and_last_state();
     test_sio_driven_level_and_announcement();
     test_direct_source_replaces_the_host_call();
+    test_a_bank_of_one_pin_uses_its_own_number();
     test_pulls_and_bus_keeper();
     test_input_edges_and_the_io_interrupt();
     test_level_bits_follow_the_input_and_the_interrupt_only_when_it_changes();

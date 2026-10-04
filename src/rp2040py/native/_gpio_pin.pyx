@@ -1,27 +1,46 @@
 # cython: language_level=3
-"""Native Cython port of `_gpio_pin.py`'s `GPIOPin` - the pin-state hot path, measured as the
-single biggest pure-Python cost during a CYW43 (PIO-driven SPI) boot (~46% of profiled self-time
-after the `check_changed_pins` fix). Every PIO clock edge re-evaluates a pin's `value` through a
-cascade of ~9 Python `@property`/helper calls (`function_select`, `raw_output_*`, the override
-getters, `_apply_override`); this collapses that cascade into inline C in a single `cdef _value()`
-path, keeping only the handful of genuinely object-typed reads (`rp2040.pio[i].pin_values`/
-`.pin_directions`, `rp2040.pwm`/`.sio`) that touch still-pure peripherals.
+"""Native `GPIOPin`: a Python-facing shell over the C++ pin of `core/pin.hpp`
+(docs/records/0096-cpp-mcu-core.md, Phase 3). `_gpio_pin.py` is the pure-Python reference and the oracle; `gpio_pin.py` is the
+facade that picks between them.
 
-Behaviourally identical to `_gpio_pin.py` (the pure reference the facade falls back to) - the full
-`@property` surface is preserved for external callers (`peripherals/ssi.py`, `external/cyw43`,
-tests); only the internals are inlined. `rp2040` stays `object` (untyped), same reasoning as
-`native/_state_machine.pyx`: `RP2040.pwm`/`.sio`/`.pio` aren't in a typed `.pxd` surface and RPPIO
-isn't natively typed, so cimporting buys nothing here.
+History: this module started as the Cython port of `_gpio_pin.py` that collapsed the ~9-call property cascade a PIO clock edge
+used to re-evaluate (the single biggest pure-Python cost of a CYW43 boot at the time) into one inlined C path. Phase 3 moves that
+path, with the pin's state, into C++: the ten words of state and the level/STATUS/input/IRQ logic live in a `PinBank` of one pin
+that this object owns, and what is left here is the edge of the pin - the things only Python can answer:
+
+* the *sources* of the level (`rp2040.sio`, `rp2040.pio[i]`, `rp2040.pwm` registers), read through one trampoline exactly as the
+  Cython did, object attribute by object attribute;
+* the *listeners* (a Python `set`, iterated in set order, so their order is unchanged by construction);
+* `rp2040.update_io_interrupt()` and the PWM/PIO reactions to an input change.
+
+Every failure of those callbacks (an exception from a listener, from a source attribute) is parked in the shared slot of
+`_pending.pyx` and re-raised here, right after the C++ call returns - the same exception, at the same call, as before.
+
+The full `@property` surface of `_gpio_pin.py` is preserved: `ctrl`, `pad_value`, the three IRQ words, `index`, `_raw_input_value`,
+`_driven` and `_always_output_enabled` are properties over the C++ pin's fields, so external callers (`peripherals/ssi.py`,
+`external/cyw43`, `tests/utils/pin_trace.py`, tests) see no difference. `rp2040` stays `object` (untyped), same reasoning as
+`native/_state_machine.pyx`: its `pwm`/`sio`/`pio` aren't in a typed `.pxd` surface.
 """
 import logging
 
-from rp2040py._gpio_pin import (
-    FUNCTION_PIO0,
-    FUNCTION_PIO1,
-    FUNCTION_PWM,
-    FUNCTION_SIO,
-    GPIOPinState,
+from libc.stdint cimport uint32_t
+from libcpp cimport bool as cppbool
+
+from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pin cimport (
+    PinHost,
+    apply_override,
+    kSrcPio0Oe,
+    kSrcPio0Value,
+    kSrcPio1Oe,
+    kSrcPio1Value,
+    kSrcPwmDirection,
+    kSrcPwmValue,
+    kSrcSioOe,
+    kSrcSioValue,
 )
+
+from rp2040py._gpio_pin import GPIOPinState
 
 # WaitType from pio_registers (its real home), NOT the peripherals.pio facade: the facade pulls in
 # native._pio, and native._pio cimports GPIOPin from this module - importing WaitType via the facade
@@ -31,68 +50,112 @@ from rp2040py.peripherals.pio_registers import WaitType
 
 _logger = logging.getLogger(__name__)
 
-# Cache the enum members as module-level Python objects so `_value()` returns them without a dict
-# lookup per call.
-cdef object _S_LOW = GPIOPinState.LOW
-cdef object _S_HIGH = GPIOPinState.HIGH
-cdef object _S_INPUT = GPIOPinState.INPUT
-cdef object _S_PULLUP = GPIOPinState.INPUT_PULL_UP
-cdef object _S_PULLDOWN = GPIOPinState.INPUT_PULL_DOWN
-cdef object _S_BUSKEEPER = GPIOPinState.INPUT_BUS_KEEPER
-
 # Indexed by GPIOPinState integer value (LOW=0, HIGH=1, INPUT=2, PULL_UP=3, PULL_DOWN=4,
-# BUS_KEEPER=5) - lets _value()/check_for_updates() turn a C state code back into the enum member.
-cdef tuple _STATES = (_S_LOW, _S_HIGH, _S_INPUT, _S_PULLUP, _S_PULLDOWN, _S_BUSKEEPER)
-
-cdef unsigned int _FUNCTION_PWM = FUNCTION_PWM
-cdef unsigned int _FUNCTION_SIO = FUNCTION_SIO
-cdef unsigned int _FUNCTION_PIO0 = FUNCTION_PIO0
-cdef unsigned int _FUNCTION_PIO1 = FUNCTION_PIO1
-
-cdef unsigned int IRQ_EDGE_HIGH = 1 << 3
-cdef unsigned int IRQ_EDGE_LOW = 1 << 2
-cdef unsigned int IRQ_LEVEL_HIGH = 1 << 1
-cdef unsigned int IRQ_LEVEL_LOW = 1 << 0
+# BUS_KEEPER=5) - turns the C++ state code back into the enum member for the listeners.
+cdef tuple _STATES = (
+    GPIOPinState.LOW,
+    GPIOPinState.HIGH,
+    GPIOPinState.INPUT,
+    GPIOPinState.INPUT_PULL_UP,
+    GPIOPinState.INPUT_PULL_DOWN,
+    GPIOPinState.INPUT_BUS_KEEPER,
+)
 
 
-cdef inline bint _apply_override_c(bint value, unsigned int override_type):
-    if override_type == 0:
-        return value
-    if override_type == 1:
-        return not value
-    if override_type == 2:
+# --- the C++ pin's host: what only Python can answer ----------------------------------------------------------------------
+
+cdef cppbool _source_trampoline(void* ctx, uint32_t source, uint32_t* out) noexcept:
+    cdef GPIOPin pin = <GPIOPin> ctx
+    cdef object rp = pin.rp2040
+    try:
+        if source == kSrcSioOe:
+            out[0] = <unsigned int> rp.sio.gpio_output_enable
+        elif source == kSrcSioValue:
+            out[0] = <unsigned int> rp.sio.gpio_value
+        elif source == kSrcPio0Oe:
+            out[0] = <unsigned int> rp.pio[0].pin_directions
+        elif source == kSrcPio0Value:
+            out[0] = <unsigned int> rp.pio[0].pin_values
+        elif source == kSrcPio1Oe:
+            out[0] = <unsigned int> rp.pio[1].pin_directions
+        elif source == kSrcPio1Value:
+            out[0] = <unsigned int> rp.pio[1].pin_values
+        elif source == kSrcPwmDirection:
+            out[0] = <unsigned int> rp.pwm.gpio_direction
+        else:  # kSrcPwmValue
+            out[0] = <unsigned int> rp.pwm.gpio_value
+    except BaseException as error:
+        park_error(error)
         return False
-    if override_type == 3:
-        return True
-    _logger.error("applyOverride received invalid override type %s", override_type)
-    return value
+    return True
+
+
+cdef cppbool _change_trampoline(void* ctx, uint32_t pin_index, int new_state, int old_state) noexcept:
+    cdef GPIOPin pin = <GPIOPin> ctx
+    try:
+        value = _STATES[new_state]
+        last_value = _STATES[old_state]
+        for listener in pin._listeners:
+            listener(value, last_value)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
+cdef cppbool _io_interrupt_trampoline(void* ctx) noexcept:
+    cdef GPIOPin pin = <GPIOPin> ctx
+    try:
+        pin.rp2040.update_io_interrupt()
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
+cdef cppbool _input_trampoline(void* ctx, uint32_t pin_index, cppbool function_is_pwm) noexcept:
+    cdef GPIOPin pin = <GPIOPin> ctx
+    cdef object rp = pin.rp2040
+    try:
+        if function_is_pwm:
+            rp.pwm.gpio_on_input(pin_index)
+        for pio in rp.pio:
+            for machine in pio.machines:
+                if (
+                    machine.enabled
+                    and machine.waiting
+                    and machine.wait_type == WaitType.PIN
+                    and machine.wait_index == pin_index
+                ):
+                    machine.check_wait()
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
 
 
 cdef class GPIOPin:
     # Fields are declared in _gpio_pin.pxd (so native/_pio.pyx can cimport this class).
 
+    def __cinit__(self, *args, **kwargs):
+        self._pin = self._bank.pin_ptr(0)
+
     def __init__(self, rp2040, unsigned int index, name=None, bint always_output_enabled=False):
+        cdef PinHost host
+        cdef cppbool always = always_output_enabled
         self.rp2040 = rp2040
-        self.index = index
         self.name = name if name is not None else str(index)
-        self._always_output_enabled = always_output_enabled
-
-        self._raw_input_value = False
-        self._driven = False
-
-        # Matches upstream field-initializer ordering: `_last_value` reads ctrl=0/pad_value=0 here,
-        # deterministically yielding GPIOPinState.INPUT, before the real defaults below.
-        self.ctrl = 0
-        self.pad_value = 0
-        self._last_state = self._state_code()
-
-        self.ctrl = 0x1F
-        self.pad_value = 0b0110110
-        self.irq_enable_mask = 0
-        self.irq_force_mask = 0
-        self.irq_status = 0
-
         self._listeners = set()
+
+        host.source = _source_trampoline
+        host.on_change = _change_trampoline
+        host.io_interrupt = _io_interrupt_trampoline
+        host.input_changed = _input_trampoline
+        host.ctx = <void*> self
+        # Mirrors the Python constructor's field-initializer ordering: the pin's `_last_state` is captured with ctrl = 0 and
+        # pad_value = 0 *before* the real defaults are written (core/pin.hpp's init does exactly that).
+        if not self._bank.init(1, host, &always, index):
+            raise_if_pending()
 
     def reset(self, io=True, pads=True):
         """Return this pin's *registers* to their power-on values - `IO_BANK0.GPIOn_CTRL`,
@@ -116,248 +179,218 @@ cdef class GPIOPin:
         QSPI pads are the one exception this method cannot handle alone: `PADS_QSPI` has different
         per-pad reset values (record 0050), applied by `RP2040.__init__`/`RP2040.reset()` right
         after this call, the same way construction does it."""
-        if io:
-            self.ctrl = 0x1F
-            self.irq_enable_mask = 0
-            self.irq_force_mask = 0
-            self.irq_status = 0
-        if pads:
-            self.pad_value = 0b0110110
-        self._last_state = self._state_code()
-
-    # --- inlined hot path -------------------------------------------------------------------
-
-    cdef bint _raw_output_enable(self, unsigned int fsel):
-        if self._always_output_enabled:
-            return True
-        cdef unsigned int bitmask = (<unsigned int>1) << self.index
-        cdef object rp = self.rp2040
-        if fsel == _FUNCTION_PWM:
-            return (<unsigned int>rp.pwm.gpio_direction) & bitmask
-        if fsel == _FUNCTION_SIO:
-            return (<unsigned int>rp.sio.gpio_output_enable) & bitmask
-        if fsel == _FUNCTION_PIO0:
-            return (<unsigned int>rp.pio[0].pin_directions) & bitmask
-        if fsel == _FUNCTION_PIO1:
-            return (<unsigned int>rp.pio[1].pin_directions) & bitmask
-        return False
-
-    cdef bint _raw_output_value(self, unsigned int fsel):
-        cdef unsigned int bitmask = (<unsigned int>1) << self.index
-        cdef object rp = self.rp2040
-        if fsel == _FUNCTION_PWM:
-            return (<unsigned int>rp.pwm.gpio_value) & bitmask
-        if fsel == _FUNCTION_SIO:
-            return (<unsigned int>rp.sio.gpio_value) & bitmask
-        if fsel == _FUNCTION_PIO0:
-            return (<unsigned int>rp.pio[0].pin_values) & bitmask
-        if fsel == _FUNCTION_PIO1:
-            return (<unsigned int>rp.pio[1].pin_values) & bitmask
-        return False
-
-    cdef bint _eff_raw_input(self):
-        cdef unsigned int pad = self.pad_value
-        if self._driven:
-            return self._raw_input_value
-        if (pad & 8) and not (pad & 4):
-            return True
-        if (pad & 4) and not (pad & 8):
-            return False
-        return self._raw_input_value
-
-    cdef int _state_code(self):
-        cdef unsigned int ctrl = self.ctrl
-        cdef unsigned int fsel = ctrl & 0x1F
-        cdef unsigned int pad
-        cdef bint oe = _apply_override_c(self._raw_output_enable(fsel), (ctrl >> 12) & 0x3)
-        cdef bint ov
-        cdef bint pd
-        cdef bint pu
-        if oe:
-            ov = _apply_override_c(self._raw_output_value(fsel), (ctrl >> 8) & 0x3)
-            return 1 if ov else 0  # HIGH / LOW
-        pad = self.pad_value
-        pd = (pad & 4) != 0
-        pu = (pad & 8) != 0
-        if pd and pu:
-            return 5  # BUS_KEEPER
-        if pd:
-            return 4  # PULL_DOWN
-        if pu:
-            return 3  # PULL_UP
-        return 2  # INPUT
-
-    cdef object _value(self):
-        return _STATES[self._state_code()]
+        if not self._bank.reset(0, bool(io), bool(pads)):
+            raise_if_pending()
 
     cpdef check_for_updates(self):
-        # Compare the state as a plain C int; only materialise the GPIOPinState objects (for the
-        # listeners) on an actual change, avoiding a per-call enum box + object richcompare.
-        cdef int s = self._state_code()
-        cdef int last = self._last_state
-        if s != last:
-            self._last_state = s
-            value = _STATES[s]
-            last_value = _STATES[last]
-            for listener in self._listeners:
-                listener(value, last_value)
+        # Announces a change of the pin's state to the listeners - once, recording it first (core/pin.hpp).
+        if not self._bank.check_for_updates(0):
+            raise_if_pending()
 
-    # --- @property surface (behavioural parity with _gpio_pin.py) ---------------------------
+    # --- the pin's own fields, as properties over the C++ pin ----------------------------------------------------------------
+
+    @property
+    def index(self):
+        return self._pin.index
+
+    @index.setter
+    def index(self, unsigned int value):
+        self._pin.index = value
+
+    @property
+    def ctrl(self):
+        return self._pin.ctrl
+
+    @ctrl.setter
+    def ctrl(self, unsigned int value):
+        self._pin.ctrl = value
+
+    @property
+    def pad_value(self):
+        return self._pin.pad_value
+
+    @pad_value.setter
+    def pad_value(self, unsigned int value):
+        self._pin.pad_value = value
+
+    @property
+    def irq_enable_mask(self):
+        return self._pin.irq_enable_mask
+
+    @irq_enable_mask.setter
+    def irq_enable_mask(self, unsigned int value):
+        self._pin.irq_enable_mask = value
+
+    @property
+    def irq_force_mask(self):
+        return self._pin.irq_force_mask
+
+    @irq_force_mask.setter
+    def irq_force_mask(self, unsigned int value):
+        self._pin.irq_force_mask = value
+
+    @property
+    def irq_status(self):
+        return self._pin.irq_status
+
+    @irq_status.setter
+    def irq_status(self, unsigned int value):
+        self._pin.irq_status = value
+
+    @property
+    def _raw_input_value(self):
+        return self._pin.raw_input_value
+
+    @_raw_input_value.setter
+    def _raw_input_value(self, bint value):
+        self._pin.raw_input_value = value
+
+    @property
+    def _driven(self):
+        return self._pin.driven
+
+    @_driven.setter
+    def _driven(self, bint value):
+        self._pin.driven = value
+
+    @property
+    def _always_output_enabled(self):
+        return self._pin.always_output_enabled
+
+    @_always_output_enabled.setter
+    def _always_output_enabled(self, bint value):
+        self._pin.always_output_enabled = value
+
+    # --- @property surface (behavioural parity with _gpio_pin.py) ---------------------------------------------------------
 
     @property
     def raw_interrupt(self):
-        return bool((self.irq_status & self.irq_enable_mask) | self.irq_force_mask)
+        return bool(self._bank.raw_interrupt(0))
 
     @property
     def is_slew_fast(self):
-        return bool(self.pad_value & 1)
+        return bool(self._pin.pad_value & 1)
 
     @property
     def schmitt_enabled(self):
-        return bool(self.pad_value & 2)
+        return bool(self._pin.pad_value & 2)
 
     @property
     def pulldown_enabled(self):
-        return bool(self.pad_value & 4)
+        return bool(self._pin.pad_value & 4)
 
     @property
     def pullup_enabled(self):
-        return bool(self.pad_value & 8)
+        return bool(self._pin.pad_value & 8)
 
     @property
     def drive_strength(self):
-        return (self.pad_value >> 4) & 0x3
+        return (self._pin.pad_value >> 4) & 0x3
 
     @property
     def input_enable(self):
-        return bool(self.pad_value & 0x40)
+        return bool(self._pin.pad_value & 0x40)
 
     @property
     def output_disable(self):
-        return bool(self.pad_value & 0x80)
+        return bool(self._pin.pad_value & 0x80)
 
     @property
     def function_select(self):
-        return self.ctrl & 0x1F
+        return self._pin.ctrl & 0x1F
 
     @property
     def output_override(self):
-        return (self.ctrl >> 8) & 0x3
+        return (self._pin.ctrl >> 8) & 0x3
 
     @property
     def output_enable_override(self):
-        return (self.ctrl >> 12) & 0x3
+        return (self._pin.ctrl >> 12) & 0x3
 
     @property
     def input_override(self):
-        return (self.ctrl >> 16) & 0x3
+        return (self._pin.ctrl >> 16) & 0x3
 
     @property
     def irq_override(self):
-        return (self.ctrl >> 28) & 0x3
+        return (self._pin.ctrl >> 28) & 0x3
 
     @property
     def raw_output_enable(self):
-        return bool(self._raw_output_enable(self.ctrl & 0x1F))
+        cdef cppbool out = False
+        if not self._bank.raw_output_enable(0, self._pin.ctrl & 0x1F, &out):
+            raise_if_pending()
+        return bool(out)
 
     @property
     def raw_output_value(self):
-        return bool(self._raw_output_value(self.ctrl & 0x1F))
+        cdef cppbool out = False
+        if not self._bank.raw_output_value(0, self._pin.ctrl & 0x1F, &out):
+            raise_if_pending()
+        return bool(out)
 
     @property
     def _effective_raw_input_value(self):
-        return bool(self._eff_raw_input())
+        return bool(self._bank.eff_raw_input(0))
 
     @property
     def input_value(self):
-        return _apply_override_c(
-            self._eff_raw_input() and bool(self.pad_value & 0x40), (self.ctrl >> 16) & 0x3
-        )
+        return bool(self._bank.input_value(0))
 
     @property
     def irq_value(self):
-        return _apply_override_c(
-            bool((self.irq_status & self.irq_enable_mask) | self.irq_force_mask), (self.ctrl >> 28) & 0x3
-        )
+        return bool(self._bank.irq_value(0))
 
     @property
     def output_enable(self):
-        return _apply_override_c(self._raw_output_enable(self.ctrl & 0x1F), (self.ctrl >> 12) & 0x3)
+        cdef cppbool out = False
+        if not self._bank.raw_output_enable(0, self._pin.ctrl & 0x1F, &out):
+            raise_if_pending()
+        return bool(apply_override(out, (self._pin.ctrl >> 12) & 0x3))
 
     @property
     def output_value(self):
-        return _apply_override_c(self._raw_output_value(self.ctrl & 0x1F), (self.ctrl >> 8) & 0x3)
+        cdef cppbool out = False
+        if not self._bank.raw_output_value(0, self._pin.ctrl & 0x1F, &out):
+            raise_if_pending()
+        return bool(apply_override(out, (self._pin.ctrl >> 8) & 0x3))
 
     @property
     def status(self):
-        cdef unsigned int fsel = self.ctrl & 0x1F
-        cdef bint raw_int = bool((self.irq_status & self.irq_enable_mask) | self.irq_force_mask)
-        cdef bint irq_v = _apply_override_c(raw_int, (self.ctrl >> 28) & 0x3)
-        cdef bint eff_in = self._eff_raw_input()
-        cdef bint in_v = _apply_override_c(eff_in and bool(self.pad_value & 0x40), (self.ctrl >> 16) & 0x3)
-        cdef bint roe = self._raw_output_enable(fsel)
-        cdef bint oe = _apply_override_c(roe, (self.ctrl >> 12) & 0x3)
-        cdef bint rov = self._raw_output_value(fsel)
-        cdef bint ov = _apply_override_c(rov, (self.ctrl >> 8) & 0x3)
-        return (
-            (1 << 26 if irq_v else 0)
-            | (1 << 24 if raw_int else 0)
-            | (1 << 19 if in_v else 0)
-            | (1 << 17 if eff_in else 0)
-            | (1 << 13 if oe else 0)
-            | (1 << 12 if roe else 0)
-            | (1 << 9 if ov else 0)
-            | (1 << 8 if rov else 0)
-        )
+        cdef uint32_t out = 0
+        if not self._bank.status(0, &out):
+            raise_if_pending()
+        return out
 
     @property
     def value(self):
-        return self._value()
+        cdef int code = 0
+        if not self._bank.state_code(0, &code):
+            raise_if_pending()
+        return _STATES[code]
 
-    # --- methods ----------------------------------------------------------------------------
+    # --- methods ----------------------------------------------------------------------------------------------------------
 
     def set_input_value(self, value):
-        self._driven = True
-        self._apply_input_value(value)
+        if not self._bank.set_input_value(0, bool(value)):
+            raise_if_pending()
 
     def release_input(self):
         """Mirrors _gpio_pin.py's own release_input() - hand the pad back to its pull resistor."""
-        self._driven = False
-        self._apply_input_value(self._eff_raw_input())
+        if not self._bank.release_input(0):
+            raise_if_pending()
 
     def _apply_input_value(self, value):
-        self._raw_input_value = bool(value)
-        prev_irq_value = self.irq_value
-        if value and (self.pad_value & 0x40):
-            self.irq_status |= IRQ_EDGE_HIGH | IRQ_LEVEL_HIGH
-            self.irq_status &= ~IRQ_LEVEL_LOW
-        else:
-            self.irq_status |= IRQ_EDGE_LOW | IRQ_LEVEL_LOW
-            self.irq_status &= ~IRQ_LEVEL_HIGH
-        if self.irq_value != prev_irq_value:
-            self.rp2040.update_io_interrupt()
-        if (self.ctrl & 0x1F) == _FUNCTION_PWM:
-            self.rp2040.pwm.gpio_on_input(self.index)
-        for pio in self.rp2040.pio:
-            for machine in pio.machines:
-                if (
-                    machine.enabled
-                    and machine.waiting
-                    and machine.wait_type == WaitType.PIN
-                    and machine.wait_index == self.index
-                ):
-                    machine.check_wait()
+        if not self._bank.apply_input_value(0, bool(value)):
+            raise_if_pending()
 
     def refresh_input(self):
-        self._apply_input_value(self._raw_input_value)
+        if not self._bank.refresh_input(0):
+            raise_if_pending()
 
     def update_irq_value(self, value):
-        if value & IRQ_EDGE_LOW and self.irq_status & IRQ_EDGE_LOW:
-            self.irq_status &= ~IRQ_EDGE_LOW
-            self.rp2040.update_io_interrupt()
-        if value & IRQ_EDGE_HIGH and self.irq_status & IRQ_EDGE_HIGH:
-            self.irq_status &= ~IRQ_EDGE_HIGH
-            self.rp2040.update_io_interrupt()
+        if not self._bank.update_irq_value(0, <unsigned int> value):
+            raise_if_pending()
 
     def add_listener(self, callback):
         self._listeners.add(callback)
