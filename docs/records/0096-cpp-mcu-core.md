@@ -305,6 +305,19 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 3 baseline, step 1: the pin-event stream, and an open question about the order.**
+  - New tool `scripts/bench/pin_events.py`: hooks a listener on every `RP2040.gpio[n]` before anything runs and records `(nanos, pin, new, old)` in the order listeners are told -
+    exactly what an `ExternalDevice` (the CYW43 gSPI listener included) sees. `--save`/`--compare` keep and diff a stream.
+  - What can be compared exactly: the **order** of `(pin, new, old)`. Measured: the order hash is identical between `main` (`6aeef40`) and this branch on all four workloads
+    (`mp-idle` 2 events, `pio-dma` 4607, `cp-boot` 59, `picow-scan` 4,798,482), so Phase 2 did not change what the pins do.
+  - What cannot: the **spacing**. Two runs of the very same build already differ (`pio-dma`: 97.8% of 4604 gaps within 64 ns of a saved run, worst 504 ns), because the asynchronous host injects a
+    script at a wall-clock-dependent simulated time (a 2 MHz PIO period is 62.5 core cycles, so it is quantised differently) and the guest code between DMA transfers takes a host-dependent time.
+    Absolute timestamps differ by tens of ms between runs. So `--compare` fails only on the order and *reports* the spacing; cycle-exact timing is covered by the instruction-level golden traces and `tests/test_pio*.py`.
+  - Event volumes (native build, per simulated second): Pico W scan 6.5M (4.05M of them on the CYW43 clock pin GPIO 29, 0.74M on its data pin GPIO 24, all to one Python listener), `pio-dma` 49k (GPIO 2 only), MicroPython idle 2.
+  - Consequence for the plan, **not yet decided**: the CYW43 listener must answer on the falling clock edge in the same cycle (`data_pin.set_input_value(bit)`), so its events cannot be deferred into a ring - they need a direct callback. If only GPIO/PIO move to C++ the Python listener stays and
+    the 4M callbacks per scan remain; the Pico W gain needs the gSPI decode in C++ too (Phase 5's item). Proposed order if that is accepted: Phase 3, then the CYW43 gSPI port (pulled forward), then DMA. Waiting on the user's decision; nothing implemented.
+  - Also measured: MicroPython 1.29.0 (the stable release, not in this record's earlier tables) is ~1.6-2x heavier for the emulator than 1.21 on both builds, and the speed-up over `main` holds (Pico `compute` 20.5 s -> 5.7 s = 3.6x, sleep 3.7x, ticks 3.0x, gpio 3.1x, Pico W scan 13.4 s -> 8.5 s = 1.6x).
+
 - 2026-10-04: **Measured speed-up against `main` (`6aeef40`, the pre-0096 Cython build) at the end of Phase 2.** Same machine, both builds Cython, best of two runs, outputs identical
   (`scripts/bench/profile_access.py` workloads; MicroPython rows from the per-phase script of the earlier MicroPython-vs-Cython entry).
 
