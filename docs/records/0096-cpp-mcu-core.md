@@ -235,8 +235,8 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   the differential harness clean for SIO/PPB/TIMER traces.
 
 ### Phase 3 - pins, PIO and the flash path
-> **Order amended 2026-10-04:** the USB controller and the CDC host (from Phase 4) now come *before* this phase; see the
-> progress-log entry of that date. The content below is unchanged.
+> **Order amended 2026-10-04, then amended again the same day:** the first amendment put USB before this phase; the second
+> (see the newest progress-log entry) defers USB instead. This phase is next. The content below is unchanged.
 
 - GPIO/IO/pads and PIO + state machines (already Cython: 0031, 0047) to C++. Pin changes go to the caller's event ring,
   with a direct-callback mode for an `ExternalDevice` that must answer combinationally (SPI bit-bang) - *measured*, not assumed, which one
@@ -246,8 +246,8 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   the CYW43 live boot (0027) still reaches a scan.
 
 ### Phase 4 - the communication blocks and DMA
-> **Order amended 2026-10-04:** the USB controller moves out of this list and is done first, ahead of Phase 3 (together with the
-> CDC host in `usb/cdc.py`). Everything else here keeps its place.
+> **Order amended 2026-10-04 (twice):** USB (controller + CDC host) is deferred to the end of this phase, and DMA is pulled
+> forward to follow Phase 3 (its DREQ coupling to PIO is the reason). See the newest progress-log entry.
 
 - UART, SPI, I2C, DMA (including its DREQ coupling to PIO/SPI/UART/ADC - the fragile part, see 0044), ADC, PWM, USB controller,
   watchdog, RTC and the small blocks (clocks, xosc, resets, psm, vreg, syscfg, sysinfo, tbman, busctrl). Order by Phase 0's profile; blocks nothing
@@ -304,6 +304,27 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 - **Wasm interpreters.** `wasm3` and JavaScriptCore backends were not measured; an interpreter backend will be far slower than wasmtime/node.
 
 ## Progress log
+
+- 2026-10-04: **Phase order amended again - USB deferred; pins/PIO, then DMA, then the CYW43 gate.** Supersedes the order in the entry below.
+  - Decision (the user's): do not port the USB controller / CDC host now. A port could silently break enumeration, raw-REPL and the
+    DTR/RTS handling (all of which have live-boot CI), and the measurement below does not show a gain big enough to take that risk first.
+  - Measured with `cProfile` on the *native* build, no counting proxies (the earlier proxied run inflated the wall time and hid the real split):
+    - MicroPython idle, 1 s of `time.sleep_ms()` (3.2 s profiled): the only Python left is USB, about a third of the run (`dpram_updated`,
+      `_finish_read`, `_on_endpoint_read`, ~35k endpoint reads/s). Everything else is the C++ batch loop. `compute`
+      (`sum(i*i ...)`, 2.9 s unprofiled) is all CPU: no peripheral in the picture, so peripherals cannot speed it up.
+    - Pico W scan (11.8 s profiled): the CYW43 gSPI clock listener (`external/cyw43/bus.py` `_clk_listener` + rising/falling, 4.0M calls) is
+      ~39% (4.6 s cumulative); DMA (`transfer_swap32`, `set_dreq`, `treq`, `schedule_transfer`) ~13%; USB ~3%.
+    - PIO+DMA micro-workload: 0.25 s total, nothing dominant.
+  - Why USB is a third of an *idle* run: the CDC host answers every OUT-endpoint arm after 10 us, with a zero-length buffer when the TX
+    FIFO is empty, so an idle firmware and the host ping-pong ~35k times per simulated second. A real device would stay armed until the host
+    sends data. That is emulation behaviour, not a cost a faster controller should be asked to carry; changing it (e.g. complete the read only
+    when there is data) would alter working behaviour and is **not** done - it needs a separate decision, and a separate commit if taken.
+  - New order: (1) Phase 3 as written - pins and PIO first, because the CYW43 gSPI listener is a pin-change consumer and its cost is the pin-event
+    path; (2) DMA, pulled forward from Phase 4 together with its DREQ coupling to PIO/SPI/UART; (3) the Phase 5 CYW43 gate - the number above
+    already says "yes, port `bus.py`/`chip.py`", but it is decided after (1)-(2) change what the listener costs; (4) the rest of Phase 4;
+    (5) USB controller + CDC host last. The `logger.info` SEV/YIELD gating idea is dropped from the list: the profile above shows no
+    logger cost.
+  - Documentation only; nothing implemented. Phase 3 starts from a baseline capture (golden trace of the Pico W boot, pin-event ring contents), as the recipe requires.
 
 - 2026-10-04: **Phase order amended - USB (controller + CDC host) first, then pins/PIO/flash.**
   - Why: the post-Phase-2 profile of MicroPython and CircuitPython boots/REPL sessions shows USB as the largest remaining Python cost; GPIO, pads, PIO, DMA and SSI are negligible in
