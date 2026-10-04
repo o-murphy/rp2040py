@@ -109,6 +109,43 @@ int main() {
         CHECK(n.read8(0x10000000u, &w) == kNotHandled);
     }
 
+    // The constant-base fast paths for flash and SRAM against the generic walk: same regions, same bytes, every width, addresses on and around
+    // the edges of both (inside, at the end, straddling it, in the mirror, below the base, in the gap) - the answers and the memory must match.
+    {
+        static uint8_t fl_a[0x2000], fl_b[0x2000], ra_a[0x800], ra_b[0x800];
+        for (uint32_t i = 0; i < sizeof fl_a; ++i) fl_a[i] = fl_b[i] = static_cast<uint8_t>(i * 7 + 3);
+        for (uint32_t i = 0; i < sizeof ra_a; ++i) ra_a[i] = ra_b[i] = static_cast<uint8_t>(i * 13 + 5);
+        MemoryMap fast, slow;
+        fast.attach({0x10000000u, 0x40000u, sizeof fl_a, 0x1FFFu, fl_a, kSubWord});
+        fast.attach({0x20000000u, sizeof ra_a, sizeof ra_a, 0xFFFFFFFFu, ra_a, kSubWord});
+        slow.attach({0x10000000u, 0x40000u, sizeof fl_b, 0x1FFFu, fl_b, kSubWord});
+        slow.attach({0x20000000u, sizeof ra_b, sizeof ra_b, 0xFFFFFFFFu, ra_b, kSubWord});
+        slow.set_fast_paths(false);
+        uint32_t seed = 12345;
+        const uint32_t bases[] = {0x10000000u, 0x20000000u};
+        const uint32_t spans[] = {0x2000, 0x800};
+        for (int n = 0; n < 200000; ++n) {
+            seed = seed * 1664525u + 1013904223u;
+            const int which = (seed >> 24) & 1;
+            uint32_t address = bases[which] + ((seed >> 3) % (spans[which] + 0x40)) - 0x20;  // 32 bytes either side of the ends
+            if ((seed >> 20) % 7 == 0) address = 0x10000000u + 0x2000 + ((seed >> 5) % 0x4000);  // the mirror
+            const uint32_t value = seed * 2654435761u;
+            uint32_t a = 0xAAAAAAAAu, b = 0xBBBBBBBBu;
+            int ra, rb;
+            switch ((seed >> 16) % 6) {
+                case 0: ra = fast.read32(address, &a); rb = slow.read32(address, &b); break;
+                case 1: ra = fast.read16(address, &a); rb = slow.read16(address, &b); break;
+                case 2: ra = fast.read8(address, &a); rb = slow.read8(address, &b); break;
+                case 3: ra = fast.write32(address, value); rb = slow.write32(address, value); a = b = 0; break;
+                case 4: ra = fast.write16(address, value); rb = slow.write16(address, value); a = b = 0; break;
+                default: ra = fast.write8(address, value); rb = slow.write8(address, value); a = b = 0; break;
+            }
+            CHECK(ra == rb && (ra == kNotHandled || a == b));
+            if (failures) break;
+        }
+        CHECK(std::memcmp(fl_a, fl_b, sizeof fl_a) == 0 && std::memcmp(ra_a, ra_b, sizeof ra_a) == 0);
+    }
+
     std::printf(failures ? "FAILED: %d\n" : "memory_map: all checks passed\n", failures);
     return failures ? 1 : 0;
 }

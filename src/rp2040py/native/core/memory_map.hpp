@@ -60,6 +60,12 @@ public:
         return index;
     }
 
+    // For tests: with the fast paths off every access takes the generic walk, so the two can be compared access by access.
+    void set_fast_paths(bool enabled) noexcept {
+        fast_enabled_ = enabled;
+        index_fast();
+    }
+
     void clear() noexcept {
         count_ = 0;
         reindex();
@@ -71,6 +77,21 @@ public:
     // Reads fill *out; writes return the index so the caller can test kNotifyOnWrite.
 
     int read32(uint32_t address, uint32_t* out) const noexcept {
+        {  // the two places the firmware lives, tried first with the bases as constants, as the pre-0096 Cython bus's chain of compares did
+            const uint32_t rel = address - kFlashBase;
+            if (rel < flash_.window) {
+                const uint32_t offset = rel & flash_.mask;
+                if (static_cast<uint64_t>(offset) + 4 <= flash_.size) {
+                    *out = load32(flash_.data + offset);
+                    return flash_.index;
+                }
+            }
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 4 <= ram_.size) {
+                *out = load32(ram_.data + off);
+                return ram_.index;
+            }
+        }
         int lo, hi;
         candidates(address, &lo, &hi);
         for (int i = lo; i < hi; ++i) {
@@ -87,6 +108,22 @@ public:
     }
 
     int read16(uint32_t address, uint32_t* out) const noexcept {
+        {  // the fast regions hand out their own data pointer: no second lookup through the region table
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + 2 <= flash_.size) {
+                uint16_t v;
+                std::memcpy(&v, flash_.data + offset, sizeof v);
+                *out = v;
+                return flash_.index;
+            }
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 2 <= ram_.size) {
+                uint16_t v;
+                std::memcpy(&v, ram_.data + off, sizeof v);
+                *out = v;
+                return ram_.index;
+            }
+        }
         const int i = find_sub_word(address, 2);
         if (i == kNotHandled) return kNotHandled;
         uint16_t v;
@@ -96,6 +133,18 @@ public:
     }
 
     int read8(uint32_t address, uint32_t* out) const noexcept {
+        {
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + 1 <= flash_.size) {
+                *out = flash_.data[offset];
+                return flash_.index;
+            }
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 1 <= ram_.size) {
+                *out = ram_.data[off];
+                return ram_.index;
+            }
+        }
         const int i = find_sub_word(address, 1);
         if (i == kNotHandled) return kNotHandled;
         *out = regions_[i].data[address - regions_[i].base];
@@ -103,6 +152,18 @@ public:
     }
 
     int write32(uint32_t address, uint32_t value) const noexcept {
+        {
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 4 <= ram_.size) {
+                std::memcpy(ram_.data + off, &value, sizeof value);
+                return ram_.index;
+            }
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + 4 <= flash_.size) {
+                std::memcpy(flash_.data + offset, &value, sizeof value);
+                return flash_.index;
+            }
+        }
         int lo, hi;
         candidates(address, &lo, &hi);
         for (int i = lo; i < hi; ++i) {
@@ -118,6 +179,19 @@ public:
     }
 
     int write16(uint32_t address, uint32_t value) const noexcept {
+        {
+            const uint16_t v = static_cast<uint16_t>(value);
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 2 <= ram_.size) {
+                std::memcpy(ram_.data + off, &v, sizeof v);
+                return ram_.index;
+            }
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + 2 <= flash_.size) {
+                std::memcpy(flash_.data + offset, &v, sizeof v);
+                return flash_.index;
+            }
+        }
         const int i = find_sub_word(address, 2);
         if (i == kNotHandled || (regions_[i].flags & kNotifyOnWrite)) return kNotHandled;
         const uint16_t v = static_cast<uint16_t>(value);
@@ -126,6 +200,18 @@ public:
     }
 
     int write8(uint32_t address, uint32_t value) const noexcept {
+        {
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + 1 <= ram_.size) {
+                ram_.data[off] = static_cast<uint8_t>(value);
+                return ram_.index;
+            }
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + 1 <= flash_.size) {
+                flash_.data[offset] = static_cast<uint8_t>(value);
+                return flash_.index;
+            }
+        }
         const int i = find_sub_word(address, 1);
         if (i == kNotHandled || (regions_[i].flags & kNotifyOnWrite)) return kNotHandled;
         regions_[i].data[address - regions_[i].base] = static_cast<uint8_t>(value);
@@ -142,6 +228,12 @@ private:
     // The region a `width`-byte sub-word access falls entirely inside, or kNotHandled. Sub-word
     // accesses never use the mirror: only the first `size` bytes of a window.
     int find_sub_word(uint32_t address, uint32_t width) const noexcept {
+        {
+            const uint32_t offset = address - kFlashBase;
+            if (static_cast<uint64_t>(offset) + width <= flash_.size) return flash_.index;
+            const uint32_t off = address - kRamBase;
+            if (static_cast<uint64_t>(off) + width <= ram_.size) return ram_.index;
+        }
         int lo, hi;
         candidates(address, &lo, &hi);
         for (int i = lo; i < hi; ++i) {
@@ -178,9 +270,40 @@ private:
             const uint64_t last = (static_cast<uint64_t>(regions_[i].base) + regions_[i].window - 1) >> 28;
             for (uint64_t n = first; n <= last && n < 16; ++n) block_[n] = block_[n] == kNoRegion ? static_cast<uint8_t>(i) : kSeveral;
         }
+        index_fast();
+    }
+
+    // The RP2040's address map is fixed by the silicon: XIP flash at 0x10000000 and SRAM at 0x20000000. A region attached there as plain sub-word
+    // memory with no hook, and that no other region shares a 256 MiB block with (so serving it first cannot change which region the ordered
+    // walk would have picked), gets a fast path with the base as a compile-time constant. Every address these miss takes the generic walk,
+    // which decides exactly what it always did.
+    static constexpr uint32_t kFlashBase = 0x10000000u, kRamBase = 0x20000000u;
+    struct Fast {
+        uint32_t window = 0, size = 0, mask = 0;  // size 0: no fast path
+        uint8_t* data = nullptr;
+        int index = kNotHandled;
+    };
+
+    void index_fast() noexcept {
+        flash_ = Fast{};
+        ram_ = Fast{};
+        for (int i = 0; i < count_ && fast_enabled_; ++i) {
+            const Region& r = regions_[i];
+            if (r.flags != kSubWord || (r.base != kFlashBase && r.base != kRamBase)) continue;
+            const uint64_t first = r.base >> 28, last = (static_cast<uint64_t>(r.base) + r.window - 1) >> 28;
+            bool alone = true;
+            for (int j = 0; j < count_; ++j) {
+                if (j == i) continue;
+                const uint64_t jf = regions_[j].base >> 28, jl = (static_cast<uint64_t>(regions_[j].base) + regions_[j].window - 1) >> 28;
+                if (jf <= last && first <= jl) alone = false;
+            }
+            if (alone) (r.base == kFlashBase ? flash_ : ram_) = Fast{r.window, r.size, r.mask, r.data, i};
+        }
     }
 
     Region regions_[kMaxRegions]{};
+    Fast flash_, ram_;
+    bool fast_enabled_ = true;
     uint8_t block_[16] = {kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion,
                           kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion, kNoRegion};
     int count_ = 0;

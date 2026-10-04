@@ -299,6 +299,24 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 2 correction - the bus read path measured against the Cython baseline it replaced, and brought back to it.**
+  - What was wrong with the previous entry: the three "fixes" were tuning of C++ I had written generically in Phase 1 (a region table walked linearly, a flag pointer reloaded every
+    iteration) instead of carrying over the structure of the working Cython. The pre-0096 bus did a fixed chain of range compares - flash, then SRAM, then boot ROM/DPRAM - with the
+    bases as constants; for an instruction fetch that is two compares. The block index of the same entry made it *better than the table walk but still slower than that chain*.
+    The "wide" test was already `(op >> 12) == 0xF || (op >> 11) == 0b11101` in the Cython, so that one was a micro-optimisation, not a fix.
+  - Measured (`scripts/bench/cpp_bus_fetch.cpp`, same addresses and memory, a MicroPython-like mix of 62% 16-bit flash fetches, 28% SRAM words, 10% flash words; both a cache-resident and a
+    2 MiB/264 KiB random working set): Cython-style chain 6.1-7.0 ns/access, the C++ `Bus` with the block index 6.6-7.7 ns (8-11% slower). A first attempt at a runtime-geometry "hot" loop
+    was worse (8.1 ns): the Cython speed comes from the bases being constants.
+  - Now: `MemoryMap` keeps the generic ordered walk (it decides ties and every unusual access) but tries two constant-base fast paths first - XIP flash at 0x10000000 and SRAM at 0x20000000, the
+    RP2040's fixed address map - for 8/16/32-bit reads and writes, with the region's own data pointer (no second lookup) and a single 64-bit bounds compare (the Cython one wrote past a
+    buffer's end on an edge access; this does not). A region qualifies only if it is plain sub-word memory with no hook and shares no 256 MiB block with another region, so serving it first
+    cannot change which region the walk would pick. Result: 6.7 ns vs 6.5 ns (within 3-4%, noise level) cache-resident, 7.1-7.5 vs 6.8-7.2 on the large set.
+  - Proof it still behaves as the walk: `test_memory_map.cpp` runs 200 000 random accesses of every width over the edges of both regions, the mirror and the gaps on a map with the fast paths
+    and an identical map with them switched off (`set_fast_paths(false)`) - answers and memory identical; plus `test_memory_map_parity` against the pure-Python bus and the whole suite.
+  - End to end, A/B on the same machine (it is slower after the session restart than the numbers above, so only pairs are comparable): synthetic loop 69 -> 73 Minstr/s, MicroPython compute
+    4.46 -> 4.09 s. A modest gain; the point of the change was to stop being slower than the baseline.
+  - Working rule from here, per the maintainer: for every hot path, take the structure of the working Cython/Python as the baseline, port it first, benchmark against it, and only then change it.
+
 - 2026-10-03: **Phase 2 follow-up - callgrind profile of the C++ loop on a MicroPython boot, and three cheap wins.**
   - Method: the boot run in-process (`time.monotonic` stubbed so the 5 ms budget does not cut batches under valgrind), 25 batches = 25 M instructions, `RP2040PY_DISABLE_STRIP=1` for symbols.
     6.76 G x86 instructions, ~130 per emulated instruction: batch loop 45, CPU `execute()` 38, memory map 31, clock 13 - plus ~25% of the total in Python (alarm callbacks
