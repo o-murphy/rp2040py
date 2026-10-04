@@ -235,6 +235,9 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   the differential harness clean for SIO/PPB/TIMER traces.
 
 ### Phase 3 - pins, PIO and the flash path
+> **Order amended 2026-10-04:** the USB controller and the CDC host (from Phase 4) now come *before* this phase; see the
+> progress-log entry of that date. The content below is unchanged.
+
 - GPIO/IO/pads and PIO + state machines (already Cython: 0031, 0047) to C++. Pin changes go to the caller's event ring,
   with a direct-callback mode for an `ExternalDevice` that must answer combinationally (SPI bit-bang) - *measured*, not assumed, which one
   each shipped device needs.
@@ -243,6 +246,9 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   the CYW43 live boot (0027) still reaches a scan.
 
 ### Phase 4 - the communication blocks and DMA
+> **Order amended 2026-10-04:** the USB controller moves out of this list and is done first, ahead of Phase 3 (together with the
+> CDC host in `usb/cdc.py`). Everything else here keeps its place.
+
 - UART, SPI, I2C, DMA (including its DREQ coupling to PIO/SPI/UART/ADC - the fragile part, see 0044), ADC, PWM, USB controller,
   watchdog, RTC and the small blocks (clocks, xosc, resets, psm, vreg, syscfg, sysinfo, tbman, busctrl). Order by Phase 0's profile; blocks nothing
   touches in any workload may be last.
@@ -298,6 +304,16 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 - **Wasm interpreters.** `wasm3` and JavaScriptCore backends were not measured; an interpreter backend will be far slower than wasmtime/node.
 
 ## Progress log
+
+- 2026-10-04: **Phase order amended - USB (controller + CDC host) first, then pins/PIO/flash.**
+  - Why: the post-Phase-2 profile of MicroPython and CircuitPython boots/REPL sessions shows USB as the largest remaining Python cost; GPIO, pads, PIO, DMA and SSI are negligible in
+    those workloads (the flash bring-up SSI accesses are a one-off). The plan said "order by Phase 0's profile"; this applies it.
+  - New order: (1) USB controller + CDC host: capture a baseline from the existing Python/Cython implementation first (golden traces, MMIO trace record/replay), write parity tests,
+    then port following the existing structure; (2) a cheap win alongside: gate the `logger.info` calls on SEV/YIELD behind a level check so they cost nothing when disabled;
+    (3) Phase 3 (pins, PIO, flash path) as written; (4) the rest of Phase 4.
+  - Documentation only; nothing here is started. Implementation needs a separate go-ahead.
+  - CI note: the CircuitPython CDC control-lines step failed once emulation got faster, because the test held DTR low for 5 *wall-clock* seconds and CircuitPython drops console output
+    while DTR is low. Fixed in the test only (`a8eb8d7`): DTR is toggled by guest time (0.5 s low, 1.5 s high). All five workflows green on that commit.
 
 - 2026-10-04: **Phase 2 correction - the bus read path measured against the Cython baseline it replaced, and brought back to it.**
   - What was wrong with the previous entry: the three "fixes" were tuning of C++ I had written generically in Phase 1 (a region table walked linearly, a flag pointer reloaded every
