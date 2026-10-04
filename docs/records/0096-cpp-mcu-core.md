@@ -305,6 +305,26 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 3 design note: the C++ pin layer (`GPIOPin` x 36, IO_BANK0, PADS_BANK0). Not implemented; read from `_gpio_pin.pyx` and its consumers.**
+  - What the pin is today. A pin is ten words of state (`ctrl`, `pad_value`, `irq_enable_mask`, `irq_force_mask`, `irq_status`, `_last_state`, `_raw_input_value`, `_driven`, `_always_output_enabled`, `index`) plus a Python
+    `set` of listeners. Its level is a pure function of that state and of *other blocks' registers*: `rp.sio.gpio_output_enable/gpio_value` (SIO, already C++), `rp.pio[0|1].pin_directions/pin_values` (RPPIO, still Cython) and
+    `rp.pwm.gpio_direction/gpio_value` (Python). 30 GPIO pins in `rp2040.gpio`, 6 QSPI pins in `rp2040.qspi` (`always_output_enabled=True`, their own pad reset values, record 0050).
+  - Who calls the pin and what it calls back (the real coupling, which is what the port must keep):
+    - *In*: IO_BANK0/PADS_BANK0 windows (`check_for_updates`, `update_irq_value`, `refresh_input`, `ctrl`/`pad_value` writes); SIO's C++ block through two Python trampolines (`gpio_in` -> `rp2040.gpio_values`, a Python loop over the 30 pins; `update_pins` -> `gpio[i].check_for_updates()` per changed pin);
+      `RPPIO.check_changed_pins` (a direct C call into `GPIOPin.check_for_updates`, via the `.pxd`); any device through `set_input_value`/`release_input`; `reset(io, pads)` from the chip.
+    - *Out*: the listeners (a Python `set`, iterated in set order), `rp2040.update_io_interrupt()` (a Python loop over the pins), `rp.pwm.gpio_on_input(index)` when FUNCSEL is PWM, and - on **every** input-level change - a loop over both PIOs and all their state machines calling `check_wait()` for one that is `WAIT PIN` on this index.
+  - Proposed shape (step 1, behaviour identical, Python listeners kept):
+    1. `core/pin.hpp`: a `PinBank` of N pins (a plain struct array, caller-owned like the memory regions) owning all of the state above except the listeners. The level function takes its sources as `const uint32_t*` (SIO's `gpio_output_enable`/`gpio_value`, each PIO's `pin_directions`/`pin_values`) plus a PWM
+       callback, so nothing in it calls Python on the common path. `check_for_updates()` computes the state code as `_state_code()` does and, on a change, calls one host callback `on_change(pin, new, old)`; the Cython shell iterates the listener `set` there, so listener order is unchanged by construction.
+    2. `GPIOPin` stays a `cdef class` with the same attribute surface (`ctrl`, `pad_value`, `irq_*`, `_raw_input_value`, `_driven`, `_listeners`, `_last_state` as properties over the bank's struct), and keeps `check_for_updates` callable as a C method for `_pio.pyx` until PIO itself moves. The pure `_gpio_pin.py` stays as the oracle (D6).
+    3. SIO's two trampolines become direct calls into the bank (no Python on a `GPIO_OUT_SET`), and `gpio_values` becomes one C++ loop. IO_BANK0/PADS_BANK0 stay Python windows in step 1 and move onto the bank as `_native_window` blocks in step 2, like TIMER and SIO.
+    4. The IO interrupt (`update_io_interrupt`) is computed in C++ from the 30 `irq_value`s; `set_interrupt` is the one call out.
+  - Open design points, decided from measurement and not assumed:
+    - **Direct-callback mode** for a consumer that must answer in the same cycle (the CYW43 gSPI listener on the falling CLK edge): a registry in the bank (`pin -> {function pointer, ctx}`) consulted in the same `on_change` call, ahead of or instead of the Python set. Its place in the listener *order* has to be fixed first: today everything is one `set`.
+    - **The per-input-change PIO wait loop** runs in Python for every `set_input_value` (740k/s on the Pico W scan's data pin); it can only be removed once PIO state is in C++ - a per-pin "someone is waiting" bit kept by the state machines would make it one test. Left as is in step 1.
+    - Thread-safety is unchanged: pins are touched on the engine-room thread (or between batches via `schedule_threadsafe`), single-threaded by contract.
+  - Verification (all already in place): `tests/test_pin_trace.py` oracle on `mp-idle`/`cp-boot`/`pins-mp`, `scripts/bench/pin_events.py` order hash identical to `main` on the four workloads, `tests/test_gpio_pin.py`, `test_qspi_pads.py`, `test_ssi.py`, the pure-Python build, a C++ access-by-access test of the level function against a transcription of `_state_code`, then the micro/real benchmark against the current Cython pins.
+
 - 2026-10-04: **Phase 3 baseline, step 2: an IO_BANK0 + PADS_BANK0 trace oracle (`tests/utils/pin_trace.py`).** Decision (the user's): Phase 3 starts with the pin layer
   (`GPIOPin`, IO_BANK0, PADS_BANK0), PIO second; the CYW43 gSPI question stays open until the pin layer's direct-callback mode is designed.
   - Why a new module and not `mmio_trace.py`: IO_BANK0/PADS_BANK0 are thin windows over the state of 30 `GPIOPin` objects, and that state is also written by other things.
