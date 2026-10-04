@@ -305,6 +305,17 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-04: **Phase 3, step 2 done: the native `GPIOPin` is a shell over the C++ pin (`core/pin.hpp`).** Performance-neutral by design; the gain is step 3's.
+  - What changed: each `GPIOPin` owns a `PinBank` of one pin (the C++ pin holds its number, so a source register's bit and what the host is told are the pin's own); the Cython class keeps the whole attribute surface as properties over the C++ fields
+    (`ctrl`, `pad_value`, the three IRQ words, `index`, `_raw_input_value`, `_driven`, `_always_output_enabled`) and implements only the host: one trampoline for the level *sources* (`rp.sio`/`rp.pio[i]`/`rp.pwm` attributes, read exactly as before), the listener `set`, `update_io_interrupt()`, and
+    the PWM/PIO reactions to an input change. A failing callback parks its exception in the shared slot and is re-raised at the same call. `core/pin.hpp` gained `Pin::index` / `init(..., first_index)` for this; `tests/cpp/test_pin.cpp` covers it.
+  - Verified against the old code, not only against itself: three pin traces (`mp-idle`, `cp-boot`, `pins-mp`) *recorded on `main`* replay on this build with 0 mismatches (6.6k / 66k / 20k events, the last with 14 IO interrupt changes and 5 external-drive samples), and the order hash of the pin-event stream equals `main`'s on `mp-idle`, `pio-dma`,
+    `cp-boot` and `picow-scan` (4,798,482 events). `test_gpio_pin.py`, `test_qspi_pads.py`, `test_ssi.py`, the pure-Python build and the whole suite are green.
+  - Measured, A/B interleaved against the commit just before (Cython pin), three rounds of best-of-two: Pico W scan 6.92 / 6.89 / 7.32 s vs 7.14 / 7.64 / 7.01 s (best 6.89 vs 7.01, about +2%, round-to-round spread up to 5%), PIO+DMA 0.167 / 0.157 / 0.167 s vs 0.172 / 0.162 / 0.161 s. So: no regression beyond noise, and no gain - the callbacks
+    the Python version made are the same callbacks. The sources are still Python attribute reads and the per-input-change PIO wait loop is still Python.
+  - Deliberately left for step 3: shared banks (30 GPIO + 6 QSPI) so SIO's two Python trampolines (`gpio_in` -> `rp2040.gpio_values`, `update_pins` -> `check_for_updates`) become direct calls; direct pointers for SIO's `gpio_output_enable`/`gpio_value` (rebound by the `sio` property setter, since `rp2040.sio` can be replaced);
+    IO_BANK0/PADS_BANK0 as `_native_window` blocks; `update_io_interrupt` in C++. Kept as is, not changed: an input change on QSPI pin *n* reaches the GPIO-*n* PWM/PIO reactions (the host is given only an index) - looks like a bug in the existing code; changing it needs a decision.
+
 - 2026-10-04: **Phase 3 design note: the C++ pin layer (`GPIOPin` x 36, IO_BANK0, PADS_BANK0). Not implemented; read from `_gpio_pin.pyx` and its consumers.**
   - What the pin is today. A pin is ten words of state (`ctrl`, `pad_value`, `irq_enable_mask`, `irq_force_mask`, `irq_status`, `_last_state`, `_raw_input_value`, `_driven`, `_always_output_enabled`, `index`) plus a Python
     `set` of listeners. Its level is a pure function of that state and of *other blocks' registers*: `rp.sio.gpio_output_enable/gpio_value` (SIO, already C++), `rp.pio[0|1].pin_directions/pin_values` (RPPIO, still Cython) and
