@@ -35,10 +35,13 @@ from rp2040py.utils.firmware_retrieve import CIRCUITPYTHON, MICROPYTHON
 
 TIMEOUT = 120.0
 
-# Emulated time runs slower than the host's wall clock, so the host's window has to be generous
-# rather than symmetric: the first measured run (CircuitPython 10.2.1) caught exactly one `False`
-# sample out of 40 for a 0.5s drop. Holding DTR low for several real seconds while the guest keeps
-# sampling is what makes the transition impossible to miss between two samples.
+# DTR is dropped and raised again at chosen points of the *guest's* time, not of the host's wall clock. CircuitPython discards
+# what it prints to the console while DTR is low (as a real board does), so the result line of the sampler below only reaches
+# the host if DTR is back up before the sampler ends. An earlier version held DTR low for 5 real seconds and so relied on the
+# emulation being slower than real time: once it got faster, the sampler (3 s of guest time) finished inside the window, its
+# output was dropped, and the exec never completed - a hang that depended on the machine's speed, not on the code under test.
+# Here the window is 0.5 s .. 1.5 s of guest time after the sampler is sent, so it falls inside the sampler's run on any host,
+# and the samples taken during it still have to show both a connected and a not-connected console.
 _SAMPLER = """
 import supervisor
 import time
@@ -48,7 +51,8 @@ for _ in range(60):
     time.sleep(0.05)
 print("SAMPLES", samples.count(True), samples.count(False))
 """
-_DTR_LOW_SECONDS = 5.0
+_DTR_LOW_AT_GUEST_SECONDS = 0.5
+_DTR_HIGH_AT_GUEST_SECONDS = 1.5
 
 
 async def _circuitpython(device: MicroPythonDevice) -> int:
@@ -57,10 +61,17 @@ async def _circuitpython(device: MicroPythonDevice) -> int:
         print(f"FAILED: the console is not connected at boot: {stdout!r} {stderr!r}")
         return 1
 
+    clock = device.mcu.clock
+    started = clock.nanos
+
+    async def _guest_seconds_since_start(seconds: float) -> None:
+        while clock.nanos - started < seconds * 1e9:
+            await asyncio.sleep(0.001)
+
     async def _toggle_dtr() -> None:
-        await asyncio.sleep(1.0)
+        await _guest_seconds_since_start(_DTR_LOW_AT_GUEST_SECONDS)
         device.set_control_lines(dtr=False, rts=False)
-        await asyncio.sleep(_DTR_LOW_SECONDS)
+        await _guest_seconds_since_start(_DTR_HIGH_AT_GUEST_SECONDS)
         device.set_control_lines(dtr=True, rts=True)
 
     toggling = asyncio.ensure_future(_toggle_dtr())
