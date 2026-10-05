@@ -18,4 +18,4 @@ try:
 except ImportError:
     from rp2040py.peripherals._dma import RPDMA
 
-__all__ = ("RPDMA", "RPDMAChannel", "DREQChannel", "TREQ")
+__all__ = ("RPDMA", "TREQ", "DREQChannel", "RPDMAChannel")
