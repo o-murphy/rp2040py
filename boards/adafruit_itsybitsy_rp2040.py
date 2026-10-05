@@ -147,7 +147,7 @@ _EXTRAS = (
 # what makes a hand-written board file able to be fully offline.
 FIRMWARE = {
     "micropython": BoardFirmwareSpec(
-        default_tag="1.28.0",
+        default_tag="1.29.0",
         fw={
             "1.28.0": "https://micropython.org/resources/firmware/ADAFRUIT_ITSYBITSY_RP2040-20260406-v1.28.0.uf2",
             "1.27.0": "https://micropython.org/resources/firmware/ADAFRUIT_ITSYBITSY_RP2040-20251209-v1.27.0.uf2",

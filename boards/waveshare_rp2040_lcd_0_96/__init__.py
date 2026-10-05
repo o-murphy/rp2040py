@@ -157,7 +157,7 @@ _EXTRAS = (LCD, BootselButton, lambda: LEDMock(gpio=BACKLIGHT_GPIO), ResetButton
 # `.uf2` path, which is what makes a hand-written board file able to be fully offline.
 FIRMWARE = {
     "micropython": BoardFirmwareSpec(
-        default_tag="1.28.0",
+        default_tag="1.29.0",
         fw={
             "1.28.0": "https://micropython.org/resources/firmware/WAVESHARE_RP2040_LCD_0_96-20260406-v1.28.0.uf2",
             "1.29.0-preview.718.g2e3304a128": "https://micropython.org/resources/firmware/WAVESHARE_RP2040_LCD_0_96-20260816-v1.29.0-preview.718.g2e3304a128.uf2",

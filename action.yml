@@ -9,7 +9,7 @@ inputs:
       "cpython-3.12"). Defaults to PyPy for its large real-firmware-boot speedup - see
       docs/records/0013-cython-core.md.
     required: false
-    default: "pypy-3.10"
+    default: "cpython-3.14"
   extras:
     description: >
       Comma-separated list of rp2040py extras to install (e.g. "fs"). Defaults to "fs" for

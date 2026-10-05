@@ -341,7 +341,7 @@ def _board(variant: str, fs_blockcount: int) -> BoardSpec:
         extras=_EXTRAS,
         firmware={
             "micropython": BoardFirmwareSpec(
-                default_tag="1.28.0",
+                default_tag="1.29.0",
                 fw=_MICROPYTHON_FW[variant],
                 layout={"fs_start": _FS_START, "fs_blockcount": fs_blockcount, "fs_blocksize": _FS_BLOCKSIZE},
             ),
