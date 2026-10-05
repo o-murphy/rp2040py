@@ -801,6 +801,7 @@ def _bench_firmware(
     bootrom: str | None,
     board: str,
     log_level: LogLevel,
+    stepwise: bool = False,
 ) -> None:
     # Uses Simulator (not a bare RP2040) so the clock actually advances: real firmware relies on
     # timer-based busy-waits during boot (e.g. hardware_timer's timer_busy_wait_until()), and those
@@ -852,23 +853,66 @@ def _bench_firmware(
     print(f"Firmware benchmark: {image}" + (f" (expecting {expect_text!r})" if expect_text else ""))
 
     rp2040.core.pc = 0x10000000
+    if not stepwise:
+        # The real engine: the same batch loop `Simulator.execute()` runs (C++ in the native build), driven synchronously on this thread. Idle jumps are part of it - a firmware
+        # sitting in `sleep_ms()` costs next to nothing, which is what a user sees - so the figure is the *real-time factor* (simulated seconds per wall second), not instructions
+        # per second: the batch does not count instructions, and an idle jump is not one. A firmware that has finished booting and waits for the host (a MicroPython REPL
+        # in WFE with no timer armed) has nothing left to run: simulated time stops and no batch can advance it, so the run ends there instead of spinning to the timeout.
+        simulator.stopped = False
+        sim_start = clock.nanos
+        start = time.perf_counter()
+        idle = False
+        while not tracker.found and (time.perf_counter() - start) < timeout:
+            simulator._execute_batch()
+            if rp2040.core.waiting and not clock.has_scheduled_alarm:
+                idle = True
+                break
+        elapsed = time.perf_counter() - start
+        simulated = (clock.nanos - sim_start) / 1e9
+        simulator.stop()
+        status = (
+            "found expected text"
+            if tracker.found
+            else (
+                "firmware idle (waiting, nothing scheduled)"
+                if idle
+                else ("timed out" if expect_text else "time budget reached")
+            )
+        )
+        print(
+            f"{status}: simulated {simulated:.3f}s in {elapsed:.2f}s of wall time"
+            + (f" -> {simulated / elapsed:.2f}x real time" if elapsed > 0 else "")
+            + " (batch engine; --stepwise for per-instruction calls from Python)"
+        )
+        if expect_text and not tracker.found:
+            sys.exit(1)
+        return
+
     cycle_nanos = 1e9 / 125_000_000  # 125 MHz
     start = time.perf_counter()
     step_batch = 1_000_000
     executed = 0
+    idle_steps = 0
     while not tracker.found and (time.perf_counter() - start) < timeout:
         for _ in range(step_batch):
             if rp2040.core.waiting:
+                idle_steps += 1  # the core sleeps (WFE/WFI): not an instruction, only a trip round this loop
                 clock.tick(clock.nanos_to_next_alarm)
             else:
                 cycles = rp2040.core.execute_instruction()
                 clock.tick(cycles * cycle_nanos)
-        executed += step_batch
+                executed += 1
     elapsed = time.perf_counter() - start
 
     status = "found expected text" if tracker.found else ("timed out" if expect_text else "step budget reached")
+    note = (
+        f"; {idle_steps:,} further loop iterations were the core asleep with nothing scheduled (a firmware idling in its REPL) and are not counted"
+        if idle_steps
+        else ""
+    )
     print(
-        f"{status}: executed {executed:,} instructions in {elapsed:.2f}s -> {executed / elapsed:,.0f} instructions/sec"
+        f"{status}: executed {executed:,} instructions in {elapsed:.2f}s -> {executed / elapsed:,.0f} instructions/sec "
+        f"(one execute_instruction() call from Python each: measures that call, not the batch engine{note})"
     )
     if expect_text and not tracker.found:
         sys.exit(1)
@@ -890,6 +934,7 @@ def _cmd_bench(args: argparse.Namespace) -> None:
             args.bootrom,
             args.board,
             log_level,
+            args.stepwise,
         )
     else:
         _bench_synthetic(args.instructions, args.block_size, args.board, log_level)
@@ -1339,12 +1384,18 @@ def main(argv: "list[str] | None" = None) -> None:
     bench_parser = subparsers.add_parser(
         "bench",
         parents=[_shared_arg_parser("board", "bootrom", "expect-text", "expect-regex", "littlefs", "fetch-fw-only")],
-        help="benchmark instruction-dispatch throughput",
+        help="benchmark: synthetic instruction dispatch, or (--image) a firmware through the real engine",
     )
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")
     bench_parser.add_argument("--block-size", type=int, default=1000, help="synthetic mode: instructions per block")
     bench_parser.add_argument("--image", help=f"firmware mode: {_IMAGE_PATH_HELP}")
     bench_parser.add_argument("--timeout", type=float, default=60.0, help="firmware mode: seconds before giving up")
+    bench_parser.add_argument(
+        "--stepwise",
+        action="store_true",
+        help="firmware mode: step one instruction at a time from Python (the old behaviour: it measures that call, "
+        "not the batch engine, and reports instructions/sec); the default runs the real batch engine and reports the real-time factor",
+    )
     bench_parser.set_defaults(func=_cmd_bench)
 
     # add_help=False + a bare REMAINDER positional: every argument (including `-h`/`--help`) is

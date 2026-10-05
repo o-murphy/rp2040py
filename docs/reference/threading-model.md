@@ -44,9 +44,11 @@ up to a switch interval to win it back from an engine that never blocks - thousa
 `faulthandler` (it does not take the GIL): the host thread sat in a Pillow plugin import while the engine ran a batch. Shortening the engine's batch made it
 *worse* (123 s), so it is the hand-offs, not the batch length. Thread-free there is nothing to hand the GIL to.
 
-Not the same thing, and easy to confuse: `rp2040py bench` in firmware mode steps one instruction at a time **from Python** (`cli/__init__.py`,
-`_bench_firmware`) and measures the cost of that call, not the batch engine (13.7 -> 18.4 M instr/s on one machine, 5.3 -> 14.6 on another, against ~97 M/s
-through `Simulator.execute()` on a MicroPython loop).
+Not the same thing, and easy to confuse: `rp2040py bench --image` used to step one instruction at a time **from Python** and print "instructions/sec" - which measured
+that call, and, for a firmware that had already booted and sat in its REPL with the core asleep (MicroPython 1.23: WFE with no timer armed), mostly *trips round the loop
+with nothing to execute* (3,000,000 iterations, 378,000 of them instructions). The default is now the real batch engine and reports the **real-time factor**; the old mode is
+`--stepwise` and counts real instructions apart from idle iterations (MicroPython 1.23: ~400 thousand instructions in 5 s, the other ~57 million iterations asleep; 1.21 with
+its periodic timer: ~6.7 M real instructions/s from Python, and the engine 46x real time).
 
 ## Why this shape (and not a faster thread)
 
