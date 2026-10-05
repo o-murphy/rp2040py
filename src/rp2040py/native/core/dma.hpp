@@ -73,7 +73,7 @@ constexpr uint32_t EN = 1u << 0, INCR_READ = 1u << 4, INCR_WRITE = 1u << 5, RING
 constexpr uint32_t IRQ_QUIET = 1u << 21, BSWAP = 1u << 22, BUSY = 1u << 24;
 constexpr uint32_t READ_ERROR = 1u << 30, WRITE_ERROR = 1u << 29;
 constexpr uint32_t CTRL_WRITE_MASK = 0xFFFFFFu, CTRL_WC_MASK = READ_ERROR | WRITE_ERROR;
-constexpr uint32_t TREQ_TIMER0 = 0x3B, TREQ_TIMER1 = 0x3C, TREQ_TIMER2 = 0x3D, TREQ_TIMER3 = 0x3E, TREQ_PERMANENT = 0x3F;
+[[maybe_unused]] constexpr uint32_t TREQ_TIMER0 = 0x3B, TREQ_TIMER1 = 0x3C, TREQ_TIMER2 = 0x3D, TREQ_TIMER3 = 0x3E, TREQ_PERMANENT = 0x3F;
 }  // namespace dma_regs
 
 class DmaBlock;
