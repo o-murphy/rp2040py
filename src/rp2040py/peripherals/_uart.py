@@ -21,6 +21,12 @@ def _js_round(value: float) -> int:
     return math.floor(value + 0.5)
 
 
+def _baud_rate(clk_peri: float, baud_divider: float) -> int:
+    """The baud rate for a peripheral clock and a divider; also what the native UART's shell calls, so the rounding and a zero divider's `ZeroDivisionError`
+    (the message included) are the same on both sides by construction."""
+    return _js_round(clk_peri / (baud_divider * 16))
+
+
 UARTDR = 0x0
 UARTFR = 0x18
 UARTIBRD = 0x24
@@ -125,7 +131,7 @@ class RPUART(BasePeripheral):
 
     @property
     def baud_rate(self) -> int:
-        return _js_round(self.rp2040.clk_peri / (self.baud_divider * 16))
+        return _baud_rate(self.rp2040.clk_peri, self.baud_divider)
 
     @property
     def flags(self) -> int:
