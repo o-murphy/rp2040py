@@ -194,34 +194,23 @@ be loaded by supplying the `--image` option - a known version tag (`1.28.0`), or
 file already on disk:
 
 > [!TIP]
-> Booting real firmware means executing millions of Thumb instructions, and in pure Python that is
-> dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js - the compiled
-> `rp2040py.native` backend (on by default, see [Performance](#performance) below) closes that gap.
-> Time for `rp2040py bench --image ... --expect-text "Hello, MicroPython!"` to see the first line
-> of the resident `tests/micropython/main.py` (MicroPython 1.28 + littlefs), CPython 3.10, wall time
-> on the machine that produced these numbers (2026-10):
+> The compiled `rp2040py.native` backend (on by default, see [Performance](#performance) below) is
+> what makes booting real firmware fast: it runs the whole core, bus and peripherals in C++, ahead
+> of both the pure-Python build and rp2040js. Wall time of `rp2040py bench --image ...
+> --littlefs ... --expect-text "Hello, MicroPython!"` to the first line of the resident
+> `tests/micropython/main.py` (MicroPython 1.28 + littlefs), CPython 3.10, one machine (2026-10):
 >
 > | Interpreter | Time to a resident script's first output |
 > |---|---|
-> | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.7 s |
-> | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s (~100x) |
-> | PyPy 3.10 (7.3.19, pure Python - the native build is skipped there) | ~1.3 s |
-> | rp2040js (Node 22, same firmware and littlefs image) | ~3.5 s total, ~3 s past Node's start-up (1.21: ~1.0 s total) |
+> | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s |
+> | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.9 s |
+> | PyPy 3.10 (pure Python - the native build is skipped there) | ~1.3 s |
+> | rp2040js (Node 22) | ~3 s past Node's start-up (~3.5 s in total) |
 >
-> The numbers are far smaller than the ones this table used to carry (133 s / 11 s / 9 s) because
-> the old figure was mostly **not** emulation: it stepped one instruction at a time from Python
-> and counted every trip round that loop with the core asleep (WFE with no timer armed, which is
-> where a booted MicroPython sits) - about 64 million "steps" for a script whose first line takes
-> ~1 million real instructions (`--stepwise` now counts the two apart). `bench` now runs the same
-> batch engine as `Simulator.execute()`, in which an idle core costs nothing. That also removes the
-> reason this README used to give for preferring 1.21 over 1.28 ("~45x more expensive to run a
-> resident script"): measured the same way, both reach the first line in about the same wall time
-> (~0.02-0.03 s native), so any recent release is fine. See
-> [docs/records/0096-cpp-mcu-core.md](docs/records/0096-cpp-mcu-core.md) (the `bench` entries of
-> its progress log) for how the old number came about, and
-> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md) /
-> [docs/records/0017-perf-python-vs-v8.md](docs/records/0017-perf-python-vs-v8.md) for the older
-> measurements this replaces.
+> Any recent MicroPython release is fine; 1.21 is not faster than 1.28. Details, the older
+> measurements this replaces and why they were wrong:
+> [docs/records/0017-perf-python-vs-v8.md](docs/records/0017-perf-python-vs-v8.md) and the `bench`
+> entries of [docs/records/0096-cpp-mcu-core.md](docs/records/0096-cpp-mcu-core.md).
 
 ```sh
 rp2040py micropython --image 1.28.0
@@ -582,21 +571,13 @@ extension points themselves.
 
 ## Performance
 
-The interpreter core (`CortexM0Core`) and the memory bus's hot read/write paths are also available
-as a compiled Cython extension (`rp2040py.native`), giving roughly **7x** the instruction
-throughput of the pure-Python implementation on both a synthetic benchmark and a real MicroPython
-boot (see [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md#cython-port-of-the-interpreter-core--implemented-on-by-default-real-world-win-confirmed-4x)
-for the full measured breakdown).
-
-That extension has since grown past the core itself: the PIO block and its state machines
-([0031](docs/records/0031-pio-cython-tick-batching.md),
-[0047](docs/records/0047-cyw43-pio-gpio-hotpath.md)), the per-batch execution loop
-([0034](docs/records/0034-execute-batch-native-port.md)), the simulation clock
-([0039](docs/records/0039-simulation-clock-native-port.md)) and GPIO pins
-([0047](docs/records/0047-cyw43-pio-gpio-hotpath.md)) are all native too. Those are wins on top of
-the 7x above, on the paths each one covers rather than across the board - the most recent, measured
-end to end, is **~2.6x** on a Pico W CYW43 boot through to `scan()` (0047), a PIO/GPIO-heavy
-workload the original core port barely touched.
+The emulator core is also available as a compiled extension (`rp2040py.native`): the Cortex-M0+
+core, the bus, the clock and the peripherals (SIO, timer, pins, PIO, DMA, SSI, UART, SPI, I2C, ADC,
+CYW43 gSPI) are C++17 behind thin Cython shells, and the batch execution loop runs entirely in C++
+([docs/records/0096-cpp-mcu-core.md](docs/records/0096-cpp-mcu-core.md)). Against the pure-Python
+build that is roughly **100x** to the first line of MicroPython's output (table in the tip above), and
+it is where rp2040py sits ahead of rp2040js. The pure-Python implementations stay in the tree as the
+reference the native blocks are tested against, and as the fallback.
 
 This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
 when a C compiler is available (prebuilt wheels are published for common platforms, so most
