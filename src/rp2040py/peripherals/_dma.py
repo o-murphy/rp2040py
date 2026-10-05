@@ -170,10 +170,14 @@ class RPDMAChannel:
     def start(self) -> None:
         if not (self._ctrl & EN) or self._ctrl & BUSY:
             return
-        self._ctrl |= BUSY
         self._trans_count = self._trans_count_reload
-        if self._trans_count:
-            self.schedule_transfer()
+        if not self._trans_count:
+            # A sequence of zero transfers is not a sequence: nothing starts (no BUSY, no interrupt, no chain), as in rp2040-emu. This used to set BUSY
+            # and schedule nothing, which left the channel BUSY for good (it then ignored every later trigger) until a CTRL rewrite or a DREQ edge ran one
+            # transfer and took the count to -1. The pico-sdk does not say what silicon does here (docs/records/0096-cpp-mcu-core.md).
+            return
+        self._ctrl |= BUSY
+        self.schedule_transfer()
 
     @property
     def treq(self) -> int:
