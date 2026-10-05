@@ -1,5 +1,8 @@
 """Ported from rp2040js's usb/cdc.spec.ts."""
 
+from types import SimpleNamespace
+
+from rp2040py.clock.mock_clock import MockClock
 from rp2040py.usb.cdc import (
     CDC_DTR,
     CDC_REQUEST_SET_CONTROL_LINE_STATE,
@@ -148,6 +151,10 @@ class _FakeUSBController:
         self.setup_packets = []
         self.reads_done = []
         self.reset_calls = 0
+        self.read_delay_microseconds = 10
+        self.rp2040 = SimpleNamespace(
+            clock=MockClock()
+        )  # the host side schedules one alarm of its own on the chip's clock
         self.on_usb_enabled = None
         self.on_reset_received = None
         self.on_endpoint_write = None
@@ -255,3 +262,46 @@ def test_reset_clears_the_control_line_state():
     assert not cdc.dtr and not cdc.rts
     assert cdc.line_coding == LineCoding()
     assert usb.reset_calls == 1
+
+
+_OUT = 2  # the bulk OUT endpoint of _MICROPYTHON_DESCRIPTORS
+
+
+def test_an_out_arm_with_nothing_to_send_waits_instead_of_being_answered():
+    """The firmware arms OUT for 64 bytes while the host has none: a real device stays armed until the host has something. Answering at once with an
+    empty buffer made an idle firmware and this host ping-pong ~35k times per simulated second (docs/records/0096-cpp-mcu-core.md)."""
+    _cdc, usb = _enumerated_cdc()
+    usb.on_endpoint_read(_OUT, 64)
+    usb.rp2040.clock.advance(100_000)
+    assert usb.reads_done == []
+
+
+def test_the_first_byte_the_host_sends_completes_the_oldest_arm_after_the_read_delay():
+    cdc, usb = _enumerated_cdc()
+    usb.on_endpoint_read(_OUT, 64)
+    usb.on_endpoint_read(_OUT, 64)  # a second arm (double buffering)
+    cdc.send_serial_byte(0x41)
+    cdc.send_serial_byte(0x42)  # a burst: gathered into one packet, not one packet per byte
+    usb.rp2040.clock.advance(9)
+    assert usb.reads_done == []
+    usb.rp2040.clock.advance(1)
+    assert usb.reads_done == [(_OUT, b"AB")]
+    cdc.send_serial_byte(0x43)  # ... and the second arm is still waiting for the next data
+    usb.rp2040.clock.advance(10)
+    assert usb.reads_done == [(_OUT, b"AB"), (_OUT, b"C")]
+
+
+def test_data_already_waiting_answers_an_arm_at_once():
+    cdc, usb = _enumerated_cdc()
+    cdc.send_serial_byte(0x41)
+    usb.on_endpoint_read(_OUT, 64)
+    assert usb.reads_done == [(_OUT, b"A")]
+
+
+def test_a_reset_forgets_the_arms_that_were_waiting():
+    cdc, usb = _enumerated_cdc()
+    usb.on_endpoint_read(_OUT, 64)
+    cdc._on_controller_reset()
+    cdc.send_serial_byte(0x41)
+    usb.rp2040.clock.advance(100)
+    assert usb.reads_done == []

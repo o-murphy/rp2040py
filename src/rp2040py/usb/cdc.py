@@ -1,5 +1,5 @@
 from collections.abc import Callable, Sequence
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.usb.interfaces import DataDirection, DescriptorType, ISetupPacketParams, SetupRecipient, SetupType
@@ -139,6 +139,12 @@ class USBCDC:
         self._control_line_state = 0
         self._line_coding = LineCoding()
         self._pending_line_coding: LineCoding | None = None
+        # An OUT arm that finds no data to send waits here, in order, like a real device that stays armed until the host has something. It used
+        # to be answered at once with an empty buffer, so an idle firmware and this host ping-ponged ~35k times per simulated second (a third of an
+        # idle run). The first byte the host sends completes the oldest arm; `_flush_alarm` waits one controller read delay first, so a burst of
+        # bytes is gathered into one packet the way the old 10 us ping-pong gathered it.
+        self._parked_out_reads: list[int] = []
+        self._flush_alarm: Any = None  # created on first use (a bare test double of the controller has no clock)
 
         def _on_usb_enabled() -> None:
             self.usb.reset_device()
@@ -192,10 +198,10 @@ class USBCDC:
                 self.usb.endpoint_read_done(ENDPOINT_ZERO, coding.to_bytes()[:size])
                 return
             if endpoint == self._out_endpoint:
-                buffer = bytearray(min(size, self.tx_fifo.item_count))
-                for i in range(len(buffer)):
-                    buffer[i] = self.tx_fifo.pull()
-                self.usb.endpoint_read_done(self._out_endpoint, buffer)
+                if not self.tx_fifo.item_count:
+                    self._parked_out_reads.append(size)  # stay armed until the host has something to send
+                    return
+                self._complete_out_read(size)
 
         self.usb.on_usb_enabled = _on_usb_enabled
         self.usb.on_reset_received = _on_reset_received
@@ -288,8 +294,22 @@ class USBCDC:
         self._pending_line_coding = coding
         self._send_class_request(CDC_REQUEST_SET_LINE_CODING, 0, None, w_length=LINE_CODING_SIZE)
 
+    def _complete_out_read(self, size: int) -> None:
+        buffer = bytearray(min(size, self.tx_fifo.item_count))
+        for i in range(len(buffer)):
+            buffer[i] = self.tx_fifo.pull()
+        self.usb.endpoint_read_done(self._out_endpoint, buffer)
+
+    def _flush_parked_reads(self) -> None:
+        while self._parked_out_reads and self.tx_fifo.item_count:
+            self._complete_out_read(self._parked_out_reads.pop(0))
+
     def send_serial_byte(self, data: int) -> None:
         self.tx_fifo.push(data)
+        if self._parked_out_reads:
+            if self._flush_alarm is None:
+                self._flush_alarm = self.usb.rp2040.clock.create_alarm(self._flush_parked_reads)
+            self._flush_alarm.schedule(self.usb.read_delay_microseconds * 1000)
 
     def reset(self) -> None:
         """Reset this host side *and* the controller it drives.
@@ -309,6 +329,9 @@ class USBCDC:
         asserting. `on_device_connected` and `on_serial_data` are deliberately *not* cleared - they
         are wiring, and the re-enumeration that follows a reset is what fires them again."""
         self.tx_fifo.reset()
+        self._parked_out_reads.clear()
+        if self._flush_alarm is not None:
+            self._flush_alarm.cancel()
         self._initialized = False
         self._descriptors_size = None
         self._descriptors = []
