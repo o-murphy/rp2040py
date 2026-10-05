@@ -74,3 +74,11 @@ def test_start_one_is_self_clearing():
     assert not chip.read_uint32(ADC_BASE + CS) & (1 << 2)  # it used to read back as set for ever
     chip.write_uint32(ADC_BASE + CS, 1 | (1 << 3))  # START_MANY is not self-clearing
     assert chip.read_uint32(ADC_BASE + CS) & (1 << 3)
+
+
+def test_result_is_12_bits():
+    chip = RP2040()
+    chip.adc.complete_adc_read(
+        0xABCD, False
+    )  # a device may hand over more than 12 bits (it used to be read back whole)
+    assert chip.read_uint32(ADC_BASE + RESULT) == 0xBCD

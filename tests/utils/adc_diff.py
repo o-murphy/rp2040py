@@ -310,8 +310,10 @@ def mutant_rig(name: str) -> Rig:
                 return
             if name != "c_busy_kept":
                 self.busy = False
-            if name != "c_result_not_stored":
+            if name == "c_result_unmasked":  # the old behaviour: RESULT held the whole value
                 self.result = value
+            elif name != "c_result_not_stored":
+                self.result = value & 0xFFF
             if error:
                 self.cs |= P.CS_ERR_STICKY | (0 if name == "c_err_missing" else P.CS_ERR)
             elif name != "c_err_never_cleared":
@@ -390,8 +392,6 @@ def mutant_rig(name: str) -> Rig:
                 return self.int_status
             if offset == P.INTE and name == "inte_reads_force":
                 return self.int_force
-            if offset == P.RESULT and name == "result_masked":
-                return self.result & 0xFFF
             return super().read_uint32(offset)
 
         def write_uint32(self, offset: int, value: int) -> None:
@@ -520,10 +520,10 @@ def mutant_rig(name: str) -> Rig:
 MUTANTS = (
     "fifo_depth_8", "sample_time_halved", "channel_not_recorded", "sample_reads_active_channel", "sample_flags_error", "multi_shot_ignored", "multi_shot_checks_start_one",
     "start_not_busy", "divider_no_one", "divider_frac_256_wrong", "divider_int_mask_8", "int_raw_gt", "int_status_no_force", "int_status_force_masked",
-    "int_status_no_mask", "dma_gt", "dma_ignores_dreq_en", "dma_never_clears", "c_busy_kept", "c_result_not_stored", "c_err_missing", "c_err_never_cleared", "c_fifo_always",
+    "int_status_no_mask", "dma_gt", "dma_ignores_dreq_en", "dma_never_clears", "c_busy_kept", "c_result_not_stored", "c_result_unmasked", "c_err_missing", "c_err_never_cleared", "c_fifo_always",
     "c_overflow_silent", "c_value_unmasked", "c_shift_ignored", "c_shift_8", "c_fifo_err_ignored", "c_no_dma", "c_no_interrupts", "c_no_round_robin", "c_round_robin_same",
     "c_no_multi_shot", "c_divider_ge", "c_micros_doubled", "cs_ready_inverted", "cs_ready_missing", "fcs_level_unmasked", "fcs_full_missing", "fcs_empty_missing",
-    "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "result_masked", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
+    "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
     "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
     "cs_sticky_in_fcs", "ainsel_setter_shift_mask", "c_round_robin_unwrapped", "fcs_no_dma", "dma_off_keeps", "cs_start_one_sticky",

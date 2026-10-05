@@ -206,6 +206,7 @@ static void test_the_fifo_shift_error_overflow_and_underflow() {
     CHECK((adc.fcs & FCS_UNDER) == 0);
     fresh(kDeferred);                                              // no FIFO enable: nothing is stored, the result is
     CHECK(adc.complete_adc_read(0x55, false) && adc.fifo.empty() && rd(RESULT) == 0x55);
+    CHECK(adc.complete_adc_read(0xABCD, false) && rd(RESULT) == 0xBCD && adc.result == 0xBCD);   // RESULT is 12 bits, FIFO or not
 }
 
 static void test_error_flags_in_cs_and_the_sticky_clear() {

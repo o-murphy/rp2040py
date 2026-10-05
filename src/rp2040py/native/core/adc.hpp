@@ -155,7 +155,7 @@ public:
     bool complete_adc_read(int64_t value, bool error) noexcept {
         using namespace adc_regs;
         busy = false;
-        result = value;
+        result = value & 0xFFF;  // RESULT is 12 bits
         if (error) {
             cs |= CS_ERR_STICKY | CS_ERR;
         } else {

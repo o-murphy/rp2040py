@@ -204,7 +204,7 @@ class RPADC(BasePeripheral):
 
     def complete_adc_read(self, value: int, error: bool) -> None:
         self.busy = False
-        self.result = value
+        self.result = value & 0xFFF  # RESULT is 12 bits
         if error:
             self.cs |= CS_ERR_STICKY | CS_ERR
         else:
