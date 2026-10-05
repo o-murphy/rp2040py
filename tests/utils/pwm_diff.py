@@ -21,6 +21,7 @@ The rig *replaces* the chip's DMA with a recorder and wraps ``set_interrupt``. L
 result as a module of its own, so a mutant is exactly the reference with one expression different.
 """
 
+import gc
 import inspect
 import random
 import types
@@ -29,6 +30,7 @@ from typing import Any
 
 from rp2040py.peripherals import _pwm as P
 from rp2040py.rp2040 import RP2040
+from utils.is32bit import IS32BIT
 
 PWM_BASE = 0x40050000
 IO_BANK0 = 0x40014000
@@ -649,6 +651,15 @@ def run_pair(
 ) -> "Divergence | None":
     """Runs `ops` on both rigs and returns the first difference, or None. `perturb(candidate, step)` lets a test damage the candidate to prove the oracle sees it."""
     a, b = reference(), candidate()
+    try:
+        return _lockstep(a, b, ops, perturb)
+    finally:
+        del a, b
+        if IS32BIT:
+            gc.collect()  # two chips of 16 MB each per run, hundreds of runs per test file: do not leave them to the automatic collector (a 32-bit build runs out of address space)
+
+
+def _lockstep(a: Rig, b: Rig, ops: list[tuple], perturb: "Callable[[Rig, int], None] | None") -> "Divergence | None":
     log_a = log_b = 0
     for step, op in enumerate(ops):
         result_a, error_a = _step(a, op)
