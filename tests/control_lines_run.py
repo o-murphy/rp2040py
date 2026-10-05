@@ -35,7 +35,7 @@ from rp2040py.utils.firmware_retrieve import CIRCUITPYTHON, MICROPYTHON
 
 TIMEOUT = 120.0
 
-# DTR is dropped and raised again at chosen points of the *guest's* time, not of the host's wall clock. CircuitPython discards
+# DTR is dropped and raised again at chosen points of the *guest's* time (clock alarms, not host polling), not of the host's wall clock. CircuitPython discards
 # what it prints to the console while DTR is low (as a real board does), so the result line of the sampler below only reaches
 # the host if DTR is back up before the sampler ends. An earlier version held DTR low for 5 real seconds and so relied on the
 # emulation being slower than real time: once it got faster, the sampler (3 s of guest time) finished inside the window, its
@@ -62,21 +62,21 @@ async def _circuitpython(device: MicroPythonDevice) -> int:
         return 1
 
     clock = device.mcu.clock
-    started = clock.nanos
+    alarms = []  # kept alive: an alarm nobody references is collected before it fires
 
-    async def _guest_seconds_since_start(seconds: float) -> None:
-        while clock.nanos - started < seconds * 1e9:
-            await asyncio.sleep(0.001)
+    def _arm_dtr_toggle() -> None:
+        # Runs inside the engine room (via schedule_threadsafe), so the alarms are the simulator's own: DTR goes low and high at fixed points of
+        # the *guest's* clock, whatever the host's speed or how it is scheduled. Polling the clock from the host's event loop (as this did before)
+        # only works while the guest is slower than the poll - a guest that sleeps by jumping to its next timer runs the whole sampler in a few
+        # milliseconds of wall time, and the first poll then sees a clock already past both points.
+        low = clock.create_alarm(lambda: device.cdc.set_control_lines(dtr=False, rts=False))
+        high = clock.create_alarm(lambda: device.cdc.set_control_lines(dtr=True, rts=True))
+        low.schedule(_DTR_LOW_AT_GUEST_SECONDS * 1e9)
+        high.schedule(_DTR_HIGH_AT_GUEST_SECONDS * 1e9)
+        alarms.extend((low, high))
 
-    async def _toggle_dtr() -> None:
-        await _guest_seconds_since_start(_DTR_LOW_AT_GUEST_SECONDS)
-        device.set_control_lines(dtr=False, rts=False)
-        await _guest_seconds_since_start(_DTR_HIGH_AT_GUEST_SECONDS)
-        device.set_control_lines(dtr=True, rts=True)
-
-    toggling = asyncio.ensure_future(_toggle_dtr())
+    device.simulator.schedule_threadsafe(_arm_dtr_toggle)
     stdout, stderr = await device.aexec(_SAMPLER, timeout=TIMEOUT)
-    await toggling
     print(f"serial_connected samples: {stdout!r}")
     if b"SAMPLES" not in stdout:
         print(f"FAILED to sample serial_connected: {stdout!r} {stderr!r}")
