@@ -267,6 +267,8 @@ script:
 | MicroPython 1.28 | 1.89 s | 0.02 s (~95x) |
 | MicroPython 1.21 | 3.36 s | 0.03 s (~110x) |
 
+PyPy 3.10 (7.3.19, pure Python, the native build is skipped there): 1.31 s on 1.28, 1.77 s on 1.21.
+
 What this changes in the text above:
 
 - **The "64.7M steps / 188.98 s for 1.28" and the "1.28 is 45x costlier than 1.21" explanation are
@@ -278,8 +280,8 @@ What this changes in the text above:
   script. That is a comparison against an old, single rp2040js run on a different machine state,
   not a fresh head-to-head - rp2040js was not re-run for this update, so treat "ahead of the JS JIT"
   as indicated, not proven, until it is.
-- **PyPy is not re-measured** (last figure 8.9-11.6 s, with the per-instruction engine). With the
-  core in C++ there is nothing left for its JIT to speed up in the hot path, so "run under PyPy" is
-  no longer the advice.
+- **PyPy was re-measured** (above): ~1.3-1.8 s, i.e. only ~1.4-1.9x faster than CPython's pure build (it was ~16x
+  on the old per-instruction engine, whose cost was interpretive overhead PyPy could remove) and ~60x slower than the
+  native build. "Run under PyPy" is no longer the advice; the native build is the fast path.
 - Preloading littlefs does not change these numbers measurably: the README figures (taken the same
   way) agree with the table here.
