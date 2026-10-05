@@ -77,6 +77,9 @@ public:
         return true;
     }
 
+    // Back to power-on (CS deasserted, nothing shifted, no response): `GSPIBus.power_off()`'s share of the bit-level state.
+    void reset() noexcept { clear(); }
+
     bool selected() const noexcept { return selected_; }
     uint32_t bits_in_word() const noexcept { return bits_in_word_; }
     uint32_t shift_register() const noexcept { return shift_reg_; }

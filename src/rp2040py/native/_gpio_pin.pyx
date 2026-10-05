@@ -141,6 +141,7 @@ cdef class GPIOPin:
 
     def __cinit__(self, *args, **kwargs):
         self._pin = self._bank.pin_ptr(0)
+        self._direct_refs = []
 
     def __init__(self, rp2040, unsigned int index, name=None, bint always_output_enabled=False):
         cdef PinHost host

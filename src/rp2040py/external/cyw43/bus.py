@@ -162,8 +162,9 @@ acknowledged, not synchronously with it.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from rp2040py._native_gate import native_disabled
 from rp2040py.gpio_pin import GPIOPinState
 
 if TYPE_CHECKING:
@@ -496,6 +497,20 @@ def _decode_header(word: int) -> GSPICommand:
     )
 
 
+def _native_shifter(bus: "GSPIBus", clk: "GPIOPin", data: "GPIOPin", cs: "GPIOPin") -> "Any | None":
+    """The native gSPI bit shifter (record 0096, Phase 3) if the three pins are native `GPIOPin`s and the extension is importable, else None
+    - in which case `attach_gpio()` installs the Python listeners, which are also the oracle the native path is tested against."""
+    if native_disabled():
+        return None
+    try:
+        from rp2040py.native._gspi import GspiShifter, can_attach
+    except ImportError:
+        return None
+    if not can_attach(clk, data, cs):
+        return None
+    return GspiShifter(bus, clk, data, cs)
+
+
 class GSPIBus:
     """One CYW43439's worth of gSPI bus state: the F0 register block plus the wire-level word/
     header decode driving it. `attach_gpio()` wires it to real `GPIOPin`s; the decode logic itself
@@ -562,6 +577,9 @@ class GSPIBus:
         # attribute, not a bare private one poked from outside - None here preserves today's exact
         # drop-the-payload DATA_HEADER behavior for any caller that constructs a bare GSPIBus().
         self.nat_bridge: NatBridge | None = None
+        # The native bit shifter (rp2040py.native._gspi), when `attach_gpio()` found native pins: it owns the edge-level state (CS, shift register,
+        # response being driven) and calls `_on_word()` / `_on_cs_change()`; None means the Python listeners below do all of it.
+        self._native_shifter: Any | None = None
 
     def power_off(self) -> None:
         """Drop the chip back to its power-on state, as pulling `WL_ON` low does on real hardware.
@@ -594,6 +612,8 @@ class GSPIBus:
         self._pending_write_words = []
         self._response_bytes = b""
         self._response_bit_index = 0
+        if self._native_shifter is not None:
+            self._native_shifter.reset()
         self._rx_packet = b""
         self._rx_queue = []
         self._bus_data_credit = 1
@@ -1164,6 +1184,11 @@ class GSPIBus:
         if self._bits_in_word < 32:
             return
         word, self._shift_reg, self._bits_in_word = self._shift_reg, 0, 0
+        self._on_word(word)
+
+    def _on_word(self, word: int) -> None:
+        """One complete 32-bit wire word, as shifted in. Everything above the bit level lives here, so the Python edge methods and the native
+        shifter (`rp2040py.native._gspi`, which calls this once per word) share it."""
         word = self._word(word)  # undo the current word-length mode's wire transform first
 
         if self._pending_command is None:
@@ -1223,6 +1248,11 @@ class GSPIBus:
         data_pin = rp2040.gpio[data]
         cs_pin = rp2040.gpio[cs]
         self._data_pin = data_pin
+
+        shifter = _native_shifter(self, clk_pin, data_pin, cs_pin)
+        if shifter is not None:
+            self._native_shifter = shifter
+            return
 
         def _cs_listener(new_state: GPIOPinState, _old_state: GPIOPinState) -> None:
             # Active-low: CS is asserted (selected) when the RP2040 drives it LOW.

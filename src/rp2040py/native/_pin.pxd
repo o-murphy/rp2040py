@@ -45,6 +45,7 @@ cdef extern from "pin.hpp" namespace "rp2040core":
         PinBank() noexcept
         bool init(uint32_t count, const PinHost& host, const bool* always_output_enabled, uint32_t first_index) noexcept
         Pin* pin_ptr(uint32_t i) noexcept
+        void bind_source(uint32_t source, const uint32_t* direct) noexcept
         bool add_direct_listener(uint32_t i, PinChangeFn fn, void* ctx) noexcept
         bool remove_direct_listener(uint32_t i, PinChangeFn fn, void* ctx) noexcept
         bool raw_output_enable(uint32_t i, uint32_t fsel, bool* out) noexcept

@@ -14,6 +14,9 @@ cdef class GPIOPin:
     cdef public object rp2040
     cdef public str name
     cdef public object _listeners
+    # Python objects a C++ consumer registered on this pin points into (the shifter itself, the PIO/SIO objects whose registers it reads
+    # directly): the pin keeps them alive for as long as it can call them.
+    cdef public list _direct_refs
     cdef PinBank _bank
     cdef Pin* _pin
 

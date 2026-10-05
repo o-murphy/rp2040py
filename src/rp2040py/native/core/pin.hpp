@@ -135,7 +135,9 @@ public:
     const Pin& pin(uint32_t i) const noexcept { return pins_[i]; }
 
     // A direct pointer replaces the host call for that source (e.g. SIO's own `gpio_output_enable`); nullptr goes back to the host.
-    void bind_source(PinSource source, const uint32_t* direct) noexcept { direct_[source] = direct; }
+    void bind_source(uint32_t source, const uint32_t* direct) noexcept {
+        if (source < kPinSources) direct_[source] = direct;
+    }
 
     // Direct listeners are called in registration order, before the host's `on_change`. They must not add or remove listeners from inside a
     // call. Returns false if the table is full (add) or the listener is not registered (remove).
