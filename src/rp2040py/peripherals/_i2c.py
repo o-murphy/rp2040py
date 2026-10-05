@@ -89,7 +89,7 @@ ABORT = 1 << 1
 ENABLE = 1 << 0
 
 # IC_TX_ABRT_SOURCE bits:
-TX_FLUSH_CNT_MASK = 0x1FF
+TX_FLUSH_CNT_MASK = 0x1FF  # the width of the count, at TX_FLUSH_CNT_SHIFT
 TX_FLUSH_CNT_SHIFT = 23
 ABRT_USER_ABRT = 1 << 16
 ABRT_SLVRD_INT = 1 << 15
@@ -254,7 +254,8 @@ class RPI2C(BasePeripheral):
             self.check_interrupts()
 
     def _abort(self, reason: int) -> None:
-        self.abort_source &= ~TX_FLUSH_CNT_MASK
+        # The reasons (bits 0-16) accumulate until read; the flush count (bits 31:23) is replaced by this abort's.
+        self.abort_source &= ~(TX_FLUSH_CNT_MASK << TX_FLUSH_CNT_SHIFT)
         self.abort_source |= reason | (self._tx_fifo.item_count << TX_FLUSH_CNT_SHIFT)
         self._tx_fifo.reset()
         self._set_interrupts(R_TX_ABRT)

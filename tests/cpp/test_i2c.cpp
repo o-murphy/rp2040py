@@ -295,12 +295,12 @@ static void test_abort_accounting_keeps_the_flush_count_in_the_high_bits() {
     CHECK(rd(TXFLR) == 0);
     const uint32_t first = rd(TX_ABRT_SOURCE);                   // reading clears it
     CHECK(first == ((3u << TX_FLUSH_CNT_SHIFT) | ABRT_7B_ADDR_NOACK) && rd(TX_ABRT_SOURCE) == 0);
-    // the reference clears the LOW nine bits (the reasons) on the next abort, not the count: an earlier reason is wiped, the count accumulates
+    // the reasons accumulate until read; the flush count is replaced by the new abort's
     i2c.abort_source = ABRT_TXDATA_NOACK | (2u << TX_FLUSH_CNT_SHIFT);
     i2c.tx.push(1);
     CHECK(i2c.arbitration_lost());
-    CHECK((i2c.abort_source & 0x1FF) == 0 && (i2c.abort_source & ARB_LOST) != 0);
-    CHECK((i2c.abort_source >> TX_FLUSH_CNT_SHIFT) == (2 | 1));
+    CHECK((i2c.abort_source & 0x1FF) == ABRT_TXDATA_NOACK && (i2c.abort_source & ARB_LOST) != 0);
+    CHECK((i2c.abort_source >> TX_FLUSH_CNT_SHIFT) == 1);
 }
 
 static void test_the_enable_register() {
@@ -761,11 +761,11 @@ static void test_registers_with_side_effects_and_masks_in_detail() {
     CHECK(rd(CLR_STOP_DET) == 1 && i2c.int_raw == 0 && i2c.failed());
     env.fail_irq = false;
     env.failed = 0;
-    // abort() on its own: bit 9 stays, the flush count is replaced by the new one, the FIFO is flushed
+    // abort() on its own: the reasons stay, the flush count (5) is replaced by the new one (0: nothing queued), the FIFO is flushed
     fresh(kSilent);
     i2c.abort_source = ABRT_SBYTE_NORSTRT | (5u << TX_FLUSH_CNT_SHIFT);
     CHECK(i2c.arbitration_lost());
-    CHECK(i2c.abort_source == (ABRT_SBYTE_NORSTRT | ARB_LOST | (5u << TX_FLUSH_CNT_SHIFT)));
+    CHECK(i2c.abort_source == (ABRT_SBYTE_NORSTRT | ARB_LOST));
     // IC_ENABLE: ABORT works whenever the machine is not idle, and a disable flushes the RX FIFO too
     fresh(kSilent);
     i2c.state = STATE_CONNECTED;

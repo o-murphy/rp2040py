@@ -41,3 +41,14 @@ def test_ic_intr_mask_holds_13_bits():
     chip, _ = _chip()
     chip.write_uint32(I2C0_BASE + IC_INTR_MASK, 0xFFFFFFFF)
     assert chip.read_uint32(I2C0_BASE + IC_INTR_MASK) == 0x1FFF
+
+
+def test_a_second_abort_keeps_the_earlier_reasons_and_replaces_the_flush_count():
+    chip, _ = _chip()
+    i2c = chip.i2c[0]
+    i2c.abort_source = 1 << 3 | (2 << 23)  # TXDATA_NOACK, two commands flushed
+    i2c._tx_fifo.push(1)
+    i2c.arbitration_lost()  # a second abort, with one command queued
+    assert i2c.abort_source & 0x1FF == 1 << 3  # the earlier reason is still there
+    assert i2c.abort_source & (1 << 12)  # and the new one joined it
+    assert i2c.abort_source >> 23 == 1  # the count is this abort's, not 2 | 1

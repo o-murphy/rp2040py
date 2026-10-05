@@ -351,12 +351,23 @@ def mutant_rig(name: str) -> Rig:
 
         def _abort(self, reason: int) -> None:
             if name == "abort_keeps_tx_fifo":
-                self.abort_source &= ~I.TX_FLUSH_CNT_MASK
+                self.abort_source &= ~(I.TX_FLUSH_CNT_MASK << I.TX_FLUSH_CNT_SHIFT)
                 self.abort_source |= reason | (self._tx_fifo.item_count << I.TX_FLUSH_CNT_SHIFT)
                 self._set_interrupts(I.R_TX_ABRT)
                 return
-            if name == "abort_no_flush_count":
+            if name == "abort_keeps_old_count":  # the count is ORed in, never replaced
+                self.abort_source |= reason | (self._tx_fifo.item_count << I.TX_FLUSH_CNT_SHIFT)
+                self._tx_fifo.reset()
+                self._set_interrupts(I.R_TX_ABRT)
+                return
+            if name == "abort_wipes_reasons":  # the old behaviour: the mask of the count's width applied to bits 0-8
                 self.abort_source &= ~I.TX_FLUSH_CNT_MASK
+                self.abort_source |= reason | (self._tx_fifo.item_count << I.TX_FLUSH_CNT_SHIFT)
+                self._tx_fifo.reset()
+                self._set_interrupts(I.R_TX_ABRT)
+                return
+            if name == "abort_no_flush_count":
+                self.abort_source &= ~(I.TX_FLUSH_CNT_MASK << I.TX_FLUSH_CNT_SHIFT)
                 self.abort_source |= reason
                 self._tx_fifo.reset()
                 self._set_interrupts(I.R_TX_ABRT)
@@ -651,6 +662,7 @@ MUTANTS = (
     "sar_mask_wrong", "tx_overflow_silent", "tx_empty_not_cleared", "rx_tl_clamp_missing", "tx_tl_mask_wrong", "hcnt_mask_wrong", "enable_fifos_kept", "enable_abort_when_idle",
     "enable_abort_not_sticky", "enable_no_next_command", "spklen_always", "master_bits_wrong", "scl_period_speed_wrong", "reset_keeps_target", "reset_keeps_fifos",
     "reset_clears_callbacks", "intr_mask_not_writable", "intr_mask_unmasked", "intr_mask_no_line_update", "intr_mask_reset_zero",
+    "abort_wipes_reasons", "abort_keeps_old_count",
 )  # fmt: skip
 
 

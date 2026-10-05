@@ -18,7 +18,7 @@
 //   - reads have side effects: IC_DATA_CMD pulls a byte (an empty FIFO sets RX_UNDER and reads 0), every IC_CLR_* clears its interrupts and reads 1 if it cleared any, IC_TX_ABRT_SOURCE
 //     clears itself (keeping bit 9, which nothing ever sets), IC_CLR_INTR and IC_CLR_TX_ABRT clear it as well; an alias write decodes against a *read*;
 //   - IC_INTR_MASK is writable (13 bits, reset value 0x8FF; a write re-evaluates the line); the DMA control registers are unimplemented (a feature in the backlog);
-//   - `abort()` clears IC_TX_ABRT_SOURCE with TX_FLUSH_CNT_MASK (bits 0-8) where the flush count lives in bits 23-31, ORs the reason and the count in, empties the TX FIFO and raises TX_ABRT;
+//   - `abort()` ORs the reason into IC_TX_ABRT_SOURCE (reasons accumulate until the register is read), replaces the flush count (bits 31:23) with the number of commands dropped, empties the TX FIFO and raises TX_ABRT;
 //   - IC_CON with the speed field 0 is rewritten to 3 (high speed); IC_TAR and IC_SAR are masked to 10 bits, the clock counts to 16, the thresholds to 8 bits and then to the FIFO size;
 //     IC_ENABLE keeps a set ABORT bit (software cannot clear it), drops it when the bus is idle, aborts and sets `stop` otherwise, and empties both FIFOs when ENABLE is cleared;
 //   - IC_SDA_HOLD and IC_FS_SPKLEN writes follow the reference's own conditions (see the record: a datasheet mismatch to be fixed there and here together);
@@ -382,7 +382,7 @@ private:
 
     bool abort(uint32_t reason) noexcept {
         using namespace i2c_regs;
-        abort_source &= ~TX_FLUSH_CNT_MASK;
+        abort_source &= ~(TX_FLUSH_CNT_MASK << TX_FLUSH_CNT_SHIFT);  // the reasons accumulate until read; the flush count is replaced
         abort_source |= reason | (tx.count() << TX_FLUSH_CNT_SHIFT);
         tx.reset();
         return set_interrupts(R_TX_ABRT);
