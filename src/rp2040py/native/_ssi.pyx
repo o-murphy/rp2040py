@@ -13,6 +13,7 @@ The reference's private state is kept readable under its names (`_ssienr`, `_wri
 command (all the block keeps) and the *count* as its length.
 """
 
+from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.stdint cimport int64_t, uint8_t, uint32_t
 from libcpp cimport bool as cppbool
 
@@ -102,6 +103,9 @@ cdef class _TxView:
 
 
 cdef class RPSSI:
+    def __cinit__(self, *args, **kwargs):
+        self._pin_keepalive = NULL
+
     def __init__(self, rp2040, name):
         cdef SsiHost host
         cdef GPIOPin pin
@@ -123,6 +127,10 @@ cdef class RPSSI:
         self._block.init(<uint8_t*> <size_t> flash_address, <uint32_t> flash_size, host)
         if isinstance(self._cs_pin, GPIOPin):
             pin = <GPIOPin> self._cs_pin
+            # The block keeps a raw pointer into the pin's bank and takes itself off it in __dealloc__. A reference the garbage collector's tp_clear cannot
+            # drop keeps the pin alive until then (it would otherwise be freed first, with this block still on its bank). No cycle: the pin never refers back.
+            Py_INCREF(pin)
+            self._pin_keepalive = <void*> pin
             if not self._block.bind_cs(pin.bank_ptr()):
                 raise_if_pending()
             self._cs_native = True
@@ -151,6 +159,9 @@ cdef class RPSSI:
     def __dealloc__(self):
         if self._cs_native and self._cs_listening:
             self._block.detach()
+        if self._pin_keepalive != NULL:
+            Py_DECREF(<object> self._pin_keepalive)
+            self._pin_keepalive = NULL
 
     # --- the reference's private state, as views --------------------------------------------------
 
