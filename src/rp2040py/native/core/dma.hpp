@@ -17,8 +17,9 @@
 // reference also read before it (the control word, the data size and the ring mask at the start of a transfer).
 //
 // Quirks of the reference that are kept (each one is pinned by tests/test_dma_diff.py or the C++ checks):
-//   - a channel started with a count of 0 stays BUSY with nothing scheduled, and a later transfer takes the count
-//     to -1 (signed here, as there; the register reads back 0xFFFFFFFF);
+//   - a CTRL rewrite while a channel runs re-arms its alarm, so if that was its last transfer the alarm runs one
+//     more on the finished channel and takes the count to -1 (signed here, as there; the register reads back 0xFFFFFFFF);
+//     a trigger with a count of 0 starts nothing (the reference used to leave such a channel BUSY for good);
 //   - a reset leaves BUSY (and the sticky error bits) alone - only the low 24 bits of CTRL are rewritten;
 //   - `set_dreq` wakes the channels waiting on a DREQ only on a rising edge, and a reset leaves the DREQs alone;
 //   - TIMER3's dividend is `timer3 >> 4` (upstream rp2040js shifts by 36, which JavaScript masks to 4);
@@ -313,10 +314,10 @@ private:
 inline bool DmaChannel::start() noexcept {
     using namespace dma_regs;
     if (!(ctrl & EN) || (ctrl & BUSY)) return true;
-    ctrl |= BUSY;
     trans_count = trans_count_reload;
-    if (trans_count != 0) return schedule_transfer();
-    return true;
+    if (trans_count == 0) return true;  // no transfers, no sequence: not BUSY, no interrupt, no chain (as rp2040-emu)
+    ctrl |= BUSY;
+    return schedule_transfer();
 }
 
 inline bool DmaChannel::schedule_transfer() noexcept {

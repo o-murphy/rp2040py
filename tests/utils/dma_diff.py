@@ -19,11 +19,9 @@ After **each** step the whole readable register file (so every channel's address
 scheduled at a different time is a difference at once), the asserted DREQs, the data in the memory the channels work on, the probe's state, and the ordered logs
 of what left the block (interrupt-line changes, probe accesses) are compared; an exception on one side and not the other is a difference like any other.
 
-Kept out of the domain on purpose: a TRANS_COUNT of 0 at a trigger. The reference starts such a channel (BUSY set, nothing scheduled) and leaves it BUSY for good; the
-next CTRL rewrite or DREQ edge then runs a transfer, which takes the count to -1. What hardware does is a decision for the port (record 0096's progress log), not
-something the oracle should freeze by accident - the generator keeps every count at 1 or more. The same -1 is reachable *without* it, by a stale alarm (a CTRL
-rewrite while a channel is running re-arms its alarm; if that was its last transfer, the alarm then runs one more on the finished channel), and that is part of the
-reference's behaviour the C++ reproduces; only the representation differs (a Python -1 vs the word 0xFFFFFFFF), which ``BusView`` below normalises.
+A TRANS_COUNT of 0 at a trigger is in the domain (it starts nothing). What the reference does when a CTRL rewrite re-arms the alarm of a channel on its last transfer - one more
+transfer runs on the finished channel and takes the count to -1 - is part of its behaviour that the C++ reproduces; only the representation differs (a Python -1 vs the word
+0xFFFFFFFF), which ``BusView`` below normalises.
 
 Same precondition as every oracle of this record: the pure DMA against the implementation under test must show 0 differences on long runs
 (tests/test_dma_diff.py), and a deliberately damaged run must be caught.
@@ -247,6 +245,18 @@ def mutant_rig(name: str) -> Rig:
                 if name in ("ignores_quiet",):
                     self._ctrl = (self._ctrl & ~_dma.IRQ_QUIET) | (saved & _dma.IRQ_QUIET)
 
+        def start(self) -> None:
+            if (
+                name == "zero_count_stays_busy"
+                and self._ctrl & _dma.EN
+                and not self._ctrl & _dma.BUSY
+                and not self._trans_count_reload
+            ):
+                self._ctrl |= _dma.BUSY  # the behaviour before the zero-count fix
+                self._trans_count = 0
+                return
+            super().start()
+
         def write_uint32(self, offset: int, value: int) -> None:
             super().write_uint32(offset, value)
             if name == "bswap_ignored" and offset in _dma.CTRL_REGS:
@@ -288,6 +298,7 @@ MUTANTS = (
     "dreq_does_not_wake",
     "timer3_shifts_16",
     "reset_clears_dreq",
+    "zero_count_stays_busy",
 )
 
 
@@ -327,7 +338,7 @@ def _register_value(r: random.Random, offset: int, channel: int) -> int:
     and a trigger is non-zero most of the time (a zero trigger is the "null trigger", exercised on its own)."""
     value = r.getrandbits(32)
     if offset in COUNT_OFFSETS:
-        value = (value & 0x3F) or 1  # never 0: see the module docstring's last paragraph
+        value &= 0x3F  # small: a 2**32 count on a PERMANENT channel is a loop the run never leaves (0 starts nothing)
     if offset in CTRL_OFFSETS:
         value = (value & ~(0xF << 11)) | (_chain_to(r, channel) << 11)
     if offset in TRIGGER_OFFSETS and r.random() < 0.9:
@@ -352,7 +363,7 @@ def _program(r: random.Random, channel: int) -> list[tuple]:
     ctrl |= (r.random() < 0.2) << 22  # BSWAP
     ctrl |= (r.random() < 0.1) << 1  # HIGH_PRIORITY
     ctrl |= (r.random() < 0.05) << 29 | (r.random() < 0.05) << 30  # sticky errors, written back
-    count = r.choice((1, 1, 2, 3, 4, 8, 17, 40))
+    count = r.choice((0, 1, 1, 2, 3, 4, 8, 17, 40))
     ops: list[tuple] = [("write", channel_register(channel, 0x0), _address(r, size), 0)]  # READ_ADDR
     ops.append(("write", channel_register(channel, 0x4), _address(r, size), 0))  # WRITE_ADDR
     ops.append(("write", channel_register(channel, 0x8), count, 0))  # TRANS_COUNT
@@ -372,10 +383,6 @@ def generate(seed: int, steps: int) -> list[tuple]:
     for base in (SRC, DST):
         for word in range(0, SPAN * 2, 4):
             ops.append(("poke", base + word, r.getrandbits(32)))
-    for channel in range(
-        CHANNELS
-    ):  # a channel that was never given a count would have 0 at its first trigger (see the docstring)
-        ops.append(("write", channel_register(channel, 0x8), 1, 0))
     for index, timer in enumerate(TIMERS):
         ops.append(("write", timer, (r.choice((1, 1, 2, 3)) << 16) | r.choice((1, 2, 3, 7, 40, 0)), 0))
     ops.append(("write", INTE0, r.getrandbits(12), 0))
@@ -425,9 +432,7 @@ def generate(seed: int, steps: int) -> list[tuple]:
                 )
             )
             alias = r.choice(ALIASES)
-            if offset in COUNT_OFFSETS:
-                alias = 0  # an xor / clear alias could take the reload value to 0 (see the docstring)
-            elif offset in CTRL_OFFSETS and alias in (0x1000, 0x3000):
+            if offset in CTRL_OFFSETS and alias in (0x1000, 0x3000):
                 alias = 0x2000  # xor / clear could lower the CHAIN_TO field (below the channel: a cycle); set can only raise it
             ops.append(("write", channel_register(channel, offset), _register_value(r, offset, channel), alias))
         elif roll < 0.92:

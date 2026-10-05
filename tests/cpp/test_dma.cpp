@@ -366,20 +366,30 @@ int main() {
     CHECK(reg(0, TRANS_COUNT) == 4);
     env.on_probe_write = 0;
 
-    // ---- a count of 0: BUSY forever, then -1 (the reference's quirk, kept; see the header) -----------------------------
+    // ---- a count of 0 starts nothing: not BUSY, no interrupt, no chain, nothing scheduled (as rp2040-emu) ---------------------
     fresh();
     cwr(7, TRANS_COUNT, 0);
     cwr(7, CTRL_TRIG, ctrl_word(2, true, true, TREQ_PERMANENT, 7));
-    CHECK((reg(7, CTRL_TRIG) & BUSY) && !clk.has_alarm() && reg(7, TRANS_COUNT) == 0);
-    cwr(7, AL1_CTRL, ctrl_word(2, true, true, TREQ_PERMANENT, 7));  // a rewrite of CTRL while BUSY schedules a transfer
-    CHECK(clk.has_alarm());
+    CHECK(!(reg(7, CTRL_TRIG) & BUSY) && !clk.has_alarm() && dma.int_raw == 0);
+    cwr(7, AL1_CTRL, ctrl_word(2, true, true, TREQ_PERMANENT, 7));  // a rewrite of CTRL does not wake it either
     settle();
-    CHECK(reg(7, TRANS_COUNT) == 0xFFFFFFFFu && !(reg(7, CTRL_TRIG) & BUSY) && dma.int_raw == 0x80);
+    CHECK(!(reg(7, CTRL_TRIG) & BUSY) && reg(7, TRANS_COUNT) == 0 && dma.int_raw == 0);
+    cwr(7, TRANS_COUNT, 1);  // ... and it starts normally once it has a count
+    cwr(7, CTRL_TRIG, ctrl_word(2, true, true, TREQ_PERMANENT, 7));
+    settle();
+    CHECK(dma.int_raw == 0x80);
+    fresh();  // a chain into a channel whose reload is 0 starts nothing; the chaining channel still finishes and interrupts
+    cwr(7, TRANS_COUNT, 0);
+    cwr(7, AL1_CTRL, ctrl_word(2, true, true, TREQ_PERMANENT, 7));
+    run(0, kRam, kRam + 0x40, 1, ctrl_word(2, true, true, TREQ_PERMANENT, 7));
+    settle();
+    CHECK(dma.int_raw == 0x1 && !(reg(7, CTRL_TRIG) & BUSY) && !clk.has_alarm());
 
     // ---- reset: BUSY survives, the DREQs survive, everything else goes ------------------------------------------------
     fresh();
-    cwr(7, TRANS_COUNT, 0);
-    cwr(7, CTRL_TRIG, ctrl_word(2, true, true, TREQ_PERMANENT, 7));
+    cwr(7, TRANS_COUNT, 3);
+    cwr(7, CTRL_TRIG, ctrl_word(2, true, true, 5, 7));  // BUSY, waiting for a DREQ nobody raises
+    CHECK(reg(7, CTRL_TRIG) & BUSY);
     (void)dma.set_dreq(11);
     wr(INTE0, 0xFF);
     wr(INTF1, 0x3);
@@ -390,7 +400,7 @@ int main() {
     CHECK((reg(7, CTRL_TRIG) & BUSY) && (reg(7, CTRL_TRIG) & 0xFFFFFF) == (7u << 11));
     CHECK(dma.dreq(11) && dma.int_raw == 0 && dma.read(INTE0) == 0 && dma.read(INTF1) == 0 && dma.read(TIMER2) == 0);
     CHECK(env.irqs == 2 && !env.irq_level[0] && !env.irq_level[1]);
-    CHECK(reg(7, TRANS_COUNT) == 0 && reg(7, DBG_TCR) == 0);
+    CHECK(reg(7, TRANS_COUNT) == 3 && reg(7, DBG_TCR) == 3);  // the live count and the reload value are left alone
 
     // ---- the interrupt registers ------------------------------------------------------------------------------------
     fresh();
@@ -556,6 +566,7 @@ int main() {
     run(0, kRam, kProbe, 1, ctrl_word(2, true, false, TREQ_PERMANENT, 0));
     settle();  // (the CTRL rewrite while BUSY also re-armed the alarm: a second, stale transfer follows, as in the reference)
     CHECK(env.probe_write_count == 2 && reg(0, READ_ADDR) == kRam + 4);
+    CHECK(reg(0, TRANS_COUNT) == 0xFFFFFFFFu);  // the stale transfer took the finished channel's count to -1 (the reference's quirk)
 
     // ---- chains reach channels 8..15's range (a 4-bit field), rings reach 32 KiB (a 4-bit field) -----------------------------
     fresh();
