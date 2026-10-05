@@ -196,12 +196,11 @@ class RPADC(BasePeripheral):
         self.on_adc_read(self._active_channel)
 
     def _update_dma(self) -> None:
-        if self.fcs & FCS_DREQ_EN:
-            thres = (self.fcs >> FCS_THRESH_SHIFT) & FCS_THRES_MASK
-            if self.fifo.item_count >= thres:
-                self.rp2040.dma.set_dreq(self.dreq)
-            else:
-                self.rp2040.dma.clear_dreq(self.dreq)
+        thres = (self.fcs >> FCS_THRESH_SHIFT) & FCS_THRES_MASK
+        if self.fcs & FCS_DREQ_EN and self.fifo.item_count >= thres:
+            self.rp2040.dma.set_dreq(self.dreq)
+        else:
+            self.rp2040.dma.clear_dreq(self.dreq)  # below the threshold, or DREQ_EN off: a request that was up goes down
 
     def complete_adc_read(self, value: int, error: bool) -> None:
         self.busy = False
@@ -285,6 +284,7 @@ class RPADC(BasePeripheral):
         elif offset == FCS:
             self.fcs &= ~(value & (FCS_OVER | FCS_UNDER))  # Write-clear bits
             self.fcs = (self.fcs & ~FCS_WRITE_MASK) | (value & FCS_WRITE_MASK)
+            self._update_dma()  # DREQ_EN or the threshold may have changed
             self.check_interrupts()
 
         elif offset == DIV:

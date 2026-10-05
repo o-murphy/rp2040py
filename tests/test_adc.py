@@ -44,3 +44,25 @@ def test_round_robin_wraps_from_the_last_channel_to_channel_0():
     assert _ainsel(chip) == 0  # (4 + 1) % 5: it used to skip 0 and come back to 4
     chip.adc.complete_adc_read(1, False)
     assert _ainsel(chip) == 4
+
+
+class _DmaRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def set_dreq(self, channel: int) -> None:
+        self.calls.append(("set", int(channel)))
+
+    def clear_dreq(self, channel: int) -> None:
+        self.calls.append(("clear", int(channel)))
+
+
+def test_an_fcs_write_republishes_the_dreq_and_switching_dreq_en_off_takes_it_down():
+    chip = RP2040()
+    chip.dma = recorder = _DmaRecorder()  # type: ignore[assignment]
+    chip.write_uint32(ADC_BASE + FCS, 1 | (1 << 3))  # FIFO and DREQ enabled, threshold 0: the level (0) is at it
+    assert recorder.calls[-1][0] == "set"
+    chip.write_uint32(ADC_BASE + FCS, 1)  # DREQ_EN off: the request that was up must go down (it used to stay up)
+    assert recorder.calls[-1][0] == "clear"
+    chip.write_uint32(ADC_BASE + FCS, 1 | (1 << 3) | (3 << 24))  # threshold 3 above the level 0
+    assert recorder.calls[-1][0] == "clear"

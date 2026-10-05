@@ -249,17 +249,25 @@ static void test_interrupts_and_the_line() {
 static void test_dreq_follows_the_threshold_when_enabled() {
     fresh(kDeferred);
     wr(FCS, FCS_EN | FCS_DREQ_EN | (2u << FCS_THRESH_SHIFT));
-    CHECK(env.dreq_n == 0);                                         // an FCS write does not touch the DREQ
-    CHECK(adc.complete_adc_read(1, false) && env.dreq_n == 1 && !last_dreq());
-    CHECK(adc.complete_adc_read(2, false) && env.dreq_n == 2 && last_dreq());
-    (void)rd(FIFO);
-    CHECK(env.dreq_n == 3 && !last_dreq());
+    CHECK(env.dreq_n == 1 && !last_dreq());                         // an FCS write publishes the DREQ: 0 < 2
+    CHECK(adc.complete_adc_read(1, false) && env.dreq_n == 2 && !last_dreq());
+    CHECK(adc.complete_adc_read(2, false) && env.dreq_n == 3 && last_dreq());
     (void)rd(FIFO);
     CHECK(env.dreq_n == 4 && !last_dreq());
+    (void)rd(FIFO);
+    CHECK(env.dreq_n == 5 && !last_dreq());
     (void)rd(FIFO);                                                 // empty: no pull, no DREQ update
-    CHECK(env.dreq_n == 4);
-    wr(FCS, FCS_EN | (2u << FCS_THRESH_SHIFT));                     // DREQ_EN off: the DREQ is left alone
-    CHECK(adc.complete_adc_read(1, false) && adc.complete_adc_read(2, false) && env.dreq_n == 4);
+    CHECK(env.dreq_n == 5);
+    // DREQ_EN off: the DREQ is deasserted whatever the level
+    CHECK(wr(FCS, FCS_EN | (2u << FCS_THRESH_SHIFT)) && env.dreq_n == 6 && !last_dreq());
+    CHECK(adc.complete_adc_read(1, false) && adc.complete_adc_read(2, false) && env.dreq_n == 8 && !last_dreq());
+    // switching it on with the level already at the threshold asserts at once, switching it off takes it down at once
+    CHECK(wr(FCS, FCS_EN | FCS_DREQ_EN | (2u << FCS_THRESH_SHIFT)) && last_dreq());
+    CHECK(wr(FCS, FCS_EN | (2u << FCS_THRESH_SHIFT)) && !last_dreq());
+    // and so does raising the threshold above the level
+    CHECK(wr(FCS, FCS_EN | FCS_DREQ_EN | (2u << FCS_THRESH_SHIFT)) && last_dreq());
+    CHECK(wr(FCS, FCS_EN | FCS_DREQ_EN | (3u << FCS_THRESH_SHIFT)) && !last_dreq());
+    CHECK(wr(FCS, FCS_EN | FCS_DREQ_EN) && last_dreq());           // threshold 0: always
 }
 
 static void test_round_robin_steps_through_the_masked_channels() {
@@ -373,7 +381,7 @@ static void test_reset_clears_the_state_the_alarms_and_republishes() {
     CHECK(adc.reset());
     CHECK(rd(CS) == CS_READY && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTE) == 0 && rd(INTF) == 0 && rd(RESULT) == 0 && adc.current_channel == 0 && !adc.err && !adc.busy);
     CHECK(!clk.has_alarm());                                         // the pending sample is gone
-    CHECK(env.irq_n == 1 && !env.irq_levels[0] && env.dreq_n == 0);
+    CHECK(env.irq_n == 1 && !env.irq_levels[0] && env.dreq_n == 1 && !last_dreq());   // the DREQ is republished (down)
     CHECK(tick(5000) && adc.fifo.empty());
     // a free-running capture's gap alarm is cancelled too
     fresh();
@@ -478,7 +486,7 @@ static void test_a_failing_host_call_stops_the_block_where_the_reference_would_h
     fresh(kDefault);
     adc.fcs = FCS_DREQ_EN;
     env.fail_dreq = true;
-    CHECK(adc.reset());                                              // FCS is cleared first: the DREQ is not touched
+    CHECK(!adc.reset());                                             // the DREQ is republished first (down): its failure ends the reset
     env.fail_dreq = false;
     env.failed = 0;
     adc.fcs = 0;

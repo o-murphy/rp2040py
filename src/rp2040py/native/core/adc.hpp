@@ -15,7 +15,8 @@
 // Quirks of the reference that are kept (each pinned by tests/test_adc_diff.py or the C++ checks):
 //   - a CS write with ERR_STICKY set clears that bit of CS (write-clear); ERR follows the last conversion, STICKY stays until cleared that way;
 //   - the active channel (CS.AINSEL, 3 bits) can hold 0-7 whatever `num_channels` is; a round-robin step stores the channel it found;
-//   - the FCS write does not update the DREQ (only the interrupt line); a FIFO read of an empty FIFO sets UNDER and reads 0; a push on a full FIFO sets OVER and drops;
+//   - every FIFO change and every FCS write re-publishes the DREQ (asserted while DREQ_EN is set and the level is at or above the threshold, deasserted otherwise); a FIFO read of an empty
+//     FIFO sets UNDER and reads 0; a push on a full FIFO sets OVER and drops;
 //   - `INTR` is raw level >= threshold (a threshold of 0 is always raised); `INTS` is (raw & enable) | force; INTE and INTF hold one bit;
 //   - a free-running capture restarts at once when the divider does not exceed the sample time in 48 MHz ticks, else after the difference;
 //   - `reset()` clears the registers, the FIFO and both alarms, republishes the DREQ and drops the line; the host's wiring (the device callback, the analog inputs) is not state;
@@ -248,6 +249,7 @@ public:
             case adc_regs::FCS:
                 fcs &= ~(word & (FCS_OVER | FCS_UNDER));  // write-clear bits
                 fcs = (fcs & ~FCS_WRITE_MASK) | (word & FCS_WRITE_MASK);
+                if (!update_dma()) return false;  // DREQ_EN or the threshold may have changed
                 return check_interrupts();
             case DIV: clock_div = word; return true;
             case INTE:
@@ -277,10 +279,8 @@ public:
 private:
     uint32_t threshold() const noexcept { return (fcs >> adc_regs::FCS_THRESH_SHIFT) & adc_regs::FCS_THRES_MASK; }
 
-    bool update_dma() noexcept {
-        if (fcs & adc_regs::FCS_DREQ_EN) return host_.dreq(host_.ctx, fifo.count() >= threshold());
-        return true;
-    }
+    // The DREQ is asserted while DREQ_EN is set and the level is at or above the threshold, and deasserted otherwise (also when DREQ_EN is switched off).
+    bool update_dma() noexcept { return host_.dreq(host_.ctx, (fcs & adc_regs::FCS_DREQ_EN) != 0 && fifo.count() >= threshold()); }
 
     static bool on_sample_alarm(void* ctx) noexcept {
         AdcBlock* block = static_cast<AdcBlock*>(ctx);

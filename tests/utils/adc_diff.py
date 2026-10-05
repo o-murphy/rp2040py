@@ -286,6 +286,15 @@ def mutant_rig(name: str) -> Rig:
                 thres = (self.fcs >> P.FCS_THRESH_SHIFT) & P.FCS_THRES_MASK
                 (self.rp2040.dma.set_dreq if self.fifo.item_count >= thres else self.rp2040.dma.clear_dreq)(self.dreq)
                 return
+            if (
+                name == "dma_off_keeps"
+            ):  # the old behaviour: with DREQ_EN off nothing is published, so a request that was up stays up
+                if self.fcs & P.FCS_DREQ_EN:
+                    thres = (self.fcs >> P.FCS_THRESH_SHIFT) & P.FCS_THRES_MASK
+                    (self.rp2040.dma.set_dreq if self.fifo.item_count >= thres else self.rp2040.dma.clear_dreq)(
+                        self.dreq
+                    )
+                return
             if name == "dma_never_clears":
                 if self.fcs & P.FCS_DREQ_EN:
                     thres = (self.fcs >> P.FCS_THRESH_SHIFT) & P.FCS_THRES_MASK
@@ -411,15 +420,23 @@ def mutant_rig(name: str) -> Rig:
                 return
             if offset == P.FCS and name == "fcs_over_not_cleared":
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
+                self._update_dma()
                 self.check_interrupts()
                 return
             if offset == P.FCS and name == "fcs_no_check":
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
+                self._update_dma()
                 return
             if offset == P.FCS and name == "fcs_mask_all":
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = value
+                self._update_dma()
+                self.check_interrupts()
+                return
+            if offset == P.FCS and name == "fcs_no_dma":  # the old behaviour: an FCS write did not touch the DREQ
+                self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
+                self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
                 self.check_interrupts()
                 return
             if offset == P.DIV and name == "div_masked":
@@ -506,7 +523,7 @@ MUTANTS = (
     "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "result_masked", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
     "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
-    "cs_sticky_in_fcs", "ainsel_setter_shift_mask", "c_round_robin_unwrapped",
+    "cs_sticky_in_fcs", "ainsel_setter_shift_mask", "c_round_robin_unwrapped", "fcs_no_dma", "dma_off_keeps",
 )  # fmt: skip
 
 
