@@ -351,9 +351,8 @@ def mutant_rig(name: str) -> Rig:
                 return super().read_uint32(offset) & ~P.FCS_FULL
             if offset == P.FCS and name == "fcs_empty_missing":
                 return super().read_uint32(offset) & ~P.FCS_EMPTY
-            if offset == P.FIFO_REG and name == "fifo_read_no_under":
-                if self.fifo.empty:
-                    return 0
+            if offset == P.FIFO_REG and name == "fifo_read_no_under" and self.fifo.empty:
+                return 0
             if offset == P.FIFO_REG and name == "fifo_read_no_dma":
                 if self.fifo.empty:
                     self.fcs |= P.FCS_UNDER
@@ -453,7 +452,6 @@ def mutant_rig(name: str) -> Rig:
                 self.on_adc_read = on_adc_read
                 return
             if name == "reset_no_irq":
-                irq = self.rp2040.set_interrupt
                 self.rp2040.set_interrupt = lambda *_a: None  # type: ignore[method-assign]
                 try:
                     super().reset()
