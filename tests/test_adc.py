@@ -82,3 +82,12 @@ def test_result_is_12_bits():
         0xABCD, False
     )  # a device may hand over more than 12 bits (it used to be read back whole)
     assert chip.read_uint32(ADC_BASE + RESULT) == 0xBCD
+
+
+def test_cs_err_comes_only_from_the_conversion():
+    chip = RP2040()
+    assert not hasattr(chip.adc, "err")  # a flag nothing ever set, ORed into CS: gone
+    chip.adc.complete_adc_read(1, True)
+    assert chip.read_uint32(ADC_BASE + CS) & (1 << 9)
+    chip.adc.complete_adc_read(1, False)
+    assert not chip.read_uint32(ADC_BASE + CS) & (1 << 9)

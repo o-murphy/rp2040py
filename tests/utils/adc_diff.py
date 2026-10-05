@@ -13,7 +13,7 @@ whose ADC is the *pure-Python* reference (``peripherals/_adc.py``, built explici
   changed in place and by assignment, ``sample_time`` and ``num_channels`` changed, ``complete_adc_read()`` and ``start_adc_read()`` called directly, ``check_interrupts()``, ``reset()``.
 
 After **each** step: the register file read through the bus (FIFO excluded - it has a side effect - and read as an operation of its own), the private state (CS, FCS, the divider
-register, both interrupt registers, the last result, busy, err, the channel being sampled), the FIFO's level and contents, the derived properties, whether an alarm is
+register, both interrupt registers, the last result, busy, the channel being sampled), the FIFO's level and contents, the derived properties, whether an alarm is
 scheduled and when (seen through the clock: the next alarm's due time), the NVIC's pending bits, and the ordered, timestamped log of everything that left the block (IRQ line changes, DREQ set/clear, reads asked of the device,
 warnings); an exception on one side and not the other is a difference like any other (an ``IndexError`` out of the sample alarm for a channel above 4 included).
 
@@ -170,7 +170,6 @@ class Rig:
                 int(adc.int_force),
                 int(adc.result),
                 bool(adc.busy),
-                bool(adc.err),
                 int(adc.current_channel),
                 int(adc.raw_write_value),
             ),
@@ -372,9 +371,9 @@ def mutant_rig(name: str) -> Rig:
         # -- the registers
         def read_uint32(self, offset: int) -> int:
             if offset == P.CS and name == "cs_ready_inverted":
-                return self.cs | (P.CS_ERR if self.err else 0) | (P.CS_READY if self.busy else 0)
+                return self.cs | (P.CS_READY if self.busy else 0)
             if offset == P.CS and name == "cs_ready_missing":
-                return self.cs | (P.CS_ERR if self.err else 0)
+                return self.cs
             if offset == P.FCS and name == "fcs_level_unmasked":
                 return super().read_uint32(offset) | (self.fifo.item_count << 20)
             if offset == P.FCS and name == "fcs_full_missing":

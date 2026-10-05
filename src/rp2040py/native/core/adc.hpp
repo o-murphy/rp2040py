@@ -79,7 +79,7 @@ public:
     // The registers and the machine, public for the shell (the reference's attributes are read and, by tests, written directly).
     uint32_t cs = 0, fcs = 0, clock_div = 0, int_enable = 0, int_force = 0;
     int64_t result = 0;
-    bool busy = false, err = false;
+    bool busy = false;
     uint32_t current_channel = 0;
     int64_t num_channels = 5;
     double sample_time = 2;  // microseconds
@@ -130,7 +130,7 @@ public:
     bool reset() noexcept {
         cs = fcs = clock_div = int_enable = int_force = 0;
         result = 0;
-        busy = err = false;
+        busy = false;
         current_channel = 0;
         fifo.reset();
         clock_->cancel(&sample_alarm);
@@ -210,7 +210,7 @@ public:
     uint32_t read(uint32_t offset) noexcept {
         using namespace adc_regs;
         switch (offset) {
-            case CS: return cs | (err ? CS_ERR : 0u) | (busy ? 0u : CS_READY);
+            case CS: return cs | (busy ? 0u : CS_READY);
             case RESULT: return static_cast<uint32_t>(result);
             case adc_regs::FCS:
                 return fcs | ((fifo.count() & FCS_LEVEL_MASK) << FCS_LEVEL_SHIFT) | (fifo.full() ? FCS_FULL : 0u) | (fifo.empty() ? FCS_EMPTY : 0u);

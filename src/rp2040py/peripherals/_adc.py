@@ -112,7 +112,6 @@ class RPADC(BasePeripheral):
 
         # Status
         self.busy = False
-        self.err = False
 
         self.current_channel = 0
 
@@ -135,7 +134,6 @@ class RPADC(BasePeripheral):
         self.int_force = 0
         self.result = 0
         self.busy = False
-        self.err = False
         self.current_channel = 0
         self.fifo.reset()
         self.sample_alarm.cancel()
@@ -245,7 +243,7 @@ class RPADC(BasePeripheral):
 
     def read_uint32(self, offset: int) -> int:
         if offset == CS:
-            return self.cs | (CS_ERR if self.err else 0) | (0 if self.busy else CS_READY)
+            return self.cs | (0 if self.busy else CS_READY)
         if offset == RESULT:
             return self.result
         if offset == FCS:

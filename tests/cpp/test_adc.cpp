@@ -119,7 +119,7 @@ static bool last_dreq() { return env.dreq_n > 0 && env.dreq_levels[env.dreq_n - 
 static void test_a_default_constructed_block_is_at_power_on() {
     static AdcBlock block;
     CHECK(block.cs == 0 && block.fcs == 0 && block.clock_div == 0 && block.int_enable == 0 && block.int_force == 0 && block.result == 0);
-    CHECK(!block.busy && !block.err && block.current_channel == 0 && block.num_channels == 5 && block.sample_time == 2 && block.fifo.empty() && block.raw_write_value() == 0);
+    CHECK(!block.busy && block.current_channel == 0 && block.num_channels == 5 && block.sample_time == 2 && block.fifo.empty() && block.raw_write_value() == 0);
 }
 
 static void test_a_fresh_block_is_at_power_on() {
@@ -128,7 +128,7 @@ static void test_a_fresh_block_is_at_power_on() {
     CHECK(rd(CS) == 0);                                              // busy: READY is clear (and the block is not enabled)
     adc.busy = false;
     CHECK(rd(CS) == CS_READY && rd(RESULT) == 0 && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTR) == FIFO_INT && rd(INTE) == 0 && rd(INTF) == 0 && rd(INTS) == 0);
-    CHECK(adc.num_channels == 5 && adc.sample_time == 2 && adc.current_channel == 0 && !adc.busy && !adc.err && adc.fifo.empty());
+    CHECK(adc.num_channels == 5 && adc.sample_time == 2 && adc.current_channel == 0 && !adc.busy && adc.fifo.empty());
     CHECK(adc.divider() == 1.0 && !adc.enabled() && !adc.temperature_enable() && adc.active_channel() == 0);
     CHECK(env.warns == 0 && !adc.failed());
 }
@@ -222,8 +222,6 @@ static void test_error_flags_in_cs_and_the_sticky_clear() {
     CHECK(adc.complete_adc_read(1, true) && (adc.cs & CS_ERR_STICKY) != 0);
     wr(CS, 0);                                                      // a write without the bit leaves it
     CHECK((adc.cs & CS_ERR_STICKY) != 0);
-    adc.err = true;
-    CHECK((rd(CS) & CS_ERR) != 0);                                  // the `err` member shows in CS as well
 }
 
 static void test_interrupts_and_the_line() {
@@ -375,13 +373,12 @@ static void test_reset_clears_the_state_the_alarms_and_republishes() {
     wr(INTE, 1);
     wr(INTF, 1);
     wr(CS, CS_EN | CS_START_ONE | (2u << CS_AINSEL_SHIFT));
-    adc.err = true;
     adc.result = 5;
     adc.fifo.push(1);
     CHECK(clk.has_alarm());
     env.irq_n = env.dreq_n = 0;
     CHECK(adc.reset());
-    CHECK(rd(CS) == CS_READY && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTE) == 0 && rd(INTF) == 0 && rd(RESULT) == 0 && adc.current_channel == 0 && !adc.err && !adc.busy);
+    CHECK(rd(CS) == CS_READY && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTE) == 0 && rd(INTF) == 0 && rd(RESULT) == 0 && adc.current_channel == 0 && !adc.busy);
     CHECK(!clk.has_alarm());                                         // the pending sample is gone
     CHECK(env.irq_n == 1 && !env.irq_levels[0] && env.dreq_n == 1 && !last_dreq());   // the DREQ is republished (down)
     CHECK(tick(5000) && adc.fifo.empty());

@@ -48,7 +48,6 @@ cdef extern from "adc.hpp" namespace "rp2040core":
         uint32_t int_force
         int64_t result
         cppbool busy
-        cppbool err
         uint32_t current_channel
         int64_t num_channels
         double sample_time

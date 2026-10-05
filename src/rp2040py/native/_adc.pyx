@@ -321,14 +321,6 @@ cdef class RPADC:
         self._block.busy = bool(value)
 
     @property
-    def err(self):
-        return bool(self._block.err)
-
-    @err.setter
-    def err(self, value):
-        self._block.err = bool(value)
-
-    @property
     def current_channel(self):
         return self._block.current_channel
 
