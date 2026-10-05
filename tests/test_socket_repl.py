@@ -3,8 +3,12 @@ import signal
 import socket
 import time
 
+from utils.emscripten import needs_sockets
+
 from rp2040py.cli.socket_repl import SocketInteractiveRepl
 from rp2040py.simulator import Simulator
+
+pytestmark = needs_sockets
 
 
 class _FakeFifo:

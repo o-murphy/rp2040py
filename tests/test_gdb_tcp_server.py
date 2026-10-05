@@ -2,9 +2,13 @@ import asyncio
 import socket
 import struct
 
+from utils.emscripten import needs_sockets
+
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.gdb.gdb_utils import decode_hex_buf, decode_hex_uint32, gdb_message
 from rp2040py.simulator import Simulator
+
+pytestmark = needs_sockets
 
 
 class _FakeRP2040:

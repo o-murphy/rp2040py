@@ -37,8 +37,12 @@ is_android = hasattr(sys, "getandroidapilevel") or "android" in sys.platform
 if is_android:
     pytest.skip("mpremote-subprocess tests need sys.executable, which is empty on Android", allow_module_level=True)
 
+from utils.emscripten import needs_sockets
+
 from rp2040py.cli.socket_repl import SocketInteractiveRepl
 from rp2040py.simulator import Simulator
+
+pytestmark = needs_sockets
 
 _CTRL_A = 1
 _CTRL_C = 3

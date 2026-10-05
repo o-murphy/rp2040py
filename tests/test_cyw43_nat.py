@@ -23,6 +23,7 @@ from test_cyw43_bus import (
     _send_wlan_frame,
     _wire_up_with_bus,
 )
+from utils.emscripten import needs_sockets
 
 from rp2040py.external.cyw43 import net
 from rp2040py.external.cyw43.bus import (
@@ -294,6 +295,7 @@ async def _echo_server(reader: "asyncio.StreamReader", writer: "asyncio.StreamWr
         writer.close()
 
 
+@needs_sockets
 def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -413,6 +415,7 @@ def test_tcp_reflector_full_round_trip_against_a_hermetic_echo_server(rp2040_fac
     _run(_body())
 
 
+@needs_sockets
 def test_tcp_reflector_sends_rst_on_a_refused_connection(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -452,6 +455,7 @@ def test_tcp_reflector_sends_rst_on_a_refused_connection(rp2040_factory):
     _run(_body())
 
 
+@needs_sockets
 def test_tcp_reflector_evicts_the_flow_on_guest_rst(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -503,6 +507,7 @@ def test_tcp_reflector_evicts_the_flow_on_guest_rst(rp2040_factory):
     _run(_body())
 
 
+@needs_sockets
 def test_reset_clears_flows_so_a_reused_port_can_connect_again(rp2040_factory):
     """The stale-flow collision `TcpReflector.reset()` exists for (0054).
 
@@ -605,6 +610,7 @@ async def _connect_with_immediate_reset(host: str, port: int) -> "tuple[_Immedia
     return _ImmediatelyResetReader(), _NoOpWriter()
 
 
+@needs_sockets
 def test_tcp_reflector_propagates_a_real_reset_as_rst_not_a_clean_fin(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -657,6 +663,7 @@ async def _never_connects(host: str, port: int) -> "tuple[asyncio.StreamReader, 
     raise AssertionError("unreachable")
 
 
+@needs_sockets
 def test_tcp_reflector_times_out_a_connect_that_never_resolves(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -727,6 +734,7 @@ def _reserve_a_free_udp_port() -> int:
     return port
 
 
+@needs_sockets
 def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -776,6 +784,7 @@ def test_udp_relay_forwards_a_dns_query_and_relays_the_response_back(rp2040_fact
     _run(_body())
 
 
+@needs_sockets
 def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination(rp2040_factory):
     """4e's own generalization: a UDP packet NOT addressed to the gateway's DNS port (e.g. NTP,
     port 123, the way `ntptime` uses it) is relayed straight to whatever real destination the
@@ -827,6 +836,7 @@ def test_udp_relay_forwards_general_udp_directly_to_its_own_real_destination(rp2
     _run(_body())
 
 
+@needs_sockets
 def test_udp_relay_stays_silent_on_no_response(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -856,6 +866,7 @@ def test_udp_relay_stays_silent_on_no_response(rp2040_factory):
     _run(_body())
 
 
+@needs_sockets
 def test_dhcp_still_takes_priority_over_the_general_udp_relay(rp2040_factory):
     """DHCP (port 67) must be handled by `DhcpServer`, not fall through to `UdpRelay` - a DHCP
     packet is broadcast to 255.255.255.255, which isn't the gateway's own IP, so without this
@@ -908,6 +919,7 @@ def _dns_query_frame() -> bytes:
     return net.pack_ethernet(GATEWAY_MAC, _GUEST_MAC, net.ETHERTYPE_IPV4, ip_query)
 
 
+@needs_sockets
 def test_a_relayed_udp_query_holds_the_real_io_flag_until_its_reply_arrives(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -935,6 +947,7 @@ def test_a_relayed_udp_query_holds_the_real_io_flag_until_its_reply_arrives(rp20
     _run(_body())
 
 
+@needs_sockets
 def test_an_unanswered_udp_query_releases_the_real_io_flag_when_the_relay_gives_up(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
@@ -966,6 +979,7 @@ def test_an_unanswered_udp_query_releases_the_real_io_flag_when_the_relay_gives_
     _run(_body())
 
 
+@needs_sockets
 def test_a_tcp_connect_in_flight_holds_the_real_io_flag_until_it_resolves(rp2040_factory):
     async def _body() -> None:
         simulator = Simulator(rp2040=rp2040_factory())
