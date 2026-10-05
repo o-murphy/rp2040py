@@ -71,8 +71,18 @@ IS_IOS = "ios" in _SYSCONFIG_PLATFORM
 _ABI3_FLOOR = (3, 11)
 _ABI3_HEX = "0x030B0000"
 _GIL_DISABLED = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+# PyPy's cpyext does not implement Py_LIMITED_API: verified directly on PyPy 3.11 (where this
+# would otherwise engage, the abi3 floor below) - it fails to compile Cython's generated code
+# with "'PyInterpreterState_Get' was not declared" / "'PyCFunction_GetSelf' was not declared",
+# symbols that exist in PyPy's full C-API headers but aren't exposed under the Py_LIMITED_API
+# gate. PyPy always gets the normal, version-specific build.
 USE_LIMITED_API = (
-    sys.version_info >= _ABI3_FLOOR and not _GIL_DISABLED and not IS_EMSCRIPTEN and not IS_ANDROID and not IS_IOS
+    sys.version_info >= _ABI3_FLOOR
+    and not _GIL_DISABLED
+    and not IS_EMSCRIPTEN
+    and not IS_ANDROID
+    and not IS_IOS
+    and sys.implementation.name != "pypy"
 )
 
 # Relative to setup.py's own directory, not Path(__file__).parent (absolute) - setuptools
@@ -153,7 +163,8 @@ def _build_ext_modules() -> list[Extension]:
     # Cython extensions target CPython's C-API; PyPy's cpyext emulation is a poor fit for it
     # (especially the typed-memoryview-heavy code here) and there's no benefit anyway - PyPy's
     # own JIT already gives the pure-Python fallback most of what Cython buys on CPython.
-    if sys.implementation.name != "cpython":
+    _is_pypy = sys.implementation.name == "pypy"
+    if sys.implementation.name != "cpython" and not (_is_pypy and environ.get("RP2040PY_FORCE_NATIVE_ON_PYPY") == "1"):
         return []
 
     sources = sorted(_NATIVE_DIR.glob("*.pyx"))
@@ -177,7 +188,13 @@ def _build_ext_modules() -> list[Extension]:
             include_dirs=[str(_CORE_DIR)],
             depends=[str(p) for p in sorted(_CORE_DIR.glob("*.hpp"))],
             py_limited_api=USE_LIMITED_API,
-            define_macros=[("Py_LIMITED_API", _ABI3_HEX)] if USE_LIMITED_API else [],
+            define_macros=(
+                ([("Py_LIMITED_API", _ABI3_HEX)] if USE_LIMITED_API else [])
+                # Without this, cpyext falls back to a slower untyped path for Cython's
+                # extension types (seen as a "cython.collection_type only works on PyPy
+                # with the C flag CYTHON_USE_TYPE_SPECS=1" RuntimeWarning on every import).
+                + ([("CYTHON_USE_TYPE_SPECS", "1")] if _is_pypy else [])
+            ),
             extra_compile_args=_EXTRA_COMPILE_ARGS,
             extra_link_args=_EXTRA_LINK_ARGS,
             # If the compiler/toolchain is genuinely missing, build_ext skips this extension
