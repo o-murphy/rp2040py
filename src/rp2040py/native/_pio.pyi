@@ -3,3 +3,4 @@
 # Lets mypy/IDEs see the native backend's API instead of the ignore_missing_imports fallback.
 
 from rp2040py.peripherals._pio import RPPIO as RPPIO
+from rp2040py.peripherals._state_machine import StateMachine as StateMachine

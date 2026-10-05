@@ -103,12 +103,12 @@ cdef class GspiShifter:
             return  # a stand-in chip with no PIO/SIO: every source keeps going through the host
         if len(pios) >= 2 and isinstance(pios[0], RPPIO) and isinstance(pios[1], RPPIO):
             pio = <RPPIO> pios[0]
-            bank.bind_source(kSrcPio0Oe, &pio.pin_directions)
-            bank.bind_source(kSrcPio0Value, &pio.pin_values)
+            bank.bind_source(kSrcPio0Oe, &pio._block.pin_directions)
+            bank.bind_source(kSrcPio0Value, &pio._block.pin_values)
             pin._direct_refs.append(pio)
             pio = <RPPIO> pios[1]
-            bank.bind_source(kSrcPio1Oe, &pio.pin_directions)
-            bank.bind_source(kSrcPio1Value, &pio.pin_values)
+            bank.bind_source(kSrcPio1Oe, &pio._block.pin_directions)
+            bank.bind_source(kSrcPio1Value, &pio._block.pin_values)
             pin._direct_refs.append(pio)
         if isinstance(sios, RPSIO):
             sio = <RPSIO> sios

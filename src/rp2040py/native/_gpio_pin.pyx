@@ -19,7 +19,7 @@ Every failure of those callbacks (an exception from a listener, from a source at
 The full `@property` surface of `_gpio_pin.py` is preserved: `ctrl`, `pad_value`, the three IRQ words, `index`, `_raw_input_value`,
 `_driven` and `_always_output_enabled` are properties over the C++ pin's fields, so external callers (`peripherals/ssi.py`,
 `external/cyw43`, `tests/utils/pin_trace.py`, tests) see no difference. `rp2040` stays `object` (untyped), same reasoning as
-`native/_state_machine.pyx`: its `pwm`/`sio`/`pio` aren't in a typed `.pxd` surface.
+`native/_pio.pyx`: its `pwm`/`sio`/`pio` aren't in a typed `.pxd` surface.
 """
 import logging
 

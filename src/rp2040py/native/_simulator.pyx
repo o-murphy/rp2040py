@@ -55,7 +55,8 @@ cdef bool _pio_advance(void* ctx, int index, int64_t cycles) noexcept:
     cdef _BatchContext context = <_BatchContext> ctx
     cdef RPPIO pio = <RPPIO> context.pios[index]
     try:
-        pio.advance(cycles)
+        if not pio._block.advance(cycles):  # a host call failed: its error is parked
+            return False
     except BaseException as error:
         park_error(error)
         return False
@@ -106,7 +107,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     host.pio_count = len(pios)
     for i in range(len(pios)):
         pio = <RPPIO> pios[i]
-        host.pio_stopped[i] = <const int*> &pio.stopped
+        host.pio_stopped[i] = <const int*> &pio._block.stopped
     host.pio_advance = _pio_advance
     host.monotonic = _monotonic
     host.ctx = <void*> context
