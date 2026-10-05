@@ -56,8 +56,8 @@ constexpr uint32_t PCELLID0 = 0xFF0, PCELLID1 = 0xFF4, PCELLID2 = 0xFF8, PCELLID
 constexpr uint32_t SR_BSY = 1u << 4, SR_RFF = 1u << 3, SR_RNE = 1u << 2, SR_TNF = 1u << 1, SR_TFE = 1u << 0;
 constexpr uint32_t CR0_DSS_MASK = 0xF;
 constexpr uint32_t CR1_SSE = 1u << 1;
-// Read only by the shell's derived properties (`spi_mode`, `master_mode`, `clock_frequency`): the reference tests `MS` (bit 2) against SSPCR0 - the bit is SSPCR1's - and the port keeps that.
-[[maybe_unused]] constexpr uint32_t CR0_SPH = 1u << 7, CR0_SPO = 1u << 6, CR0_MS = 1u << 2, CR0_SCR_SHIFT = 8, CR0_SCR_MASK = 0xFF;
+// Read only by the shell's derived properties (`spi_mode`, `master_mode`, `clock_frequency`); `CR1_MS` is SSPCR1 bit 2, 0 = master.
+[[maybe_unused]] constexpr uint32_t CR0_SPH = 1u << 7, CR0_SPO = 1u << 6, CR1_MS = 1u << 2, CR0_SCR_SHIFT = 8, CR0_SCR_MASK = 0xFF;
 constexpr uint32_t CPSR_MASK = 0xFE;
 constexpr uint32_t INT_TX = 1u << 3, INT_RX = 1u << 2, INT_RT = 1u << 1, INT_ROR = 1u << 0;
 }  // namespace spi_regs

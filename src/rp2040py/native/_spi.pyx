@@ -255,7 +255,7 @@ cdef class RPSPI:
 
     @property
     def master_mode(self):
-        return not (self._block.control0 & MS)
+        return not (self._block.control1 & MS)  # SSPCR1.MS, bit 2
 
     @property
     def spi_mode(self):

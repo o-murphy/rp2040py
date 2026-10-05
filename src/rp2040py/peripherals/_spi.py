@@ -140,7 +140,7 @@ class RPSPI(BasePeripheral):
 
     @property
     def master_mode(self) -> bool:
-        return not (self._control0 & MS)
+        return not (self._control1 & MS)  # MS is SSPCR1 bit 2 (see 'SSPCR1 bits' above); this used to test SSPCR0
 
     @property
     def spi_mode(self) -> int:

@@ -26,3 +26,13 @@ def test_an_rx_overrun_raises_the_interrupt_line_at_once(rp2040_factory):
     spi.complete_transmit(99)  # one too many: an overrun
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & SSPRORINTR
     assert _line_is_pending(chip)  # it used to wait for some other change of the status
+
+
+def test_master_mode_is_sspcr1s_ms_bit_not_sspcr0s(rp2040_factory):
+    chip = rp2040_factory()
+    spi = chip.spi[0]
+    assert spi.master_mode  # reset: MS clear is master
+    chip.write_uint32(SPI0_BASE + SSPCR0, 1 << 2)  # bit 2 of SSPCR0 is part of the data size, not the mode
+    assert spi.master_mode
+    chip.write_uint32(SPI0_BASE + SSPCR1, 1 << 2)  # SSPCR1.MS: slave
+    assert not spi.master_mode
