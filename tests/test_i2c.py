@@ -52,3 +52,16 @@ def test_a_second_abort_keeps_the_earlier_reasons_and_replaces_the_flush_count()
     assert i2c.abort_source & 0x1FF == 1 << 3  # the earlier reason is still there
     assert i2c.abort_source & (1 << 12)  # and the new one joined it
     assert i2c.abort_source >> 23 == 1  # the count is this abort's, not 2 | 1
+
+
+def test_fs_spklen_is_writable_only_while_the_i2c_is_disabled():
+    chip, _ = _chip()
+    IC_ENABLE, IC_FS_SPKLEN = 0x6C, 0xA0
+    chip.write_uint32(I2C0_BASE + IC_FS_SPKLEN, 5)  # bit 0 of the VALUE is set: the old condition refused it
+    assert chip.read_uint32(I2C0_BASE + IC_FS_SPKLEN) == 5
+    chip.write_uint32(I2C0_BASE + IC_ENABLE, 1)
+    chip.write_uint32(I2C0_BASE + IC_FS_SPKLEN, 8)  # enabled: not writable (the old condition accepted it)
+    assert chip.read_uint32(I2C0_BASE + IC_FS_SPKLEN) == 5
+    chip.write_uint32(I2C0_BASE + IC_ENABLE, 0)
+    chip.write_uint32(I2C0_BASE + IC_FS_SPKLEN, 0x100)  # the 8-bit field is 0: ignored
+    assert chip.read_uint32(I2C0_BASE + IC_FS_SPKLEN) == 5

@@ -21,7 +21,7 @@
 //   - `abort()` ORs the reason into IC_TX_ABRT_SOURCE (reasons accumulate until the register is read), replaces the flush count (bits 31:23) with the number of commands dropped, empties the TX FIFO and raises TX_ABRT;
 //   - IC_CON with the speed field 0 is rewritten to 3 (high speed); IC_TAR and IC_SAR are masked to 10 bits, the clock counts to 16, the thresholds to 8 bits and then to the FIFO size;
 //     IC_ENABLE keeps a set ABORT bit (software cannot clear it), drops it when the bus is idle, aborts and sets `stop` otherwise, and empties both FIFOs when ENABLE is cleared;
-//   - IC_SDA_HOLD and IC_FS_SPKLEN writes follow the reference's own conditions (see the record: a datasheet mismatch to be fixed there and here together);
+//   - IC_FS_SPKLEN is writable only while the I2C is disabled (IC_ENABLE[0] = 0), holds 8 bits and ignores a field of 0; the IC_SDA_HOLD write warns by the reference's own condition (bit 0 of the value, not IC_ENABLE);
 //   - `reset()` clears the registers, the FIFOs and the state machine and drops the line, and never touches the host's callbacks (wiring, not state) or `raw_write_value`;
 //   - an unimplemented offset warns and reads 0xFFFFFFFF (a read above 0x1000 warns a second time); an unimplemented write warns.
 //
@@ -340,7 +340,7 @@ public:
                 enable = word;
                 return next_command();  // TX_CMD_BLOCK may have changed
             case FS_SPKLEN:
-                if (!(word & EN_ENABLE) && word > 0) spikelen = word;
+                if (!(enable & EN_ENABLE) && (word & 0xFFu) > 0) spikelen = word & 0xFFu;  // only while disabled; 8 bits, minimum 1
                 return true;
             default: break;
         }

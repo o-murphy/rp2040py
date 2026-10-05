@@ -510,8 +510,6 @@ def mutant_rig(name: str) -> Rig:
                 return self._clear_interrupts(I.R_START_DET)
             if offset == I.IC_ENABLE_STATUS and name == "enable_status_wrong":
                 return self.enable & 0x7
-            if offset == I.IC_FS_SPKLEN and name == "spklen_unmasked":
-                return self._spikelen
             return super().read_uint32(offset)
 
         def write_uint32(self, offset: int, value: int) -> None:
@@ -604,6 +602,18 @@ def mutant_rig(name: str) -> Rig:
             if offset == I.IC_INTR_MASK and name == "intr_mask_no_line_update":
                 self.int_enable = value & I.INTR_MASK_BITS
                 return
+            if offset == I.IC_FS_SPKLEN and name == "spklen_stored_whole":
+                if not (self.enable & I.ENABLE) and (value & 0xFF) > 0:
+                    self._spikelen = value
+                return
+            if offset == I.IC_FS_SPKLEN and name == "spklen_old_condition":  # bit 0 of the VALUE, not IC_ENABLE[0]
+                if not (value & I.ENABLE) and (value & 0xFF) > 0:
+                    self._spikelen = value & 0xFF
+                return
+            if offset == I.IC_FS_SPKLEN and name == "spklen_zero_field_accepted":
+                if not (self.enable & I.ENABLE) and value > 0:
+                    self._spikelen = value & 0xFF
+                return
             if offset == I.IC_FS_SPKLEN and name == "spklen_always":
                 self._spikelen = value
                 return
@@ -658,11 +668,11 @@ MUTANTS = (
     "abort_no_flush_count", "start_no_start_det", "start_mode_inverted", "address_mask_wrong", "connect_nack_no_abort", "connect_first_byte_missing", "connect_nack_always_7b",
     "write_nack_no_abort", "read_first_byte_flag_missing", "read_stop_ignored", "stop_no_next_command", "stop_keeps_abort_bit", "arb_lost_keeps_state", "data_rx_under_missing",
     "data_read_keeps_rx_full", "status_no_activity", "status_tfe_wrong", "levels_swapped", "comp_version_wrong", "abrt_source_read_keeps",
-    "clr_intr_keeps_abrt_source", "clr_rx_under_returns_zero", "clr_stop_det_clears_start", "enable_status_wrong", "spklen_unmasked", "speed_fix_missing", "tar_mask_wrong",
+    "clr_intr_keeps_abrt_source", "clr_rx_under_returns_zero", "clr_stop_det_clears_start", "enable_status_wrong", "speed_fix_missing", "tar_mask_wrong",
     "sar_mask_wrong", "tx_overflow_silent", "tx_empty_not_cleared", "rx_tl_clamp_missing", "tx_tl_mask_wrong", "hcnt_mask_wrong", "enable_fifos_kept", "enable_abort_when_idle",
     "enable_abort_not_sticky", "enable_no_next_command", "spklen_always", "master_bits_wrong", "scl_period_speed_wrong", "reset_keeps_target", "reset_keeps_fifos",
     "reset_clears_callbacks", "intr_mask_not_writable", "intr_mask_unmasked", "intr_mask_no_line_update", "intr_mask_reset_zero",
-    "abort_wipes_reasons", "abort_keeps_old_count",
+    "abort_wipes_reasons", "abort_keeps_old_count", "spklen_stored_whole", "spklen_old_condition", "spklen_zero_field_accepted",
 )  # fmt: skip
 
 

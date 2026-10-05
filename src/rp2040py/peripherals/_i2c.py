@@ -523,8 +523,9 @@ class RPI2C(BasePeripheral):
             self._next_command()  # TX_CMD_BLOCK may have changed
 
         elif offset == IC_FS_SPKLEN:
-            if not (value & ENABLE) and value > 0:
-                self._spikelen = value
+            # Writable only while the I2C is disabled; the field is 8 bits and its minimum is 1 (the hardware ignores a 0).
+            if not (self.enable & ENABLE) and (value & 0xFF) > 0:
+                self._spikelen = value & 0xFF
 
         else:
             super().write_uint32(offset, value)

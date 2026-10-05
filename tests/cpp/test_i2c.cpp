@@ -430,12 +430,20 @@ static void test_sda_hold_and_spike_length_follow_the_references_own_conditions(
     CHECK(rd(SDA_HOLD) == 1);
     wr(FS_SPKLEN, 4);
     CHECK(rd(FS_SPKLEN) == 4);
-    wr(FS_SPKLEN, 5);                                            // bit 0 of the VALUE set: ignored (the reference's own condition)
-    CHECK(rd(FS_SPKLEN) == 4);
-    wr(FS_SPKLEN, 0);
-    CHECK(rd(FS_SPKLEN) == 4);
+    wr(FS_SPKLEN, 5);                                            // bit 0 of the VALUE does not matter: only the I2C being disabled does
+    CHECK(rd(FS_SPKLEN) == 5);
+    wr(FS_SPKLEN, 0);                                            // the field's minimum is 1: ignored
+    CHECK(rd(FS_SPKLEN) == 5);
+    wr(FS_SPKLEN, 0x100);                                        // the 8-bit field is 0 here: ignored
+    CHECK(rd(FS_SPKLEN) == 5 && i2c.spikelen == 5);
     wr(FS_SPKLEN, 0x1FE);
-    CHECK(rd(FS_SPKLEN) == 0xFE);                                // stored whole, read as 8 bits
+    CHECK(rd(FS_SPKLEN) == 0xFE && i2c.spikelen == 0xFE);        // 8 bits held
+    wr(ENABLE, 1);
+    wr(FS_SPKLEN, 3);                                            // enabled: not writable
+    CHECK(rd(FS_SPKLEN) == 0xFE);
+    wr(ENABLE, 0);
+    wr(FS_SPKLEN, 3);
+    CHECK(rd(FS_SPKLEN) == 3);
 }
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
@@ -779,10 +787,8 @@ static void test_registers_with_side_effects_and_masks_in_detail() {
     i2c.rx.push(1);
     wr(ENABLE, 0);
     CHECK(i2c.rx.empty());
-    // IC_FS_SPKLEN stores the whole value; write_atomic remembers the raw one
+    // write_atomic remembers the raw value
     fresh(kSilent);
-    wr(FS_SPKLEN, 0x1FE);
-    CHECK(i2c.spikelen == 0x1FE);
     wr(TAR, 0x01, kAtomicSet);
     CHECK(i2c.raw_write_value() == 1);
     wr(TAR, 0x77);
