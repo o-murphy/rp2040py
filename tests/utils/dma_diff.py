@@ -72,6 +72,14 @@ def channel_register(channel: int, offset: int) -> int:
     return channel * 0x40 + offset
 
 
+class Runaway(Exception):
+    """A step that never ends: a channel that writes the DMA's own registers can rewrite itself into a loop of zero-delay transfers (the hardware has that too).
+    Raised from the logger once a step has produced this many bus warnings; the run is then out of the domain and `run_pair` stops without a verdict."""
+
+
+RUNAWAY_LOG = 50_000
+
+
 class BusView:
     """What the bus sees of the pure-Python DMA: its registers as 32-bit words. The reference keeps a count that went below zero as a Python ``-1`` (see the
     module docstring: a stale alarm can run a transfer on a channel that already finished) which a 32-bit bus cannot carry - the Cython bus raises
@@ -141,6 +149,7 @@ class Rig:
             self.chip.dma.dreq.update(levels)
             self.chip.peripherals[DMA_BASE >> 12] = BusView(self.chip.dma)
         self.log: list[tuple] = []
+        self._mark = 0
         self.probe = Probe(self.chip, self.log)
         self.chip.peripherals[PROBE_BASE >> 12] = self.probe
         original = self.chip.set_interrupt
@@ -155,12 +164,18 @@ class Rig:
             setattr(
                 self.chip.logger,
                 method,
-                lambda name, message, _m=method: self.log.append(("log", _m, str(name), str(message))),
+                lambda name, message, _m=method: self._log_line(_m, name, message),
             )
+
+    def _log_line(self, method: str, name: Any, message: Any) -> None:
+        self.log.append(("log", method, str(name), str(message)))
+        if len(self.log) - self._mark > RUNAWAY_LOG:
+            raise Runaway
 
     # --- the operations --------------------------------------------------------------------------------------------------
 
     def apply(self, op: tuple) -> Any:
+        self._mark = len(self.log)
         kind = op[0]
         chip = self.chip
         if kind == "write":
@@ -487,6 +502,8 @@ def run_pair(
         result_b, error_b = _step(b, op)
         if perturb is not None:
             perturb(b, step)
+        if "Runaway" in f"{error_a}{error_b}":
+            return None  # out of the domain (see Runaway)
         if (result_a, error_a) != (result_b, error_b):
             return Divergence(step, op, f"result {result_a!r}/{error_a} vs {result_b!r}/{error_b}")
         new_a, new_b = a.log[log_a:], b.log[log_b:]
