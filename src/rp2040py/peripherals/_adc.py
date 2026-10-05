@@ -280,7 +280,7 @@ class RPADC(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == CS:
-            self.fcs &= ~(value & CS_ERR_STICKY)  # Write-clear bits
+            self.cs &= ~(value & CS_ERR_STICKY)  # Write-clear bit
             self.cs = (self.cs & ~CS_WRITE_MASK) | (value & CS_WRITE_MASK)
             if value & CS_EN and not self.busy and (value & CS_START_ONE or value & CS_START_MANY):
                 self.start_adc_read()

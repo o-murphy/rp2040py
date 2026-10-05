@@ -207,17 +207,19 @@ static void test_the_fifo_shift_error_overflow_and_underflow() {
     CHECK(adc.complete_adc_read(0x55, false) && adc.fifo.empty() && rd(RESULT) == 0x55);
 }
 
-static void test_error_flags_in_cs_and_the_sticky_quirk() {
+static void test_error_flags_in_cs_and_the_sticky_clear() {
     fresh(kDeferred);
     CHECK(adc.complete_adc_read(1, true));
     CHECK((adc.cs & (CS_ERR | CS_ERR_STICKY)) == (CS_ERR | CS_ERR_STICKY));
     CHECK(adc.complete_adc_read(1, false));
     CHECK((adc.cs & CS_ERR) == 0 && (adc.cs & CS_ERR_STICKY) != 0);   // ERR follows the last conversion, STICKY stays
-    wr(CS, CS_ERR_STICKY);                                          // the reference clears it in FCS, not in CS
-    CHECK((adc.cs & CS_ERR_STICKY) != 0);
     adc.fcs = FCS_UNDER | FCS_EN;
-    wr(CS, CS_ERR_STICKY);
-    CHECK(adc.fcs == FCS_EN);                                       // bit 10 of FCS is UNDER: that is what it cleared
+    wr(CS, CS_ERR_STICKY);                                          // write-clear: the sticky bit goes ...
+    CHECK((adc.cs & CS_ERR_STICKY) == 0);
+    CHECK(adc.fcs == (FCS_UNDER | FCS_EN));                         // ... and FCS (whose bit 10 is UNDER) is not touched
+    CHECK(adc.complete_adc_read(1, true) && (adc.cs & CS_ERR_STICKY) != 0);
+    wr(CS, 0);                                                      // a write without the bit leaves it
+    CHECK((adc.cs & CS_ERR_STICKY) != 0);
     adc.err = true;
     CHECK((rd(CS) & CS_ERR) != 0);                                  // the `err` member shows in CS as well
 }
@@ -512,7 +514,7 @@ int main() {
     test_the_channel_is_selected_by_ainsel_and_a_bad_one_fails_in_the_alarm();
     test_a_start_needs_enable_and_an_idle_block();
     test_the_fifo_shift_error_overflow_and_underflow();
-    test_error_flags_in_cs_and_the_sticky_quirk();
+    test_error_flags_in_cs_and_the_sticky_clear();
     test_interrupts_and_the_line();
     test_dreq_follows_the_threshold_when_enabled();
     test_round_robin_with_the_references_setter_quirk();

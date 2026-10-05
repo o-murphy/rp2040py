@@ -13,7 +13,7 @@
 // failure out of an alarm makes the alarm return `false` and the clock stops ticking.
 //
 // Quirks of the reference that are kept (each pinned by tests/test_adc_diff.py or the C++ checks):
-//   - the CS write "clears" ERR_STICKY by clearing that bit of **FCS**, not of CS (so the sticky error is never cleared by software, and FCS bit 10 is UNDER);
+//   - a CS write with ERR_STICKY set clears that bit of CS (write-clear); ERR follows the last conversion, STICKY stays until cleared that way;
 //   - the active channel is stored by a setter that masks the new value with CS_AINSEL_SHIFT (12) where the field mask is 7 - an upstream (rp2040js) quirk kept as it is - so a
 //     round-robin step can only ever land on channels 0 and 4 (and set stray bits above the field);
 //   - the FCS write does not update the DREQ (only the interrupt line); a FIFO read of an empty FIFO sets UNDER and reads 0; a push on a full FIFO sets OVER and drops;
@@ -243,7 +243,7 @@ public:
         const uint32_t word = static_cast<uint32_t>(value);
         switch (offset) {
             case CS:
-                fcs &= ~(word & CS_ERR_STICKY);  // "write-clear" - of FCS: the reference's own quirk
+                cs &= ~(word & CS_ERR_STICKY);  // write-clear bit
                 cs = (cs & ~CS_WRITE_MASK) | (word & CS_WRITE_MASK);
                 if ((word & CS_EN) && !busy && ((word & CS_START_ONE) || (word & CS_START_MANY))) return start_adc_read();
                 return true;

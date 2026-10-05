@@ -372,8 +372,14 @@ def mutant_rig(name: str) -> Rig:
                 "cs_start_when_busy",
                 "cs_mask_all",
                 "cs_start_one_only",
+                "cs_sticky_in_fcs",
             ):
-                self.fcs &= ~(value & P.CS_ERR_STICKY)
+                if (
+                    name == "cs_sticky_in_fcs"
+                ):  # the old behaviour: the write-clear hit FCS (whose bit 10 is UNDER), not CS
+                    self.fcs &= ~(value & P.CS_ERR_STICKY)
+                else:
+                    self.cs &= ~(value & P.CS_ERR_STICKY)
                 mask = 0xFFFFFFFF if name == "cs_mask_all" else P.CS_WRITE_MASK
                 self.cs = (self.cs & ~mask) | (value & mask)
                 start = value & P.CS_START_ONE or value & P.CS_START_MANY
@@ -481,6 +487,7 @@ MUTANTS = (
     "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "result_masked", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
     "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
+    "cs_sticky_in_fcs",
 )  # fmt: skip
 
 
