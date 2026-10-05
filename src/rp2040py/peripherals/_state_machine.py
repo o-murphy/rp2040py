@@ -345,7 +345,7 @@ class StateMachine:
                 self.write_out_value(destination, value, bit_count)
             else:
                 value = (self.output_shift_reg & 0xFFFFFFFF) >> (32 - bit_count)
-                self.output_shift_reg <<= bit_count
+                self.output_shift_reg = (self.output_shift_reg << bit_count) & 0xFFFFFFFF
                 self.write_out_value(destination, value, bit_count)
             self.output_shift_count += bit_count
             self.output_shift_count = min(self.output_shift_count, 32)
@@ -389,7 +389,7 @@ class StateMachine:
                     self.input_shift_reg = (self.input_shift_reg & 0xFFFFFFFF) >> bit_count
                     self.input_shift_reg |= source_value << (32 - bit_count)
                 else:
-                    self.input_shift_reg <<= bit_count
+                    self.input_shift_reg = (self.input_shift_reg << bit_count) & 0xFFFFFFFF
                     self.input_shift_reg |= source_value
                 self.input_shift_count += bit_count
                 self.input_shift_count = min(self.input_shift_count, 32)
