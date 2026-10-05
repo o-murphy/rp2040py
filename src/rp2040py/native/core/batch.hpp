@@ -25,6 +25,10 @@ constexpr int kBatchFault = -1;
 
 struct BatchHost {
     const volatile uint8_t* stopped = nullptr;  // nonzero: leave at the next iteration
+    // Optional. Nonzero: some device is waiting on the *real* world (a relayed DNS/NTP reply, a TCP connect in flight), so an idle jump may not outrun the wall clock -
+    // it is capped at `BatchParams::paced_idle_nanos` and ends the batch, and the caller sleeps for the simulated time the batch covered (`Simulator.execute()`).
+    // Null: never paced.
+    const volatile uint8_t* real_io = nullptr;
     // PIO blocks stepped once per iteration, by the system clocks that iteration covered. `pio_stopped[i]` points at block i's own
     // "stopped" flag; `pio_advance` is called only for a block that is not stopped and returns false if it failed (parked).
     static constexpr int kMaxPio = 4;
@@ -41,6 +45,7 @@ struct BatchParams {
     long instruction_ceiling = 1000000;
     double yield_budget_seconds = 0.005;
     int check_interval = 256;
+    double paced_idle_nanos = 1e6;      // the longest idle jump while `real_io` is set (1 ms of simulated time)
 };
 
 // Runs one batch. Returns 0, or kBatchFault when a clock alarm or the CPU failed (the Python error is parked; the pending tick time
@@ -66,13 +71,18 @@ inline int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchP
             if (host.monotonic(host.ctx) - batch_start > params.yield_budget_seconds) break;
         }
         int64_t cycles;
+        bool paced = false;
         if (cpu.waiting) {
             if (pending_nanos != 0.0) {
                 if (!clock.tick(pending_nanos)) return kBatchFault;
                 pending_nanos = 0.0;
                 pending_count = 0;
             }
-            const double idle_nanos = clock.nanos_to_next_alarm();
+            double idle_nanos = clock.nanos_to_next_alarm();
+            if (host.real_io != nullptr && *host.real_io != 0) {
+                if (idle_nanos > params.paced_idle_nanos) idle_nanos = params.paced_idle_nanos;
+                paced = true;
+            }
             if (!clock.tick(idle_nanos)) return kBatchFault;
             // The system clocks that jump covered, floored at one: an idle jump with no alarm advances time by nothing, and a PIO
             // frozen whenever the CPU parks in WFI with an empty alarm queue could never make the progress that wakes it again.
@@ -104,6 +114,7 @@ inline int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchP
             if (!*host.pio_stopped[p] && !host.pio_advance(host.ctx, p, cycles)) return kBatchFault;
         }
         i += 1;
+        if (paced) break;  // one capped idle jump per batch: the caller sleeps for the simulated time it covered
     }
     if (pending_nanos != 0.0) {
         if (!clock.tick(pending_nanos)) return kBatchFault;

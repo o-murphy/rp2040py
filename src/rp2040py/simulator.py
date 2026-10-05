@@ -64,6 +64,12 @@ class Simulator:
         # below is the property over it; the pure-Python loop uses the property.
         self._stop_flag = bytearray(1)
         self.stopped = True
+        # One byte too, for the same reason: nonzero while some device waits on the *real* world (a relayed DNS/NTP reply, a TCP connect in flight). The batch loops
+        # then cap an idle jump (`_execute_batch._PACED_IDLE_NANOS`) and end the batch, and `execute()` sleeps for the simulated time it covered - so simulated time
+        # cannot outrun the wall clock while a real reply is on its way (the guest's own timeouts run in simulated time; the reply arrives in wall time).
+        self._real_io_flag = bytearray(1)
+        self._real_io_pending = 0
+        self._real_io_lock = threading.Lock()
         # Owned here (rather than a separately-constructed, separately-passed-around object) so
         # anyone with a reference to this Simulator can request a shutdown - a REPL, a
         # --expect-text watcher, a SIGTERM handler - without also needing a reference to whatever
@@ -89,6 +95,17 @@ class Simulator:
         # exception here left every awaiter blocked on device state that could now never arrive
         # genuinely stuck forever (0% CPU, not merely slow) instead of failing loudly.
         self.engine_room_error: BaseException | None = None
+
+    def real_io_begin(self) -> None:
+        """A device starts waiting for the real world (see `_real_io_flag`). Paired with `real_io_end()`; counted, so overlapping waits compose. Any thread."""
+        with self._real_io_lock:
+            self._real_io_pending += 1
+            self._real_io_flag[0] = 1
+
+    def real_io_end(self) -> None:
+        with self._real_io_lock:
+            self._real_io_pending = max(0, self._real_io_pending - 1)
+            self._real_io_flag[0] = 1 if self._real_io_pending else 0
 
     @property
     def stopped(self) -> bool:
@@ -238,6 +255,16 @@ class Simulator:
                     # instead - the level can only change from a `schedule_threadsafe()` callback
                     # on this same loop, and yielding for this long is what lets one run.
                     await asyncio.sleep(_HELD_IN_RESET_POLL_SECONDS)
+                    continue
+                if self._real_io_flag[0]:
+                    # A device waits on the real world: whatever simulated time this batch covers must not have taken less wall time than that.
+                    nanos_before, wall_before = self.clock.nanos, time.monotonic()
+                    self._execute_batch()
+                    ahead = (self.clock.nanos - nanos_before) / 1e9 - (time.monotonic() - wall_before)
+                    if ahead > 0:
+                        await asyncio.sleep(ahead)
+                    else:
+                        await asyncio.sleep(0)
                     continue
                 self._execute_batch()
                 # Upstream rp2040js uses `setTimeout(() => this.execute(), 0)` to yield back to

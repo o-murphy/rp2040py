@@ -16,6 +16,7 @@ cdef extern from "batch.hpp" namespace "rp2040core":
 
     cdef cppclass BatchHost:
         const uint8_t* stopped
+        const uint8_t* real_io
         int pio_count
         const int* pio_stopped[4]
         BatchPioAdvanceFn pio_advance
@@ -28,5 +29,6 @@ cdef extern from "batch.hpp" namespace "rp2040core":
         long instruction_ceiling
         double yield_budget_seconds
         int check_interval
+        double paced_idle_nanos
 
     int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchParams& params) noexcept

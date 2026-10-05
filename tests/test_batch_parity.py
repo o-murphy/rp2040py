@@ -178,3 +178,41 @@ def test_the_native_loop_refuses_a_clock_it_would_bypass():
 
     with pytest.raises(TypeError, match="overrides tick"):
         native_execute_batch(simulator, 1)
+
+
+@pytest.mark.parametrize("tick_batch", [1, 16])
+def test_a_paced_idle_core_advances_at_most_a_millisecond_per_batch_in_both_loops(tick_batch):
+    """While a device waits on the real world (`Simulator.real_io_begin()`) an idle jump is capped at 1 ms of simulated time and ends the batch - the same in
+    the pure-Python loop and the C++ one - so `Simulator.execute()` can sleep for it; an unpaced idle core jumps straight to its alarm."""
+    program = [opcode_wfi(), opcode_movs(2, 7), BKPT]
+    states = []
+    for loop in (pure_execute_batch, native_execute_batch):
+        simulator, log, _run = _rig(loop, program, alarms=(("wake", 50_000_000.0),), idle=True)
+        simulator._real_io_flag[0] = 1
+        simulator.stopped = False
+        loop(simulator, tick_batch)  # one batch
+        after_one = _state(simulator)
+        assert after_one[4] == 1_000_000.0 and log == [], after_one  # 1 ms, and the alarm 50 ms away has not fired
+        for _ in range(
+            60
+        ):  # 49 more capped jumps reach the alarm exactly, which wakes the core and lets the program stop
+            loop(simulator, tick_batch)
+            if simulator.stopped:
+                break
+        states.append((after_one, _state(simulator), log))
+
+    assert states[0] == states[1]
+    assert states[0][2] == [("wake", 50_000_000.0)]
+
+
+def test_clearing_the_real_io_flag_restores_the_unpaced_jump_in_both_loops():
+    program = [opcode_wfi(), BKPT]
+    for loop in (pure_execute_batch, native_execute_batch):
+        simulator, log, run = _rig(loop, program, alarms=(("wake", 50_000_000.0),), idle=True)
+        simulator._real_io_flag[0] = 1
+        simulator.stopped = False
+        loop(simulator, 1)
+        assert simulator.rp2040.clock.nanos == 1_000_000.0
+        simulator._real_io_flag[0] = 0
+        assert run(1) == "ok"
+        assert log == [("wake", 50_000_000.0)]

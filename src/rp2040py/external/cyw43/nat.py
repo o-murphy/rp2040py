@@ -153,6 +153,14 @@ class _OneShotDatagramProtocol(asyncio.DatagramProtocol):
             self._on_response.set_exception(exc)
 
 
+def _real_io(rp2040: "RP2040", name: str) -> None:
+    """Tells the Simulator (if there is one) that a real-world wait starts (`name` = `real_io_begin`) or ends (`real_io_end`): while it lasts, simulated time may not
+    outrun the wall clock, or the guest's own timeouts (simulated) would expire before a relayed reply (real) can arrive."""
+    method = getattr(getattr(rp2040, "simulator", None), name, None)
+    if method is not None:
+        method()
+
+
 class UdpRelay:
     """Step 4e - a one-shot UDP relay, generalized beyond DNS (originally `DnsRelay`, port 53
     only - broadened same session after confirming `ntptime`/other UDP-based guest code hit the
@@ -204,12 +212,32 @@ class UdpRelay:
         else:
             upstream = (_ip_to_str(ip.dst_ip), udp.dst_port)
             reply_src_ip, reply_src_port = ip.dst_ip, udp.dst_port
-        self._rp2040.schedule_threadsafe(
-            self._relay(eth.src_mac, ip.src_ip, udp.src_port, udp.payload, upstream, reply_src_ip, reply_src_port)
-        )
+        _real_io(self._rp2040, "real_io_begin")  # ended by `_relay()`, however it ends
+        try:
+            self._rp2040.schedule_threadsafe(
+                self._relay(eth.src_mac, ip.src_ip, udp.src_port, udp.payload, upstream, reply_src_ip, reply_src_port)
+            )
+        except BaseException:
+            _real_io(self._rp2040, "real_io_end")
+            raise
         return True
 
     async def _relay(
+        self,
+        guest_mac: bytes,
+        guest_ip: bytes,
+        guest_port: int,
+        query: bytes,
+        upstream: "tuple[str, int]",
+        reply_src_ip: bytes,
+        reply_src_port: int,
+    ) -> None:
+        try:
+            await self._relay_inner(guest_mac, guest_ip, guest_port, query, upstream, reply_src_ip, reply_src_port)
+        finally:
+            _real_io(self._rp2040, "real_io_end")
+
+    async def _relay_inner(
         self,
         guest_mac: bytes,
         guest_ip: bytes,
@@ -321,7 +349,14 @@ class TcpReflector:
             mss=min(tcp.mss or _DEFAULT_MSS, _MAX_MSS),
         )
         self._flows[key] = flow
-        self._rp2040.schedule_threadsafe(self._open_and_pump(flow))
+        _real_io(
+            self._rp2040, "real_io_begin"
+        )  # the connect in flight; ended by `_open_and_pump()` once it has resolved, one way or the other
+        try:
+            self._rp2040.schedule_threadsafe(self._open_and_pump(flow))
+        except BaseException:
+            _real_io(self._rp2040, "real_io_end")
+            raise
 
     async def _open_and_pump(self, flow: TcpFlow) -> None:
         """Runs as a real `asyncio.Task` on the engine-room loop itself (self-registered via
@@ -333,9 +368,12 @@ class TcpReflector:
         failed."""
         flow.pump_task = asyncio.current_task()
         try:
-            reader, writer = await asyncio.wait_for(
-                self._connect_fn(_ip_to_str(flow.key.dst_ip), flow.key.dst_port), timeout=self._connect_timeout
-            )
+            try:
+                reader, writer = await asyncio.wait_for(
+                    self._connect_fn(_ip_to_str(flow.key.dst_ip), flow.key.dst_port), timeout=self._connect_timeout
+                )
+            finally:
+                _real_io(self._rp2040, "real_io_end")
         except (OSError, asyncio.TimeoutError):
             self._queue_ethernet_frame(self._build_tcp_frame(flow, flags=net.TCP_RST | net.TCP_ACK, seq=0))
             self._flows.pop(flow.key, None)

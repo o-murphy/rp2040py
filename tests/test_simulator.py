@@ -12,9 +12,11 @@ Drives `_execute_batch()` directly rather than the `async def execute()` wrapper
 deterministic single-batch behavior without depending on asyncio scheduling order.
 """
 
+import asyncio
 import itertools
 import time
 
+from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 
 
@@ -155,3 +157,50 @@ def test_batch_yields_within_budget_even_after_switching_from_idle_to_busy():
     simulator.stop()
 
     assert elapsed < 0.1
+
+
+def test_real_io_begin_and_end_count_and_set_the_flag_the_batch_loops_read():
+    simulator = Simulator(rp2040=RP2040())
+    assert simulator._real_io_flag[0] == 0
+    simulator.real_io_begin()
+    simulator.real_io_begin()
+    assert simulator._real_io_flag[0] == 1
+    simulator.real_io_end()
+    assert simulator._real_io_flag[0] == 1  # one wait still outstanding
+    simulator.real_io_end()
+    assert simulator._real_io_flag[0] == 0
+    simulator.real_io_end()  # an unmatched end cannot go negative or latch the flag
+    assert simulator._real_io_flag[0] == 0
+    simulator.real_io_begin()
+    assert simulator._real_io_flag[0] == 1
+
+
+def _advance_an_idle_chip_for(wall_seconds: float, paced: bool) -> float:
+    """Simulated seconds an idle core (nothing but a far-away alarm) gets through in `wall_seconds` of real time, with a real-world wait outstanding or not."""
+
+    async def _body() -> float:
+        chip = RP2040()
+        simulator = Simulator(rp2040=chip)
+        simulator.bind_loop()
+        chip.core.waiting = True
+        chip.clock.create_alarm(lambda: None).schedule(10e9)  # 10 simulated seconds away
+        if paced:
+            simulator.real_io_begin()
+        task = asyncio.ensure_future(simulator.execute())
+        try:
+            await asyncio.sleep(wall_seconds)
+        finally:
+            simulator.stop()
+            await task
+        return chip.clock.nanos / 1e9
+
+    return asyncio.run(_body())
+
+
+def test_simulated_time_does_not_outrun_the_wall_clock_while_a_real_world_wait_is_outstanding():
+    """The guest's own timeouts run in simulated time and a relayed reply arrives in wall time: while a device waits on the real world, an idle core must advance
+    at no more than about real time. Unpaced, the same core jumps to its alarm 10 simulated seconds away in a few milliseconds."""
+    paced = _advance_an_idle_chip_for(0.4, paced=True)
+    unpaced = _advance_an_idle_chip_for(0.4, paced=False)
+    assert 0.1 < paced < 0.6, paced
+    assert unpaced >= 9.0, unpaced

@@ -42,6 +42,7 @@ cdef double CYCLE_NANOS = 1e9 / 125_000_000  # 125 MHz
 cdef double BATCH_YIELD_BUDGET_SECONDS = 0.005
 cdef int TIME_CHECK_INTERVAL = 256
 cdef long BATCH_INSTRUCTION_CEILING = 1000000
+cdef double PACED_IDLE_NANOS = 1_000_000.0  # mirrors _execute_batch.py's _PACED_IDLE_NANOS
 
 
 cdef class _BatchContext:
@@ -77,6 +78,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     cdef CortexM0Core core = rp2040.core
     cdef SimulationClock clock = simulator.clock
     cdef unsigned char[::1] stop_flag = simulator._stop_flag
+    cdef unsigned char[::1] real_io_flag = simulator._real_io_flag
     cdef BatchHost host
     cdef BatchParams params
     cdef int result
@@ -104,6 +106,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     context = _BatchContext(pios)  # keeps the blocks alive for the whole batch (their flag addresses are in `host`)
 
     host.stopped = <const uint8_t*> &stop_flag[0]
+    host.real_io = <const uint8_t*> &real_io_flag[0]
     host.pio_count = len(pios)
     for i in range(len(pios)):
         pio = <RPPIO> pios[i]
@@ -116,6 +119,7 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
     params.instruction_ceiling = BATCH_INSTRUCTION_CEILING
     params.yield_budget_seconds = BATCH_YIELD_BUDGET_SECONDS
     params.check_interval = TIME_CHECK_INTERVAL
+    params.paced_idle_nanos = PACED_IDLE_NANOS
 
     result = run_batch(core._cpu, clock._clock, host, params)
     if result == kBatchFault:

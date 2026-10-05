@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 # those interludes and never fired in practice, see git history for the confirmed repro.
 _BATCH_YIELD_BUDGET_SECONDS = 0.005
 _TIME_CHECK_INTERVAL = 256
+# While a device waits on the real world (`Simulator.real_io_begin()`), an idle jump is capped at this much simulated time and ends the batch, so
+# `Simulator.execute()` can sleep for it: simulated time may not outrun the wall clock while a real reply is on its way. Mirrored in native/_simulator.pyx.
+_PACED_IDLE_NANOS = 1_000_000.0
 
 
 def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
@@ -46,6 +49,9 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
     touches `.rp2040`, `.clock`, and `.stopped`, structurally, the same three attributes
     native/_simulator.pyx's own execute_batch() reads."""
     rp2040, clock = simulator.rp2040, simulator.clock
+    real_io = getattr(
+        simulator, "_real_io_flag", None
+    )  # one byte, nonzero while a device waits on the real world (see _PACED_IDLE_NANOS)
 
     if rp2040.run_pin_low:
         # RUN held low: the chip is in reset and does nothing at all - no instruction, no PIO
@@ -125,6 +131,7 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
                 # batch early; execute()'s own loop immediately starts the next one after
                 # yielding, so nothing about idle state or instruction execution is lost.
                 break
+        paced = False
         if rp2040.core.waiting:
             if pending_nanos:
                 # Flush whatever the busy branch below had accumulated first - the idle jump
@@ -144,6 +151,9 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
             # actually produced the wildly variable wall-clock times noted in
             # docs/BACKLOG.md's CDC investigation, not anything USB-specific.
             idle_nanos = clock.nanos_to_next_alarm
+            if real_io is not None and real_io[0]:
+                idle_nanos = min(idle_nanos, _PACED_IDLE_NANOS)
+                paced = True
             clock.tick(idle_nanos)
             # Real PIO keeps running while the CPU sleeps, so the jump has to be handed to it as
             # the system clocks it actually covers - not as the single step this used to give it
@@ -174,6 +184,8 @@ def execute_batch(simulator: "Simulator", tick_batch: int) -> None:
             if not pio.stopped:
                 pio.advance(cycles)
         i += 1
+        if paced:
+            break  # one capped idle jump per batch: the caller sleeps for the simulated time it covered
     if pending_nanos:
         # End of batch (stopped, iteration ceiling, or the real-time yield budget above) with
         # something still un-flushed - must not leave simulated time silently behind by up to
