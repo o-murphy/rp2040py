@@ -1,0 +1,58 @@
+name: AddressSanitizer
+
+# The native extensions hold raw pointers between Python-owned objects (a block on a pin's bank, an alarm in the
+# clock's list) and detach in __dealloc__, in whatever order the cyclic garbage collector frees the objects. The
+# pure-Python reference cannot get that wrong and the ordinary test run does not notice when it does: the two bugs
+# that this workflow exists for (a chip leaked by an invisible reference to its clock, and an SSI detaching from a
+# pin bank that was already freed) showed up only as a MemoryError or an access violation in the 32-bit Windows
+# wheel test (docs/records/0096-cpp-mcu-core.md). Here the whole suite runs on a build with -fsanitize=address, so
+# the first bad access is reported with the stacks that allocated and freed it.
+
+on:
+  push:
+    paths-ignore: &non-code-paths
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+    paths-ignore: *non-code-paths
+  workflow_dispatch:
+
+concurrency:
+  group: asan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asan:
+    name: pytest on an AddressSanitizer build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RP2040PY_REQUIRE_NATIVE: "1"
+      # setuptools appends these to the compile and link lines of every extension. -O1 and the frame pointer keep the
+      # reports readable; -g is stripped from the wheel but not from this in-tree build.
+      CFLAGS: -fsanitize=address -fno-omit-frame-pointer -g -O1
+      CXXFLAGS: -fsanitize=address -fno-omit-frame-pointer -g -O1
+      LDFLAGS: -fsanitize=address
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.10"
+          github-token: ${{ github.token }}
+
+      - name: Build the native extensions with AddressSanitizer
+        run: uv sync
+
+      # The interpreter itself is not instrumented, so the runtime has to be loaded first. The tests run through the
+      # venv's own python, not `uv run`: `uv run` re-syncs the project and would replace the instrumented build with
+      # a plain one. Leak checking is off (Python does not free everything at exit); the quarantine is kept small
+      # because every chip owns 16 MB of flash and ASan would otherwise hold the freed ones back.
+      - name: Run the test suite
+        run: |
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          export ASAN_OPTIONS=detect_leaks=0:quarantine_size_mb=32:abort_on_error=0
+          .venv/bin/python -m pytest tests -q -p no:cacheprovider
