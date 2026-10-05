@@ -335,7 +335,9 @@ def scenarios() -> dict[str, list[tuple]]:
     s["b_edges_count_without_poking_the_direction"] = [
         _w(ch(0, TOP), 3),
         _w(ch(0, DIV), 0x10),
-        _w(ch(0, CSR), EN_BIT | (2 << 4)),  # the CSR write makes B an input: its direction bit goes low, the A bit stays high
+        _w(
+            ch(0, CSR), EN_BIT | (2 << 4)
+        ),  # the CSR write makes B an input: its direction bit goes low, the A bit stays high
         *[op for level in (1, 0, 1, 0, 1) for op in ((IN, 1, level), (R, ch(0, CTR)))],
         *all_reads(),
     ]

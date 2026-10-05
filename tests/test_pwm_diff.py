@@ -34,7 +34,9 @@ def _write_the_compare_register(candidate: Rig, step: int) -> None:
 
 
 def _flip_the_b_input_latch(candidate: Rig, step: int) -> None:
-    if step == 700:  # (a pin's level is not a reliable probe: an input override a random FUNCSEL write left on the pin can pin it)
+    if (
+        step == 700
+    ):  # (a pin's level is not a reliable probe: an input override a random FUNCSEL write left on the pin can pin it)
         candidate.chip.pwm.channels[3].last_b_value = not candidate.chip.pwm.channels[3].last_b_value
 
 

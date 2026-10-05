@@ -52,7 +52,9 @@ def test_both_strobes_in_one_write_cancel():
 def test_the_strobes_do_nothing_without_the_enable_in_the_same_write():
     chip = _running_channel_0()
     chip.write_uint32(_ch(0, CTR), 10)
-    chip.write_uint32(_ch(0, CSR), CSR_PH_ADV)  # also switches the channel off: the strobe acts on a running counter only
+    chip.write_uint32(
+        _ch(0, CSR), CSR_PH_ADV
+    )  # also switches the channel off: the strobe acts on a running counter only
     chip.write_uint32(_ch(0, CSR), CSR_PH_RET)
     assert chip.read_uint32(_ch(0, CTR)) == 10
 
