@@ -29,7 +29,7 @@ jobs:
       matrix:
         # Deliberately small. A CircuitPython boot costs minutes of emulated time, so this matrix
         # buys *firmware* coverage, not interpreter coverage - ci-micropython.yml already runs the
-        # full pypy/cpython-3.10/cpython-3.14 spread on every release it tests, and nothing about
+        # full pypy/cpython-3.10/cpython-3.15 spread on every release it tests, and nothing about
         # CircuitPython exercises the host interpreter differently. Three jobs, one runtime.
         include:
           # The oldest release this project claims to support. **Not** the default any more - that

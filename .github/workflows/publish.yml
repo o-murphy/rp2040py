@@ -140,6 +140,13 @@ jobs:
             cibw_platform: android
             needs_qemu: false
 
+          - name: Pyodide WebAssembly
+            artifact_key: pyodide-wasm32
+            os: ubuntu-latest
+            cibw_archs: "wasm32"
+            cibw_platform: pyodide
+            needs_qemu: false
+
     runs-on: ${{ matrix.os }}
 
     steps:

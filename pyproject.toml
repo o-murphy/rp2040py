@@ -23,6 +23,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    # Free-threaded wheels are built (cp314t-*, cp315t-* below) but record 0096 itself still
+    # lists free-threaded builds as "needs an explicit look" (callbacks/threads risk, not yet
+    # verified) - "Unstable" is the honest tier, not "Beta"/"Mature".
+    "Programming Language :: Python :: Free Threading :: 1 - Unstable",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
@@ -124,26 +129,39 @@ build-frontend = "build[uv]"
 # (needed by this project's typed memoryviews) only entered the limited API at 3.11 - confirmed
 # by trying to force the floor down to 3.10, which fails to compile (see setup.py/docs/BACKLOG.md).
 # cp311-* builds once and self-tags as cp311-abi3 (setup.py's _bdist_wheel_abi3), covering every
-# 3.11+ interpreter with that one wheel. Free-threaded (cp314t-*) is separate for the usual reason:
-# Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible.
-build = "cp310-* cp311-* cp314t-*"
+# 3.11+ interpreter with that one wheel. Free-threaded builds (cp314t-*, cp315t-*) are separate
+# for the usual reason: Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible, so each
+# free-threaded minor version needs its own non-abi3 wheel.
+build = "cp310-* cp311-* cp314t-* cp315t-*"
 test-extras = "fs"
 test-requires = "pytest"
 # cibuildwheel runs tests from a scratch directory (not the repo checkout) so only the built
 # wheel's contents are ever imported - {project} is substituted with the repo root so pytest can
 # still find the test suite itself (tests/ isn't part of the wheel).
 test-command = "pytest {project}/tests"
-test-skip = "*-pyodide_*"
 
 [tool.cibuildwheel.android]
 test-extras = ""
 test-sources = ["tests", "pyproject.toml"]
 test-command = "python -m pytest tests"
-build = "cp313-android_* cp314-android_*"
+build = "cp313-android_* cp314-android_* cp315-android_*"
 
-# pthread is not allowed 
-# [tool.cibuildwheel.pyodide]
-# build = "cp313-pyodide_* cp314-pyodide_*"
+[tool.cibuildwheel.pyodide]
+build = "cp313-pyodide_* cp314-pyodide_* cp315-pyodide_*"
+# Not "fs": littlefs-python has no wasm32/emscripten wheel, so installing it here fails outright
+# (confirmed 2026-10-05) - same reason as the android section's own test-extras override above.
+test-extras = ""
+# Emscripten/WASM has no pthreads, no real sockets, no subprocess - most of tests/ exercises
+# things that simply don't exist in this sandbox (network firmware fetch, CYW43's libslirp,
+# mpremote, real OS threads), so the full suite is not a fair target here, and the "pthread is
+# not allowed" note this replaces was the real reason this platform was disabled altogether.
+# What's proven instead (2026-10-05, via this cibuildwheel runner, cp314-pyodide): the C++/Cython
+# native extension compiles and loads for wasm32-emscripten (not a silent pure-Python fallback),
+# and record 0096's thread-free engine - the fix for exactly the "no pthreads" problem - runs
+# correctly here: test_rp2040.py + test_simulator.py (21 tests, including the thread-free
+# idle-budget/pacing tests) pass under the real pyodide-build test runner. Broader coverage is
+# Phase 6 (WASM host) work, not yet done - see docs/records/0096-cpp-mcu-core.md.
+test-command = "python -m pytest {project}/tests/test_rp2040.py {project}/tests/test_simulator.py"
 
 [dependency-groups]
 dev = [

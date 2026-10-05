@@ -66,7 +66,7 @@ jobs:
         python_runtime:
           - pypy-3.10
           - cpython-3.10
-          - cpython-3.14
+          - cpython-3.15
 
     steps:
       - uses: actions/checkout@v7
@@ -112,7 +112,7 @@ jobs:
       - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
         run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
         env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
 
       # WiFi through the emulated CYW43439 + NAT bridge, from Kaluma's own `wifi`/`net` modules -
       # a third, independent network stack over the same bus as MicroPython's lwIP and
@@ -137,4 +137,4 @@ jobs:
       - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
         run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
         env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}

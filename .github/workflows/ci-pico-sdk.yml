@@ -33,7 +33,7 @@ jobs:
         python_runtime:
           - pypy-3.10
           - cpython-3.10
-          - cpython-3.14
+          - cpython-3.15
     steps:
       - uses: actions/checkout@v7
 
@@ -71,10 +71,10 @@ jobs:
 
       # CortexM0Core.execute_instruction() is a pure-Python instruction interpreter; CPython is
       # much slower here than V8 JIT-compiling the equivalent JS in rp2040js, hence the generous
-      # 10-minute timeout - and why this also runs under PyPy and CPython 3.14's experimental JIT
+      # 10-minute timeout - and why this also runs under PyPy and CPython 3.15's experimental JIT
       # (see docs/PORTING.md#known-differences-from-rp2040js). demo/micropython_run.py has zero
       # runtime dependencies, so no `uv sync` is needed here.
       - name: Test "Hello World" example ${{ matrix.python_runtime }}
         run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
         env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.14' && '1' || '' }}
+          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
