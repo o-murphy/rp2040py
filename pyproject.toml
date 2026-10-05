@@ -151,17 +151,11 @@ build = "cp313-pyodide_* cp314-pyodide_* cp315-pyodide_*"
 # Not "fs": littlefs-python has no wasm32/emscripten wheel, so installing it here fails outright
 # (confirmed 2026-10-05) - same reason as the android section's own test-extras override above.
 test-extras = ""
-# Emscripten/WASM has no pthreads, no real sockets, no subprocess - most of tests/ exercises
-# things that simply don't exist in this sandbox (network firmware fetch, CYW43's libslirp,
-# mpremote, real OS threads), so the full suite is not a fair target here, and the "pthread is
-# not allowed" note this replaces was the real reason this platform was disabled altogether.
-# What's proven instead (2026-10-05, via this cibuildwheel runner, cp314-pyodide): the C++/Cython
-# native extension compiles and loads for wasm32-emscripten (not a silent pure-Python fallback),
-# and record 0096's thread-free engine - the fix for exactly the "no pthreads" problem - runs
-# correctly here: test_rp2040.py + test_simulator.py (21 tests, including the thread-free
-# idle-budget/pacing tests) pass under the real pyodide-build test runner. Broader coverage is
-# Phase 6 (WASM host) work, not yet done - see docs/records/0096-cpp-mcu-core.md.
-test-command = "python -m pytest {project}/tests/test_rp2040.py {project}/tests/test_simulator.py"
+# The whole suite, as on every other platform: tests that need what Emscripten/WASM does not have (real sockets, subprocesses, OS threads, network firmware fetches) must skip or fail
+# loudly here rather than be left out of the command. record 0096's thread-free engine is the fix for the "no pthreads" problem that kept this platform disabled; the native
+# extension compiles and loads for wasm32-emscripten (not a silent pure-Python fallback). wasm32 is a 32-bit address space whose memory never shrinks, so it shares the 32-bit
+# targets' memory limits (see tests/conftest.py).
+test-command = "python -m pytest {project}/tests"
 
 [dependency-groups]
 dev = [
