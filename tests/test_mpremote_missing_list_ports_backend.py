@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 import pytest
+from utils.emscripten import needs_processes
 
 pytest.importorskip("mpremote", reason="needs the optional mpremote dev dependency")
 
@@ -65,12 +66,14 @@ print("OK")
 """
 
 
+@needs_processes
 def test_patch_serial_list_ports_missing_backend_lets_mpremote_import_cleanly() -> None:
     result = subprocess.run([sys.executable, "-c", _SCRIPT], capture_output=True, text=True, timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OK"
 
 
+@needs_processes
 def test_patch_serial_list_ports_missing_backend_is_a_noop_when_list_ports_already_works() -> None:
     result = subprocess.run(
         [sys.executable, "-c", _NOOP_SCRIPT], capture_output=True, text=True, timeout=30, check=False

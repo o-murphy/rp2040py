@@ -10,6 +10,7 @@ import asyncio
 import threading
 
 import pytest
+from utils.emscripten import needs_threads
 
 from rp2040py.gdb.gdb_tcp_server import GDBTCPServer
 from rp2040py.simulator import Simulator
@@ -44,6 +45,7 @@ def test_wait_for_shutdown_exits_via_shutdown_request_and_runs_cleanup():
     assert cleanup_calls == [True]
 
 
+@needs_threads
 def test_wait_for_shutdown_closes_a_real_gdb_server_instead_of_hanging():
     """The actual regression this whole coordinator exists to prevent: `cleanup` must actually run
     (and actually close the server's listening socket) before sys.exit() below, not get skipped or

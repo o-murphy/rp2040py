@@ -4,6 +4,7 @@ import struct
 import time
 
 import pytest
+from utils.emscripten import needs_fine_clock
 
 from rp2040py.boards import BOARDS, BoardSpec, FlashLayout
 from rp2040py.device.kaluma_device import KalumaDevice
@@ -42,6 +43,7 @@ def garbage_image(tmp_path) -> str:
     return str(path)
 
 
+@needs_fine_clock
 def test_start_raises_timeout_error_instead_of_hanging_forever(garbage_image):
     device = KalumaDevice(board=_pico_board(garbage_image))
     started = time.monotonic()

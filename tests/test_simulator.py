@@ -17,6 +17,8 @@ import itertools
 import math
 import time
 
+from utils.emscripten import needs_fine_clock
+
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 
@@ -214,6 +216,7 @@ def _advance_an_idle_chip_for(wall_seconds: float, paced: bool, coarse_timer: bo
     return asyncio.run(_body())
 
 
+@needs_fine_clock
 def test_simulated_time_does_not_outrun_the_wall_clock_while_a_real_world_wait_is_outstanding():
     """The guest's own timeouts run in simulated time and a relayed reply arrives in wall time: while a device waits on the real world, an idle core must advance
     at no more than about real time. Unpaced, the same core jumps to its alarm 10 simulated seconds away in a few milliseconds."""
@@ -223,6 +226,7 @@ def test_simulated_time_does_not_outrun_the_wall_clock_while_a_real_world_wait_i
     assert unpaced >= 9.0, unpaced
 
 
+@needs_fine_clock
 def test_pacing_keeps_up_with_real_time_on_a_platform_with_a_coarse_timer():
     """Windows' sleep(0.001) lasts ~15.6 ms; pacing per batch would then slow the guest to ~1/16 of real time (a CI failure found it). Accounted against the start of the
     wait, a sleep that overshoots is paid back by the batches after it, so the guest still advances at about real time."""

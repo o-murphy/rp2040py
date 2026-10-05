@@ -4,6 +4,7 @@ otherwise pays the default 5 ms per GIL release (docs/records/0096-cpp-mcu-core.
 import sys
 
 import pytest
+from utils.emscripten import needs_threads
 
 from rp2040py import simulator as sim
 
@@ -43,6 +44,7 @@ def test_the_environment_variable_wins(restore_switch_interval, monkeypatch):
     assert sys.getswitchinterval() == pytest.approx(0.005)
 
 
+@needs_threads
 def test_creating_the_engine_room_loop_applies_it(restore_switch_interval, monkeypatch):
     from rp2040py.simulator import Simulator
 

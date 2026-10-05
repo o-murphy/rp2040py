@@ -4,6 +4,7 @@ import asyncio
 import threading
 
 import pytest
+from utils.emscripten import needs_blocking_loop, needs_threads
 
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
@@ -16,6 +17,7 @@ def _simulator_with_a_loop_of_its_own():
     return simulator, loop
 
 
+@needs_blocking_loop
 def test_pump_advances_the_simulation_without_a_thread():
     simulator, loop = _simulator_with_a_loop_of_its_own()
     threads_before = threading.active_count()
@@ -66,6 +68,7 @@ async def _fail():
     raise ValueError("boom")
 
 
+@needs_blocking_loop
 def test_submit_returns_a_future_whose_result_pumps_the_loop():
     simulator, loop = _simulator_with_a_loop_of_its_own()
     threads_before = threading.active_count()
@@ -94,6 +97,7 @@ def test_a_submitted_future_times_out_like_a_concurrent_one():
         loop.close()
 
 
+@needs_blocking_loop
 def test_call_runs_the_coroutine_to_completion_on_the_callers_thread():
     import concurrent.futures
 
@@ -106,6 +110,7 @@ def test_call_runs_the_coroutine_to_completion_on_the_callers_thread():
         loop.close()
 
 
+@needs_blocking_loop
 def test_a_threadless_simulator_makes_its_own_loop_without_a_thread():
     threads_before = threading.active_count()
     simulator = Simulator(rp2040=RP2040(), threadless=True)
@@ -134,6 +139,7 @@ def test_threadless_is_the_default_and_the_environment_or_the_argument_opt_into_
     assert Simulator(rp2040=RP2040(), threadless=False)._threadless is False
 
 
+@needs_threads
 def test_the_threaded_mode_is_still_there_when_asked_for():
     simulator = Simulator(rp2040=RP2040(), threadless=False)
     try:
@@ -146,6 +152,7 @@ def test_the_threaded_mode_is_still_there_when_asked_for():
             simulator._loop_thread.join(timeout=2.0)
 
 
+@needs_threads
 def test_two_threads_blocking_on_the_thread_free_loop_do_not_run_it_at_once():
     """`call()` from a second thread while the first is pumping the loop for its own `.result()` used to run `run_until_complete` twice at once - an AssertionError inside the
     proactor loop on Windows. One thread pumps at a time; the other waits for it and takes over."""

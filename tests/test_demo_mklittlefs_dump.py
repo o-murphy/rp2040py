@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from utils.emscripten import needs_processes
 
 # Every test here shells out to a real `python demo/mklittlefs_dump.py` via
 # [sys.executable, str(SCRIPT), ...] (see _run() below) - on Android's testbed sys.executable is
@@ -28,6 +29,7 @@ def _run(*args: str) -> "subprocess.CompletedProcess[str]":
     )
 
 
+@needs_processes
 def test_writes_each_file_under_its_own_basename(tmp_path):
     app = tmp_path / "app.py"
     app.write_bytes(b"import lib\n")
@@ -44,6 +46,7 @@ def test_writes_each_file_under_its_own_basename(tmp_path):
     assert "os.listdir('/')" in result.stdout
 
 
+@needs_processes
 def test_main_writes_the_matching_file_as_main_py_instead_of_its_own_basename(tmp_path):
     app = tmp_path / "app.py"
     app.write_bytes(b"print('hi')\n")
@@ -55,6 +58,7 @@ def test_main_writes_the_matching_file_as_main_py_instead_of_its_own_basename(tm
     assert "with open('app.py', 'wb') as fp:" not in result.stdout
 
 
+@needs_processes
 def test_output_flag_writes_to_a_file_instead_of_stdout(tmp_path):
     app = tmp_path / "app.py"
     app.write_bytes(b"print('hi')\n")
@@ -67,6 +71,7 @@ def test_output_flag_writes_to_a_file_instead_of_stdout(tmp_path):
     assert "with open('app.py', 'wb') as fp:" in out.read_text()
 
 
+@needs_processes
 def test_main_not_matching_any_file_errors_out(tmp_path):
     app = tmp_path / "app.py"
     app.write_bytes(b"print('hi')\n")
@@ -77,6 +82,7 @@ def test_main_not_matching_any_file_errors_out(tmp_path):
     assert "--main" in result.stderr
 
 
+@needs_processes
 def test_colliding_destination_names_error_out(tmp_path):
     (tmp_path / "pkg_a").mkdir()
     (tmp_path / "pkg_b").mkdir()

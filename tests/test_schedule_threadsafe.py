@@ -8,6 +8,7 @@ import asyncio
 import threading
 
 import pytest
+from utils.emscripten import needs_threads
 
 from rp2040py.simulator import Simulator
 
@@ -52,6 +53,7 @@ def test_bare_rp2040_schedule_threadsafe_raises_without_an_owning_simulator(rp20
         rp2040_factory().schedule_threadsafe(lambda: None)
 
 
+@needs_threads
 def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_caller(rp2040_factory):
     simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
     # No bootrom/firmware loaded - core.waiting=True keeps the engine room in _execute_batch()'s
@@ -81,6 +83,7 @@ def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_c
         _stop_and_join(simulator)
 
 
+@needs_threads
 def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread(rp2040_factory):
     simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
     simulator.rp2040.core.waiting = True  # see the sibling test above for why
