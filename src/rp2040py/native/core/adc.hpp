@@ -13,6 +13,7 @@
 // failure out of an alarm makes the alarm return `false` and the clock stops ticking.
 //
 // Quirks of the reference that are kept (each pinned by tests/test_adc_diff.py or the C++ checks):
+//   - START_ONE is self-clearing (it never reads back from CS); START_MANY stays until written away;
 //   - a CS write with ERR_STICKY set clears that bit of CS (write-clear); ERR follows the last conversion, STICKY stays until cleared that way;
 //   - the active channel (CS.AINSEL, 3 bits) can hold 0-7 whatever `num_channels` is; a round-robin step stores the channel it found;
 //   - every FIFO change and every FCS write re-publishes the DREQ (asserted while DREQ_EN is set and the level is at or above the threshold, deasserted otherwise); a FIFO read of an empty
@@ -244,6 +245,7 @@ public:
             case CS:
                 cs &= ~(word & CS_ERR_STICKY);  // write-clear bit
                 cs = (cs & ~CS_WRITE_MASK) | (word & CS_WRITE_MASK);
+                cs &= ~CS_START_ONE;  // self-clearing
                 if ((word & CS_EN) && !busy && ((word & CS_START_ONE) || (word & CS_START_MANY))) return start_adc_read();
                 return true;
             case adc_regs::FCS:

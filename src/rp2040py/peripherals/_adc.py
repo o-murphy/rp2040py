@@ -278,6 +278,7 @@ class RPADC(BasePeripheral):
         if offset == CS:
             self.cs &= ~(value & CS_ERR_STICKY)  # Write-clear bit
             self.cs = (self.cs & ~CS_WRITE_MASK) | (value & CS_WRITE_MASK)
+            self.cs &= ~CS_START_ONE  # self-clearing
             if value & CS_EN and not self.busy and (value & CS_START_ONE or value & CS_START_MANY):
                 self.start_adc_read()
 

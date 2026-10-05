@@ -66,3 +66,11 @@ def test_an_fcs_write_republishes_the_dreq_and_switching_dreq_en_off_takes_it_do
     assert recorder.calls[-1][0] == "clear"
     chip.write_uint32(ADC_BASE + FCS, 1 | (1 << 3) | (3 << 24))  # threshold 3 above the level 0
     assert recorder.calls[-1][0] == "clear"
+
+
+def test_start_one_is_self_clearing():
+    chip = RP2040()
+    chip.write_uint32(ADC_BASE + CS, 1 | (1 << 2))  # enabled, START_ONE
+    assert not chip.read_uint32(ADC_BASE + CS) & (1 << 2)  # it used to read back as set for ever
+    chip.write_uint32(ADC_BASE + CS, 1 | (1 << 3))  # START_MANY is not self-clearing
+    assert chip.read_uint32(ADC_BASE + CS) & (1 << 3)

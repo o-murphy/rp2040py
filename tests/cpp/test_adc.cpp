@@ -171,10 +171,11 @@ static void test_a_start_needs_enable_and_an_idle_block() {
     wr(CS, CS_START_ONE);                                          // not enabled
     CHECK(env.reads_n == 0 && !adc.busy);
     wr(CS, CS_EN | CS_START_ONE);
+    CHECK((adc.cs & CS_START_ONE) == 0);                           // self-clearing: it never reads back
     wr(CS, CS_EN | CS_START_ONE);                                  // busy: ignored
-    CHECK(env.reads_n == 1);
+    CHECK(env.reads_n == 1 && (rd(CS) & CS_START_ONE) == 0);
     wr(CS, CS_EN | CS_START_MANY | CS_START_ONE);
-    CHECK(env.reads_n == 1);
+    CHECK(env.reads_n == 1 && (adc.cs & (CS_START_MANY | CS_START_ONE)) == CS_START_MANY);   // START_MANY stays
     fresh();
     CHECK(wr(CS, CS_EN | CS_TS_EN));                               // no start bit
     CHECK(env.reads_n == 0 && adc.temperature_enable() && adc.enabled());
