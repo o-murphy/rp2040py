@@ -312,6 +312,23 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-05: **callgrind of the Pico W scan after the gSPI shifter: the PIO is now the largest cost, ~59% of all instructions; the CPU is ~18%.** Decides the next step: the PIO (state machines + `RPPIO`) to C++, the rest of Phase 3, before DMA.
+  - Method: `valgrind --tool=callgrind` on the real flow (boot, then `WLAN.scan()` through the REPL) with a build that keeps symbols (`RP2040PY_DISABLE_STRIP=1`), 30.84 G instructions in total; inclusive shares of the total (instructions, not time - cache behaviour differs, so read them as proportions):
+    | | share |
+    |---|---|
+    | `execute_batch` (everything the engine runs) | 94.5% |
+    | of which `_pio_advance` -> `RPPIO.advance` (the PIO, with everything it calls) | **59.0%** |
+    | `RPPIO._run_due` -> `StateMachine.step` -> `execute_instruction` | 50.2% -> 29.3% -> 25.7% |
+    | `RPPIO.check_changed_pins` (pin updates the PIO causes, incl. the direct gSPI listener) | 16.7% |
+    | CPU instruction execution (`cpu.hpp`) | 18.1% |
+    | everything outside the batch (asyncio, REPL host) | ~5.5% |
+    - `PyObject_VectorcallMethod` is 29% inclusive: the Cython PIO talks to its own `RPPIO` and to the pins through *Python method calls* (`pio.pin_values_changed(...)`, `pin_directions_changed(...)`, attribute reads through `object`-typed fields), i.e. the per-instruction cost is
+      CPython dispatch, not the instruction semantics. Flat: `_PyEval_EvalFrameDefault` 11.8% and `_PyObject_GenericGetAttrWithDict` 6.7% (attribute reads), `PyLong_FromLong` 3%, `_pio_advance` self 4.2%, `RPPIO.advance` self 2.5%, `pin_values_changed` 2.1%, and the pin shell's own
+      `_change_trampoline` 2.6% (it iterates an empty Python listener set on every CLK change: a cheap skip exists, not done - it disappears with the port).
+  - Reading: the Python listener (38% before) is gone; what is left of the PIO's cost is its *interface* to Python, which is exactly what moving it into C++ removes. DMA (~25% of the wall in the earlier cProfile) stays the next after that: its DREQ coupling is with the PIO FIFOs, so it is simpler once the PIO is in C++.
+  - Plan for the PIO (design note to be written before code, per the recipe): (1) a trace/differential oracle for the PIO block (register traffic + pin-event order + FIFO levels) recorded on `main`; (2) the state-machine instruction semantics in `core/pio.hpp`, checked against a transcription of `_state_machine.py` on random programs; (3) `RPPIO` (registers, FIFOs, pin mapping, due-time pacing of record 0063, IRQs) behind a Cython shell with
+      the same Python attributes; (4) `_pio_advance` calling C++ directly instead of a trampoline; (5) DREQ left as the host callback until Phase 4. Existing tests `test_pio*.py`, the CYW43 tests, the `pio-dma` workload and the pin-event hashes are the judges.
+
 - 2026-10-05: **Phase 3: the CYW43 gSPI bit shifter is C++ - the Pico W scan goes from 7.1 s to 3.4 s (2.1x) over the Python listener.**
   - What was built (as designed in the 2026-10-05 note): `core/gspi.hpp` (`GspiShifter`: CS, 32-bit shift register, response buffer; direct listeners of the CLK and CS pins; samples DATA with the pin's `state_code()`, drives it with `set_input_value()`), a Cython shell `native/_gspi.pyx`, and in
     `external/cyw43/bus.py` the code after the 32nd bit of `_on_clock_rising` split out as `GSPIBus._on_word()` (the pure path is unchanged and is still the oracle and the fallback) plus `attach_gpio()` choosing the native shifter when the three pins are native `GPIOPin`s. The level sources of the three pins are bound as
