@@ -391,31 +391,27 @@ def mutant_rig(name: str) -> Rig:
             super().complete_start()
 
         def complete_connect(self, ack: bool, nack_byte: int = 0) -> None:
-            if name == "connect_nack_no_abort":
-                if not ack or self._stop:
-                    self._state = I.I2CState.STOP
-                    self.on_stop()
-                    return
-            if name == "connect_first_byte_missing":
-                if ack and not self._stop:
-                    self._state = I.I2CState.CONNECTED
-                    self._busy = False
-                    self._next_command()
-                    return
-            if name == "connect_nack_always_7b":
-                if not ack and not self._stop:
-                    self._abort(I.ABRT_7B_ADDR_NOACK)
-                    self._state = I.I2CState.STOP
-                    self.on_stop()
-                    return
+            if name == "connect_nack_no_abort" and (not ack or self._stop):
+                self._state = I.I2CState.STOP
+                self.on_stop()
+                return
+            if name == "connect_first_byte_missing" and ack and not self._stop:
+                self._state = I.I2CState.CONNECTED
+                self._busy = False
+                self._next_command()
+                return
+            if name == "connect_nack_always_7b" and not ack and not self._stop:
+                self._abort(I.ABRT_7B_ADDR_NOACK)
+                self._state = I.I2CState.STOP
+                self.on_stop()
+                return
             super().complete_connect(ack, nack_byte)
 
         def complete_write(self, ack: bool) -> None:
-            if name == "write_nack_no_abort":
-                if not ack or self._stop:
-                    self._state = I.I2CState.STOP
-                    self.on_stop()
-                    return
+            if name == "write_nack_no_abort" and (not ack or self._stop):
+                self._state = I.I2CState.STOP
+                self.on_stop()
+                return
             super().complete_write(ack)
 
         def complete_read(self, value: int) -> None:
