@@ -12,6 +12,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from utils.emscripten import needs_processes
+
+pytestmark = needs_processes  # the checks compile and run C++ in a subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "src" / "rp2040py" / "native" / "core"
