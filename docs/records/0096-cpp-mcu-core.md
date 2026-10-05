@@ -302,8 +302,18 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 - **The measurements are a ceiling.** Phase 2's exit criterion is a measured table because the C++ proxy's ~20x is not a promise.
 - **PyPy on real firmware is unmeasured.** It decides Phase 7, and could go either way.
 - **Wasm interpreters.** `wasm3` and JavaScriptCore backends were not measured; an interpreter backend will be far slower than wasmtime/node.
+- **Open (raised 2026-10-04): should the core own its small fixed buffers instead of taking them from Python?** Today every region is caller-owned (a Python `bytearray`, pointer handed to C++; decision 4). The sizes are in fact fixed - SRAM 264 KiB, USB DPRAM 4 KiB,
+  boot ROM 4 KiB, flash 16 MiB in the emulator today - so members/statics of the core are an option. Not the stack: 16 MiB and 264 KiB do not fit one (1-8 MiB thread stacks, 1 MiB on Windows, 64 KiB linear stack in wasm); "inside C++" would mean static/member storage.
+  For: no buffer-lifetime hazard (the `bytearray`-resized-under-a-pointer use-after-free above), no export lock to hold, constant sizes the compiler can fold, and in wasm plain static data instead of host-reserved regions. Against: `mcu.sram`/`mcu.flash`/`usb_dpram` are
+  `memoryview`s over Python buffers that board code, `load_flash`, tests and filesystem images write to (they could become views of C++ memory, still zero-copy, but it touches all of them); 16 MiB of flash per chip instance in a process that builds hundreds of chips in tests;
+  boards that want a different flash size. The expected speed difference is small (the buffer pointer is loaded once per batch and the constant bases are already folded) - a hypothesis, not a measurement.
+  Measurement plan, before deciding: in `scripts/bench/cpp_bus_fetch.cpp`, the same access mix (62% 16-bit flash fetches, 28% SRAM words, 10% flash words, cache-resident and 2 MiB/264 KiB working sets) through caller-owned pointers vs static arrays of the same size; if the gain is under a few percent
+  the answer is "no". Leading option if it is not: SRAM, DPRAM and boot ROM as core members, flash stays caller-owned (large, board-dependent). Not done now; revisit after Phase 3, since it reaches most of the Python-facing surface.
 
 ## Progress log
+
+- 2026-10-04: **Open question recorded, nothing changed: who owns the small fixed buffers (core members vs caller-owned)?** The user asked whether, the sizes being known, arrays inside the C++ would be better than buffers provided from Python. Written into "Risks and open questions" with the
+  arguments both ways, the point that the stack is not an option (and that flash, 16 MiB, would stay caller-owned in any compromise), and a measurement plan on `scripts/bench/cpp_bus_fetch.cpp`. Not implemented, not measured yet.
 
 - 2026-10-04: **Tried and dropped: a `pin_wait_mask` to skip the per-input-change walk of the PIO state machines. No gain; the walk is not the cost.**
   - Idea: every input change (`set_input_value`, 740k on the Pico W scan's data pin) makes the pin layer walk both PIOs' eight machines looking for one parked on `wait gpio`/`wait pin` for that index. A conservative mask on each `RPPIO` (bit set by
