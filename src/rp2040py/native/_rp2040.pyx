@@ -20,6 +20,7 @@ dispatch - see native/_simulation_clock.pyx's own module docstring for the full 
 """
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t
+from libc.string cimport memset
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
 from rp2040py.native._memory_map cimport (
@@ -594,7 +595,6 @@ cdef class RP2040:
         `SYSCFG`/`SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at
         all, so `BasePeripheral`'s default no-op is their correct implementation.
         """
-        cdef unsigned char[:] filler
         if from_watchdog:
             psm_wdsel = self.psm.wdsel
             resets_wdsel = self.resets.wdsel
@@ -686,8 +686,9 @@ cdef class RP2040:
             self.ssi.reset()
 
         if not preserve_flash:
-            filler = bytearray(b"\xff" * len(self._flash))
-            self._flash[:] = filler
+            # Erased in place: building a filler first (a 16 MB bytes object, then a 16 MB bytearray copy of it) made every reset a 32 MB allocation, and on a 32-bit build
+            # (CI's ARMv7 wheel test) a run of chips waiting for the garbage collector turned that into a MemoryError.
+            memset(<uint8_t*> &self._flash[0], 0xFF, len(self._flash))
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int word = self._bus.read32(<unsigned int> (address & 0xFFFFFFFFU))
         raise_if_pending()
