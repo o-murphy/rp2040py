@@ -132,8 +132,6 @@ class RPUART(BasePeripheral):
         return (RXFF if self.rx_fifo.full else 0) | (RXFE if self.rx_fifo.empty else 0) | TXFE
 
     def check_interrupts(self) -> None:
-        # TODO We should actually implement a proper FIFO for TX
-        self._interrupt_status |= UARTTXINTR
         self.rp2040.set_interrupt(self.irq, bool(self._interrupt_status & self._interrupt_mask))
 
     def feed_byte(self, value: int) -> None:
@@ -189,6 +187,11 @@ class RPUART(BasePeripheral):
         if offset == UARTDR:
             if self.on_byte:
                 self.on_byte(value & 0xFF)
+            # The byte leaves the (never-filling) TX FIFO at once; the PL011 TX interrupt is
+            # edge-like - set by that, never while the FIFO merely stays empty - so UARTICR clears
+            # it for good instead of it being re-asserted (an IRQ storm in the guest otherwise).
+            self._interrupt_status |= UARTTXINTR
+            self.check_interrupts()
 
         elif offset == UARTIBRD:
             self._int_divisor = value & 0xFFFF
