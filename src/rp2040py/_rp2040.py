@@ -14,10 +14,13 @@ from rp2040py.memory_map import (
     RAM_START_ADDRESS,
     SIO_START_ADDRESS,
 )
+from rp2040py.peripherals._dma import (  # the pure chip's own DMA: the native one works on the native chip's C++ bus
+    RPDMA,
+    DREQChannel,
+)
 from rp2040py.peripherals.adc import RPADC
 from rp2040py.peripherals.busctrl import RPBUSCTRL
 from rp2040py.peripherals.clocks import RPClocks
-from rp2040py.peripherals.dma import RPDMA, DREQChannel
 from rp2040py.peripherals.i2c import RPI2C
 from rp2040py.peripherals.io import RPIO
 from rp2040py.peripherals.pads import RPPADS
