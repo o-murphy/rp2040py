@@ -179,6 +179,9 @@ class RPSPI(BasePeripheral):
             self.rx_fifo.push(rx_value)
         else:
             self._int_raw |= SSPRORINTR
+            # The interrupt line is the OR of the enabled raw interrupts, so the overrun reaches it at once. (`_fifos_updated()` below compares the status with the one it
+            # sees on entry - after ROR was set - and so never noticed it: the line stayed low until something else changed.)
+            self.check_interrupts()
         self._fifos_updated()
         self._do_tx()
 

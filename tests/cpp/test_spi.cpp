@@ -250,10 +250,11 @@ static void test_rx_threshold_overrun_and_icr() {
 static void test_icr_drops_the_line_when_it_clears_the_last_enabled_interrupt() {
     fresh(kSilent);
     wr(IMSC, INT_ROR);
-    for (uint32_t i = 0; i < 9; ++i) spi.complete_transmit(i);   // the ninth overruns (the reference does not raise the line for it: ROR is set before the status is compared)
-    CHECK((rd(RIS) & INT_ROR) != 0 && !last_irq());
-    CHECK(spi.check_interrupts() && last_irq());
-    CHECK(wr(ICR, INT_ROR) && !last_irq());                      // the line follows at once
+    for (uint32_t i = 0; i < 8; ++i) spi.complete_transmit(i);
+    CHECK(!last_irq());
+    spi.complete_transmit(8);                                    // the ninth overruns: ROR is raw and enabled, so the line rises at once
+    CHECK((rd(RIS) & INT_ROR) != 0 && last_irq());
+    CHECK(wr(ICR, INT_ROR) && !last_irq());                      // and drops with the clear
 }
 
 static void test_the_line_is_not_touched_while_the_enabled_status_does_not_change() {

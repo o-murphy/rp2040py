@@ -13,7 +13,7 @@
 // Failures follow the contract of core_host.hpp: a host call that fails (the callback raised) makes the block return `false` at once, leaving the state the reference's exception would have left.
 //
 // Quirks of the reference that are kept (each one is pinned by tests/test_spi_diff.py or the C++ checks):
-//   - a DR write on a full TX FIFO is dropped silently; a completion into a full RX FIFO sets the overrun bit (ROR) and drops the value; a completion with nothing sent is accepted and pushes;
+//   - a DR write on a full TX FIFO is dropped silently; a completion into a full RX FIFO sets the overrun bit (ROR), raises the line at once and drops the value; a completion with nothing sent is accepted and pushes;
 //   - a written value is masked to DSS + 1 bits (so 1..16, the invalid sizes DSS = 0..2 included), a completed one is kept whole; CR0, CR1, IMSC and DMACR are stored whole, CPSR is masked to 0xFE;
 //   - the TX interrupt is raw while the TX FIFO holds at most 4 (half of 8), the RX interrupt while the RX FIFO holds at least 4; ICR clears only RT and ROR, by the *decoded* value;
 //   - SR's BSY is "busy or the TX FIFO is not empty"; SR, RIS and MIS are read-only: a write to them is an unimplemented one;
@@ -112,6 +112,7 @@ public:
             rx.push(rx_value);
         } else {
             int_raw |= spi_regs::INT_ROR;
+            if (!check_interrupts()) return false;  // the line is the OR of the enabled raw interrupts: the overrun reaches it at once
         }
         if (!fifos_updated()) return false;
         return do_tx();
