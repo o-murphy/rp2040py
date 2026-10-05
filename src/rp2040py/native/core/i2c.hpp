@@ -17,7 +17,7 @@
 //   - the default device (no callback set): start and stop complete at once, **every connect is NACKed**, a write is NACKed, a read returns 0xFF - the shell completes these in C++;
 //   - reads have side effects: IC_DATA_CMD pulls a byte (an empty FIFO sets RX_UNDER and reads 0), every IC_CLR_* clears its interrupts and reads 1 if it cleared any, IC_TX_ABRT_SOURCE
 //     clears itself (keeping bit 9, which nothing ever sets), IC_CLR_INTR and IC_CLR_TX_ABRT clear it as well; an alias write decodes against a *read*;
-//   - the IC_INTR_MASK register has no write handler (a write is an unimplemented one), so `int_enable` is only ever set by the embedder; the DMA control registers are unimplemented;
+//   - IC_INTR_MASK is writable (13 bits, reset value 0x8FF; a write re-evaluates the line); the DMA control registers are unimplemented (a feature in the backlog);
 //   - `abort()` clears IC_TX_ABRT_SOURCE with TX_FLUSH_CNT_MASK (bits 0-8) where the flush count lives in bits 23-31, ORs the reason and the count in, empties the TX FIFO and raises TX_ABRT;
 //   - IC_CON with the speed field 0 is rewritten to 3 (high speed); IC_TAR and IC_SAR are masked to 10 bits, the clock counts to 16, the thresholds to 8 bits and then to the FIFO size;
 //     IC_ENABLE keeps a set ABORT bit (software cannot clear it), drops it when the bus is idle, aborts and sets `stop` otherwise, and empties both FIFOs when ENABLE is cleared;
@@ -82,6 +82,8 @@ constexpr uint32_t ABRT_10ADDR2_NOACK = 1u << 2, ABRT_10ADDR1_NOACK = 1u << 1, A
 [[maybe_unused]] constexpr uint32_t R_RESTART_DET = 1u << 12;
 constexpr uint32_t R_GEN_CALL = 1u << 11, R_START_DET = 1u << 10, R_STOP_DET = 1u << 9, R_ACTIVITY = 1u << 8, R_RX_DONE = 1u << 7;
 constexpr uint32_t R_TX_ABRT = 1u << 6, R_RD_REQ = 1u << 5, R_TX_EMPTY = 1u << 4, R_TX_OVER = 1u << 3, R_RX_FULL = 1u << 2, R_RX_OVER = 1u << 1, R_RX_UNDER = 1u << 0;
+// IC_INTR_MASK: reset value 0x8FF (datasheet), 13 bits
+constexpr uint32_t INTR_MASK_RESET = 0x8FF, INTR_MASK_BITS = 0x1FFF;
 // FIFO entry bits
 constexpr uint32_t FIRST_DATA_BYTE = 1u << 10, RESTART = 1u << 10, STOP = 1u << 9, CMD = 1u << 8;
 // the state machine
@@ -104,7 +106,7 @@ public:
     uint32_t control = i2c_regs::CON_SLAVE_DISABLE | i2c_regs::CON_RESTART_EN | (i2c_regs::SPEED_FAST << i2c_regs::CON_SPEED_SHIFT) | i2c_regs::CON_MASTER;
     uint32_t ss_clock_high = 0x0028, ss_clock_low = 0x002F, fs_clock_high = 0x0006, fs_clock_low = 0x000D;
     uint32_t target_address = 0x55, slave_address = 0x55;
-    uint32_t abort_source = 0, int_raw = 0, int_enable = 0, spikelen = 0x07;
+    uint32_t abort_source = 0, int_raw = 0, int_enable = i2c_regs::INTR_MASK_RESET, spikelen = 0x07;
     Fifo<kFifoDepth> rx, tx;
 
     void init(const I2cHost& host) noexcept { host_ = host; }
@@ -128,7 +130,8 @@ public:
         fs_clock_high = 0x0006;
         fs_clock_low = 0x000D;
         target_address = slave_address = 0x55;
-        abort_source = int_raw = int_enable = 0;
+        abort_source = int_raw = 0;
+        int_enable = INTR_MASK_RESET;
         spikelen = 0x07;
         return host_.irq(host_.ctx, false);
     }
@@ -300,6 +303,9 @@ public:
                 tx.push(word);
                 if (!clear_interrupts(R_TX_EMPTY, &cleared)) return false;
                 return next_command();
+            case INTR_MASK:
+                int_enable = word & INTR_MASK_BITS;
+                return check_interrupts();
             case SS_SCL_HCNT: ss_clock_high = word & 0xFFFFu; return true;
             case SS_SCL_LCNT: ss_clock_low = word & 0xFFFFu; return true;
             case FS_SCL_HCNT: fs_clock_high = word & 0xFFFFu; return true;

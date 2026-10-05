@@ -131,7 +131,7 @@ static void test_a_default_constructed_block_is_at_power_on() {
     static I2cBlock block;
     CHECK(block.control == 0x65 && block.target_address == 0x55 && block.slave_address == 0x55 && block.state == STATE_IDLE);
     CHECK(block.ss_clock_high == 0x28 && block.ss_clock_low == 0x2F && block.fs_clock_high == 0x06 && block.fs_clock_low == 0x0D && block.spikelen == 0x07);
-    CHECK(block.enable == 0 && block.rx_threshold == 0 && block.tx_threshold == 0 && block.abort_source == 0 && block.int_raw == 0 && block.int_enable == 0);
+    CHECK(block.enable == 0 && block.rx_threshold == 0 && block.tx_threshold == 0 && block.abort_source == 0 && block.int_raw == 0 && block.int_enable == 0x8FF);
     CHECK(!block.busy && !block.stop && !block.pending_restart && !block.first_byte && block.rx.empty() && block.tx.empty() && block.raw_write_value() == 0);
     CHECK(block.master_bits() == 7);
 }
@@ -139,7 +139,7 @@ static void test_a_default_constructed_block_is_at_power_on() {
 static void test_register_reads_at_power_on() {
     fresh();
     CHECK(rd(CON) == 0x65 && rd(TAR) == 0x55 && rd(SAR) == 0x55 && rd(SS_SCL_HCNT) == 0x28 && rd(SS_SCL_LCNT) == 0x2F && rd(FS_SCL_HCNT) == 0x06 && rd(FS_SCL_LCNT) == 0x0D);
-    CHECK(rd(INTR_STAT) == 0 && rd(INTR_MASK) == 0 && rd(RAW_INTR_STAT) == 0 && rd(RX_TL) == 0 && rd(TX_TL) == 0 && rd(ENABLE) == 0);
+    CHECK(rd(INTR_STAT) == 0 && rd(INTR_MASK) == 0x8FF && rd(RAW_INTR_STAT) == 0 && rd(RX_TL) == 0 && rd(TX_TL) == 0 && rd(ENABLE) == 0);
     CHECK(rd(STATUS) == (ST_TFE | ST_TFNF) && rd(TXFLR) == 0 && rd(RXFLR) == 0 && rd(SDA_HOLD) == 1 && rd(ENABLE_STATUS) == 0 && rd(FS_SPKLEN) == 7);
     CHECK(rd(COMP_PARAM_1) == 0 && rd(COMP_VERSION) == 0x3230312Au && rd(COMP_TYPE) == 0x44570140u && rd(TX_ABRT_SOURCE) == 0);
     CHECK(env.warns == 0);
@@ -377,14 +377,28 @@ static void test_the_clear_registers_return_whether_they_cleared_and_clear_the_a
     CHECK(rd(CLR_INTR) == 0);
 }
 
-static void test_the_interrupt_line_follows_the_mask_the_embedder_sets() {
+static void test_the_interrupt_mask_register_gates_the_line() {
     fresh(kSilent);
-    i2c.int_enable = R_RX_UNDER;
-    CHECK(rd(DATA_CMD) == 0 && last_irq() && rd(INTR_STAT) == R_RX_UNDER && rd(INTR_MASK) == R_RX_UNDER);
+    CHECK(rd(INTR_MASK) == 0x8FF);                               // the datasheet's reset value
+    wr(INTR_MASK, R_RX_UNDER);
+    CHECK(rd(INTR_MASK) == R_RX_UNDER && env.warns == 0);
+    CHECK(rd(DATA_CMD) == 0 && last_irq() && rd(INTR_STAT) == R_RX_UNDER);
     CHECK(rd(CLR_RX_UNDER) == 1 && !last_irq());
-    CHECK(wr(INTR_MASK, 0xFFFF) && env.warns == 1 && env.warn_kind[0] == kI2cWarnWrite && env.warn_offset[0] == INTR_MASK);  // IC_INTR_MASK has no write handler
-    CHECK(rd(INTR_MASK) == R_RX_UNDER);
-    CHECK(i2c.check_interrupts() && !last_irq());
+    i2c.int_raw = R_RX_FULL | R_RX_UNDER;
+    env.irq_n = 0;
+    wr(INTR_MASK, R_RX_FULL);                                    // a write re-evaluates the line at once
+    CHECK(env.irq_n == 1 && last_irq() && rd(INTR_STAT) == R_RX_FULL);
+    wr(INTR_MASK, 0);
+    CHECK(!last_irq() && rd(INTR_STAT) == 0);
+    wr(INTR_MASK, 0xFFFFFFFFu);                                  // 13 bits are held
+    CHECK(rd(INTR_MASK) == 0x1FFF);
+    wr(INTR_MASK, 0x0F, kAtomicSet);
+    CHECK(rd(INTR_MASK) == 0x1FFF);
+    wr(INTR_MASK, 0xFF, kAtomicClear);
+    CHECK(rd(INTR_MASK) == 0x1F00);
+    CHECK(i2c.reset() && rd(INTR_MASK) == 0x8FF);
+    i2c.int_enable = R_RX_UNDER;                                 // the embedder may still set it directly
+    CHECK(i2c.check_interrupts());
 }
 
 static void test_status_composition() {
@@ -494,7 +508,7 @@ static void test_reset_clears_the_state_and_keeps_the_host_and_raw_write_value()
     const int64_t raw = i2c.raw_write_value();
     env.irq_n = 0;
     CHECK(i2c.reset());
-    CHECK(rd(CON) == 0x65 && rd(TAR) == 0x55 && rd(SAR) == 0x55 && rd(SS_SCL_HCNT) == 0x28 && rd(RX_TL) == 0 && rd(ENABLE) == 0 && rd(RAW_INTR_STAT) == 0 && rd(INTR_MASK) == 0);
+    CHECK(rd(CON) == 0x65 && rd(TAR) == 0x55 && rd(SAR) == 0x55 && rd(SS_SCL_HCNT) == 0x28 && rd(RX_TL) == 0 && rd(ENABLE) == 0 && rd(RAW_INTR_STAT) == 0 && rd(INTR_MASK) == 0x8FF);
     CHECK(rd(TXFLR) == 0 && rd(RXFLR) == 0 && i2c.abort_source == 0 && i2c.state == STATE_IDLE);
     CHECK(rd(SS_SCL_LCNT) == 0x2F && rd(FS_SCL_HCNT) == 6 && rd(FS_SCL_LCNT) == 0x0D && rd(TX_TL) == 0 && i2c.spikelen == 7);
     CHECK(!i2c.busy && !i2c.stop && !i2c.pending_restart && !i2c.first_byte);
@@ -791,7 +805,7 @@ int main() {
     test_tx_overflow_rx_overflow_and_the_thresholds();
     test_tx_empty_is_raised_at_or_below_the_threshold_and_cleared_by_a_write();
     test_the_clear_registers_return_whether_they_cleared_and_clear_the_abort_source();
-    test_the_interrupt_line_follows_the_mask_the_embedder_sets();
+    test_the_interrupt_mask_register_gates_the_line();
     test_status_composition();
     test_sda_hold_and_spike_length_follow_the_references_own_conditions();
     test_unimplemented_offsets_warn_and_read_all_ones();

@@ -146,6 +146,10 @@ R_RX_FULL = 1 << 2
 R_RX_OVER = 1 << 1
 R_RX_UNDER = 1 << 0
 
+# IC_INTR_MASK: reset value 0x8FF (datasheet), 13 bits (RESTART_DET included)
+INTR_MASK_RESET = 0x8FF
+INTR_MASK_BITS = 0x1FFF
+
 # FIFO entry bits
 FIRST_DATA_BYTE = 1 << 10
 RESTART = 1 << 10
@@ -185,7 +189,7 @@ class RPI2C(BasePeripheral):
         self.slave_address = 0x55
         self.abort_source = 0
         self.int_raw = 0
-        self.int_enable = 0
+        self.int_enable = INTR_MASK_RESET
         self._spikelen = 0x07
 
     def reset(self) -> None:
@@ -210,7 +214,7 @@ class RPI2C(BasePeripheral):
         self.slave_address = 0x55
         self.abort_source = 0
         self.int_raw = 0
-        self.int_enable = 0
+        self.int_enable = INTR_MASK_RESET
         self._spikelen = 0x07
         self.rp2040.set_interrupt(self.irq, False)
 
@@ -473,6 +477,10 @@ class RPI2C(BasePeripheral):
                 self._tx_fifo.push(value)
                 self._clear_interrupts(R_TX_EMPTY)
                 self._next_command()
+
+        elif offset == IC_INTR_MASK:
+            self.int_enable = value & INTR_MASK_BITS
+            self.check_interrupts()
 
         elif offset == IC_SS_SCL_HCNT:
             self.ss_clock_high_period = value & 0xFFFF

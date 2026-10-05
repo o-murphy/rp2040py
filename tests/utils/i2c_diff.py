@@ -12,7 +12,7 @@ class, later the C++ one), fed one stream of operations:
   **auto** (the callback completes from inside itself - re-entrancy: the block is in the middle of ``_next_command`` when it is entered again), **deferred** (completes on a later
   operation, as a device with a clock alarm does) or **silent** (never) - and the completions themselves as operations, in any order and state, including ones nothing asked for
   and an arbitration loss;
-* ``reset()``, ``check_interrupts()``, and the interrupt mask set directly - the reference has no ``IC_INTR_MASK`` write handler (a write is an unimplemented one), so the line can only rise this way.
+* ``reset()``, ``check_interrupts()``, and the interrupt mask set directly as well as through ``IC_INTR_MASK`` (writable, 13 bits, reset value 0x8FF).
 
 After **each** step: the registers that have no side effect when read, the whole private state (the bus state machine, the busy/stop/restart/first-byte flags, the abort source, the
 interrupt registers, the thresholds, the clock counts, the spike length), both FIFOs' level *and contents*, the derived properties, the NVIC's pending bits, and the ordered log of
@@ -27,6 +27,7 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _i2c as I
+from rp2040py.peripherals.peripheral import BasePeripheral
 from rp2040py.rp2040 import RP2040
 
 I2C0_BASE = 0x40044000
@@ -45,7 +46,7 @@ EFFECT_REGISTERS = (
 )  # fmt: skip
 WRITABLE = (
     I.IC_CON, I.IC_TAR, I.IC_SAR, I.IC_DATA_CMD, I.IC_SS_SCL_HCNT, I.IC_SS_SCL_LCNT, I.IC_FS_SCL_HCNT, I.IC_FS_SCL_LCNT, I.IC_SDA_HOLD, I.IC_RX_TL, I.IC_TX_TL, I.IC_ENABLE,
-    I.IC_FS_SPKLEN,
+    I.IC_FS_SPKLEN, I.IC_INTR_MASK,
 )  # fmt: skip
 UNIMPLEMENTED = (
     0x0C,
@@ -184,7 +185,7 @@ class Rig:
             i2c.arbitration_lost()
         elif (
             kind == "mask"
-        ):  # the reference has no IC_INTR_MASK write handler (see the I2C design note): the line can only be exercised by setting the mask directly
+        ):  # the mask set behind the register's back (a value the register's 13 bits could not hold included)
             i2c.int_enable = op[1]
         elif kind == "check":
             i2c.check_interrupts()
@@ -248,6 +249,8 @@ def mutant_rig(name: str) -> Rig:
             if name == "fifo_depth_32":
                 self._rx_fifo = I.FIFO(32)
                 self._tx_fifo = I.FIFO(32)
+            if name == "intr_mask_reset_zero":
+                self.int_enable = 0
             if name == "initial_target_wrong":
                 self.target_address = 0x56
 
@@ -580,6 +583,16 @@ def mutant_rig(name: str) -> Rig:
                     self._rx_fifo.reset()
                 self.enable = value
                 return
+            if offset == I.IC_INTR_MASK and name == "intr_mask_not_writable":
+                BasePeripheral.write_uint32(self, offset, value)
+                return
+            if offset == I.IC_INTR_MASK and name == "intr_mask_unmasked":
+                self.int_enable = value
+                self.check_interrupts()
+                return
+            if offset == I.IC_INTR_MASK and name == "intr_mask_no_line_update":
+                self.int_enable = value & I.INTR_MASK_BITS
+                return
             if offset == I.IC_FS_SPKLEN and name == "spklen_always":
                 self._spikelen = value
                 return
@@ -615,6 +628,8 @@ def mutant_rig(name: str) -> Rig:
                 self.on_start, self.on_connect, self.on_write_byte, self.on_read_byte, self.on_stop = callbacks
                 return
             super().reset()
+            if name == "intr_mask_reset_zero":
+                self.int_enable = 0
             if name == "reset_clears_callbacks":
                 self.on_start = lambda repeated_start: self.complete_start()
                 self.on_connect = lambda address, mode: self.complete_connect(False)
@@ -635,7 +650,7 @@ MUTANTS = (
     "clr_intr_keeps_abrt_source", "clr_rx_under_returns_zero", "clr_stop_det_clears_start", "enable_status_wrong", "spklen_unmasked", "speed_fix_missing", "tar_mask_wrong",
     "sar_mask_wrong", "tx_overflow_silent", "tx_empty_not_cleared", "rx_tl_clamp_missing", "tx_tl_mask_wrong", "hcnt_mask_wrong", "enable_fifos_kept", "enable_abort_when_idle",
     "enable_abort_not_sticky", "enable_no_next_command", "spklen_always", "master_bits_wrong", "scl_period_speed_wrong", "reset_keeps_target", "reset_keeps_fifos",
-    "reset_clears_callbacks",
+    "reset_clears_callbacks", "intr_mask_not_writable", "intr_mask_unmasked", "intr_mask_no_line_update", "intr_mask_reset_zero",
 )  # fmt: skip
 
 
@@ -663,6 +678,8 @@ def _value(r: random.Random, offset: int) -> int:
         return r.choice((0, 1, 2, 3, r.getrandbits(32)))
     if offset == I.IC_FS_SPKLEN:
         return r.choice((0, 1, 2, 4, 7, 0x100, r.getrandbits(32)))
+    if offset == I.IC_INTR_MASK:
+        return r.choice((0, 0x10, 0x4, 0x40, 0x200, 0x8FF, 0x1FFF, 0x2000, r.getrandbits(13), r.getrandbits(32)))
     return r.getrandbits(r.choice((8, 16, 32)))
 
 
@@ -718,6 +735,8 @@ def generate(seed: int, steps: int) -> list[tuple]:
             else:
                 args = ()
             ops.append((which, *args))
+        elif roll < 0.945:  # a burst of received bytes - overflows the 16-entry RX FIFO when nothing drains it
+            ops.extend(("complete_read", r.getrandbits(8)) for _ in range(r.choice((17, 18, 20))))
         elif roll < 0.95:
             ops.append(("arbitration_lost",))
         elif roll < 0.96:
