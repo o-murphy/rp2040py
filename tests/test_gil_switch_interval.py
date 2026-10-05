@@ -48,7 +48,7 @@ def test_creating_the_engine_room_loop_applies_it(restore_switch_interval, monke
 
     monkeypatch.delenv("RP2040PY_SWITCH_INTERVAL", raising=False)
     sys.setswitchinterval(0.005)
-    simulator = Simulator()
+    simulator = Simulator(threadless=False)  # the thread is what the interval is for (RP2040PY_THREADLESS=1 has none)
     simulator._ensure_loop()
     try:
         assert sys.getswitchinterval() == pytest.approx(sim._ENGINE_SWITCH_INTERVAL_SECONDS)
