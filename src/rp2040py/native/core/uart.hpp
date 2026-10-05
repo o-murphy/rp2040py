@@ -58,7 +58,7 @@ constexpr uint32_t DR = 0x0, FR = 0x18, IBRD = 0x24, FBRD = 0x28, LCR_H = 0x2C, 
 constexpr uint32_t PERIPHID0 = 0xFE0, PERIPHID1 = 0xFE4, PERIPHID2 = 0xFE8, PERIPHID3 = 0xFEC;
 constexpr uint32_t PCELLID0 = 0xFF0, PCELLID1 = 0xFF4, PCELLID2 = 0xFF8, PCELLID3 = 0xFFC;
 constexpr uint32_t FR_TXFE = 1u << 7, FR_RXFF = 1u << 6, FR_RXFE = 1u << 4;
-constexpr uint32_t LCR_FEN = 1u << 4;
+[[maybe_unused]] constexpr uint32_t LCR_FEN = 1u << 4;  // the shell's `fifos_enabled`; the block itself never looks at it (the FIFO is 32 deep either way)
 constexpr uint32_t CR_RXE = 1u << 9, CR_TXE = 1u << 8, CR_UARTEN = 1u << 0;
 constexpr uint32_t INT_TX = 1u << 5, INT_RX = 1u << 4;
 constexpr uint32_t IMSC_MASK = 0x7FFu;
