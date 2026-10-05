@@ -30,7 +30,7 @@ from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native
     RPUART,
     IUARTDMAChannels,
 )
-from rp2040py.peripherals.adc import RPADC
+from rp2040py.peripherals._adc import RPADC  # the pure chip's own ADC: the native one is the native chip's
 from rp2040py.peripherals.busctrl import RPBUSCTRL
 from rp2040py.peripherals.clocks import RPClocks
 from rp2040py.peripherals.io import RPIO
