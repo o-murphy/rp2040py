@@ -54,7 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phased plan (phases 0-7) - Phases 0-2 done (clock/alarms, TIMER, SIO, the bus, the CPU and the batch loop are C++; the PPB stays a Python window by decision; synthetic loop 14 -> ~110 Minstr/s, CircuitPython boot 12.4 -> 1.1 s), Phase 3 (pins, PIO, flash path) next, then DMA, the CYW43 gate, the rest of Phase 4 and USB last - order set 2026-10-04 from a native-build profile; CI green on Linux/macOS/Windows; Python API unchanged
+- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phased plan (phases 0-7) - Phases 0-3 done (clock/alarms, TIMER, SIO, the bus, the CPU, the batch loop, the pins, the CYW43 gSPI shifter and the PIO are C++; the PPB stays a Python window by decision; synthetic loop 14 -> ~110 Minstr/s, CircuitPython boot 12.4 -> 1.1 s, Pico W scan 9.8 -> 2.1 s), Phase 4 (DMA first; USB deferred) next; CI green on Linux/macOS/Windows; Python API unchanged
 - [ ] [0094] a Zephyr guest boots here - MicroPython's `ports/zephyr` on `rpi_pico` | measured, nothing built - the RP2040 model needed no changes; its console is USB CDC, so the `micropython` subcommand sees silence
 - [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
 - [ ] [0092] a power button, and what a power cycle would have to destroy | documented, nothing built - the `HAD_POR` cause exists; a trigger and an SRAM/USB decision do not
