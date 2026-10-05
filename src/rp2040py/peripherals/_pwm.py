@@ -219,11 +219,9 @@ class PWMChannel:
 
     @property
     def en(self) -> int:
-        # TODO: matches upstream rp2040js, which only defines a setter for `en` - reading it
-        # in JS returns `undefined`, and `undefined << n` evaluates to 0, so callers that shift
-        # this value (RPPWM.read_uint32 for the EN register) always see 0. Kept as-is for
-        # behavioral parity. Revisit if rp2040js fixes it upstream.
-        return 0
+        # EN aliases the CSR_EN bit of every channel (RP2040 datasheet, PWM EN register), so it reads what the channel's own CSR says. rp2040js defines only a setter for
+        # `en`, so reading it there gives `undefined` and the EN register always reads 0; the reference followed that until record 0096 (Phase 4) fixed it.
+        return self.csr & CSR_EN
 
     @en.setter
     def en(self, value: int) -> None:

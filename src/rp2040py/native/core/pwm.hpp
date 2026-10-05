@@ -13,7 +13,6 @@
 // an alarm makes the alarm return `false` and the clock stops ticking.
 //
 // Quirks of the reference that are kept (pinned by the C++ checks and by tests/test_pwm_diff.py), several of them bugs that are fixed later, one commit each, with the oracle's mutants:
-//   - the per-channel `en` reads as 0, so reading EN always gives 0 whatever is enabled (a copy of an rp2040js quirk); writing EN works;
 //   - `gpio_on_input` suppresses every B-input edge while `gpio_direction` is nonzero (`and` for `&`, again from rp2040js) - after a reset it never is zero, so the gated and edge-counting
 //     divider modes are dead unless something writes the word;
 //   - in phase-correct mode the wrap does not drive A and B, so a phase-correct output only ever changes at the compare alarms;
@@ -124,8 +123,8 @@ public:
     inline bool gpio_b_changed() noexcept;
     inline bool update_enable() noexcept;
 
-    // The reference's `en` getter: always 0 (rp2040js defines only a setter, so reading it gives `undefined`, which the shift in the EN register read turns into 0).
-    uint32_t en() const noexcept { return 0; }
+    // The channel's enable bit (0 or 1): what the EN register aliases.
+    uint32_t en() const noexcept { return csr & pwm_regs::CSR_EN; }
     inline bool set_en(bool value) noexcept;
 
     void update_double_buffered() noexcept {
@@ -240,7 +239,7 @@ public:
 
     // ---- registers --------------------------------------------------------------------------------------------
 
-    // Reads a register. The EN read is always 0 (see `PwmChannel::en`).
+    // Reads a register. EN reads the enable bit of each channel.
     uint32_t read(uint32_t offset) noexcept {
         using namespace pwm_regs;
         if (offset < EN) return channels[offset / kChannelStride].read_register(offset % kChannelStride);

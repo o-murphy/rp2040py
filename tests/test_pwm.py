@@ -68,3 +68,22 @@ def test_an_advance_moves_the_next_alarm_one_cycle_closer():
     before = chip.clock.nanos_to_next_alarm
     chip.write_uint32(_ch(0, CSR), CSR_EN | CSR_PH_ADV)
     assert chip.clock.nanos_to_next_alarm == before - 8.0
+
+
+def test_the_en_register_reads_the_enable_bit_of_every_channel():
+    chip = RP2040()
+    assert chip.read_uint32(PWM_BASE + EN) == 0
+    chip.write_uint32(_ch(0, CSR), CSR_EN)
+    chip.write_uint32(_ch(5, CSR), CSR_EN | (2 << 4))
+    assert chip.read_uint32(PWM_BASE + EN) == 0b0010_0001
+    chip.write_uint32(PWM_BASE + EN, 0b1000_0010)  # EN writes every channel's bit at once: 0 and 5 off, 1 and 7 on
+    assert chip.read_uint32(PWM_BASE + EN) == 0b1000_0010
+    assert chip.read_uint32(_ch(1, CSR)) & CSR_EN and not chip.read_uint32(_ch(0, CSR)) & CSR_EN
+
+
+def test_a_csr_write_without_the_enable_switches_the_channel_off_in_en():
+    chip = RP2040()
+    chip.write_uint32(PWM_BASE + EN, 0xFF)
+    assert chip.read_uint32(PWM_BASE + EN) == 0xFF
+    chip.write_uint32(_ch(3, CSR), 0)
+    assert chip.read_uint32(PWM_BASE + EN) == 0xFF & ~(1 << 3)
