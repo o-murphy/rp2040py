@@ -42,6 +42,7 @@ CircuitPython 10.2.1; 0048's live WiFi verification and `ci-circuitpython.yml`'s
 """
 
 import argparse
+import asyncio
 import dataclasses
 import queue
 import sys
@@ -280,22 +281,25 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=900.0, help="give up after N seconds (%(default)s)")
     args = parser.parse_args()
 
-    # Raw bytes across the queue, decoded in the loop below. `on_frame` fires on the emulator's own
-    # engine-room thread, so anything done in it - `decode_frame()` above, above all - is time the
-    # emulated chip is not running. Measured: decoding inline throttled a run badly enough to look
-    # like the panel itself was slow.
+    # Raw bytes across the queue, decoded in the loop below, not inside `on_frame`, which runs inside the engine (anything done there - `decode_frame()` above, above all - is time
+    # the emulated chip is not running; decoding inline throttled a run badly enough to look like the panel itself was slow). No thread: the engine runs as a task on `loop`,
+    # which this script runs itself - `pump()` advances the emulator for a slice of wall time and returns, and the frames are decoded between slices.
     frames: queue.Queue[bytes] = queue.Queue()
     board = resolve_firmware(board_with(frames.put), "circuitpython", args.image)
     device = MicroPythonDevice(board=board, circuitpython=True, log_level=LogLevel.ERROR)
     print(f"booting {board.image} (this takes minutes, not seconds)")
-    device.start_async(timeout=_START_TIMEOUT_SECONDS).result()
+    loop = asyncio.new_event_loop()
+    simulator = device.simulator
+    loop.run_until_complete(
+        device.astart(timeout=_START_TIMEOUT_SECONDS)
+    )  # binds `loop` and starts the engine as a task on it
 
     last: Image.Image | None = None
     seen = 0
     try:
-        stdout, stderr = device.exec_async(
-            _PUSH_TEMPLATE.format(code=GUEST_CODE.encode()), timeout=args.timeout
-        ).result()
+        stdout, stderr = loop.run_until_complete(
+            device.aexec(_PUSH_TEMPLATE.format(code=GUEST_CODE.encode()), timeout=args.timeout)
+        )
         print(stdout.decode(errors="replace").strip() or stderr.decode(errors="replace").strip())
     except Exception as exc:  # noqa: BLE001 - report and still try the restart below
         print(f"pushing code.py failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -333,8 +337,9 @@ def main() -> None:
     changed_at = time.monotonic()
     try:
         while (args.frames <= 0 or seen < args.frames) and (deadline is None or time.monotonic() < deadline):
+            simulator.pump(0.05)
             try:
-                buffer = frames.get(timeout=0.5)
+                buffer = frames.get_nowait()
             except queue.Empty:
                 pass
             else:
@@ -375,6 +380,8 @@ def main() -> None:
         pass
     finally:
         device.stop()
+        simulator.pump(0.01)
+        loop.close()
 
     if args.console_log is not None:
         args.console_log.write_bytes(bytes(console))
