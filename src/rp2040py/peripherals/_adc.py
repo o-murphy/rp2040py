@@ -198,7 +198,9 @@ class RPADC(BasePeripheral):
         if self.fcs & FCS_DREQ_EN and self.fifo.item_count >= thres:
             self.rp2040.dma.set_dreq(self.dreq)
         else:
-            self.rp2040.dma.clear_dreq(self.dreq)  # below the threshold, or DREQ_EN off: a request that was up goes down
+            self.rp2040.dma.clear_dreq(
+                self.dreq
+            )  # below the threshold, or DREQ_EN off: a request that was up goes down
 
     def complete_adc_read(self, value: int, error: bool) -> None:
         self.busy = False
