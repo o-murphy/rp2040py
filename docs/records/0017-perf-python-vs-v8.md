@@ -286,11 +286,17 @@ What this changes in the text above:
   | MicroPython 1.28 | 3.5-4.2 s / ~2.8-3.5 s | 0.21-0.23 s / ~0.07-0.09 s |
   | MicroPython 1.21 | 1.01-1.06 s / ~0.3 s | 0.23-0.25 s / ~0.09-0.11 s |
 
-  So the native build is roughly 30-40x ahead of rp2040js on 1.28 and ~3x on 1.21 once start-up is taken out
-  (~15x and ~4x on the raw totals). Caveats: one machine, Node 22 rather than the v26 of the old figure,
-  `tsx` rather than a compiled build, and the "first line" moment is not identical between the two (rp2040py's
-  simulated time at the first line also differs between the native and pure builds - an open oddity, see
-  record 0096), so this is an order of magnitude, not a benchmark suite.
+  **Read these numbers as "time to the first line with each emulator's own idle handling", not as raw
+  instruction throughput.** rp2040js's `Simulator.execute()` goes through every idle trip (a core in
+  WFE/WFI with no alarm to wake it) inside its 1,000,000-iteration batch and then yields with
+  `setTimeout(0)`; rp2040py's batch engine skips an idle core outright. That is the same effect that
+  inflated the old "64.7M steps" for 1.28 (it spends most of its time idle by the first line), and it
+  is presumably why 1.28 is ~3x slower than 1.21 in rp2040js while the two are level here. Both facts
+  are real for someone running the emulator, but the 30-40x on 1.28 mostly measures that design
+  difference, not a faster instruction loop; the ~3x on 1.21, which is less idle-dominated, is the
+  closer indication of the instruction path. Also: one machine, Node 22 rather than v26, `tsx` rather
+  than a compiled build, and the "first line" moment is not identical (rp2040py's simulated time at the
+  first line differs between the native and pure builds - an open oddity, record 0096).
 - **PyPy was re-measured** (above): ~1.3-1.8 s, i.e. only ~1.4-1.9x faster than CPython's pure build (it was ~16x
   on the old per-instruction engine, whose cost was interpretive overhead PyPy could remove) and ~60x slower than the
   native build. "Run under PyPy" is no longer the advice; the native build is the fast path.

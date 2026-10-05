@@ -196,7 +196,7 @@ file already on disk:
 > [!TIP]
 > The compiled `rp2040py.native` backend (on by default, see [Performance](#performance) below) is
 > what makes booting real firmware fast: it runs the whole core, bus and peripherals in C++, ahead
-> of both the pure-Python build and rp2040js. Wall time of `rp2040py bench --image ...
+> of the pure-Python build, and ahead of rp2040js in the same measurement. Wall time of `rp2040py bench --image ...
 > --littlefs ... --expect-text "Hello, MicroPython!"` to the first line of the resident
 > `tests/micropython/main.py` (MicroPython 1.28 + littlefs), CPython 3.10, one machine (2026-10):
 >
@@ -205,7 +205,7 @@ file already on disk:
 > | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s |
 > | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.9 s |
 > | PyPy 3.10 (pure Python - the native build is skipped there) | ~1.3 s |
-> | rp2040js (Node 22) | ~3 s past Node's start-up (~3.5 s in total) |
+> | rp2040js (Node 22) | ~3 s past Node's start-up (~3.5 s in total); it steps through idle time instead of skipping it, so this is not a pure instruction-speed figure |
 >
 > Any recent MicroPython release is fine; 1.21 is not faster than 1.28. Details, the older
 > measurements this replaces and why they were wrong:
