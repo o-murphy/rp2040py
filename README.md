@@ -196,7 +196,7 @@ file already on disk:
 > [!TIP]
 > The compiled `rp2040py.native` backend (on by default, see [Performance](#performance) below) is
 > what makes booting real firmware fast: it runs the whole core, bus and peripherals in C++, ahead
-> of the pure-Python build, and ahead of rp2040js in the same measurement. Wall time of `rp2040py bench --image ...
+> of the pure-Python build, and on a plain instruction loop it runs about twice as fast as rp2040js (1.36x real time vs ~0.6x, [0017](docs/records/0017-perf-python-vs-v8.md)). Wall time of `rp2040py bench --image ...
 > --littlefs ... --expect-text "Hello, MicroPython!"` to the first line of the resident
 > `tests/micropython/main.py` (MicroPython 1.28 + littlefs), CPython 3.10, one machine (2026-10):
 >

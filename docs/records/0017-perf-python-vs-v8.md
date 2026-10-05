@@ -293,10 +293,26 @@ What this changes in the text above:
   inflated the old "64.7M steps" for 1.28 (it spends most of its time idle by the first line), and it
   is presumably why 1.28 is ~3x slower than 1.21 in rp2040js while the two are level here. Both facts
   are real for someone running the emulator, but the 30-40x on 1.28 mostly measures that design
-  difference, not a faster instruction loop; the ~3x on 1.21, which is less idle-dominated, is the
-  closer indication of the instruction path. Also: one machine, Node 22 rather than v26, `tsx` rather
+  difference, not a faster instruction loop. The idle-free comparison is the next table. Also: one machine, Node 22 rather than v26, `tsx` rather
   than a compiled build, and the "first line" moment is not identical (rp2040py's simulated time at the
   first line differs between the native and pure builds - an open oddity, record 0096).
+- **Idle-free instruction speed, head to head.** The same three-instruction loop in RAM (`adds r0,#1;
+  subs r0,#1; b .-4`), run for 0.4 simulated seconds (50M cycles at 125 MHz), each emulator driving its
+  own batch loop with no idle time and no I/O (rp2040py: `Simulator._execute_batch()`; rp2040js: the body
+  of `Simulator.execute()` without the `setTimeout`):
+
+  | Emulator | Wall time | Simulated / wall |
+  | --- | --- | --- |
+  | rp2040py native | 0.30 s | **1.36x real time** |
+  | rp2040js (Node 22) | 0.63-0.74 s | 0.55-0.65x |
+  | rp2040py pure Python | 75.5 s | 0.005x |
+
+  So on the raw instruction path the native build is ~2x rp2040js and runs this loop faster than a real
+  125 MHz RP2040 would. A loop of 1-cycle ALU instructions is the favourable case; instruction mixes with
+  more memory and peripheral traffic land lower (the boot-to-first-line figures above are dominated by
+  those), so read 1.36x as "real time or a bit better", not as a floor. (Per-call `core.execute_instruction()`
+  from Python, `rp2040py bench` synthetic mode, is a different thing again: ~28M instructions/s, bounded by
+  the Python-to-C++ call, against ~55M/s for rp2040js's plain JS method call.)
 - **PyPy was re-measured** (above): ~1.3-1.8 s, i.e. only ~1.4-1.9x faster than CPython's pure build (it was ~16x
   on the old per-instruction engine, whose cost was interpretive overhead PyPy could remove) and ~60x slower than the
   native build. "Run under PyPy" is no longer the advice; the native build is the fast path.
