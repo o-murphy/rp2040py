@@ -184,37 +184,43 @@ uvx rp2040py micropython
 ```
 
 and enjoy the MicroPython REPL! Quit the REPL with Ctrl+X. The first run fetches the recommended
-MicroPython build (**1.21.0**, currently) from [micropython.org](https://micropython.org/download/RPI_PICO/)
+MicroPython build (**1.29.0**, currently) from [micropython.org](https://micropython.org/download/RPI_PICO/)
 into `~/.cache/rp2040py` and reuses that cached file afterwards (falls back to the current
-directory if the cache directory isn't writable). 1.21 is recommended: it does far
-less work before dropping to the REPL prompt than newer releases, so it boots dramatically faster in
-the emulator (see the benchmark below). Newer releases work too, just slower to reach the REPL -
-e.g. 1.28.0.
+directory if the cache directory isn't writable). Any recent release boots to the REPL quickly in
+the emulator (see the benchmark below).
 
 A different version, a local UF2 file, or a CircuitPython version (`--circuitpython`, see below) can
 be loaded by supplying the `--image` option - a known version tag (`1.28.0`), or a path to a UF2
 file already on disk:
 
 > [!TIP]
-> Booting real firmware means executing millions of Thumb instructions through a pure-Python
-> interpreter - dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js, though the
-> compiled `rp2040py.native` backend (on by default, see [Performance](#performance) below) closes
-> most of that gap:
+> Booting real firmware means executing millions of Thumb instructions, and in pure Python that is
+> dramatically slower than V8 JIT-compiling the equivalent JS in rp2040js - the compiled
+> `rp2040py.native` backend (on by default, see [Performance](#performance) below) closes that gap.
+> Time for `rp2040py bench --image ... --expect-text "Hello, MicroPython!"` to see the first line
+> of the resident `tests/micropython/main.py` (MicroPython 1.28 + littlefs), CPython 3.10, wall time
+> on the machine that produced these numbers (2026-10):
 >
-> | Interpreter | Time to a resident script's first output (MicroPython 1.28 boot) |
+> | Interpreter | Time to a resident script's first output |
 > |---|---|
-> | CPython 3.10 | 133.3s |
-> | CPython 3.10 + `rp2040py.native` (on by default) | 11.3s (~11.8x) |
-> | PyPy 3.10 | 8.9s (~15x) |
+> | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.7 s |
+> | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s (~100x) |
+> | PyPy 3.10 | 8.9 s when last measured (2026-04, before the batch engine below) - not re-measured |
 >
-> This is also why **1.21 is the recommended default version**: both 1.21 and 1.28 reach the bare
-> REPL prompt in well under a second, but *running* a typical resident script afterward is ~45x
-> more expensive under 1.28 than 1.21 - real work MicroPython 1.28's own firmware does per loop
-> iteration, not an emulator bug. See
-> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md) for the full measured
-> breakdown (methodology, PyPy/CPython-JIT comparisons, the 1.21-vs-1.28 instruction-count numbers)
-> and [docs/reference/porting-checklist.md](docs/reference/porting-checklist.md#known-differences-from-rp2040js)
-> for a synthetic instructions/sec benchmark across all three runtimes.
+> The numbers are far smaller than the ones this table used to carry (133 s / 11 s / 9 s) because
+> the old figure was mostly **not** emulation: it stepped one instruction at a time from Python
+> and counted every trip round that loop with the core asleep (WFE with no timer armed, which is
+> where a booted MicroPython sits) - about 64 million "steps" for a script whose first line takes
+> ~1 million real instructions (`--stepwise` now counts the two apart). `bench` now runs the same
+> batch engine as `Simulator.execute()`, in which an idle core costs nothing. That also removes the
+> reason this README used to give for preferring 1.21 over 1.28 ("~45x more expensive to run a
+> resident script"): measured the same way, both reach the first line in about the same wall time
+> (~0.02-0.03 s native), so any recent release is fine. See
+> [docs/records/0096-cpp-mcu-core.md](docs/records/0096-cpp-mcu-core.md) (the `bench` entries of
+> its progress log) for how the old number came about, and
+> [docs/records/0013-cython-core.md](docs/records/0013-cython-core.md) /
+> [docs/records/0017-perf-python-vs-v8.md](docs/records/0017-perf-python-vs-v8.md) for the older
+> measurements this replaces.
 
 ```sh
 rp2040py micropython --image 1.28.0
