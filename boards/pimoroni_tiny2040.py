@@ -473,7 +473,7 @@ BOARD = BoardSpec(
     extras=_EXTRAS,
     firmware={
         "micropython": BoardFirmwareSpec(
-            default_tag="1.28.0",
+            default_tag="1.29.0",
             fw=_MICROPYTHON_2MB,
             layout={"fs_start": "0x100000", "fs_blockcount": 256, "fs_blocksize": 4096},
         ),
@@ -489,7 +489,7 @@ BOARD_8MB = BoardSpec(
     extras=_EXTRAS,
     firmware={
         "micropython": BoardFirmwareSpec(
-            default_tag="1.28.0",
+            default_tag="1.29.0",
             fw=_MICROPYTHON_8MB,
             layout={"fs_start": "0x100000", "fs_blockcount": 1792, "fs_blocksize": 4096},
         ),
