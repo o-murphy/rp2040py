@@ -16,7 +16,6 @@ A TIMER needs the native `SimulationClock` (its alarms are nodes of the C++ cloc
 for its own `clock` field, so a native chip always has one.
 """
 
-from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
@@ -57,9 +56,6 @@ cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t va
 
 
 cdef class RPTimer:
-    def __cinit__(self, *args, **kwargs):
-        self._clock_keepalive = NULL
-
     def __init__(self, rp2040, name):
         cdef TimerHost host
         clock = rp2040.clock
@@ -71,10 +67,6 @@ cdef class RPTimer:
         self.rp2040 = rp2040
         self.name = name
         self.clock = clock
-        # A reference the garbage collector's tp_clear cannot drop: __dealloc__ must still reach the clock to unlink
-        # this block's alarms from it, and a cycle collection clears the object fields above first.
-        Py_INCREF(clock)
-        self._clock_keepalive = <void*> clock
         host.irq = _irq_trampoline
         host.warn = _warn_trampoline
         host.ctx = <void*> self
@@ -83,10 +75,8 @@ cdef class RPTimer:
         self._block.init(&(<SimulationClock> clock)._clock, host)
 
     def __dealloc__(self):
-        if self._clock_keepalive != NULL:
-            self._block.detach()
-            Py_DECREF(<object> self._clock_keepalive)
-            self._clock_keepalive = NULL
+        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
+        self._block.detach()
 
     # --- BasePeripheral's surface -----------------------------------------------------------------
 

@@ -23,8 +23,11 @@ namespace rp2040core {
 
 using AlarmFireFn = bool (*)(void* ctx);  // false: stop ticking, a failure is pending with the caller
 
+class Clock;
+
 struct Alarm {
     Alarm* next = nullptr;
+    Clock* owner = nullptr;   // the clock whose list this alarm is linked into (null when not linked)
     double nanos = 0.0;       // absolute due time while linked
     bool scheduled = false;   // linked into a clock's list
     AlarmFireFn fire = nullptr;
@@ -34,6 +37,28 @@ struct Alarm {
 class Clock {
 public:
     double frequency = 125e6;
+
+    Clock() = default;
+    Clock(const Clock&) = delete;
+    Clock& operator=(const Clock&) = delete;
+
+    // The clock may go away before the alarms linked into it (the garbage collector frees a cycle in no particular order): every
+    // still-linked alarm is told it has no clock any more, so a later `cancel_alarm()` on it is a no-op instead of a write
+    // through a dangling pointer. The alarm's owner needs no keep-alive reference to the clock for this.
+    ~Clock() { reset(); }
+
+    // Back to a freshly constructed clock: time 0, default frequency, no alarm linked (each one released as the destructor does).
+    void reset() noexcept {
+        while (head_ != nullptr) {
+            Alarm* alarm = head_;
+            head_ = alarm->next;
+            alarm->next = nullptr;
+            alarm->owner = nullptr;
+            alarm->scheduled = false;
+        }
+        now_ = 0.0;
+        frequency = 125e6;
+    }
 
     double nanos() const noexcept { return now_; }
     bool has_alarm() const noexcept { return head_ != nullptr; }
@@ -57,6 +82,7 @@ public:
             head_ = alarm;
         }
         alarm->next = item;
+        alarm->owner = this;
         alarm->scheduled = true;
     }
 
@@ -71,6 +97,7 @@ public:
                 } else {
                     head_ = item->next;
                 }
+                item->owner = nullptr;
                 return true;
             }
             last = item;
@@ -98,6 +125,7 @@ public:
         while (head_ != nullptr && head_->nanos <= target) {
             Alarm* alarm = head_;
             head_ = alarm->next;
+            alarm->owner = nullptr;
             alarm->scheduled = false;  // it is no longer in the list; a callback may re-arm it
             now_ = alarm->nanos;
             if (!alarm->fire(alarm->ctx)) return false;
@@ -110,6 +138,13 @@ private:
     double now_ = 0.0;
     Alarm* head_ = nullptr;
 };
+
+// Unlinks `alarm` from whatever clock it is linked into, if that clock still exists. What an owner's `detach()` calls: unlike
+// `clock->cancel(alarm)` it is safe when the clock was destroyed first.
+inline void cancel_alarm(Alarm* alarm) noexcept {
+    if (alarm->owner != nullptr) alarm->owner->cancel(alarm);
+    alarm->scheduled = false;
+}
 
 }  // namespace rp2040core
 

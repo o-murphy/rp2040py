@@ -70,8 +70,7 @@ public:
 
     // Unlinks every alarm from the clock; the owner calls it before the block goes away.
     void detach() noexcept {
-        if (clock_ == nullptr) return;
-        for (int i = 0; i < kAlarms; ++i) clock_->cancel(&alarms_[i]);
+        for (int i = 0; i < kAlarms; ++i) cancel_alarm(&alarms_[i]);
     }
 
     uint32_t int_status() const noexcept { return (int_raw_ & int_enable_) | int_force_; }

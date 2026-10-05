@@ -40,6 +40,7 @@ tests/test_simulation_clock_parity.py replays randomized alarm scripts against b
 from libcpp cimport bool
 
 from rp2040py.native._pending cimport has_pending_error, park_error, raise_if_pending
+from rp2040py.native._clock cimport cancel_alarm
 
 cdef bool _fire_alarm(void* ctx) noexcept:
     """What the C++ clock calls when an alarm comes due: drop the alarm's keep-alive (it is no longer
@@ -58,6 +59,11 @@ cdef class ClockAlarm:
     def __cinit__(self, *args, **kwargs):
         self._node.fire = _fire_alarm
         self._node.ctx = <void*> self
+
+    def __dealloc__(self):
+        # Reached while still linked only when the collector frees the clock's `_armed` set before this alarm; the C++ clock
+        # holds a pointer into this object's node, so take it out of the list (a no-op if the clock itself is gone already).
+        cancel_alarm(&self._node)
 
     def __init__(self, clock, callback):
         self._clock = clock

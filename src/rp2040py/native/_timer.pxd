@@ -39,7 +39,6 @@ cdef extern from "timer.hpp" namespace "rp2040core":
 
 cdef class RPTimer:
     cdef TimerBlock _block
-    cdef void* _clock_keepalive
     cdef public object rp2040
     cdef public object name
     cdef public object clock

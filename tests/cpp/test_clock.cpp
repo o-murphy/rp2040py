@@ -107,6 +107,31 @@ int main() {
     c.tick(100);
     CHECK(m.fired == 1 && !m.alarm.scheduled);
 
+    // The clock may be destroyed before its alarms (a garbage collector frees a cycle in no particular order): the alarms are
+    // released, and cancel_alarm() on them is then a no-op. The other order - the alarm goes first - unlinks it from a live clock.
+    {
+        Probe survivor;
+        {
+            Clock dying;
+            init(survivor, dying, 40);
+            dying.schedule(&survivor.alarm, 10);
+            CHECK(survivor.alarm.scheduled && survivor.alarm.owner == &dying);
+        }
+        CHECK(!survivor.alarm.scheduled && survivor.alarm.owner == nullptr && survivor.alarm.next == nullptr);
+        cancel_alarm(&survivor.alarm);
+        CHECK(!survivor.alarm.scheduled);
+
+        Clock alive;
+        Probe first, last;
+        init(first, alive, 41); init(last, alive, 42);
+        alive.schedule(&first.alarm, 10);
+        alive.schedule(&last.alarm, 20);
+        cancel_alarm(&first.alarm);
+        CHECK(!first.alarm.scheduled && first.alarm.owner == nullptr && alive.nanos_to_next_alarm() == 20);
+        alive.tick(30);
+        CHECK(first.fired == 0 && last.fired == 1);
+    }
+
     // A callback may cancel another alarm, and arm one that is due inside the same tick.
     Clock c2;
     Probe x, y, z;

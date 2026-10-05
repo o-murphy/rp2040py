@@ -9,6 +9,7 @@ cdef extern from "clock.hpp" namespace "rp2040core":
 
     cdef cppclass Alarm:
         Alarm* next
+        Clock* owner
         double nanos
         bint scheduled
         AlarmFireFn fire
@@ -24,3 +25,5 @@ cdef extern from "clock.hpp" namespace "rp2040core":
         void schedule(Alarm* alarm, double delta) noexcept
         void cancel(Alarm* alarm) noexcept
         bint tick(double delta) noexcept
+
+    void cancel_alarm(Alarm* alarm) noexcept

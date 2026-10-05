@@ -71,7 +71,6 @@ cdef extern from "dma.hpp" namespace "rp2040core":
 
 cdef class RPDMA:
     cdef DmaBlock _block
-    cdef void* _clock_keepalive
     cdef public object rp2040
     cdef public object name
     cdef public object clock

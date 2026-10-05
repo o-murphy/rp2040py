@@ -76,7 +76,6 @@ cdef extern from "adc.hpp" namespace "rp2040core":
 
 cdef class RPADC:
     cdef AdcBlock _block
-    cdef void* _clock_keepalive
     cdef public object rp2040
     cdef public object name
     cdef public object clock

@@ -95,7 +95,7 @@ static void fresh(int mode = kDefault) {
     adc.detach();
     env = Env();
     env.mode = mode;
-    clk = Clock();
+    clk.reset();
     AdcHost host;
     host.irq = on_irq;
     host.dreq = on_dreq;

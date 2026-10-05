@@ -18,7 +18,6 @@ the block's two alarms), `num_channels`, `sample_time`, `resolution`, `divider`,
 `BasePeripheral`'s surface.
 """
 
-from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
@@ -158,9 +157,6 @@ cdef class _AlarmView:
 
 
 cdef class RPADC:
-    def __cinit__(self, *args, **kwargs):
-        self._clock_keepalive = NULL
-
     def __init__(self, rp2040, name):
         cdef AdcHost host
         clock = rp2040.clock
@@ -173,10 +169,6 @@ cdef class RPADC:
         self.rp2040 = rp2040
         self.name = name
         self.clock = clock
-        # A reference the garbage collector's tp_clear cannot drop: __dealloc__ must still reach the clock to unlink this block's alarms
-        # from it, and a cycle collection clears the object fields above first.
-        Py_INCREF(clock)
-        self._clock_keepalive = <void*> clock
         self.channel_values = [0, 0, 0, 0, 0]
         self.resolution = 12
         self.dreq = DREQChannel.DREQ_ADC
@@ -192,10 +184,8 @@ cdef class RPADC:
         self._block.init(&(<SimulationClock> clock)._clock, host)
 
     def __dealloc__(self):
-        if self._clock_keepalive != NULL:
-            self._block.detach()
-            Py_DECREF(<object> self._clock_keepalive)
-            self._clock_keepalive = NULL
+        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
+        self._block.detach()
 
     # --- the device on the pins ------------------------------------------------------------------
 

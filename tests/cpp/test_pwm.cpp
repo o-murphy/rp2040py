@@ -103,7 +103,7 @@ static void start() {
         delete block;
     }
     block = new PwmBlock();
-    clk = Clock();
+    clk.reset();
     env = Env();
     PwmHost host;
     host.irq = on_irq;

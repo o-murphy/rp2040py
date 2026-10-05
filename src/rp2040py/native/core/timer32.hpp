@@ -201,7 +201,7 @@ public:
 
     // Unlinks the alarm from the clock; the owner calls it before the alarm goes away.
     void detach() noexcept {
-        if (timer_ != nullptr) timer_->clock()->cancel(&clock_alarm_);
+        cancel_alarm(&clock_alarm_);
     }
 
     bool enable() const noexcept { return enabled_; }

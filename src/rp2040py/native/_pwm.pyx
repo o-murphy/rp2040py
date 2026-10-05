@@ -17,7 +17,6 @@ alarms), `gpio_value`, `gpio_direction`, the private interrupt words `_int_raw`/
 `gpio_set`, `gpio_set_dir`, `gpio_read`, `gpio_on_input`, `reset`, plus `BasePeripheral`'s surface.
 """
 
-from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
@@ -343,9 +342,6 @@ cdef class _Channel:
 
 
 cdef class RPPWM:
-    def __cinit__(self, *args, **kwargs):
-        self._clock_keepalive = NULL
-
     def __init__(self, rp2040, name):
         cdef PwmHost host
         cdef _Channel channel
@@ -362,10 +358,6 @@ cdef class RPPWM:
         self.rp2040 = rp2040
         self.name = name
         self.clock = clock
-        # A reference the garbage collector's tp_clear cannot drop: __dealloc__ must still reach the clock to unlink this block's alarms
-        # from it, and a cycle collection clears the object fields above first.
-        Py_INCREF(clock)
-        self._clock_keepalive = <void*> clock
         host.irq = _irq_trampoline
         host.dreq = _dreq_trampoline
         host.pin_changed = _pin_changed_trampoline
@@ -399,10 +391,8 @@ cdef class RPPWM:
         self.channels = views
 
     def __dealloc__(self):
-        if self._clock_keepalive != NULL:
-            self._block.detach()
-            Py_DECREF(<object> self._clock_keepalive)
-            self._clock_keepalive = NULL
+        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
+        self._block.detach()
 
     # --- the reference's attributes --------------------------------------------------------------
 

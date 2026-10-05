@@ -135,8 +135,7 @@ public:
 
     // Unlinks every alarm from the clock; the owner calls it before the block goes away.
     void detach() noexcept {
-        if (clock_ == nullptr) return;
-        for (int i = 0; i < kChannels; ++i) clock_->cancel(&channels[i].alarm);
+        for (int i = 0; i < kChannels; ++i) cancel_alarm(&channels[i].alarm);
     }
 
     Bus* bus() const noexcept { return bus_; }

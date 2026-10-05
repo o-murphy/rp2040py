@@ -98,9 +98,8 @@ public:
 
     // Unlinks both alarms from the clock; the owner calls it before the block goes away.
     void detach() noexcept {
-        if (clock_ == nullptr) return;
-        clock_->cancel(&sample_alarm);
-        clock_->cancel(&multi_shot_alarm);
+        cancel_alarm(&sample_alarm);
+        cancel_alarm(&multi_shot_alarm);
     }
 
     Clock* clock() const noexcept { return clock_; }

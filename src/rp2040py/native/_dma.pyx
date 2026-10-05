@@ -18,7 +18,6 @@ A DMA needs the native chip (its bus) and the native `SimulationClock` (its alar
 `RP2040` always has both.
 """
 
-from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
@@ -196,9 +195,6 @@ cdef class _DreqView:
 
 
 cdef class RPDMA:
-    def __cinit__(self, *args, **kwargs):
-        self._clock_keepalive = NULL
-
     def __init__(self, rp2040, name):
         cdef DmaHost host
         cdef Bus* bus
@@ -213,10 +209,6 @@ cdef class RPDMA:
         self.rp2040 = rp2040
         self.name = name
         self.clock = clock
-        # A reference the garbage collector's tp_clear cannot drop: __dealloc__ must still reach the clock to unlink
-        # this block's alarms from it, and a cycle collection clears the object fields above first.
-        Py_INCREF(clock)
-        self._clock_keepalive = <void*> clock
         bus = <Bus*> <size_t> bus_address()
         host.irq = _irq_trampoline
         host.clk_sys = _clk_sys_trampoline
@@ -238,10 +230,8 @@ cdef class RPDMA:
         self._dreq_view = dreq_view
 
     def __dealloc__(self):
-        if self._clock_keepalive != NULL:
-            self._block.detach()
-            Py_DECREF(<object> self._clock_keepalive)
-            self._clock_keepalive = NULL
+        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
+        self._block.detach()
 
     # --- the reference's attributes --------------------------------------------------------------
 
