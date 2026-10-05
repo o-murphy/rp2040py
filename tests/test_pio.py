@@ -650,7 +650,7 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
     per-CPU-instruction loop). A DMA-fed PIO TX FIFO (4 words deep) drains in ~8 `step()` calls
     here (a plain `pull`+`jmp` 2-instruction loop, no GPIO/pin config needed to reproduce this) -
     far short of the 1000-step ceiling - so that burst could genuinely outrun the DMA channel's own
-    alarm-paced refill (`RPDMAChannel.schedule_transfer()`, `peripherals/dma.py`) and leave the
+    alarm-paced refill (`RPDMAChannel.schedule_transfer()`, `peripherals/_dma.py`) and leave the
     state machine prematurely `FDEBUG_TXSTALL`'d with most of a larger transfer still undelivered,
     the instant a real `Simulator` owns this `RP2040` - exactly `cyw43_bus_pio_spi.c`'s own
     TX-only `cyw43_spi_transfer()` shape for CYW43's firmware/CLM download block writes.

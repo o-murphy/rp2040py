@@ -262,7 +262,7 @@ class RPPIO(BasePeripheral):
                 # right after this write already sees the result, with no yield in between." That's
                 # true for a program with no other peripheral dependency, but a DMA-fed transfer
                 # (exactly `cyw43_bus_pio_spi.c`'s own gSPI TX, this project's own paced-by-DREQ
-                # `RPDMAChannel`/`peripherals/dma.py`) needs `SimulationClock` alarms to fire
+                # `RPDMAChannel`/`peripherals/_dma.py`) needs `SimulationClock` alarms to fire
                 # between FIFO drains to keep refilling it - and those alarms only fire from
                 # `clock.tick()`, called once per CPU instruction by
                 # `_execute_batch.py`/`native/_simulator.pyx`'s own outer loop, *never* from inside
