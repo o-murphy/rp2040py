@@ -52,7 +52,7 @@ import signal
 import struct
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from importlib.metadata import version
 from os import PathLike
 from pathlib import Path
@@ -284,7 +284,7 @@ async def _run_async(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> None:
     _maybe_exit_after_fetch(args, bootrom_source=args.bootrom)
     try:
-        exit_code = asyncio.run(_run_async(args))
+        exit_code = asyncio.run(_exit_as_result(_run_async(args)))
     except KeyboardInterrupt:
         sys.exit(130)
     if exit_code:
@@ -407,6 +407,20 @@ async def _start_console_repl(
     stdio_repl = StdioInteractiveRepl(cdc, simulator, on_data=on_data, on_quit=simulator.shutdown_request.request)
     await stdio_repl.start()
     return stdio_repl
+
+
+async def _exit_as_result(command: "Awaitable[int | None]") -> "int | str | None":
+    """Runs a command's coroutine and turns a `sys.exit()` raised inside it into its return value, which the caller then passes to `sys.exit()` itself.
+
+    On CPython `asyncio.run()` re-raises a `SystemExit` out of the task, but an event loop that is not a plain `run_until_complete` host does not: Pyodide's
+    `WebLoop` hands it to the JavaScript runtime as an unhandled error, which ends the whole process (a pytest run included) instead of reaching the caller. The
+    commands below validate their arguments and exit with `sys.exit(1)` from inside their coroutine, so the exit is made an ordinary result here.
+    """
+    try:
+        return await command
+    except SystemExit as exit_request:
+        code = exit_request.code
+        return 0 if code is None else code
 
 
 def _validate_console_mode(args: argparse.Namespace) -> None:
@@ -677,7 +691,7 @@ async def _micropython_async(args: argparse.Namespace) -> "int | None":
 
 def _cmd_micropython(args: argparse.Namespace) -> None:
     try:
-        exit_code = asyncio.run(_micropython_async(args))
+        exit_code = asyncio.run(_exit_as_result(_micropython_async(args)))
     except KeyboardInterrupt:
         sys.exit(130)
     if exit_code is not None:
@@ -747,7 +761,7 @@ async def _kaluma_async(args: argparse.Namespace) -> "int | None":
 
 def _cmd_kaluma(args: argparse.Namespace) -> None:
     try:
-        exit_code = asyncio.run(_kaluma_async(args))
+        exit_code = asyncio.run(_exit_as_result(_kaluma_async(args)))
     except KeyboardInterrupt:
         sys.exit(130)
     if exit_code is not None:
