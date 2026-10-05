@@ -456,12 +456,44 @@ static void test_level_function_against_the_reference_transcription() {
     }
 }
 
+static int gone_calls = 0;
+static void gone_fn(void* ctx) noexcept { ++gone_calls; ++*static_cast<int*>(ctx); }
+
+// A listener that asked to be told is told once when the bank dies first; one that did not is never touched (its owner may be freed already).
+static void test_a_listener_is_told_when_its_bank_is_destroyed_first() {
+    Recorder r;
+    Direct told, silent;
+    int told_count = 0;
+    gone_calls = 0;
+    {
+        PinBank bank;
+        CHECK(bank.init(1, host_for(&r)));
+        CHECK(bank.add_direct_listener(0, direct_fn, &told_count, gone_fn));
+        CHECK(bank.add_direct_listener(0, direct_fn, &silent));
+        (void)told;
+        CHECK(bank.remove_direct_listener(0, direct_fn, &silent));
+        CHECK(bank.add_direct_listener(0, direct_fn, &silent));
+    }
+    CHECK(gone_calls == 1 && told_count == 1);
+    // Unregistered before the bank dies: nothing to tell.
+    gone_calls = 0;
+    {
+        PinBank bank;
+        CHECK(bank.init(1, host_for(&r)));
+        int never = 0;
+        CHECK(bank.add_direct_listener(0, direct_fn, &never, gone_fn));
+        CHECK(bank.remove_direct_listener(0, direct_fn, &never));
+    }
+    CHECK(gone_calls == 0);
+}
+
 int main() {
     test_defaults_and_last_state();
     test_sio_driven_level_and_announcement();
     test_direct_source_replaces_the_host_call();
     test_a_bank_of_one_pin_uses_its_own_number();
     test_direct_listeners_run_before_the_host_and_can_stop_it();
+    test_a_listener_is_told_when_its_bank_is_destroyed_first();
     test_pulls_and_bus_keeper();
     test_input_edges_and_the_io_interrupt();
     test_level_bits_follow_the_input_and_the_interrupt_only_when_it_changes();

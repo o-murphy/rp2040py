@@ -51,7 +51,6 @@ cdef class RPSSI:
     cdef SsiBlock _block
     cdef object _cs_pin
     cdef bint _cs_native
-    cdef void* _pin_keepalive
     cdef bint _cs_listening
     cdef public object rp2040
     cdef public object name

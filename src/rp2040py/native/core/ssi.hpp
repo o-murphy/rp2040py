@@ -77,7 +77,7 @@ public:
     // full or the level could not be read.
     bool bind_cs(PinBank* bank) noexcept {
         bank_ = bank;
-        if (!bank_->add_direct_listener(0, &SsiBlock::cs_listener, this)) {
+        if (!bank_->add_direct_listener(0, &SsiBlock::cs_listener, this, &SsiBlock::on_bank_gone)) {
             bank_ = nullptr;
             return false;
         }
@@ -191,6 +191,9 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<SsiBlock>::handler(this); }
 
 private:
+    // The chip-select pin's bank was destroyed first: forget it, so `detach()` has nothing to unregister from.
+    static void on_bank_gone(void* ctx) noexcept { static_cast<SsiBlock*>(ctx)->bank_ = nullptr; }
+
     static bool cs_listener(void* ctx, uint32_t, int new_state, int) noexcept {
         static_cast<SsiBlock*>(ctx)->on_cs_change(new_state == kPinLow);  // active low
         return true;

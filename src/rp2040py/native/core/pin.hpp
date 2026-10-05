@@ -75,6 +75,7 @@ constexpr uint32_t kMaxDirectListeners = 4;
 struct PinListener {
     bool (*fn)(void* ctx, uint32_t pin, int new_state, int old_state) = nullptr;  // false: it failed
     void* ctx = nullptr;
+    void (*bank_gone)(void* ctx) = nullptr;  // optional: called once if the bank is destroyed while this listener is still registered
 };
 
 struct Pin {
@@ -106,6 +107,19 @@ public:
     static constexpr uint32_t kMaxPins = 32;
 
     PinBank() = default;
+
+    // The bank may go away before the objects that listen on it (the garbage collector frees a cycle in no particular order): a listener that asked to
+    // be told (`bank_gone`) drops its pointer to the bank here, so its own detach later is a no-op instead of a write into freed memory. One that did not
+    // ask is not touched - it may be freed already, which is why this is opt-in.
+    ~PinBank() {
+        for (uint32_t i = 0; i < count_; ++i) {
+            Pin& p = pins_[i];
+            for (uint32_t n = 0; n < p.direct_count; ++n) {
+                if (p.direct[n].bank_gone != nullptr) p.direct[n].bank_gone(p.direct[n].ctx);
+            }
+            p.direct_count = 0;
+        }
+    }
     PinBank(const PinBank&) = delete;
     PinBank& operator=(const PinBank&) = delete;
 
@@ -141,11 +155,12 @@ public:
 
     // Direct listeners are called in registration order, before the host's `on_change`. They must not add or remove listeners from inside a
     // call. Returns false if the table is full (add) or the listener is not registered (remove).
-    bool add_direct_listener(uint32_t i, bool (*fn)(void*, uint32_t, int, int), void* ctx) noexcept {
+    bool add_direct_listener(uint32_t i, bool (*fn)(void*, uint32_t, int, int), void* ctx, void (*bank_gone)(void*) = nullptr) noexcept {
         Pin& p = pins_[i];
         if (p.direct_count >= kMaxDirectListeners) return false;
         p.direct[p.direct_count].fn = fn;
         p.direct[p.direct_count].ctx = ctx;
+        p.direct[p.direct_count].bank_gone = bank_gone;
         ++p.direct_count;
         return true;
     }
