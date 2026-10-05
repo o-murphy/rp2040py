@@ -70,6 +70,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0097] a Pyodide/WASM wheel for rp2040py | root-caused and fixed - a native clock/block reference cycle invisible to the GC exhausted the 32-bit/wasm address space one leaked chip at a time; `[tool.cibuildwheel.pyodide]`/`publish.yml`'s pyodide row now run the full test suite like every other platform
 - [x] [0095] `setup-rp2040py` action moved to the repo root, with branding | Marketplace-publishable; external consumers on the old `.github/actions/...` path need to update
 
 - [x] [0087] CircuitPython's CIRCUITPY is writable over the raw REPL we already have | closed 2026-08-20 - the demos push `code.py` over the REPL; the host-side FAT12 builder is gone
