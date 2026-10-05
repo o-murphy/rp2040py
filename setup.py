@@ -149,6 +149,12 @@ elif IS_EMSCRIPTEN:
     _EXTRA_LINK_ARGS = []
 else:
     _EXTRA_COMPILE_ARGS = ["-O3", "-std=c++17", *_NO_EXCEPTIONS_GNU]
+    if _SYSCONFIG_PLATFORM in ("linux-i686", "linux-i386"):
+        # A 32-bit x86 GCC defaults to the x87 FPU, which keeps intermediate results in 80 bits: the C++ core then rounds a
+        # chain of double arithmetic differently from the pure-Python reference (1 ulp apart, e.g. an alarm due at
+        # 14254079.999999998 instead of 14254080.0 - seen in the PWM/DMA oracles under the i686 wheel build). SSE2 rounds
+        # every operation to double, as Python and every 64-bit target do (MSVC's x86 build already defaults to SSE2).
+        _EXTRA_COMPILE_ARGS += ["-msse2", "-mfpmath=sse"]
     # -Wl,-strip-all: drops debug symbols/relocation info from the built .so at link time (smaller
     # wheel, marginally faster load - doesn't touch the optimizations above, which happen at
     # compile time on the .c GCC/Clang already emitted from Cython's own generated source). GNU ld

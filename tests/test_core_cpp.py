@@ -6,6 +6,7 @@ those flags and ``-Werror`` is what keeps a stray ``throw``/``dynamic_cast``/``n
 through the extension build, which does not use those flags. Skipped when no C++ compiler is on PATH.
 """
 
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "src" / "rp2040py" / "native" / "core"
 FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror"]
+if platform.machine().lower() in ("i386", "i686"):
+    # Same reason as setup.py: a 32-bit x86 compiler defaults to the x87 FPU, whose 80-bit intermediates break exact double comparisons.
+    FLAGS += ["-msse2", "-mfpmath=sse"]
 
 
 def _cxx() -> "str | None":
