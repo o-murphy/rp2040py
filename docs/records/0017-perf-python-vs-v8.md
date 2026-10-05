@@ -1,6 +1,6 @@
 # 0017. Note — Performance: pure-Python interpretation vs V8
 
-- Status: Note (rationale + measurements)
+- Status: Note (rationale + measurements) - **the figures below are historical; see the 2026-10-05 update at the end**
 - Recorded: 2026-08-05
 - Related: 0011, 0013, 0015, 0016
 
@@ -251,3 +251,35 @@ Two mitigations, worth combining:
   regression this found and fixed, and the two real correctness bugs the build-then-test loop
   caught along the way).
 
+
+## Update 2026-10-05: the tables above no longer describe the project
+
+Everything above was measured with the pure-Python/Cython-per-instruction core, stepping one
+instruction at a time from Python. Since then record [0096](0096-cpp-mcu-core.md) moved the core,
+the bus and the peripherals into C++ behind a batch engine, and `bench` was fixed to measure that
+engine. Re-measured with a littlefs image preloaded (`rp2040py mklittlefs -o lfs.img
+tests/micropython/main.py --main main.py`, then `rp2040py bench --image <uf2> --littlefs lfs.img
+--expect-text "Hello, MicroPython!"`), CPython 3.10, wall time to the first line of the resident
+script:
+
+| Firmware | Pure Python (`RP2040PY_SKIP_CYTHON=1`) | Native (default) |
+| --- | --- | --- |
+| MicroPython 1.28 | 1.89 s | 0.02 s (~95x) |
+| MicroPython 1.21 | 3.36 s | 0.03 s (~110x) |
+
+What this changes in the text above:
+
+- **The "64.7M steps / 188.98 s for 1.28" and the "1.28 is 45x costlier than 1.21" explanation are
+  withdrawn.** The step count included trips round the stepping loop with the core asleep (WFE, no
+  timer armed). 1.28 needs ~1 million real instructions to its first line, and both versions now
+  reach it in about the same wall time. 1.21 is no longer the recommended version.
+- **The V8 comparison is out of date.** rp2040js booted this workload in 4.11 s (Node v26, measured
+  once, in 2026-08); the native build here takes ~0.02-0.03 s for the same firmware + littlefs +
+  script. That is a comparison against an old, single rp2040js run on a different machine state,
+  not a fresh head-to-head - rp2040js was not re-run for this update, so treat "ahead of the JS JIT"
+  as indicated, not proven, until it is.
+- **PyPy is not re-measured** (last figure 8.9-11.6 s, with the per-instruction engine). With the
+  core in C++ there is nothing left for its JIT to speed up in the hot path, so "run under PyPy" is
+  no longer the advice.
+- Preloading littlefs does not change these numbers measurably: the README figures (taken the same
+  way) agree with the table here.
