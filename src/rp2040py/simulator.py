@@ -111,7 +111,8 @@ class _PumpedFuture(concurrent.futures.Future[_T]):
 
 
 def _threadless_by_default() -> bool:
-    return os.environ.get("RP2040PY_THREADLESS", "") not in ("", "0")
+    """Thread-free unless RP2040PY_THREADLESS=0 asks for the engine-room thread."""
+    return os.environ.get("RP2040PY_THREADLESS", "") != "0"
 
 
 class Simulator:
@@ -119,7 +120,7 @@ class Simulator:
         self, clock: SimulationClock | None = None, rp2040: RP2040 | None = None, *, threadless: "bool | None" = None
     ):
         # `threadless`: when no loop was registered with `bind_loop()`, create a plain loop for the engine *without* a thread behind it, to be driven by the caller (`pump()`, or a
-        # blocking `.result()`/`call()`, which pump) - instead of the engine-room thread `_ensure_loop()` starts otherwise. None: RP2040PY_THREADLESS=1 in the environment.
+        # blocking `.result()`/`call()`, which pump) - instead of the engine-room thread `_ensure_loop()` starts otherwise. None (the default): thread-free, unless RP2040PY_THREADLESS=0 in the environment; `threadless=False` is the opt-in to the thread (a caller that starts the engine and then merely waits, relying on it making progress in the background).
         self._threadless = _threadless_by_default() if threadless is None else threadless
         # `rp2040`, if given, is normally built via `boards.build_rp2040()` (or a bare `RP2040()`
         # for a caller with no board-registry needs) - its own clock is authoritative in that

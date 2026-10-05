@@ -123,8 +123,24 @@ def test_a_threadless_simulator_makes_its_own_loop_without_a_thread():
         simulator._loop.close()
 
 
-def test_the_environment_switches_threadless_on(monkeypatch):
+def test_threadless_is_the_default_and_the_environment_or_the_argument_opt_into_the_thread(monkeypatch):
+    monkeypatch.delenv("RP2040PY_THREADLESS", raising=False)
+    assert Simulator(rp2040=RP2040())._threadless is True
     monkeypatch.setenv("RP2040PY_THREADLESS", "1")
     assert Simulator(rp2040=RP2040())._threadless is True
     monkeypatch.setenv("RP2040PY_THREADLESS", "0")
     assert Simulator(rp2040=RP2040())._threadless is False
+    monkeypatch.delenv("RP2040PY_THREADLESS")
+    assert Simulator(rp2040=RP2040(), threadless=False)._threadless is False
+
+
+def test_the_threaded_mode_is_still_there_when_asked_for():
+    simulator = Simulator(rp2040=RP2040(), threadless=False)
+    try:
+        assert simulator._ensure_loop().is_running() or simulator._loop_thread is not None
+        assert simulator.submit(_answer(5)).result(timeout=5) == 5  # a real engine-room thread serves it
+    finally:
+        simulator.stop()
+        if simulator._loop is not None and simulator._loop_thread is not None:
+            simulator._loop.call_soon_threadsafe(simulator._loop.stop)
+            simulator._loop_thread.join(timeout=2.0)
