@@ -55,6 +55,7 @@ demo/eink_run.py draws for the e-paper panel).
 """
 
 import argparse
+import asyncio
 import queue
 import sys
 import time
@@ -169,7 +170,9 @@ print('wrote', {name!r}, len({data!r}), 'bytes')
 """
 
 
-def _push_guest_files(device: MicroPythonDevice, args: argparse.Namespace, timeout: "float | None") -> None:
+def _push_guest_files(
+    loop: asyncio.AbstractEventLoop, device: MicroPythonDevice, args: argparse.Namespace, timeout: "float | None"
+) -> None:
     """Write `--code`/`--boot` onto CIRCUITPY over the raw REPL, then restart the firmware so it
     runs them. Does nothing when neither was given.
 
@@ -185,12 +188,12 @@ def _push_guest_files(device: MicroPythonDevice, args: argparse.Namespace, timeo
     for name, path in (("/boot.py", args.boot), ("/code.py", args.code)):
         if path is None:
             continue
-        stdout, _ = device.exec_async(
-            _PUSH_TEMPLATE.format(name=name, data=path.read_bytes()), timeout=timeout
-        ).result()
+        stdout, _ = loop.run_until_complete(
+            device.aexec(_PUSH_TEMPLATE.format(name=name, data=path.read_bytes()), timeout=timeout)
+        )
         print(stdout.decode(errors="replace").strip())
     if args.boot is not None:
-        device.hard_reset_async(timeout=timeout).result()
+        loop.run_until_complete(device.ahard_reset(timeout=timeout))
     elif args.code is not None:
         # Ctrl-B, then Ctrl-D. Not `supervisor.reload()`: `RawReplRunner` never sends Ctrl-B, so an
         # exec leaves the device in the *raw* REPL, and a restart from there comes back to a raw
@@ -269,12 +272,9 @@ def main() -> None:
     frame_limit = args.frames if args.frames is not None else (5 if args.circuitpython and not args.tkinter else 0)
     deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
 
-    # frame_queue exists because St7735s.on_frame fires from the device's own engine-room thread,
-    # not this one; frames are decoded there and only ever drawn from the loop below (Tkinter
-    # widgets may only be touched from the thread that created them). Same shape as eink_run.py.
-    # Raw bytes across the queue, not decoded images: `on_frame` fires on the emulator's own
-    # engine-room thread, so a pure-Python RGB565 decode in it is time the emulated chip does not
-    # get to run. `_drain()` decodes on this thread instead.
+    # No thread (same shape as eink_run.py): the engine runs as a task on `loop`, which this script runs itself - `pump()` below advances the emulator for a slice of wall
+    # time and returns, and the frames `St7735s.on_frame` hands over are decoded and drawn between slices (Tkinter widgets may only be touched from the thread that created
+    # them, which is this one). Raw bytes across the queue, not decoded images, keeps the decode out of `on_frame`, which runs inside the engine.
     frame_queue: queue.Queue[bytes] = queue.Queue()
 
     from boards.waveshare_rp2040_lcd_0_96 import board_with
@@ -297,10 +297,14 @@ def main() -> None:
     # brings USB up - measured past 30s in emulation, where the same board with an
     # already-populated drive enumerates well inside it. Nothing here waits on the timeout when
     # the device is quicker, so the higher ceiling costs a fast run nothing.
-    device.start_async(timeout=_START_TIMEOUT_SECONDS).result()
+    loop = asyncio.new_event_loop()
+    simulator = device.simulator
+    loop.run_until_complete(
+        device.astart(timeout=_START_TIMEOUT_SECONDS)
+    )  # binds `loop` and starts the engine as a task on it
 
     shown = 0
-    _push_guest_files(device, args, args.timeout or None)
+    _push_guest_files(loop, device, args, args.timeout or None)
     try:
         if args.circuitpython:
             # Nothing to push: board_init() already started painting, and never stops - so this
@@ -308,13 +312,13 @@ def main() -> None:
             while (frame_limit <= 0 or shown < frame_limit) and not _expired(deadline):
                 shown += _drain(frame_queue, renderer, _budget(frame_limit, shown))
                 renderer.pump()
-                time.sleep(0.05)
+                simulator.pump(0.02)
         else:
-            future = device.exec_file_async(_DEMO_SCRIPT, timeout=None)
+            future = loop.create_task(device.aexec_file(_DEMO_SCRIPT, timeout=None))
             while not future.done() and not _expired(deadline) and (frame_limit <= 0 or shown < frame_limit):
                 shown += _drain(frame_queue, renderer, _budget(frame_limit, shown))
                 renderer.pump()
-                time.sleep(0.05)
+                simulator.pump(0.02)
             if not future.done():
                 print(f"timed out after {args.timeout}s with {shown} frame(s)", file=sys.stderr)
                 device.stop()
@@ -336,7 +340,9 @@ def main() -> None:
             while True:
                 _drain(frame_queue, renderer)
                 renderer.pump()
-                time.sleep(0.05)
+                simulator.pump(
+                    0.02
+                )  # the emulated board keeps running (a CircuitPython panel keeps repainting) while the window is open
         except (KeyboardInterrupt, tkinter.TclError):  # TclError: the user closed the window
             pass
 
@@ -347,6 +353,8 @@ def main() -> None:
         print(f"CIRCUITPY written to {args.dump_fs}")
 
     device.stop()
+    simulator.pump(0.01)
+    loop.close()
 
 
 if __name__ == "__main__":
