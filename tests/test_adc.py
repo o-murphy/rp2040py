@@ -35,3 +35,12 @@ def test_round_robin_can_select_every_channel_not_only_0_and_4():
         seen.append(_ainsel(chip))
     assert seen == [0, 1, 2, 3]
     assert (chip.read_uint32(ADC_BASE + CS) >> 15) & 1 == 0  # no stray bit above the field
+
+
+def test_round_robin_wraps_from_the_last_channel_to_channel_0():
+    chip = RP2040()
+    chip.write_uint32(ADC_BASE + CS, 1 | (0x11 << 16) | (4 << 12))  # channels 0 and 4 in the mask, sampling 4
+    chip.adc.complete_adc_read(1, False)
+    assert _ainsel(chip) == 0  # (4 + 1) % 5: it used to skip 0 and come back to 4
+    chip.adc.complete_adc_read(1, False)
+    assert _ainsel(chip) == 4

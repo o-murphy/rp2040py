@@ -178,7 +178,7 @@ public:
         const uint32_t round_mask = (cs >> CS_RROBIN_SHIFT) & CS_RROBIN_MASK;
         if (round_mask) {
             const int64_t channels = num_channels < 1 ? 1 : num_channels;
-            int64_t channel = static_cast<int64_t>(active_channel()) + 1;
+            int64_t channel = (static_cast<int64_t>(active_channel()) + 1) % channels;
             bool found = channel < 32 && (round_mask & (1u << channel));
             for (int64_t turns = 0; !found && turns < channels; ++turns) {
                 channel = (channel + 1) % channels;

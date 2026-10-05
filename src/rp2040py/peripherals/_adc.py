@@ -228,7 +228,7 @@ class RPADC(BasePeripheral):
         # Round-robin
         round_mask = (self.cs >> CS_RROBIN_SHIFT) & CS_RROBIN_MASK
         if round_mask:
-            channel = self._active_channel + 1
+            channel = (self._active_channel + 1) % self.num_channels
             while not (round_mask & (1 << channel)):
                 channel = (channel + 1) % self.num_channels
             self._active_channel = channel

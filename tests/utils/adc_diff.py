@@ -326,6 +326,10 @@ def mutant_rig(name: str) -> Rig:
             round_mask = (self.cs >> P.CS_RROBIN_SHIFT) & P.CS_RROBIN_MASK
             if round_mask and name != "c_no_round_robin":
                 channel = self._active_channel + (0 if name == "c_round_robin_same" else 1)
+                if (
+                    name != "c_round_robin_unwrapped"
+                ):  # the old behaviour: the first candidate was not wrapped (5 % 5 = 0 was skipped)
+                    channel %= self.num_channels
                 while not (round_mask & (1 << channel)):
                     channel = (channel + 1) % self.num_channels
                 self._active_channel = channel
@@ -502,7 +506,7 @@ MUTANTS = (
     "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "result_masked", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
     "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
-    "cs_sticky_in_fcs", "ainsel_setter_shift_mask",
+    "cs_sticky_in_fcs", "ainsel_setter_shift_mask", "c_round_robin_unwrapped",
 )  # fmt: skip
 
 

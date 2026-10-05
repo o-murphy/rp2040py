@@ -269,14 +269,14 @@ static void test_round_robin_steps_through_the_masked_channels() {
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 2);
     wr(CS, CS_EN | (0x10u << CS_RROBIN_SHIFT));
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 0 -> 1 2 3 4: found
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 5 (no bit) -> 1 2 3 4: again 4
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 0 1 2 3 4: again 4
     wr(CS, CS_EN | (0x03u << CS_RROBIN_SHIFT) | (4u << CS_AINSEL_SHIFT));
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 1);      // 4 -> 5 (no) -> 1 (bit 1)
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 0);      // 4 -> (4 + 1) % 5 = 0, a set bit
     wr(CS, CS_EN | (0x12u << CS_RROBIN_SHIFT));
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 1);      // the first candidate is active + 1 = 1, a set bit
     wr(CS, CS_EN | (0x11u << CS_RROBIN_SHIFT));
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 0 -> 1 .. 4
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 5 (no bit) -> (5 + 1) % 5 = 1, 2, 3, 4: channel 0 is skipped (to be fixed)
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 0);      // 4 -> (4 + 1) % 5 = 0: it wraps to channel 0
     // a channel number above the field is stored in its 3 bits and nothing else of CS is touched
     adc.num_channels = 16;
     adc.cs = CS_EN | (0x10u << CS_RROBIN_SHIFT);
