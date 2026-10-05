@@ -60,7 +60,10 @@ from rp2040py.peripherals.reset import (
     RPReset,
 )
 from rp2040py.peripherals.rtc import RP2040RTC
-from rp2040py.peripherals.spi import RPSPI, ISPIDMAChannels
+from rp2040py.peripherals._spi import (
+    RPSPI,
+    ISPIDMAChannels,
+)  # the pure chip's own SPI: the native one is the native chip's
 from rp2040py.peripherals.syscfg import RP2040SysCfg
 from rp2040py.peripherals.sysinfo import RP2040SysInfo
 from rp2040py.peripherals.tbman import RPTBMAN
