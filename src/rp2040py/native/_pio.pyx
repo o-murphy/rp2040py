@@ -19,6 +19,7 @@ import asyncio
 from libc.stdint cimport int32_t, int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._dma cimport RPDMA
 from rp2040py.native._gpio_pin cimport GPIOPin
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._pin cimport PinBank
@@ -45,8 +46,17 @@ cdef cppbool _irq_trampoline(void* ctx, uint32_t line, cppbool level) noexcept:
 
 cdef cppbool _dreq_trampoline(void* ctx, uint32_t channel, cppbool set) noexcept:
     cdef RPPIO pio = <RPPIO> ctx
+    cdef RPDMA native
     try:
-        dma = pio.rp2040.dma
+        dma = pio.rp2040.dma  # looked up on every call: a chip may be given another DMA (a recorder, a test double)
+        if type(dma) is RPDMA:
+            # The chip's own native DMA: the DREQ goes straight into its C++ block - no Python call, no enum - and a
+            # failure it hits (an interrupt line, clk_sys) is already parked, which is what `False` says.
+            native = <RPDMA> dma
+            if set:
+                return native._block.set_dreq(channel)
+            native._block.clear_dreq(channel)
+            return True
         if set:
             dma.set_dreq(_DREQ_BY_NUMBER[channel])
         else:
