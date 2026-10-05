@@ -256,6 +256,8 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 - Exit: the whole of `tests/` green on both builds; no MCU register access reaches a Python handler in a boot unless a user window was attached.
 
 ### Phase 5 - gate: what of the existing Python moves too (CYW43 and friends)
+> **Amended 2026-10-05:** CYW43 is a board peripheral, not part of the MCU core; it leaves this record's order (see the newest progress-log entry). The text below is kept as written.
+
 - Decide from a profile, not from taste: is the CYW43 gSPI transfer path (PIO-clocked, a very high event rate per bit) the new
   bottleneck? If so port `bus.py`/`chip.py`; keep `nat.py` in Python. Re-check other `external/` devices the same way.
 - Exit: a written decision per component, with the measurement behind it.
@@ -311,6 +313,15 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
   the answer is "no". Leading option if it is not: SRAM, DPRAM and boot ROM as core members, flash stays caller-owned (large, board-dependent). Not done now; revisit after Phase 3, since it reaches most of the Python-facing surface.
 
 ## Progress log
+
+- 2026-10-05: **Phase order amended (the fourth time): CYW43 leaves this record; USB is closed by measurement; the rest of Phase 4 waits for workloads that use it. Supersedes the order of the entry below.**
+  - CYW43 is a **board peripheral** (an `ExternalDevice` under `external/`), not an MCU capability, so it is not a gate of the MCU core. A function-level profile of the Pico W scan (cProfile, native build, 1.33 s profiled) puts `external/cyw43/bus.py` at 17.4% of self time (hot: `_on_word` 62k calls, `_write_backplane_memory` 3.6k, `_swap_bytes` 63k, `_word`, `_word_count`); `chip.py` and `nat.py` are ~0; the C++ core is 65.7%. Ceiling of moving the word path to C++: roughly 15% of the scan. A native CYW43 may follow **separately** from this record, with that profile as its starting point; the core's interest in it is only the boundary (pin/PIO host callbacks).
+  - USB is closed by measurement: after the ping-pong change `usb/cdc.py` + `usb/setup.py` are ~100 calls and `peripherals/usb.py` 0.002 s (0.3-0.6%) in mp-idle and cp-boot. Nothing to port for speed.
+  - The rest of Phase 4: UART, SPI, I2C, ADC, PWM had zero accesses in all four workloads, so the profile cannot rank them. Added single-block scenarios (UART write, SPI write, I2C scan, ADC read, PWM duty sweep) and ran them on the native build: SPI, I2C, ADC and PWM finish in 0.10-0.18 s wall each (their blocks 23-78k accesses, dwarfed by SIO/TIMER); the UART scenario **never completes** - see the next entry. These blocks are done after the profile says so or for WASM completeness, not before.
+  - Constructing `RP2040()` costs 0.06-0.3 s once (first call slowest), not a throughput item.
+  - Phase 5's text above is superseded in its CYW43 wording; its exit is replaced by the profile in this entry.
+
+- 2026-10-05: **Found, not caused by this work: `machine.UART.write()` never returns in MicroPython 1.21 on the emulated UART (IRQ storm).** Reproduced on the pre-DMA build and on the pure build too. The guest loops reading UARTMIS twice, UARTFR once and writing UARTICR (646k iterations in 8 s) because `RPUART.check_interrupts()` re-asserts `UARTTXINTR` after every clear (the old TODO "proper FIFO for TX"). Real PL011: the TX interrupt is edge-like (it is set when a written byte leaves the FIFO, not while the FIFO is empty). Fix tracked as its own commit.
 
 - 2026-10-05: **Phase order amended (the third time): SSI/flash path -> CYW43 -> USB -> the rest of Phase 4 -> the QSPI pads and shared pin banks with the WASM host. Supersedes the order of 2026-10-04.**
   - Why: the plan said "order Phase 4 by Phase 0's profile", and the profile re-taken on 2026-10-05 (after pins, PIO and DMA were C++) shows where the Python left is: UART, SPI, I2C, ADC, PWM, RTC and the watchdog had **zero** accesses in all five workloads; what remained was USB (11-30% of the profiled time before the CDC change above), the SSI (~8% of a CircuitPython boot, 408k reads and 137k writes) and, on the Pico W, the CYW43 bus protocol (`GSPIBus._on_word`, backplane memory writes, byte swaps: ~6-11%). `_execute_batch` (the C++ core inside one Python frame) was 52-63%.
