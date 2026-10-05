@@ -281,9 +281,8 @@ def mutant_rig(name: str) -> Rig:
             super()._fifos_updated()
 
         def read_uint32(self, offset: int) -> int:
-            if offset == P.SSPDR and name == "dr_read_empty_ff":
-                if self.rx_fifo.empty:
-                    return 0xFF
+            if offset == P.SSPDR and name == "dr_read_empty_ff" and self.rx_fifo.empty:
+                return 0xFF
             if offset == P.SSPSR and name == "sr_bsy_wrong":
                 return super().read_uint32(offset) & ~P.BSY
             if offset == P.SSPMIS and name == "mis_unmasked":
