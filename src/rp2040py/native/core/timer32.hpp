@@ -142,6 +142,8 @@ public:
     }
 
     TimerMode mode() const noexcept { return mode_; }
+    uint32_t mode_raw() const noexcept { return static_cast<uint32_t>(mode_); }  // for the shells: the enum as a plain number
+    void set_mode_raw(uint32_t value) noexcept { set_mode(static_cast<TimerMode>(value)); }
     void set_mode(TimerMode value) noexcept {
         if (value == mode_) return;
         const int64_t now_counter = counter();
