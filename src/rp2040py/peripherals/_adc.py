@@ -186,10 +186,7 @@ class RPADC(BasePeripheral):
     @_active_channel.setter
     def _active_channel(self, channel: int) -> None:
         self.cs &= ~(CS_AINSEL_MASK << CS_AINSEL_SHIFT)
-        # TODO: matches upstream rp2040js, which masks `channel` with CS_AINSEL_SHIFT (12)
-        # instead of CS_AINSEL_MASK (0x7) here - almost certainly an upstream bug, kept as-is
-        # for behavioral parity. Revisit if rp2040js fixes it upstream.
-        self.cs |= (channel & CS_AINSEL_SHIFT) << CS_AINSEL_SHIFT
+        self.cs |= (channel & CS_AINSEL_MASK) << CS_AINSEL_SHIFT
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.ADC_FIFO, bool(self.int_status))

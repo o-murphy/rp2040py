@@ -14,8 +14,7 @@
 //
 // Quirks of the reference that are kept (each pinned by tests/test_adc_diff.py or the C++ checks):
 //   - a CS write with ERR_STICKY set clears that bit of CS (write-clear); ERR follows the last conversion, STICKY stays until cleared that way;
-//   - the active channel is stored by a setter that masks the new value with CS_AINSEL_SHIFT (12) where the field mask is 7 - an upstream (rp2040js) quirk kept as it is - so a
-//     round-robin step can only ever land on channels 0 and 4 (and set stray bits above the field);
+//   - the active channel (CS.AINSEL, 3 bits) can hold 0-7 whatever `num_channels` is; a round-robin step stores the channel it found;
 //   - the FCS write does not update the DREQ (only the interrupt line); a FIFO read of an empty FIFO sets UNDER and reads 0; a push on a full FIFO sets OVER and drops;
 //   - `INTR` is raw level >= threshold (a threshold of 0 is always raised); `INTS` is (raw & enable) | force; INTE and INTF hold one bit;
 //   - a free-running capture restarts at once when the divider does not exceed the sample time in 48 MHz ticks, else after the difference;
@@ -117,11 +116,10 @@ public:
     uint32_t int_raw() const noexcept { return fifo.count() >= threshold() ? adc_regs::FIFO_INT : 0u; }
     uint32_t int_status() const noexcept { return (int_raw() & int_enable) | int_force; }
     uint32_t active_channel() const noexcept { return (cs >> adc_regs::CS_AINSEL_SHIFT) & adc_regs::CS_AINSEL_MASK; }
-    // The reference's setter, quirk included (see the header): the value is masked with CS_AINSEL_SHIFT, not with the field mask.
     void set_active_channel(int64_t channel) noexcept {
         using namespace adc_regs;
         cs &= ~(CS_AINSEL_MASK << CS_AINSEL_SHIFT);
-        cs |= (static_cast<uint32_t>(channel) & CS_AINSEL_SHIFT) << CS_AINSEL_SHIFT;
+        cs |= (static_cast<uint32_t>(channel) & CS_AINSEL_MASK) << CS_AINSEL_SHIFT;
     }
 
     // ---- the conversion ---------------------------------------------------------------------------------------

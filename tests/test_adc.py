@@ -19,3 +19,19 @@ def test_a_cs_write_clears_the_sticky_error_in_cs_not_in_fcs():
     chip.write_uint32(ADC_BASE + CS, CS_ERR_STICKY)  # write-clear
     assert not chip.read_uint32(ADC_BASE + CS) & CS_ERR_STICKY
     assert chip.read_uint32(ADC_BASE + FCS) & FCS_UNDER  # FCS is not what the bit belongs to
+
+
+def _ainsel(chip) -> int:
+    return (chip.read_uint32(ADC_BASE + CS) >> 12) & 0x7
+
+
+def test_round_robin_can_select_every_channel_not_only_0_and_4():
+    chip = RP2040()
+    adc = chip.adc
+    chip.write_uint32(ADC_BASE + CS, 1 | (0x1F << 16))  # enabled, all five channels in the round-robin mask
+    seen = [_ainsel(chip)]
+    for _ in range(3):
+        adc.complete_adc_read(1, False)
+        seen.append(_ainsel(chip))
+    assert seen == [0, 1, 2, 3]
+    assert (chip.read_uint32(ADC_BASE + CS) >> 15) & 1 == 0  # no stray bit above the field

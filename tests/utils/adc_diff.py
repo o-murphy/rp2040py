@@ -339,6 +339,21 @@ def mutant_rig(name: str) -> Rig:
                 else:
                     self.start_adc_read()
 
+        # -- the active channel
+        @property
+        def _active_channel(self) -> int:
+            return (self.cs >> P.CS_AINSEL_SHIFT) & P.CS_AINSEL_MASK
+
+        @_active_channel.setter
+        def _active_channel(self, channel: int) -> None:
+            self.cs &= ~(P.CS_AINSEL_MASK << P.CS_AINSEL_SHIFT)
+            if (
+                name == "ainsel_setter_shift_mask"
+            ):  # the old behaviour: masked with the shift (12), not the field mask (7)
+                self.cs |= (channel & P.CS_AINSEL_SHIFT) << P.CS_AINSEL_SHIFT
+            else:
+                self.cs |= (channel & P.CS_AINSEL_MASK) << P.CS_AINSEL_SHIFT
+
         # -- the registers
         def read_uint32(self, offset: int) -> int:
             if offset == P.CS and name == "cs_ready_inverted":
@@ -487,7 +502,7 @@ MUTANTS = (
     "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "result_masked", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
     "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
-    "cs_sticky_in_fcs",
+    "cs_sticky_in_fcs", "ainsel_setter_shift_mask",
 )  # fmt: skip
 
 

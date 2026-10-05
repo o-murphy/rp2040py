@@ -262,26 +262,27 @@ static void test_dreq_follows_the_threshold_when_enabled() {
     CHECK(adc.complete_adc_read(1, false) && adc.complete_adc_read(2, false) && env.dreq_n == 4);
 }
 
-static void test_round_robin_with_the_references_setter_quirk() {
+static void test_round_robin_steps_through_the_masked_channels() {
     fresh(kDeferred);
     wr(CS, CS_EN | (0x1Fu << CS_RROBIN_SHIFT));
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 0);      // 0 -> 1, stored as 1 & 12 = 0
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 1);      // 0 -> 1
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 2);
     wr(CS, CS_EN | (0x10u << CS_RROBIN_SHIFT));
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 0 -> 1 2 3 4: found, 4 & 12 = 4
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 0 -> 1 2 3 4: found
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 5 (no bit) -> 1 2 3 4: again 4
     wr(CS, CS_EN | (0x03u << CS_RROBIN_SHIFT) | (4u << CS_AINSEL_SHIFT));
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 0);      // 4 -> 5 (no) -> 1 (bit 1): 1 & 12 = 0
-    CHECK((adc.cs & (1u << 12)) == 0);
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 1);      // 4 -> 5 (no) -> 1 (bit 1)
     wr(CS, CS_EN | (0x12u << CS_RROBIN_SHIFT));
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 0);      // the first candidate is active + 1 = 1, a set bit: stored as 1 & 12 = 0
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 1);      // the first candidate is active + 1 = 1, a set bit
     wr(CS, CS_EN | (0x11u << CS_RROBIN_SHIFT));
     CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 0 -> 1 .. 4
-    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 5 (no bit) -> (5 + 1) % 5 = 1, 2, 3, 4: channel 0 is skipped
-    // the setter's stray bits: 12 & channel can set bits above the field when the channel is 8..15 - unreachable with 5 channels, reachable with more
+    CHECK(adc.complete_adc_read(1, false) && adc.active_channel() == 4);      // 4 -> 5 (no bit) -> (5 + 1) % 5 = 1, 2, 3, 4: channel 0 is skipped (to be fixed)
+    // a channel number above the field is stored in its 3 bits and nothing else of CS is touched
     adc.num_channels = 16;
-    wr(CS, CS_EN | (0x10u << CS_RROBIN_SHIFT));
-    CHECK(adc.complete_adc_read(1, false));
-    // a channel the block does not have: the search gives up after a turn instead of looping for ever
+    adc.cs = CS_EN | (0x10u << CS_RROBIN_SHIFT);
+    adc.set_active_channel(13);
+    CHECK(adc.cs == (CS_EN | (0x10u << CS_RROBIN_SHIFT) | (5u << CS_AINSEL_SHIFT)));
+// a channel the block does not have: the search gives up after a turn instead of looping for ever
     fresh(kDeferred);
     adc.num_channels = 3;
     wr(CS, CS_EN | (0x10u << CS_RROBIN_SHIFT));
@@ -517,7 +518,7 @@ int main() {
     test_error_flags_in_cs_and_the_sticky_clear();
     test_interrupts_and_the_line();
     test_dreq_follows_the_threshold_when_enabled();
-    test_round_robin_with_the_references_setter_quirk();
+    test_round_robin_steps_through_the_masked_channels();
     test_a_free_running_capture_and_its_divider();
     test_an_immediate_device_completes_from_inside_the_callback();
     test_a_silent_device_leaves_the_block_busy_until_a_completion();
