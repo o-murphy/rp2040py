@@ -304,6 +304,10 @@ def mutant_rig(name: str) -> Rig:
             if offset == P.SSPCPSR and name == "cpsr_mask_ff":
                 self._clock_divisor = value & 0xFF
                 return
+            if offset == P.SSPICR and name == "icr_decoded_value":
+                self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR))
+                self.check_interrupts()
+                return
             if offset == P.SSPICR and name == "icr_clears_all":
                 self._int_raw = 0
                 self.check_interrupts()
@@ -341,7 +345,7 @@ def mutant_rig(name: str) -> Rig:
 MUTANTS = (
     "fifo_depth_16", "spi_mode_swapped", "master_mode_inverted", "clock_freq_no_scr", "dma_tx_inverted", "dma_rx_inverted", "busy_not_set", "do_tx_no_fifos_updated",
     "overrun_not_flagged", "complete_no_do_tx", "tx_threshold_lt", "rx_threshold_gt", "dr_read_empty_ff", "sr_bsy_wrong", "mis_unmasked", "dss_mask_ignored",
-    "dr_write_when_full_pushes", "cpsr_mask_ff", "icr_clears_all", "icr_clears_tx", "imsc_masked", "reset_no_dma_publish", "reset_clears_callback",
+    "dr_write_when_full_pushes", "cpsr_mask_ff", "icr_decoded_value", "icr_clears_all", "icr_clears_tx", "imsc_masked", "reset_no_dma_publish", "reset_clears_callback",
 )  # fmt: skip
 
 

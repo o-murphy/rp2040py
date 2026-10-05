@@ -270,7 +270,9 @@ class RPSPI(BasePeripheral):
         elif offset == SSPDMACR:
             self._dma_control = value
         elif offset == SSPICR:
-            self._int_raw &= ~(value & (SSPRTINTR | SSPRORINTR))
+            # By the bits the bus passed, not the alias-decoded value - the rule of the UART's and the DMA's write-1-to-clear registers (an alias decodes against a read
+            # of ICR, which is write-only and reads as all ones here, so a CLR/XOR/SET write would otherwise clear the wrong bits).
+            self._int_raw &= ~(self.raw_write_value & (SSPRTINTR | SSPRORINTR))
             self.check_interrupts()
         else:
             super().write_uint32(offset, value)

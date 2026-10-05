@@ -15,7 +15,7 @@
 // Quirks of the reference that are kept (each one is pinned by tests/test_spi_diff.py or the C++ checks):
 //   - a DR write on a full TX FIFO is dropped silently; a completion into a full RX FIFO sets the overrun bit (ROR), raises the line at once and drops the value; a completion with nothing sent is accepted and pushes;
 //   - a written value is masked to DSS + 1 bits (so 1..16, the invalid sizes DSS = 0..2 included), a completed one is kept whole; CR0, CR1, IMSC and DMACR are stored whole, CPSR is masked to 0xFE;
-//   - the TX interrupt is raw while the TX FIFO holds at most 4 (half of 8), the RX interrupt while the RX FIFO holds at least 4; ICR clears only RT and ROR, by the *decoded* value;
+//   - the TX interrupt is raw while the TX FIFO holds at most 4 (half of 8), the RX interrupt while the RX FIFO holds at least 4; ICR clears only RT and ROR, by the *raw* value the bus passed (a direct write keeps the one the last atomic write left);
 //   - SR's BSY is "busy or the TX FIFO is not empty"; SR, RIS and MIS are read-only: a write to them is an unimplemented one;
 //   - both DREQs are re-published on every FIFO change and by `reset()` (and `power_on()`, the constructor's own publication): TX is asserted unless the TX FIFO is full, RX only while the RX
 //     FIFO is not empty;
@@ -175,7 +175,7 @@ public:
                 return check_interrupts();
             case DMACR: dma_control = word; return true;
             case ICR:
-                int_raw &= ~(word & (INT_RT | INT_ROR));
+                int_raw &= ~(static_cast<uint32_t>(raw_write_value_) & (INT_RT | INT_ROR));  // the bits the bus passed, whatever the alias (as the UART's ICR)
                 return check_interrupts();
             default: break;
         }

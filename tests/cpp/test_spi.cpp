@@ -352,12 +352,16 @@ static void test_alias_writes_decode_against_a_read_with_its_side_effects() {
     CHECK(rd(IMSC) == 0);
 }
 
-static void test_icr_uses_the_decoded_value_unlike_the_uart() {
+static void test_icr_clears_the_raw_value_whatever_the_alias_like_the_uart() {
     fresh(kSilent);
     spi.int_raw = INT_RT | INT_ROR;
     env.warns = 0;
-    CHECK(wr(ICR, INT_ROR, kAtomicClear));                       // the alias decode reads ICR first: unimplemented, all ones; all ones & ~ROR clears RT only
+    CHECK(wr(ICR, INT_ROR, kAtomicClear));                       // the alias decode reads ICR first (unimplemented: a warning, all ones) - but ICR clears the RAW bits
     CHECK(env.warns >= 1 && env.warn_offset[0] == ICR);
+    CHECK(rd(RIS) == INT_RT);
+    CHECK(wr(ICR, INT_RT, kAtomicXor) && rd(RIS) == 0);
+    spi.int_raw = INT_RT | INT_ROR;
+    CHECK(spi.write(ICR, 0xFFFFFFFFu));                          // a direct write keeps the raw value the last atomic write left (INT_RT)
     CHECK(rd(RIS) == INT_ROR);
 }
 
@@ -397,6 +401,20 @@ static void test_a_failing_host_call_stops_the_block_where_the_reference_would_h
     CHECK(!spi.failed());
 }
 
+static void test_a_failing_line_update_on_an_overrun_stops_the_completion() {
+    fresh(kDeferred);
+    wr(CR0, 0xF);
+    wr(IMSC, INT_ROR);
+    dr(1);
+    dr(2);                                                       // 1 in flight, 1 queued
+    for (uint32_t i = 0; i < 8; ++i) spi.rx.push(i);             // the RX FIFO is full
+    env.fail_irq = true;
+    CHECK(!spi.complete_transmit(9));                            // the overrun's line update raised: ROR is set, the value dropped, the queued byte not sent
+    CHECK((spi.int_raw & INT_ROR) != 0 && spi.rx.count() == 8 && spi.tx.count() == 1 && env.sent_n == 1);
+    env.fail_irq = false;
+    env.failed = 0;
+}
+
 static void test_the_window_handler_is_the_bus_entry_point() {
     fresh(kSilent);
     WindowHandler h = spi.window_handler();
@@ -430,8 +448,9 @@ int main() {
     test_reset_clears_everything_republishes_the_dreqs_and_keeps_the_host();
     test_unimplemented_offsets_warn_and_read_all_ones();
     test_alias_writes_decode_against_a_read_with_its_side_effects();
-    test_icr_uses_the_decoded_value_unlike_the_uart();
+    test_icr_clears_the_raw_value_whatever_the_alias_like_the_uart();
     test_a_failing_host_call_stops_the_block_where_the_reference_would_have_raised();
+    test_a_failing_line_update_on_an_overrun_stops_the_completion();
     test_the_window_handler_is_the_bus_entry_point();
     if (failures == 0) std::printf("test_spi: ok\n");
     return failures == 0 ? 0 : 1;

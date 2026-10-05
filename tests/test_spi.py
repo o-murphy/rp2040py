@@ -36,3 +36,15 @@ def test_master_mode_is_sspcr1s_ms_bit_not_sspcr0s(rp2040_factory):
     assert spi.master_mode
     chip.write_uint32(SPI0_BASE + SSPCR1, 1 << 2)  # SSPCR1.MS: slave
     assert not spi.master_mode
+
+
+def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):
+    """The same rule as the UART's and the DMA's write-1-to-clear registers: what a write clears is the raw value of the write, not the alias-decoded value (an
+    alias decodes against a read of ICR, which is write-only and reads as all ones here)."""
+    chip = rp2040_factory()
+    spi = chip.spi[0]
+    spi._int_raw = SSPRTINTR | SSPRORINTR
+    chip.write_uint32(SPI0_BASE + 0x3000 + SSPICR, SSPRORINTR)  # the CLR alias: clear ROR
+    assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == SSPRTINTR
+    chip.write_uint32(SPI0_BASE + SSPICR, SSPRTINTR)
+    assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == 0
