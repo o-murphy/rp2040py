@@ -312,6 +312,18 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 
 ## Progress log
 
+- 2026-10-05: **Phase 3: the CYW43 gSPI bit shifter is C++ - the Pico W scan goes from 7.1 s to 3.4 s (2.1x) over the Python listener.**
+  - What was built (as designed in the 2026-10-05 note): `core/gspi.hpp` (`GspiShifter`: CS, 32-bit shift register, response buffer; direct listeners of the CLK and CS pins; samples DATA with the pin's `state_code()`, drives it with `set_input_value()`), a Cython shell `native/_gspi.pyx`, and in
+    `external/cyw43/bus.py` the code after the 32nd bit of `_on_clock_rising` split out as `GSPIBus._on_word()` (the pure path is unchanged and is still the oracle and the fallback) plus `attach_gpio()` choosing the native shifter when the three pins are native `GPIOPin`s. The level sources of the three pins are bound as
+    pointers into the live native PIO/SIO objects, so reading CLK/DATA/CS never makes a Python attribute read; the pins keep the shifter and those objects alive.
+  - Verified before measuring: standalone C++ checks against an independent transcription of the three edge methods (30 x 6000 random CS/CLK/word/response operations; 13 mutants killed, one equivalent); the 111 CYW43/chip-reset/boards tests pass on both the shifter and the Python listeners; the order hash of the Pico W scan's
+    4,798,482 pin events equals `main`'s (`f45f9c116bcf8dab81f25792d2c1eff6`); the scan result is unchanged (`RP2040PY-GUEST` found, same tuple); `uv run pre-commit run --all-files` green on both builds.
+  - Measured, A/B interleaved against the commit just before, three rounds of best-of-two, Pico W `WLAN.scan()` (MicroPython 1.23.0): Python listener 7.154 / 7.146 / 7.057 s, C++ shifter 3.342 / 3.597 / 3.457 s. The ~4M Python edge listener calls (38% of the run in the profile) became ~125k word callbacks. Against `main` (9.83 s on the same
+    workload, measured earlier in the session): about 2.8x.
+  - What this teaches about the plan: the profile pointed at exactly this (a Python listener per clock edge, not the pin layer's own machinery - two earlier experiments, the pin shell and the PIO wait mask, were performance-neutral), and the gain only came from a consumer that no longer crosses into Python.
+    The same recipe - a C++ consumer behind the direct-listener registry, the protocol left in Python and called once per word - is what Phase 5's other `external/` devices (displays, LED strips on PIO) would get if a profile ever points at them.
+  - Not done: `nat.py`/`chip.py` stay Python by decision; the cost of the DMA path (13% of the scan) is Phase 4's.
+
 - 2026-10-05: **Design note: the CYW43 gSPI bit shifter in C++ (`core/gspi.hpp`), the protocol in Python. Not implemented; read from `external/cyw43/bus.py` (`_on_cs_change`, `_on_clock_rising`, `_start_response`, `_on_clock_falling`, `attach_gpio`).**
   - What the per-edge path is. Three pins (CLK 29, DATA 24, CS 25) and a tiny state machine in `GSPIBus`: `_selected`, a 32-bit `_shift_reg` + `_bits_in_word`, and while answering a read a `_response_bytes` buffer with a bit index. CS (active low) resets everything and, on deassert, puts the chip's IRQ level on DATA;
     a rising CLK edge samples DATA (`data_pin.value == HIGH`: the level the host drives) unless idle or answering, and on the 32nd bit hands the word to the protocol; a falling edge, while answering, drives the next response bit with `data_pin.set_input_value(bit)`. Everything above one 32-bit word (`_word()` wire transform, header decode, write accumulation,
