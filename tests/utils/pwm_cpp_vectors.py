@@ -351,14 +351,31 @@ def scenarios() -> dict[str, list[tuple]]:
         (T, 50.0),
         *all_reads(),
     ]
-    s["phase_strobes_are_dead"] = [
+    s["phase_strobes"] = [
         _w(ch(0, TOP), 7),
-        _w(ch(0, CSR), EN_BIT | 0x80),
-        (R, ch(0, CSR)),
-        _w(ch(0, CSR), EN_BIT | 0x40),
-        (R, ch(0, CSR)),
-        (T, 40.0),
+        _w(ch(0, CSR), EN_BIT),
         (R, ch(0, CTR)),
+        _w(ch(0, CSR), EN_BIT | 0x80),  # PH_ADV on a running counter
+        (R, ch(0, CTR)),
+        (R, ch(0, CSR)),  # the strobe never reads back
+        _w(ch(0, CSR), EN_BIT | 0x80),
+        _w(ch(0, CSR), EN_BIT | 0x80),
+        (R, ch(0, CTR)),
+        _w(ch(0, CSR), EN_BIT | 0x40),  # PH_RET
+        (R, ch(0, CTR)),
+        _w(ch(0, CTR), 0),
+        _w(ch(0, CSR), EN_BIT | 0x40),  # retarding past 0 wraps to TOP
+        (R, ch(0, CTR)),
+        _w(ch(0, CSR), 0x80),  # no enable in the write: ignored
+        (R, ch(0, CTR)),
+        _w(ch(0, CSR), 0x40),
+        (R, ch(0, CTR)),
+        _w(ch(0, CSR), EN_BIT | 0xC0),  # both at once: net zero
+        (R, ch(0, CTR)),
+        (T, 40.0),
+        _w(ch(0, CSR), EN_BIT | 0x80),  # the compare alarms move with the counter
+        (T, 100.0),
+        *all_reads(),
     ]
     s["top_zero_and_cc_edges"] = [
         _w(ch(4, TOP), 0),

@@ -13,7 +13,6 @@
 // an alarm makes the alarm return `false` and the clock stops ticking.
 //
 // Quirks of the reference that are kept (pinned by the C++ checks and by tests/test_pwm_diff.py), several of them bugs that are fixed later, one commit each, with the oracle's mutants:
-//   - writing CSR clears PH_ADV and PH_RET *before* they are tested, so the phase advance/retard never acts;
 //   - the per-channel `en` reads as 0, so reading EN always gives 0 whatever is enabled (a copy of an rp2040js quirk); writing EN works;
 //   - `gpio_on_input` suppresses every B-input edge while `gpio_direction` is nonzero (`and` for `&`, again from rp2040js) - after a reset it never is zero, so the gated and edge-counting
 //     divider modes are dead unless something writes the word;
@@ -389,9 +388,12 @@ inline bool PwmChannel::write_register(uint32_t offset, uint32_t value) noexcept
     switch (offset) {
         case CHN_CSR: {
             if ((value & CSR_EN) && !(csr & CSR_EN)) update_double_buffered();
+            // PH_ADV and PH_RET are self-clearing strobes: they act on the written value, never appear in the stored CSR, and move a *running* counter, so they need the enable in the same write.
             csr = value & ~(CSR_PH_ADV | CSR_PH_RET);
-            if (csr & CSR_PH_ADV) timer.advance(1);  // dead: the strobes were just cleared (the reference's bug)
-            if (csr & CSR_PH_RET) timer.advance(-1);
+            if (value & CSR_EN) {
+                if (value & CSR_PH_ADV) timer.advance(1);
+                if (value & CSR_PH_RET) timer.advance(-1);
+            }
             div_mode = static_cast<PwmDivMode>((csr >> CSR_DIVMODE_SHIFT) & CSR_DIVMODE_MASK);
             if (!set_b_direction(div_mode == PwmDivMode::kFreeRunning)) return false;
             if (!update_enable()) return false;

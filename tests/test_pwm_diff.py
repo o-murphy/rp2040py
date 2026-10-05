@@ -33,9 +33,9 @@ def _write_the_compare_register(candidate: Rig, step: int) -> None:
         candidate.chip.write_uint32(PWM_BASE + 0x14 * 3 + 0x0C, 0x00050003)  # channel 3 CC
 
 
-def _drive_an_input(candidate: Rig, step: int) -> None:
-    if step == 700:
-        candidate.chip.gpio[7].set_input_value(True)
+def _flip_the_b_input_latch(candidate: Rig, step: int) -> None:
+    if step == 700:  # (a pin's level is not a reliable probe: an input override a random FUNCSEL write left on the pin can pin it)
+        candidate.chip.pwm.channels[3].last_b_value = not candidate.chip.pwm.channels[3].last_b_value
 
 
 def _advance_one_clock(candidate: Rig, step: int) -> None:
@@ -68,7 +68,7 @@ def _pull_a_pin(candidate: Rig, step: int) -> None:
     [
         _write_a_register,
         _write_the_compare_register,
-        _drive_an_input,
+        _flip_the_b_input_latch,
         _advance_one_clock,
         _change_the_interrupt_enable,
         _change_the_pin_word,

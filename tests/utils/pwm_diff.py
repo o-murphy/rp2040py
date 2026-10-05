@@ -257,6 +257,13 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "csr_en_always_updates": ("if value & CSR_EN and not (self.csr & CSR_EN):", "if value & CSR_EN:", 1),
     "csr_en_never_updates": ("if value & CSR_EN and not (self.csr & CSR_EN):", "if False:", 1),
     "csr_keeps_strobes": ("self.csr = value & ~(CSR_PH_ADV | CSR_PH_RET)", "self.csr = value", 1),
+    "csr_strobes_tested_after_the_clear": ("if value & CSR_PH_ADV:", "if self.csr & CSR_PH_ADV:", 1),
+    "csr_ret_tested_after_the_clear": ("if value & CSR_PH_RET:", "if self.csr & CSR_PH_RET:", 1),
+    "csr_strobes_not_gated_on_en": ("            if value & CSR_EN:\n                if value & CSR_PH_ADV:", "            if True:\n                if value & CSR_PH_ADV:", 1),
+    "csr_strobes_gated_on_the_counter_running": ("            if value & CSR_EN:\n                if value & CSR_PH_ADV:", "            if self.timer.enable:\n                if value & CSR_PH_ADV:", 1),
+    "csr_adv_retards": ("self.timer.advance(1)\n                if value & CSR_PH_RET:", "self.timer.advance(-1)\n                if value & CSR_PH_RET:", 1),
+    "csr_ret_advances": ("                    self.timer.advance(-1)\n            self.div_mode", "                    self.timer.advance(1)\n            self.div_mode", 1),
+    "csr_ret_missing": ("                if value & CSR_PH_RET:\n                    self.timer.advance(-1)\n", "", 1),
     "csr_divmode_one_bit": (
         "(self.csr >> CSR_DIVMODE_SHIFT) & CSR_DIVMODE_MASK",
         "(self.csr >> CSR_DIVMODE_SHIFT) & 0x1",
@@ -465,6 +472,9 @@ def _channel_scenario(r: random.Random) -> list[tuple]:
         ops.append(("write", P.EN, r.choice((1 << ch, 0xFF, (1 << ch) | 1)), ALIASES[0]))
     if r.random() < 0.5:
         ops.append(("write", P.INTE, r.choice((1 << ch, 0xFF, 0)), ALIASES[0]))
+    for _ in range(r.choice((0, 0, 1, 2, 4))):  # phase strobes on the running channel, the counter read after each
+        ops.append(("write", base + P.CHN_CSR, csr | P.CSR_EN | r.choice((P.CSR_PH_ADV, P.CSR_PH_RET, P.CSR_PH_ADV | P.CSR_PH_RET, P.CSR_PH_ADV)), ALIASES[0]))
+        ops.append(("read", base + P.CHN_CTR, ALIASES[0]))
     b = pins[1]
     if mode and r.random() < 0.6:
         ops.append(("direction", r.choice((0, 0, 0xFFFFFFFF, r.getrandbits(32)))))

@@ -48,8 +48,16 @@ class Timer32:
         decrease the counter if the timer is running in Decrement mode.
 
         :param delta: The value to add to the counter. Can be negative.
+
+        The base value is kept inside the counter's range (retarding past 0 wraps to TOP), and the
+        alarms are told: the counter has moved, so the time it takes to reach each target has too.
         """
         self._base_value += delta
+        if self._top_value != 0xFFFFFFFF:
+            top_modulo = self._top_value * 2 if self._timer_mode == TimerMode.ZIGZAG else self._top_value + 1
+            if top_modulo:
+                self._base_value %= top_modulo
+        self._updated()
 
     @property
     def raw_counter(self) -> int:

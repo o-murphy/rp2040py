@@ -82,8 +82,16 @@ public:
         updated();
     }
 
-    // Adds to the counter without telling the alarms (the reference's `advance`; negative in DECREMENT mode counts the other way).
-    void advance(int64_t delta) noexcept { base_value_ += delta; }
+    // Adds to the counter (negative in DECREMENT mode counts the other way). The base value is kept inside the counter's range - retarding past 0 wraps to TOP - and the alarms are
+    // told, because the time to each target has changed (rp2040js 1.4.0's fix of the PWM's phase strobes, which the reference follows).
+    void advance(int64_t delta) noexcept {
+        base_value_ += delta;
+        if (top_value_ != kNoTop) {
+            const int64_t top_modulo = mode_ == TimerMode::kZigzag ? top_value_ * 2 : top_value_ + 1;
+            if (top_modulo != 0) base_value_ = timer32_detail::floor_mod(base_value_, top_modulo);
+        }
+        updated();
+    }
 
     int64_t raw_counter() const noexcept {
         if (base_freq_ == 0.0 || prescaler_ == 0.0 || !enabled_) return base_value_;

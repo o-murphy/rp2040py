@@ -129,7 +129,7 @@ static void test_set_advance_and_the_stopped_counter() {
         Rig r(TimerMode::kIncrement, 9);
         r.t.set_enable(false);
         r.t.advance(-3);
-        CHECK(r.t.counter() == 4294967293u && r.t.raw_counter() == -3);
+        CHECK(r.t.counter() == 7u && r.t.raw_counter() == 7);  // advance() keeps the base value in range when TOP is set
         Rig q;
         q.t.set_enable(false);
         q.t.advance(-3);
@@ -391,7 +391,7 @@ static void test_how_the_timer_moves_its_alarms() {
         a.detach();
         b.detach();
     }
-    {  // advance() does not tell the alarms (the reference's behaviour): the counter moves, the next alarm does not
+    {  // advance() tells the alarms: the counter moves, so the next alarm comes sooner
         Rig r(TimerMode::kIncrement, 9);
         Fires f;
         f.rig = &r;
@@ -402,8 +402,37 @@ static void test_how_the_timer_moves_its_alarms() {
         r.us(2);
         CHECK(r.clk.nanos_to_next_alarm() == 3000.0);
         r.t.advance(1);
-        CHECK(r.clk.nanos_to_next_alarm() == 3000.0 && r.t.counter() == 3);
+        CHECK(r.clk.nanos_to_next_alarm() == 2000.0 && r.t.counter() == 3);
+        r.us(3);
+        CHECK(f.n == 1 && f.at[0] == 4000.0);
         a.detach();
+    }
+    {  // advance() wraps the base value into 0..TOP (INCREMENT), 0..2*TOP-1 (ZIGZAG) and leaves a TOP of 0xFFFFFFFF alone; a zigzag TOP of 0 has no modulus
+        Rig r(TimerMode::kIncrement, 9);
+        r.t.advance(-1);
+        CHECK(r.t.counter() == 9u && r.t.raw_counter() == 9);
+        Rig q(TimerMode::kIncrement, 9);
+        q.t.advance(25);
+        CHECK(q.t.counter() == 5u);
+        Rig z(TimerMode::kZigzag, 4);
+        z.t.advance(-1);
+        CHECK(z.t.raw_counter() == 7 && z.t.counter() == 1u);
+        z.t.advance(-1);
+        CHECK(z.t.raw_counter() == 6 && z.t.counter() == 2u);
+        Rig zs(TimerMode::kZigzag, 4);  // stopped: the base value is what is read, so the wrap into 0..2*TOP-1 is visible
+        zs.t.set_enable(false);
+        zs.t.advance(-1);
+        CHECK(zs.t.raw_counter() == 7 && zs.t.counter() == 1u);
+        Rig z0(TimerMode::kZigzag, 0);
+        z0.t.advance(3);
+        CHECK(z0.t.raw_counter() == 0 && z0.t.counter() == 0u);
+        Rig d(TimerMode::kDecrement, 9);
+        d.us(3);
+        CHECK(d.t.counter() == 7u);
+        d.t.advance(1);
+        CHECK(d.t.counter() == 8u);
+        d.t.advance(-2);
+        CHECK(d.t.counter() == 6u);
     }
     {  // a target equal to the current one changes nothing, a new one moves the alarm; a prescaler write and reset() move it too
         Rig r(TimerMode::kIncrement, 9);

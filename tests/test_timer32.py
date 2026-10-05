@@ -60,3 +60,46 @@ def test_setting_top_to_zero_on_a_running_zigzag_counter_is_safe(clock):
     timer.top = 0
 
     assert timer.counter == 0
+
+
+def test_advance_keeps_the_counter_in_range_and_wraps_past_zero_to_top(clock):
+    timer = _timer(clock, top=9)
+
+    timer.advance(-1)
+
+    assert timer.counter == 9
+    timer.advance(25)
+    assert timer.counter == 4
+
+
+def test_advance_wraps_a_zigzag_counter_over_its_whole_period(clock):
+    timer = _timer(clock, TimerMode.ZIGZAG, top=4)
+
+    timer.advance(-1)  # one before 0 is the last point of the period: 7 of 0..7, which reads as 1 on the way down
+
+    assert (timer.raw_counter, timer.counter) == (7, 1)
+
+
+def test_advance_on_a_zigzag_counter_with_top_zero_has_no_period_to_wrap():
+    timer = _timer(MockClock(), TimerMode.ZIGZAG, top=0)
+
+    timer.advance(3)
+
+    assert timer.counter == 0
+
+
+def test_advance_tells_the_alarms():
+    from rp2040py.clock._simulation_clock import SimulationClock
+    from rp2040py.utils.timer32 import Timer32PeriodicAlarm
+
+    clock = SimulationClock()
+    timer = _timer(clock, top=9)
+    alarm = Timer32PeriodicAlarm(timer, lambda: None)
+    alarm.target = 5
+    alarm.enable = True
+    _us(clock, 2)
+    assert clock.nanos_to_next_alarm == 3000
+
+    timer.advance(1)
+
+    assert clock.nanos_to_next_alarm == 2000

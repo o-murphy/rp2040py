@@ -111,11 +111,14 @@ class PWMChannel:
         if offset == CHN_CSR:
             if value & CSR_EN and not (self.csr & CSR_EN):
                 self._update_double_buffered()
+            # PH_ADV and PH_RET are self-clearing strobes: they act on the written value and never appear in the stored CSR. They advance or retard a *running* counter, so
+            # they need the enable in the same write (rp2040js 1.4.0, which had the same bug).
             self.csr = value & ~(CSR_PH_ADV | CSR_PH_RET)
-            if self.csr & CSR_PH_ADV:
-                self.timer.advance(1)
-            if self.csr & CSR_PH_RET:
-                self.timer.advance(-1)
+            if value & CSR_EN:
+                if value & CSR_PH_ADV:
+                    self.timer.advance(1)
+                if value & CSR_PH_RET:
+                    self.timer.advance(-1)
             self.div_mode = PWMDivMode((self.csr >> CSR_DIVMODE_SHIFT) & CSR_DIVMODE_MASK)
             self.set_b_direction(self.div_mode == PWMDivMode.FREE_RUNNING)
             self.update_enable()
