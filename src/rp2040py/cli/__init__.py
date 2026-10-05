@@ -792,6 +792,11 @@ def _bench_synthetic(instruction_count: int, block_size: int, board: str, log_le
     print(f"Executed {executed:,} instructions in {elapsed:.2f}s -> {executed / elapsed:,.0f} instructions/sec")
 
 
+_BENCH_DONE = "bench-done"
+# One REPL line: the string concatenation keeps the echoed command itself from containing the marker the run waits for.
+_BENCH_WORKLOAD = "exec('for i in range(30000): pass'); print('bench-' + 'done')"
+
+
 def _bench_firmware(
     image: PathLike,
     littlefs: PathLike | None,
@@ -830,7 +835,11 @@ def _bench_firmware(
 
     cdc = USBCDC(rp2040.usb_ctrl)
 
+    connected_at: list[float] = []  # simulated nanos of the host-side connect (engine mode's workload waits for it)
+    workload_done: list[bool] = []
+
     def _on_device_connected() -> None:
+        connected_at.append(clock.nanos)
         # nudge MicroPython to print its prompt, same as the micropython subcommand
         cdc.send_serial_byte(ord("\r"))
         cdc.send_serial_byte(ord("\n"))
@@ -843,6 +852,8 @@ def _bench_firmware(
             char = chr(byte)
             if char == "\n":
                 tracker.feed_line(current_line)
+                if current_line.strip() == _BENCH_DONE:
+                    workload_done.append(True)
                 current_line = ""
             else:
                 current_line += char
@@ -862,14 +873,44 @@ def _bench_firmware(
         sim_start = clock.nanos
         start = time.perf_counter()
         idle = False
-        while not tracker.found and (time.perf_counter() - start) < timeout:
+        # Boot alone is ~10 ms of wall time - too short for a real-time factor to mean anything - so unless the caller is waiting for specific text, the firmware's REPL is then
+        # given a fixed MicroPython loop and the factor is measured over that (the number a user's program sees: the core awake, the interpreter running).
+        want_workload = not expect_text
+        workload: tuple[float, float] | None = (
+            None  # (simulated nanos, perf_counter) at the moment the loop was typed in
+        )
+        boot: tuple[float, float] | None = None
+        while not tracker.found and not workload_done and (time.perf_counter() - start) < timeout:
             simulator._execute_batch()
-            if rp2040.core.waiting and not clock.has_scheduled_alarm:
-                idle = True
+            idle = rp2040.core.waiting and not clock.has_scheduled_alarm
+            if want_workload and workload is None and connected_at and (idle or clock.nanos - connected_at[0] > 3e8):
+                boot = ((clock.nanos - sim_start) / 1e9, time.perf_counter() - start)
+                for byte in _BENCH_WORKLOAD.encode() + b"\r\n":
+                    cdc.send_serial_byte(byte)
+                workload = (clock.nanos, time.perf_counter())
+                idle = False
+            elif idle and workload is None:
                 break
-        elapsed = time.perf_counter() - start
+        end = time.perf_counter()
         simulated = (clock.nanos - sim_start) / 1e9
         simulator.stop()
+
+        def _factor(sim_seconds: float, wall_seconds: float) -> str:
+            return f"simulated {sim_seconds:.3f}s in {wall_seconds:.2f}s of wall time" + (
+                f" -> {sim_seconds / wall_seconds:.2f}x real time" if wall_seconds > 0 else ""
+            )
+
+        if workload is not None:
+            assert boot is not None
+            print(f"boot: {_factor(*boot)}")
+            work_sim, work_wall = (clock.nanos - workload[0]) / 1e9, end - workload[1]
+            print(
+                f"{'workload (' + _BENCH_WORKLOAD + ')' if workload_done else 'workload did not finish'}: {_factor(work_sim, work_wall)}"
+                " (batch engine; --stepwise for per-instruction calls from Python)"
+            )
+            if not workload_done:
+                sys.exit(1)
+            return
         status = (
             "found expected text"
             if tracker.found
@@ -880,9 +921,7 @@ def _bench_firmware(
             )
         )
         print(
-            f"{status}: simulated {simulated:.3f}s in {elapsed:.2f}s of wall time"
-            + (f" -> {simulated / elapsed:.2f}x real time" if elapsed > 0 else "")
-            + " (batch engine; --stepwise for per-instruction calls from Python)"
+            f"{status}: {_factor(simulated, end - start)} (batch engine; --stepwise for per-instruction calls from Python)"
         )
         if expect_text and not tracker.found:
             sys.exit(1)
@@ -893,9 +932,13 @@ def _bench_firmware(
     step_batch = 1_000_000
     executed = 0
     idle_steps = 0
-    while not tracker.found and (time.perf_counter() - start) < timeout:
+    idle = False
+    while not tracker.found and not idle and (time.perf_counter() - start) < timeout:
         for _ in range(step_batch):
             if rp2040.core.waiting:
+                if not clock.has_scheduled_alarm:
+                    idle = True  # asleep with nothing scheduled: nothing will ever wake it, so ending here beats spinning to the timeout
+                    break
                 idle_steps += 1  # the core sleeps (WFE/WFI): not an instruction, only a trip round this loop
                 clock.tick(clock.nanos_to_next_alarm)
             else:
@@ -904,7 +947,15 @@ def _bench_firmware(
                 executed += 1
     elapsed = time.perf_counter() - start
 
-    status = "found expected text" if tracker.found else ("timed out" if expect_text else "step budget reached")
+    status = (
+        "found expected text"
+        if tracker.found
+        else (
+            "firmware idle (waiting, nothing scheduled)"
+            if idle
+            else ("timed out" if expect_text else "step budget reached")
+        )
+    )
     note = (
         f"; {idle_steps:,} further loop iterations were the core asleep with nothing scheduled (a firmware idling in its REPL) and are not counted"
         if idle_steps

@@ -22,23 +22,16 @@ def _bench(capsys, **kwargs):
     return capsys.readouterr().out
 
 
-def test_the_engine_mode_reports_the_real_time_factor(capsys):
-    out = _bench(capsys)
-    assert "of wall time" in out and "real time" in out and "batch engine" in out
+def test_the_engine_mode_reports_boot_and_a_workload_real_time_factor(capsys):
+    out = _bench(capsys, timeout=120.0)
+    assert "boot: simulated" in out and "real time" in out
+    assert "workload (" in out and "batch engine" in out
     assert "instructions/sec" not in out
 
 
-def test_an_idle_firmware_ends_the_run_instead_of_spinning_to_the_timeout(capsys):
-    import time
-
+def test_an_idle_firmware_ends_the_stepwise_run_instead_of_spinning_to_the_timeout(capsys):
     if _IMAGE is not None and "v1.23" not in _IMAGE.name:
         pytest.skip("only MicroPython 1.23 sits in WFE with no timer armed at the REPL")
-    t = time.perf_counter()
-    out = _bench(capsys, timeout=30.0)
+    out = _bench(capsys, stepwise=True, timeout=30.0)
     assert "firmware idle" in out
-    assert time.perf_counter() - t < 15
-
-
-def test_stepwise_counts_real_instructions_apart_from_idle_iterations(capsys):
-    out = _bench(capsys, stepwise=True, timeout=1.0)
     assert "instructions/sec" in out and "not the batch engine" in out

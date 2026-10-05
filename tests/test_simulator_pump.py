@@ -144,3 +144,35 @@ def test_the_threaded_mode_is_still_there_when_asked_for():
         if simulator._loop is not None and simulator._loop_thread is not None:
             simulator._loop.call_soon_threadsafe(simulator._loop.stop)
             simulator._loop_thread.join(timeout=2.0)
+
+
+def test_two_threads_blocking_on_the_thread_free_loop_do_not_run_it_at_once():
+    """`call()` from a second thread while the first is pumping the loop for its own `.result()` used to run `run_until_complete` twice at once - an AssertionError inside the
+    proactor loop on Windows. One thread pumps at a time; the other waits for it and takes over."""
+    import threading
+
+    simulator = Simulator(threadless=True)
+    loop = asyncio.new_event_loop()
+    simulator.bind_loop(loop)
+    errors: list[BaseException] = []
+
+    async def _work(value: int) -> int:
+        await asyncio.sleep(0.01)
+        return value
+
+    def _from_thread() -> None:
+        try:
+            for i in range(20):
+                assert simulator.call(_work(i), timeout=5) == i
+        except BaseException as exc:  # noqa: BLE001 - reported on the main thread
+            errors.append(exc)
+
+    thread = threading.Thread(target=_from_thread)
+    thread.start()
+    try:
+        for i in range(20):
+            assert simulator.submit(_work(i)).result(timeout=5) == i
+    finally:
+        thread.join(10)
+        loop.close()
+    assert not errors and not thread.is_alive()

@@ -73,40 +73,41 @@ class ShutdownRequest:
             self.event.set()
 
 
+async def _wait_for_future(fut: "concurrent.futures.Future[Any]", timeout: "float | None") -> None:
+    await asyncio.wait({asyncio.wrap_future(fut)}, timeout=timeout)
+
+
 class _PumpedFuture(concurrent.futures.Future[_T]):
-    """A `concurrent.futures.Future` for a coroutine that runs as a task on a loop *nobody is running*: `result()`/`exception()` pump that loop on the calling thread until the task
-    is done (or `timeout` of wall time has passed), instead of blocking for a thread that does not exist. What lets the blocking half of the device API (`start_async().result()`,
-    `exec_async().result()`) work without an engine-room thread (see `Simulator.pump()`)."""
+    """A `concurrent.futures.Future` for a coroutine that runs on a loop *nobody is running*: `result()`/`exception()` pump that loop on the calling thread until the coroutine is
+    done (or `timeout` of wall time has passed), instead of blocking for a thread that does not exist. What lets the blocking half of the device API
+    (`start_async().result()`, `exec_async().result()`) work without an engine-room thread (see `Simulator.pump()`). Several threads may wait on such futures at once: the
+    Simulator lets one of them at a time run the loop (`Simulator._pump_until`), the others wait for it."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, task: "asyncio.Task[_T]") -> None:
+    def __init__(self, simulator: "Simulator", inner: "concurrent.futures.Future[_T]") -> None:
         super().__init__()
-        self._pump_loop = loop
-        self._pump_task = task
-        task.add_done_callback(self._copy_outcome)
+        self._simulator = simulator
+        self._inner = inner
+        inner.add_done_callback(self._copy_outcome)
 
-    def _copy_outcome(self, task: "asyncio.Task[_T]") -> None:
-        if task.cancelled():
+    def _copy_outcome(self, inner: "concurrent.futures.Future[_T]") -> None:
+        if inner.cancelled():
             super().cancel()
             self.set_running_or_notify_cancel()
-        elif task.exception() is not None:
-            self.set_exception(task.exception())
+        elif inner.exception() is not None:
+            self.set_exception(inner.exception())
         else:
-            self.set_result(task.result())
-
-    def _pump(self, timeout: "float | None") -> None:
-        if not self.done() and not self._pump_loop.is_running():
-            self._pump_loop.run_until_complete(asyncio.wait({self._pump_task}, timeout=timeout))
+            self.set_result(inner.result())
 
     def result(self, timeout: "float | None" = None) -> _T:
-        self._pump(timeout)
+        self._simulator._pump_until(self._inner, timeout)
         return super().result(0 if self.done() else timeout)
 
     def exception(self, timeout: "float | None" = None) -> "BaseException | None":
-        self._pump(timeout)
+        self._simulator._pump_until(self._inner, timeout)
         return super().exception(0 if self.done() else timeout)
 
     def cancel(self) -> bool:
-        self._pump_task.cancel()
+        self._inner.cancel()
         return super().cancel()
 
 
@@ -122,6 +123,8 @@ class Simulator:
         # `threadless`: when no loop was registered with `bind_loop()`, create a plain loop for the engine *without* a thread behind it, to be driven by the caller (`pump()`, or a
         # blocking `.result()`/`call()`, which pump) - instead of the engine-room thread `_ensure_loop()` starts otherwise. None (the default): thread-free, unless RP2040PY_THREADLESS=0 in the environment; `threadless=False` is the opt-in to the thread (a caller that starts the engine and then merely waits, relying on it making progress in the background).
         self._threadless = _threadless_by_default() if threadless is None else threadless
+        # Held by the one thread that is currently running the (thread-free) loop for a blocking call or pump(); see _pump_until().
+        self._pump_lock = threading.Lock()
         # `rp2040`, if given, is normally built via `boards.build_rp2040()` (or a bare `RP2040()`
         # for a caller with no board-registry needs) - its own clock is authoritative in that
         # case, since peripherals were already constructed against it before this Simulator ever
@@ -239,7 +242,9 @@ class Simulator:
             raise RuntimeError(
                 "pump() drives a loop that is not running: await instead, or call it from outside the loop"
             )
-        loop.run_until_complete(asyncio.sleep(seconds))
+        with self._pump_lock:
+            if not loop.is_running():
+                loop.run_until_complete(asyncio.sleep(seconds))
 
     def start_execution(self) -> None:
         """Schedules execute() to start running on this Simulator's own engine-room thread and
@@ -265,12 +270,37 @@ class Simulator:
         loop.call_soon_threadsafe(_start)
 
     def _driven_by_caller(self) -> "asyncio.AbstractEventLoop | None":
-        """The registered loop if it is one this Simulator has no thread for and nobody is running at the moment - the thread-free case, where a blocking call has to pump it
-        itself. None for the threaded engine-room loop and for a loop that is running (a caller inside it must `await`)."""
+        """The registered loop if it is one this Simulator has no thread for and the caller is not inside - the thread-free case, where a blocking call has to pump it itself.
+        None for the threaded engine-room loop and for a caller already running inside the loop (which must `await`)."""
         loop = self._loop
-        if loop is not None and self._loop_thread is None and not loop.is_running():
-            return loop
-        return None
+        if loop is None or self._loop_thread is not None:
+            return None
+        try:
+            if asyncio.get_running_loop() is loop:
+                return None
+        except RuntimeError:
+            pass
+        return loop
+
+    def _pump_until(self, fut: "concurrent.futures.Future[Any]", timeout: "float | None") -> None:
+        """Runs the thread-free loop on this thread until `fut` is done or `timeout` of wall time has passed. One thread at a time runs it (`run_until_complete` is not re-entrant, and
+        two threads doing it at once crash the Windows proactor loop outright): the others poll `fut` and take over when the runner is done, so a future never stalls because the thread
+        that happened to be pumping returned first."""
+        loop = self._loop
+        assert loop is not None
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not fut.done():
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return
+            if self._pump_lock.acquire(blocking=False):
+                try:
+                    if not fut.done() and not loop.is_running():
+                        loop.run_until_complete(_wait_for_future(fut, remaining))
+                        continue
+                finally:
+                    self._pump_lock.release()
+            concurrent.futures.wait([fut], timeout=0.001 if remaining is None else min(remaining, 0.001))
 
     def call(self, coro: "Coroutine[Any, Any, _T]", timeout: "float | None" = None) -> _T:
         """Runs `coro` on the engine-room thread and blocks the calling thread until it completes -
@@ -284,10 +314,12 @@ class Simulator:
             self._ensure_loop()
         loop = self._driven_by_caller()
         if loop is not None:
-            try:
-                return loop.run_until_complete(asyncio.wait_for(coro, timeout))
-            except asyncio.TimeoutError as exc:
-                raise concurrent.futures.TimeoutError() from exc
+            fut = asyncio.run_coroutine_threadsafe(coro, loop)
+            self._pump_until(fut, timeout)
+            if not fut.done():
+                fut.cancel()
+                raise concurrent.futures.TimeoutError()
+            return fut.result()
         future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
         return future.result(timeout)
 
@@ -300,7 +332,7 @@ class Simulator:
             self._ensure_loop()
         loop = self._driven_by_caller()
         if loop is not None:
-            return _PumpedFuture(loop, loop.create_task(coro))
+            return _PumpedFuture(self, asyncio.run_coroutine_threadsafe(coro, loop))
         return asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
 
     def schedule_threadsafe(self, fn_or_coro: "Callable[[], None] | Coroutine[Any, Any, Any]") -> None:

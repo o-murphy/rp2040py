@@ -125,12 +125,15 @@ def test_batch_yields_within_budget_even_after_switching_from_idle_to_busy():
     busy partway through still took ~0.95s wall time with that version). The budget must be
     tracked from the start of the whole batch instead, regardless of idle/busy transitions.
 
-    core.pc is pointed at zeroed SRAM (matches test_instructions.py's own pattern) so the busy
-    branch's real execute_instruction() call decodes a harmless all-zero opcode
-    (`movs r0, r0`) instead of needing a fake."""
+    core.pc is pointed at SRAM holding `b .` (0xE7FE, a branch to itself) so the busy branch's
+    real execute_instruction() call has a harmless instruction to run for as long as the batch
+    lasts. (Zeroed SRAM, `movs r0, r0`, used to be enough, but a slow batch ran off the end of the
+    SRAM, after which every instruction logged three warnings: on Windows' console that alone took
+    0.1-0.5 s and made this test fail intermittently on CI.)"""
     simulator = Simulator()
     rp2040 = simulator.rp2040
     rp2040.core.pc = 0x20000000
+    rp2040.write_uint16(0x20000000, 0xE7FE)  # b .
     rp2040.core.waiting = True
 
     period_nanos = 1_000_000  # 1ms, matching USBCTRL's SOF period
