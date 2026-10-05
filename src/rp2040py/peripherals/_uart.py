@@ -133,6 +133,11 @@ class RPUART(BasePeripheral):
     def baud_rate(self) -> int:
         return _baud_rate(self.rp2040.clk_peri, self.baud_divider)
 
+    def clk_peri_changed(self) -> None:
+        """The peripheral clock changed: re-announce the baud rate, unless the firmware has not set the divider yet (rp2040js 1.4.0)."""
+        if self.baud_divider and self.on_baud_rate_change:
+            self.on_baud_rate_change(self.baud_rate)
+
     @property
     def flags(self) -> int:
         return (RXFF if self.rx_fifo.full else 0) | (RXFE if self.rx_fifo.empty else 0) | TXFE

@@ -20,7 +20,7 @@ def _js_round(value: float) -> int:
 
 
 class Timer32:
-    def __init__(self, clock: IClock, base_freq: int):
+    def __init__(self, clock: IClock, base_freq: float):
         self.clock = clock
         self._base_freq = base_freq
 
@@ -103,11 +103,11 @@ class Timer32:
         self.set(counter if counter <= self._top_value else 0)
 
     @property
-    def frequency(self) -> int:
+    def frequency(self) -> float:
         return self._base_freq
 
     @frequency.setter
-    def frequency(self, value: int) -> None:
+    def frequency(self, value: float) -> None:
         self._base_value = self.counter
         self._base_nanos = self.clock.nanos
         self._base_freq = value

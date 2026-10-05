@@ -302,7 +302,7 @@ class RPPWM(BasePeripheral):
             super().write_uint32(offset, value)
 
     @property
-    def clock_freq(self) -> int:
+    def clock_freq(self) -> float:
         return self.rp2040.clk_sys
 
     def channel_interrupt(self, index: int) -> None:

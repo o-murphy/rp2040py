@@ -33,11 +33,12 @@ from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native
     IUARTDMAChannels,
 )
 from rp2040py.peripherals.busctrl import RPBUSCTRL
-from rp2040py.peripherals.clocks import RPClocks
+from rp2040py.peripherals.clocks import RPClocks, reset_clock_tree, update_clocks
 from rp2040py.peripherals.io import RPIO
 from rp2040py.peripherals.pads import RPPADS
 from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
 from rp2040py.peripherals.pio import RPPIO
+from rp2040py.peripherals.pll import RPPLL
 from rp2040py.peripherals.ppb import RPPPB
 from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.peripherals.reset import (
@@ -139,8 +140,12 @@ class RP2040:
         self.core = CortexM0Core(self)
 
         # Clocks
-        self.clk_sys = 125 * MHZ
-        self.clk_peri = 125 * MHZ
+        self.clk_sys: float = 125 * MHZ
+        self.clk_peri: float = 125 * MHZ
+        # The oscillators the PLLs and the clock generators start from (rp2040js 1.4.0): a 12 MHz crystal, and the ring oscillator at its typical frequency.
+        self.xosc_freq = 12 * MHZ
+        self.rosc_freq = 6.5 * MHZ
+        self._clock_listeners: set = set()
 
         self.ppb = RPPPB(self, "PPB")
         self.sio = RPSIO(self)
@@ -201,6 +206,8 @@ class RP2040:
         # `psm`/`resets` because their WDSEL registers decide *what* a watchdog reset covers, the
         # rest because they are what gets reset.
         self.clocks = RPClocks(self, "CLOCKS_BASE")
+        self.pll_sys = RPPLL(self, "PLL_SYS_BASE")
+        self.pll_usb = RPPLL(self, "PLL_USB_BASE")
         self.resets = RPReset(self, "RESETS_BASE")
         self.psm = RPPSM(self, "PSM_BASE")
         self.pads_bank0 = RPPADS(self, "PADS_BANK0_BASE", "bank0")
@@ -225,8 +232,8 @@ class RP2040:
             0x4001C: self.pads_bank0,
             0x40020: self.pads_qspi,
             0x40024: self.xosc,
-            0x40028: UnimplementedPeripheral(self, "PLL_SYS_BASE"),
-            0x4002C: UnimplementedPeripheral(self, "PLL_USB_BASE"),
+            0x40028: self.pll_sys,
+            0x4002C: self.pll_usb,
             0x40030: self.busctrl,
             0x40034: self.uart[0],
             0x40038: self.uart[1],
@@ -442,6 +449,7 @@ class RP2040:
             self.sio.reset()
         if psm_wdsel & WDSEL_CLOCKS:
             self.clocks.reset()
+            reset_clock_tree(self)
 
         if resets_wdsel & RESET_IO_BANK0:
             for pin in self.gpio:
@@ -509,6 +517,20 @@ class RP2040:
 
         if not preserve_flash:
             self.flash[:] = b"\xff" * len(self.flash)
+
+    def update_clocks(self) -> None:
+        """Re-derives `clk_sys`/`clk_peri` from the PLL and CLOCKS registers and retunes what runs from them (see `peripherals.clocks.update_clocks`)."""
+        update_clocks(self)
+
+    def add_clock_listener(self, listener: "Callable[[float, float], None]") -> "Callable[[], None]":
+        """Calls `listener(clk_sys, old_clk_sys)` whenever clk_sys changes - for anything that derives a rate from it (a PIO clock divider, say). Returns the
+        function that unsubscribes it."""
+        self._clock_listeners.add(listener)
+
+        def unsubscribe() -> None:
+            self._clock_listeners.discard(listener)
+
+        return unsubscribe
 
     def read_uint32(self, address: int) -> int:
         address = u32(address)
