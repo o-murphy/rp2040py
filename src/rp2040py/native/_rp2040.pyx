@@ -711,6 +711,12 @@ cdef class RP2040:
         self._ppb = value
         self._bus.set_ppb(self._direct_handler(value, False))
 
+    def _native_flash_address(self):
+        """The address and size of this chip's flash buffer, for a native block that works on it directly (the SSI): allocated once, only ever
+        refilled in place, so the address is good for the chip's life. Looked up as an attribute of the chip, so a chip without one (the
+        pure-Python chip) simply does not answer."""
+        return (<size_t> &self._flash[0], self.flash_byte_size)
+
     def _native_bus_address(self):
         """The address of this chip's C++ bus, for a native block that works on it directly (the DMA). Looked up as an
         attribute of the chip, so a chip without a C++ bus (the pure-Python one) simply does not answer."""

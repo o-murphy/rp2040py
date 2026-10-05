@@ -18,6 +18,9 @@ from rp2040py.peripherals._dma import (  # the pure chip's own DMA: the native o
     RPDMA,
     DREQChannel,
 )
+from rp2040py.peripherals._ssi import (
+    RPSSI,  # the pure chip's own SSI: the native one works on the native chip's flash buffer
+)
 from rp2040py.peripherals.adc import RPADC
 from rp2040py.peripherals.busctrl import RPBUSCTRL
 from rp2040py.peripherals.clocks import RPClocks
@@ -54,7 +57,6 @@ from rp2040py.peripherals.reset import (
 )
 from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.spi import RPSPI, ISPIDMAChannels
-from rp2040py.peripherals.ssi import RPSSI
 from rp2040py.peripherals.syscfg import RP2040SysCfg
 from rp2040py.peripherals.sysinfo import RP2040SysInfo
 from rp2040py.peripherals.tbman import RPTBMAN

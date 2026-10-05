@@ -2,10 +2,10 @@
 plain-Python reference in `_ssi.py`. Every caller imports `RPSSI` and the register/command constants from here - never from `_ssi.py`
 directly. Mirrors `peripherals/pio.py`/`timer.py`/`dma.py`.
 
-At present only the reference exists; the C++ block (`native/core/ssi.hpp`, record 0096's design note of the flash path) is the next step,
-and `_ssi.py` stays the oracle for it (`tests/test_ssi_diff.py`).
+The two are held to identical behaviour by the lockstep differential of `tests/test_ssi_diff.py`; the pure-Python class stays the oracle (docs/records/0096-cpp-mcu-core.md).
 """
 
+from rp2040py._native_gate import native_disabled
 from rp2040py.peripherals._ssi import (
     CMD_BLOCK_ERASE,
     CMD_PAGE_PROGRAM,
@@ -56,6 +56,13 @@ from rp2040py.peripherals._ssi import (
     STATUS2_QE_BIT,
     STATUS_WEL_BIT,
 )
+
+try:
+    if native_disabled():
+        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    from rp2040py.native._ssi import RPSSI
+except ImportError:
+    from rp2040py.peripherals._ssi import RPSSI
 
 __all__ = (
     "CMD_BLOCK_ERASE",
