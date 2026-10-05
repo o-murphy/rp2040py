@@ -22,6 +22,10 @@ _logger = logging.getLogger(__name__)
 # _execute_batch.py's own per-batch wall-clock budget: a held RESET button is a human-scale event,
 # so nothing needs finer resolution than one batch's worth of latency, and anything shorter just
 # spends CPU noticing that the chip is still held.
+# Pacing while a device waits on the real world (see `Simulator.execute()`): sleep only once the guest is at least this far ahead of the wall clock, and let it
+# run at most this far *behind* before the origin is moved up (the credit a slow stretch could otherwise bank and spend in one burst).
+_PACE_MIN_SLEEP_SECONDS = 0.002
+_PACE_MAX_CREDIT_SECONDS = 0.05
 _HELD_IN_RESET_POLL_SECONDS = 0.005
 
 
@@ -68,6 +72,9 @@ class Simulator:
         # then cap an idle jump (`_execute_batch._PACED_IDLE_NANOS`) and end the batch, and `execute()` sleeps for the simulated time it covered - so simulated time
         # cannot outrun the wall clock while a real reply is on its way (the guest's own timeouts run in simulated time; the reply arrives in wall time).
         self._real_io_flag = bytearray(1)
+        self._pace_origin: tuple[float, float] | None = (
+            None  # (simulated nanos, monotonic seconds) when the current real-world wait began
+        )
         self._real_io_pending = 0
         self._real_io_lock = threading.Lock()
         # Owned here (rather than a separately-constructed, separately-passed-around object) so
@@ -257,15 +264,20 @@ class Simulator:
                     await asyncio.sleep(_HELD_IN_RESET_POLL_SECONDS)
                     continue
                 if self._real_io_flag[0]:
-                    # A device waits on the real world: whatever simulated time this batch covers must not have taken less wall time than that.
-                    nanos_before, wall_before = self.clock.nanos, time.monotonic()
+                    # A device waits on the real world: simulated time may not run ahead of the wall clock measured from when the wait began. Accounted against
+                    # that origin rather than per batch, so the coarse timers of some platforms (a sleep(0.001) is ~15 ms on Windows) neither slow the guest to
+                    # a crawl - a sleep that overshoots is paid back by the next batches running without one - nor let it bank an unbounded credit.
+                    if self._pace_origin is None:
+                        self._pace_origin = (self.clock.nanos, time.monotonic())
                     self._execute_batch()
-                    ahead = (self.clock.nanos - nanos_before) / 1e9 - (time.monotonic() - wall_before)
-                    if ahead > 0:
-                        await asyncio.sleep(ahead)
-                    else:
-                        await asyncio.sleep(0)
+                    sim0, wall0 = self._pace_origin
+                    ahead = (self.clock.nanos - sim0) / 1e9 - (time.monotonic() - wall0)
+                    if ahead < -_PACE_MAX_CREDIT_SECONDS:
+                        self._pace_origin = (sim0 + (ahead + _PACE_MAX_CREDIT_SECONDS) * 1e9, wall0)
+                        ahead = -_PACE_MAX_CREDIT_SECONDS
+                    await asyncio.sleep(ahead if ahead > _PACE_MIN_SLEEP_SECONDS else 0)
                     continue
+                self._pace_origin = None  # no real wait outstanding: the next one starts a fresh origin
                 self._execute_batch()
                 # Upstream rp2040js uses `setTimeout(() => this.execute(), 0)` to yield back to
                 # the single-threaded JS event loop every batch so external stop() calls can get

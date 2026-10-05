@@ -14,6 +14,7 @@ deterministic single-batch behavior without depending on asyncio scheduling orde
 
 import asyncio
 import itertools
+import math
 import time
 
 from rp2040py.rp2040 import RP2040
@@ -175,8 +176,14 @@ def test_real_io_begin_and_end_count_and_set_the_flag_the_batch_loops_read():
     assert simulator._real_io_flag[0] == 1
 
 
-def _advance_an_idle_chip_for(wall_seconds: float, paced: bool) -> float:
+def _advance_an_idle_chip_for(wall_seconds: float, paced: bool, coarse_timer: bool = False) -> float:
     """Simulated seconds an idle core (nothing but a far-away alarm) gets through in `wall_seconds` of real time, with a real-world wait outstanding or not."""
+
+    real_sleep = asyncio.sleep
+
+    async def _coarse_sleep(delay: float, *args: object) -> None:
+        """A platform whose timer ticks every ~15.6 ms (Windows): every positive sleep is rounded up to a whole tick."""
+        await real_sleep(math.ceil(delay / 0.0156) * 0.0156 if delay > 0 else 0, *args)
 
     async def _body() -> float:
         chip = RP2040()
@@ -188,12 +195,19 @@ def _advance_an_idle_chip_for(wall_seconds: float, paced: bool) -> float:
             simulator.real_io_begin()
         task = asyncio.ensure_future(simulator.execute())
         try:
-            await asyncio.sleep(wall_seconds)
+            await real_sleep(wall_seconds)
         finally:
             simulator.stop()
             await task
         return chip.clock.nanos / 1e9
 
+    if coarse_timer:
+        original = asyncio.sleep
+        asyncio.sleep = _coarse_sleep  # type: ignore[assignment]
+        try:
+            return asyncio.run(_body())
+        finally:
+            asyncio.sleep = original  # type: ignore[assignment]
     return asyncio.run(_body())
 
 
@@ -204,3 +218,10 @@ def test_simulated_time_does_not_outrun_the_wall_clock_while_a_real_world_wait_i
     unpaced = _advance_an_idle_chip_for(0.4, paced=False)
     assert 0.1 < paced < 0.6, paced
     assert unpaced >= 9.0, unpaced
+
+
+def test_pacing_keeps_up_with_real_time_on_a_platform_with_a_coarse_timer():
+    """Windows' sleep(0.001) lasts ~15.6 ms; pacing per batch would then slow the guest to ~1/16 of real time (a CI failure found it). Accounted against the start of the
+    wait, a sleep that overshoots is paid back by the batches after it, so the guest still advances at about real time."""
+    paced = _advance_an_idle_chip_for(0.4, paced=True, coarse_timer=True)
+    assert 0.1 < paced < 0.6, paced
