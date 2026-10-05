@@ -53,6 +53,19 @@ BLOCK_FIELDS = (
 )  # fmt: skip
 
 
+class _DreqRecorder:
+    """Stands in for the chip's DMA: the DMA is a recorder here (the real one would act on the DREQs and on the FIFOs, which is a different block's behaviour)."""
+
+    def __init__(self, log: list) -> None:
+        self._log = log
+
+    def set_dreq(self, channel: int) -> None:
+        self._log.append(("dreq", int(channel), 1))
+
+    def clear_dreq(self, channel: int) -> None:
+        self._log.append(("dreq", int(channel), 0))
+
+
 class Rig:
     """One chip plus the logs of everything that left its PIOs."""
 
@@ -84,8 +97,7 @@ class Rig:
 
     def _tap(self) -> None:
         chip, log = self.chip, self.log
-        chip.dma.set_dreq = lambda channel: log.append(("dreq", int(channel), 1))  # type: ignore[method-assign]
-        chip.dma.clear_dreq = lambda channel: log.append(("dreq", int(channel), 0))  # type: ignore[method-assign]
+        chip.dma = _DreqRecorder(log)  # type: ignore[assignment]  # the PIO looks `rp2040.dma` up on every DREQ; the native DMA's methods cannot be replaced
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:

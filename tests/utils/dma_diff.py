@@ -19,9 +19,11 @@ After **each** step the whole readable register file (so every channel's address
 scheduled at a different time is a difference at once), the asserted DREQs, the data in the memory the channels work on, the probe's state, and the ordered logs
 of what left the block (interrupt-line changes, probe accesses) are compared; an exception on one side and not the other is a difference like any other.
 
-Outside the domain on purpose: a TRANS_COUNT of 0 at a trigger. The reference starts such a channel (BUSY set, nothing scheduled) and leaves it BUSY for good; the
-next CTRL rewrite or DREQ edge then runs a transfer, which takes the count to -1 (a register read that raises ``OverflowError`` in the Cython bus). What hardware
-does is a decision for the port (record 0096's progress log), not something the oracle should freeze by accident - the generator keeps every count at 1 or more.
+Kept out of the domain on purpose: a TRANS_COUNT of 0 at a trigger. The reference starts such a channel (BUSY set, nothing scheduled) and leaves it BUSY for good; the
+next CTRL rewrite or DREQ edge then runs a transfer, which takes the count to -1. What hardware does is a decision for the port (record 0096's progress log), not
+something the oracle should freeze by accident - the generator keeps every count at 1 or more. The same -1 is reachable *without* it, by a stale alarm (a CTRL
+rewrite while a channel is running re-arms its alarm; if that was its last transfer, the alarm then runs one more on the finished channel), and that is part of the
+reference's behaviour the C++ reproduces; only the representation differs (a Python -1 vs the word 0xFFFFFFFF), which ``BusView`` below normalises.
 
 Same precondition as every oracle of this record: the pure DMA against the implementation under test must show 0 differences on long runs
 (tests/test_dma_diff.py), and a deliberately damaged run must be caught.
@@ -70,6 +72,27 @@ def channel_register(channel: int, offset: int) -> int:
     return channel * 0x40 + offset
 
 
+class BusView:
+    """What the bus sees of the pure-Python DMA: its registers as 32-bit words. The reference keeps a count that went below zero as a Python ``-1`` (see the
+    module docstring: a stale alarm can run a transfer on a channel that already finished) which a 32-bit bus cannot carry - the Cython bus raises
+    ``OverflowError`` - where the C++ block reads it back as 0xFFFFFFFF; the word is what the comparison is about."""
+
+    def __init__(self, dma: Any) -> None:
+        self._dma = dma
+
+    def read_uint32(self, offset: int) -> int:
+        return int(self._dma.read_uint32(offset)) & 0xFFFFFFFF
+
+    def write_uint32(self, offset: int, value: int) -> None:
+        self._dma.write_uint32(offset, value)
+
+    def write_uint32_atomic(self, offset: int, value: int, atomic_type: int) -> None:
+        self._dma.write_uint32_atomic(offset, value, atomic_type)
+
+    def reset(self) -> None:
+        self._dma.reset()
+
+
 class Probe:
     """A peripheral channels can read and write. A write raises or clears a DREQ (``offset 0``: value bits 0-5 the DREQ, bit 8 set/clear), which is what a
     PIO TX FIFO does in answer to a DMA write; everything else just goes to the log. A read returns a number that changes with every read, so a copy
@@ -116,7 +139,7 @@ class Rig:
             levels = dict(self.chip.dma.dreq)
             self.chip.dma = _dma.RPDMA(self.chip, "DMA")
             self.chip.dma.dreq.update(levels)
-            self.chip.peripherals[DMA_BASE >> 12] = self.chip.dma
+            self.chip.peripherals[DMA_BASE >> 12] = BusView(self.chip.dma)
         self.log: list[tuple] = []
         self.probe = Probe(self.chip, self.log)
         self.chip.peripherals[PROBE_BASE >> 12] = self.probe
@@ -238,7 +261,7 @@ def mutant_rig(name: str) -> Rig:
     dma.channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
     dma.dreq.update(levels)
     rig.chip.dma = dma
-    rig.chip.peripherals[DMA_BASE >> 12] = dma
+    rig.chip.peripherals[DMA_BASE >> 12] = BusView(dma)
     return rig
 
 
@@ -386,9 +409,12 @@ def generate(seed: int, steps: int) -> list[tuple]:
                     0x804,
                 )
             )
-            ops.append(
-                ("write", channel_register(channel, offset), _register_value(r, offset, channel), r.choice(ALIASES))
-            )
+            alias = r.choice(ALIASES)
+            if offset in COUNT_OFFSETS:
+                alias = 0  # an xor / clear alias could take the reload value to 0 (see the docstring)
+            elif offset in CTRL_OFFSETS and alias in (0x1000, 0x3000):
+                alias = 0x2000  # xor / clear could lower the CHAIN_TO field (below the channel: a cycle); set can only raise it
+            ops.append(("write", channel_register(channel, offset), _register_value(r, offset, channel), alias))
         elif roll < 0.92:
             channel = r.randrange(CHANNELS)
             offset = r.choice((0x0, 0x4, 0x8, 0xC, 0x1C, 0x2C, 0x3C, 0x800, 0x804))

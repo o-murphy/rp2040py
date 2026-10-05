@@ -711,6 +711,11 @@ cdef class RP2040:
         self._ppb = value
         self._bus.set_ppb(self._direct_handler(value, False))
 
+    def _native_bus_address(self):
+        """The address of this chip's C++ bus, for a native block that works on it directly (the DMA). Looked up as an
+        attribute of the chip, so a chip without a C++ bus (the pure-Python one) simply does not answer."""
+        return <size_t> &self._bus
+
     cdef WindowHandler _direct_handler(self, object block, bint is_sio):
         """The handler the bus calls for SIO or the PPB. A block with `_native_window` on its TYPE lends its own C++
         functions (a recorder/profiler that forwards attributes must still see every access, and a Mock must not answer
