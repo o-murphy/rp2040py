@@ -206,6 +206,7 @@ file already on disk:
 > | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.7 s |
 > | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s (~100x) |
 > | PyPy 3.10 (7.3.19, pure Python - the native build is skipped there) | ~1.3 s |
+> | rp2040js (Node 22, same firmware and littlefs image) | ~3.5 s total, ~3 s past Node's start-up (1.21: ~1.0 s total) |
 >
 > The numbers are far smaller than the ones this table used to carry (133 s / 11 s / 9 s) because
 > the old figure was mostly **not** emulation: it stepped one instruction at a time from Python

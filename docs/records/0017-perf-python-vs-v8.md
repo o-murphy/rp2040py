@@ -275,11 +275,22 @@ What this changes in the text above:
   withdrawn.** The step count included trips round the stepping loop with the core asleep (WFE, no
   timer armed). 1.28 needs ~1 million real instructions to its first line, and both versions now
   reach it in about the same wall time. 1.21 is no longer the recommended version.
-- **The V8 comparison is out of date.** rp2040js booted this workload in 4.11 s (Node v26, measured
-  once, in 2026-08); the native build here takes ~0.02-0.03 s for the same firmware + littlefs +
-  script. That is a comparison against an old, single rp2040js run on a different machine state,
-  not a fresh head-to-head - rp2040js was not re-run for this update, so treat "ahead of the JS JIT"
-  as indicated, not proven, until it is.
+- **The V8 comparison is out of date, and is now re-measured head to head.** rp2040js (branch
+  `feat/littlefs-write-support`, Node 22.22, `npx tsx demo/micropython-run.ts --image <uf2> --littlefs lfs.img
+  --expect-text "Hello, MicroPython!"`, same machine, same firmware and littlefs image, three runs each) versus
+  `rp2040py bench` (native, same image), whole-process wall time including interpreter start-up
+  (`node`+`tsx` alone ~0.72 s, `python -c "import rp2040py.cli"` ~0.14 s):
+
+  | Firmware | rp2040js (total / minus start-up) | rp2040py native (total / minus start-up) |
+  | --- | --- | --- |
+  | MicroPython 1.28 | 3.5-4.2 s / ~2.8-3.5 s | 0.21-0.23 s / ~0.07-0.09 s |
+  | MicroPython 1.21 | 1.01-1.06 s / ~0.3 s | 0.23-0.25 s / ~0.09-0.11 s |
+
+  So the native build is roughly 30-40x ahead of rp2040js on 1.28 and ~3x on 1.21 once start-up is taken out
+  (~15x and ~4x on the raw totals). Caveats: one machine, Node 22 rather than the v26 of the old figure,
+  `tsx` rather than a compiled build, and the "first line" moment is not identical between the two (rp2040py's
+  simulated time at the first line also differs between the native and pure builds - an open oddity, see
+  record 0096), so this is an order of magnitude, not a benchmark suite.
 - **PyPy was re-measured** (above): ~1.3-1.8 s, i.e. only ~1.4-1.9x faster than CPython's pure build (it was ~16x
   on the old per-instruction engine, whose cost was interpretive overhead PyPy could remove) and ~60x slower than the
   native build. "Run under PyPy" is no longer the advice; the native build is the fast path.
