@@ -18,6 +18,7 @@ from rp2040py.peripherals._dma import (  # the pure chip's own DMA: the native o
     RPDMA,
     DREQChannel,
 )
+from rp2040py.peripherals._i2c import RPI2C  # the pure chip's own I2C: the native one is the native chip's
 from rp2040py.peripherals._spi import (
     RPSPI,
     ISPIDMAChannels,
@@ -32,7 +33,6 @@ from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native
 from rp2040py.peripherals.adc import RPADC
 from rp2040py.peripherals.busctrl import RPBUSCTRL
 from rp2040py.peripherals.clocks import RPClocks
-from rp2040py.peripherals.i2c import RPI2C
 from rp2040py.peripherals.io import RPIO
 from rp2040py.peripherals.pads import RPPADS
 from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
