@@ -27,7 +27,7 @@
 
 #include <cstdint>
 
-#include "window_map.hpp"
+#include "core_host.hpp"
 
 namespace rp2040core {
 
@@ -35,13 +35,9 @@ using UartIrqFn = bool (*)(void* ctx, bool level);               // false: failu
 using UartDreqFn = bool (*)(void* ctx, bool asserted);           // the TX DREQ; false: failure parked
 using UartByteFn = bool (*)(void* ctx, uint32_t byte);           // a transmitted byte, already masked to 8 bits; false: failure parked
 using UartBaudFn = bool (*)(void* ctx);                          // IBRD/FBRD changed: the host announces the new baud rate; false: failure parked
-// The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-enum UartWarn : uint32_t {
-    kUartWarnRead = 0,            // "Unimplemented peripheral read from 0x{offset:x}"
-    kUartWarnReadAtomicArea = 1,  // "Unimplemented read from peripheral in the atomic operation region" (offset > 0x1000)
-    kUartWarnWrite = 2,           // "Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}"
-};
-using UartWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t value);
+// The messages the Python block logs through `BasePeripheral.warn` (see core_host.hpp); the host formats them.
+constexpr uint32_t kUartWarnRead = kRegWarnRead, kUartWarnReadAtomicArea = kRegWarnReadAtomicArea, kUartWarnWrite = kRegWarnWrite;
+using UartWarnFn = RegWarnFn;
 
 struct UartHost {
     UartIrqFn irq = nullptr;
@@ -80,7 +76,7 @@ public:
 
     void init(const UartHost& host) noexcept { host_ = host; }
 
-    bool failed() const noexcept { return host_.failed != nullptr && *host_.failed != 0; }
+    bool failed() const noexcept { return host_failed(host_.failed); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // ---- the RX FIFO (the reference's `utils.fifo.FIFO(32)`) ---------------------------------------------------
@@ -213,24 +209,14 @@ public:
         raw_write_value_ = raw;
         int64_t value = raw;
         if (atomic_type != kAtomicNormal) {
-            const int64_t current = static_cast<int64_t>(read(offset));
-            switch (atomic_type) {
-                case kAtomicXor: value = current ^ raw; break;
-                case kAtomicSet: value = current | raw; break;
-                case kAtomicClear: value = current & ~raw; break;
-                default: break;
-            }
+            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
         }
         return write(offset, value);
     }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------------
 
-    static uint32_t window_read32(void* ctx, uint32_t offset) { return static_cast<UartBlock*>(ctx)->read(offset); }
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) {
-        (void)static_cast<UartBlock*>(ctx)->write_atomic(offset, raw_value, atomic_type);
-    }
-    WindowHandler window_handler() noexcept { return WindowHandler{&UartBlock::window_read32, &UartBlock::window_write32, this}; }
+    WindowHandler window_handler() noexcept { return BlockWindow<UartBlock>::handler(this); }
 
 private:
     UartHost host_;

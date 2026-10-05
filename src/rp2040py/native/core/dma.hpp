@@ -35,6 +35,7 @@
 
 #include "bus.hpp"
 #include "clock.hpp"
+#include "core_host.hpp"
 #include "window_map.hpp"
 
 namespace rp2040core {
@@ -42,12 +43,8 @@ namespace rp2040core {
 using DmaIrqFn = bool (*)(void* ctx, uint32_t line, bool level);  // false: failure parked
 using DmaClockFn = double (*)(void* ctx);                          // clk_sys in Hz; a failure is parked and flagged
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-enum DmaWarn : uint32_t {
-    kDmaWarnRead = 0,            // "Unimplemented peripheral read from 0x{offset:x}"
-    kDmaWarnReadAtomicArea = 1,  // "Unimplemented read from peripheral in the atomic operation region" (offset > 0x1000)
-    kDmaWarnWrite = 2,           // "Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}"
-};
-using DmaWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t value);
+constexpr uint32_t kDmaWarnRead = kRegWarnRead, kDmaWarnReadAtomicArea = kRegWarnReadAtomicArea, kDmaWarnWrite = kRegWarnWrite;
+using DmaWarnFn = RegWarnFn;
 
 struct DmaHost {
     DmaIrqFn irq = nullptr;
@@ -278,24 +275,14 @@ public:
         raw_write_value_ = raw;
         int64_t value = raw;
         if (atomic_type != kAtomicNormal) {
-            const int64_t current = static_cast<int64_t>(read(offset));
-            switch (atomic_type) {
-                case kAtomicXor: value = current ^ raw; break;
-                case kAtomicSet: value = current | raw; break;
-                case kAtomicClear: value = current & ~raw; break;
-                default: break;
-            }
+            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
         }
         return write(offset, value);
     }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    static uint32_t window_read32(void* ctx, uint32_t offset) { return static_cast<DmaBlock*>(ctx)->read(offset); }
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) {
-        (void)static_cast<DmaBlock*>(ctx)->write_atomic(offset, raw_value, atomic_type);
-    }
-    WindowHandler window_handler() noexcept { return WindowHandler{&DmaBlock::window_read32, &DmaBlock::window_write32, this}; }
+    WindowHandler window_handler() noexcept { return BlockWindow<DmaBlock>::handler(this); }
 
 private:
     friend class DmaChannel;

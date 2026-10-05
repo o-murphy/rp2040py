@@ -1,0 +1,58 @@
+# Adding a peripheral block to the C++ core
+
+The checklist every block of `src/rp2040py/native/core/` follows (record
+[0096](../records/0096-cpp-mcu-core.md), "Core host contract" and the per-block recipe). The shared pieces are in
+`core/core_host.hpp`; `core/uart.hpp` + `native/_uart.pyx` is the smallest complete example.
+
+## 0. Constraints (compiled in, not promised)
+
+Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tests/test_core_cpp.py` builds every header and every
+`tests/cpp/test_*.cpp` with `-fno-exceptions -fno-rtti -Wall -Wextra -Werror`, and macOS CI uses clang - run the headers through
+`clang++` too (`-Wunused-const-variable` is the usual surprise: mark a constant only a shell reads `[[maybe_unused]]`).
+
+## 1. The reference and the facade (before any C++)
+
+- `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle) and a new `peripherals/X.py`
+  facade that imports `native/_X` when it can (`native_disabled()` / `RP2040PY_SKIP_CYTHON` forces the reference). The pure chip
+  (`_rp2040.py`) imports `_X` directly; the native chip (`native/_rp2040.pyx`) imports the facade.
+- Anything the shell and the reference must compute the same way (a rounding, a division, an error message) is a function in `_X.py`
+  that both call - not two copies. (Cython's `cdivision=True` turned `int / 64` into integer division in the UART shell.)
+
+## 2. The oracle (before any C++), proven before it judges
+
+`tests/utils/X_diff.py` + `tests/test_X_diff.py`: two chips, one generated operation stream, everything observable compared after every
+step - every register offset through the bus **and its XOR/SET/CLR aliases**, reads of unimplemented offsets (the warnings are compared),
+the block's side effects (IRQ line, DREQs, callbacks) as an ordered log, an exception on one side and not the other. Then prove it:
+agreement over several seeds, perturbations of the candidate through the public API caught at the step they are made, logic mutants
+of the reference (one subclass each) caught, coverage counts asserted so a green run means something. A mutant that survives is
+a hole in the generator - widen it.
+
+## 3. The block (`core/X.hpp`)
+
+- Registers as plain members; `read(offset)`, `write(offset, int64 value)`, `write_atomic(offset, raw, alias)` using
+  `decode_atomic()` (remember the raw value, decode against a *read*, with its side effects), `reset()`.
+- A `XHost` of plain function pointers + `void* ctx` + `const int* failed`. Everything outside the block is reached through it. Report an
+  unimplemented register as `RegWarn` data, never as a string. A host call that fails makes the block return `false` at once, leaving
+  exactly the state the reference's exception would have left.
+- `WindowHandler window_handler() { return BlockWindow<XBlock>::handler(this); }`.
+- Keep the reference's quirks and say so in the header comment, each one pinned by the oracle or the C++ checks. A real bug of the
+  reference is *not* fixed in the port: fix it in its own commit first (and ask), then port.
+
+## 4. C++ checks and mutation testing
+
+`tests/cpp/test_X.cpp`: directed tests of every behaviour, with a recording host (and failure injection per host function).
+Then a textual mutation pass over the header (swap, drop, off-by-one every line of logic, compile with `-fsanitize=bounds`):
+every mutant killed or argued equivalent in the record.
+
+## 5. The shell (`native/_X.pxd/.pyx/.pyi`)
+
+A `cdef class` over the block; trampolines for each host function that catch `BaseException`, `park_error()` it and return `False`;
+the reference's attributes (including the private ones tests poke, as properties with setters); `read_uint32`/`write_uint32`/
+`write_uint32_atomic` that `raise_if_pending()`; `_native_window()` on the *type* (the bus registers the block's own C++ functions).
+Check what the differential says the first time it runs reference against native - it will find something.
+
+## 6. Verify and record
+
+Differential over many more seeds than CI runs; live boots (MicroPython, CircuitPython, Kaluma, Pico SDK as far as the block is
+touched) and the one scenario that exercises it; an A/B against the commit before if the block is on a hot path; full
+`uv run pre-commit run --all-files` on both builds; a progress-log entry in the record and the tracker row.

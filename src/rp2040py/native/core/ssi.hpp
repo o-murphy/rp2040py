@@ -27,18 +27,15 @@
 
 #include <cstdint>
 
+#include "core_host.hpp"
 #include "pin.hpp"
 #include "window_map.hpp"
 
 namespace rp2040core {
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-enum SsiWarn : uint32_t {
-    kSsiWarnRead = 0,            // "Unimplemented peripheral read from 0x{offset:x}"
-    kSsiWarnReadAtomicArea = 1,  // "Unimplemented read from peripheral in the atomic operation region" (offset > 0x1000)
-    kSsiWarnWrite = 2,           // "Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}"
-};
-using SsiWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t value);
+constexpr uint32_t kSsiWarnRead = kRegWarnRead, kSsiWarnReadAtomicArea = kRegWarnReadAtomicArea, kSsiWarnWrite = kRegWarnWrite;
+using SsiWarnFn = RegWarnFn;
 // Only when no native pin is bound (a Python chip-select): whether the pin reads LOW now. False: a failure is pending with the caller.
 using SsiCsLowFn = bool (*)(void* ctx, bool* low);
 
@@ -184,24 +181,14 @@ public:
         raw_write_value_ = raw;
         int64_t value = raw;
         if (atomic_type != kAtomicNormal) {
-            const int64_t current = static_cast<int64_t>(read(offset));
-            switch (atomic_type) {
-                case kAtomicXor: value = current ^ raw; break;
-                case kAtomicSet: value = current | raw; break;
-                case kAtomicClear: value = current & ~raw; break;
-                default: break;
-            }
+            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
         }
         write(offset, value);
     }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    static uint32_t window_read32(void* ctx, uint32_t offset) { return static_cast<SsiBlock*>(ctx)->read(offset); }
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) {
-        static_cast<SsiBlock*>(ctx)->write_atomic(offset, raw_value, atomic_type);
-    }
-    WindowHandler window_handler() noexcept { return WindowHandler{&SsiBlock::window_read32, &SsiBlock::window_write32, this}; }
+    WindowHandler window_handler() noexcept { return BlockWindow<SsiBlock>::handler(this); }
 
 private:
     static bool cs_listener(void* ctx, uint32_t, int new_state, int) noexcept {

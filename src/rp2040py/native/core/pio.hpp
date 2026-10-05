@@ -20,6 +20,7 @@
 
 #include <cstdint>
 
+#include "core_host.hpp"
 #include "pin.hpp"
 #include "window_map.hpp"
 
@@ -443,12 +444,7 @@ public:
         if (atomic_type != kAtomicNormal) {
             uint32_t current = 0;
             RP2040_PIO_TRY(read32(offset, &current));
-            switch (atomic_type) {
-                case kAtomicXor: value = current ^ static_cast<uint32_t>(raw); break;
-                case kAtomicSet: value = current | static_cast<uint32_t>(raw); break;
-                case kAtomicClear: value = current & ~static_cast<uint32_t>(raw); break;
-                default: break;
-            }
+            value = static_cast<uint32_t>(decode_atomic(atomic_type, static_cast<int64_t>(current), static_cast<int64_t>(static_cast<uint32_t>(raw))));
         }
         return write32(offset, value);
     }
@@ -475,11 +471,7 @@ public:
     }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ----
-    static uint32_t window_read32(void* ctx, uint32_t offset) { return static_cast<PioBlock*>(ctx)->read(offset); }
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) {
-        static_cast<PioBlock*>(ctx)->write_atomic(offset, raw_value, atomic_type);
-    }
-    WindowHandler window_handler() noexcept { return WindowHandler{&PioBlock::window_read32, &PioBlock::window_write32, this}; }
+    WindowHandler window_handler() noexcept { return BlockWindow<PioBlock>::handler(this); }
 
     // Used by the machines.
     bool update_pin(uint32_t gpio) noexcept {

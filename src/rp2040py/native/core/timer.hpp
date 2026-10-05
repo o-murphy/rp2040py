@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include "clock.hpp"
+#include "core_host.hpp"
 #include "window_map.hpp"
 
 namespace rp2040core {
@@ -29,13 +30,9 @@ namespace rp2040core {
 using TimerIrqFn = bool (*)(void* ctx, uint32_t line, bool level);
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-enum TimerWarn : uint32_t {
-    kTimerWarnRead = 0,            // "Unimplemented peripheral read from 0x{offset:x}"
-    kTimerWarnReadAtomicArea = 1,  // "Unimplemented read from peripheral in the atomic operation region" (offset > 0x1000)
-    kTimerWarnWrite = 2,           // "Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}"
-    kTimerWarnPause = 3,           // "Unimplemented Timer Pause"
-};
-using TimerWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t value);
+constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
+constexpr uint32_t kTimerWarnPause = 3;  // "Unimplemented Timer Pause" - the one message a block adds to the common three
+using TimerWarnFn = RegWarnFn;
 
 struct TimerHost {
     TimerIrqFn irq = nullptr;
@@ -191,13 +188,7 @@ public:
         raw_write_value_ = raw;
         int64_t value = raw;
         if (atomic_type != kAtomicNormal) {
-            const int64_t current = static_cast<int64_t>(read(offset));
-            switch (atomic_type) {
-                case kAtomicXor: value = current ^ raw; break;
-                case kAtomicSet: value = current | raw; break;
-                case kAtomicClear: value = current & ~raw; break;
-                default: break;  // not reachable from an address: the Python block logs a warning and writes raw
-            }
+            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);  // an alias that is none of the three (not reachable from an address) writes raw
         }
         if (write32(offset, value, raw) == kWriteUnhandled && host_.warn) {
             host_.warn(host_.ctx, kTimerWarnWrite, offset, value);
@@ -206,13 +197,7 @@ public:
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    static uint32_t window_read32(void* ctx, uint32_t offset) {
-        return static_cast<TimerBlock*>(ctx)->read(offset);
-    }
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) {
-        static_cast<TimerBlock*>(ctx)->write_atomic(offset, raw_value, atomic_type);
-    }
-    WindowHandler window_handler() noexcept { return WindowHandler{&TimerBlock::window_read32, &TimerBlock::window_write32, this}; }
+    WindowHandler window_handler() noexcept { return BlockWindow<TimerBlock>::handler(this); }
 
 private:
     struct Slot {
