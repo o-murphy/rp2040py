@@ -87,3 +87,46 @@ def test_a_csr_write_without_the_enable_switches_the_channel_off_in_en():
     assert chip.read_uint32(PWM_BASE + EN) == 0xFF
     chip.write_uint32(_ch(3, CSR), 0)
     assert chip.read_uint32(PWM_BASE + EN) == 0xFF & ~(1 << 3)
+
+
+IO_BANK0 = 0x40014000
+PADS_BANK0 = 0x4001C000
+FUNC_PWM = 4
+
+
+def _b_input_on_pin_1(chip: RP2040, mode: int) -> None:
+    """Channel 0 counting the edges of the B input (pin 1) in the given divider mode, the pin on the PWM function with its input enabled."""
+    chip.write_uint32(IO_BANK0 + 8 * 1 + 4, FUNC_PWM)
+    chip.write_uint32(PADS_BANK0 + 4 + 4 * 1, 0x56)
+    chip.write_uint32(_ch(0, TOP), 100)
+    chip.write_uint32(_ch(0, CSR), CSR_EN | (mode << 4))
+
+
+def test_a_b_input_edge_is_counted_in_the_edge_modes_after_a_plain_reset():
+    chip = RP2040()
+    _b_input_on_pin_1(chip, mode=2)  # rising edges
+    for _ in range(3):
+        chip.gpio[1].set_input_value(True)
+        chip.gpio[1].set_input_value(False)
+    assert chip.read_uint32(_ch(0, CTR)) == 3
+
+
+def test_falling_edges_are_counted_in_the_falling_edge_mode():
+    chip = RP2040()
+    _b_input_on_pin_1(chip, mode=3)
+    chip.gpio[1].set_input_value(True)
+    assert chip.read_uint32(_ch(0, CTR)) == 0
+    chip.gpio[1].set_input_value(False)
+    assert chip.read_uint32(_ch(0, CTR)) == 1
+
+
+def test_an_edge_on_a_pin_that_is_an_output_is_ignored():
+    chip = RP2040()
+    _b_input_on_pin_1(chip, mode=2)
+    chip.pwm.gpio_direction |= 1 << 1  # pin 1 driven as an output
+    chip.gpio[1].set_input_value(True)
+    chip.gpio[1].set_input_value(False)
+    assert chip.read_uint32(_ch(0, CTR)) == 0
+    chip.pwm.gpio_direction &= ~(1 << 1)  # an input again: counted
+    chip.gpio[1].set_input_value(True)
+    assert chip.read_uint32(_ch(0, CTR)) == 1

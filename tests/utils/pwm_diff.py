@@ -370,11 +370,10 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         1,
     ),
     "enable_ignores_csr": ("enable = bool(csr & CSR_EN)", "enable = True", 1),
-    "on_input_ignores_direction": (
-        "if self.gpio_direction and 1 << index:\n            return",
-        "if False:\n            return",
-        1,
-    ),
+    "on_input_ignores_direction": ("if self.gpio_direction & (1 << index):\n            return", "if False:\n            return", 1),
+    "on_input_any_direction_bit": ("if self.gpio_direction & (1 << index):\n            return", "if self.gpio_direction:\n            return", 1),
+    "on_input_inverted": ("if self.gpio_direction & (1 << index):\n            return", "if not self.gpio_direction & (1 << index):\n            return", 1),
+    "on_input_neighbour_pin": ("if self.gpio_direction & (1 << index):\n            return", "if self.gpio_direction & (1 << (index ^ 1)):\n            return", 1),
     "on_input_misses_second_b": (
         "if channel.pin_b1 == index or channel.pin_b2 == index:",
         "if channel.pin_b1 == index:",
@@ -479,8 +478,8 @@ def _channel_scenario(r: random.Random) -> list[tuple]:
         ops.append(("write", base + P.CHN_CSR, csr | P.CSR_EN | r.choice((P.CSR_PH_ADV, P.CSR_PH_RET, P.CSR_PH_ADV | P.CSR_PH_RET, P.CSR_PH_ADV)), ALIASES[0]))
         ops.append(("read", base + P.CHN_CTR, ALIASES[0]))
     b = pins[1]
-    if mode and r.random() < 0.6:
-        ops.append(("direction", r.choice((0, 0, 0xFFFFFFFF, r.getrandbits(32)))))
+    if mode and r.random() < 0.4:
+        ops.append(("direction", r.choice((0, 0xFFFFFFFF, ~(1 << pins[1]) & 0xFFFFFFFF, 1 << pins[1], r.getrandbits(32)))))
     for _ in range(r.choice((2, 3, 4, 6))):
         if mode and r.random() < 0.8:
             ops.append(("input", b, r.random() < 0.5))

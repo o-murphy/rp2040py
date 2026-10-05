@@ -333,11 +333,9 @@ class RPPWM(BasePeripheral):
         return self.rp2040.gpio[index].input_value
 
     def gpio_on_input(self, index: int) -> None:
-        # TODO: matches upstream rp2040js, which uses logical AND (`&&`) here instead of
-        # bitwise AND (`&`) - this reduces to "if gpio_direction is nonzero", not "if bit
-        # `index` of gpio_direction is set". Kept as-is for behavioral parity. Revisit if
-        # rp2040js fixes it upstream.
-        if self.gpio_direction and 1 << index:
+        # A pin that is an output ignores what happens on its input. rp2040js tests `gpioDirection && 1 << index`, a logical AND that is true whenever the word is nonzero - after a reset
+        # it never is zero, so no B-input edge was ever seen; it means `&` (this pin's bit), which record 0096 (Phase 4) made the reference do.
+        if self.gpio_direction & (1 << index):
             return
         for channel in self.channels:
             if channel.pin_b1 == index or channel.pin_b2 == index:

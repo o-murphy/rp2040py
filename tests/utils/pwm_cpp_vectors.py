@@ -332,14 +332,23 @@ def scenarios() -> dict[str, list[tuple]]:
         (IN, 1, 0),
         (R, ch(0, CTR)),
     ]
-    s["input_ignored_while_direction_is_set"] = [
+    s["b_edges_count_without_poking_the_direction"] = [
         _w(ch(0, TOP), 3),
         _w(ch(0, DIV), 0x10),
-        _w(ch(0, CSR), EN_BIT | (2 << 4)),
-        (IN, 1, 1),
-        (IN, 1, 0),
-        (IN, 1, 1),
+        _w(ch(0, CSR), EN_BIT | (2 << 4)),  # the CSR write makes B an input: its direction bit goes low, the A bit stays high
+        *[op for level in (1, 0, 1, 0, 1) for op in ((IN, 1, level), (R, ch(0, CTR)))],
         *all_reads(),
+    ]
+    s["b_edges_are_ignored_while_the_pin_is_an_output"] = [
+        _w(ch(0, TOP), 20),
+        _w(ch(0, DIV), 0x10),
+        _w(ch(0, CSR), EN_BIT | (2 << 4)),
+        (DIR, 0x2),  # pin 1 is an output: its input is ignored ...
+        *[op for level in (1, 0, 1) for op in ((IN, 1, level), (R, ch(0, CTR)))],
+        (DIR, 0xFFFFFFFD),  # ... pin 1 is an input, every other pin an output: counted
+        *[op for level in (0, 1, 0, 1) for op in ((IN, 1, level), (R, ch(0, CTR)))],
+        (DIR, 0x1),  # a neighbouring pin's bit does not matter
+        *[op for level in (0, 1) for op in ((IN, 1, level), (R, ch(0, CTR)))],
     ]
     s["reset_while_running"] = [
         _w(ch(0, TOP), 3),

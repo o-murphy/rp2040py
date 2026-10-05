@@ -13,8 +13,6 @@
 // an alarm makes the alarm return `false` and the clock stops ticking.
 //
 // Quirks of the reference that are kept (pinned by the C++ checks and by tests/test_pwm_diff.py), several of them bugs that are fixed later, one commit each, with the oracle's mutants:
-//   - `gpio_on_input` suppresses every B-input edge while `gpio_direction` is nonzero (`and` for `&`, again from rp2040js) - after a reset it never is zero, so the gated and edge-counting
-//     divider modes are dead unless something writes the word;
 //   - in phase-correct mode the wrap does not drive A and B, so a phase-correct output only ever changes at the compare alarms;
 //   - CC and TOP are double buffered: a write is held until the channel is enabled or wraps; a CC write is not masked (the reference keeps the 32-bit value; TOP keeps 16 bits);
 //   - reset() restarts the channels and the direction word, not INTR/INTE/INTF or `gpio_value`;
@@ -216,10 +214,10 @@ public:
 
     bool gpio_read(int64_t index, bool* level) noexcept { return host_.pin_read(host_.ctx, static_cast<uint32_t>(index), level); }
 
-    // A pin whose function is PWM changed its input level. The reference gates this on `gpio_direction and 1 << index`, which is true whenever the word is nonzero: every edge is dropped
-    // then (and after a reset it is never zero).
+    // A pin whose function is PWM changed its input level. A pin that is an output (its bit of the direction word is set) ignores it; rp2040js and the reference used to drop every edge
+    // while the whole word was nonzero (`and` for `&`).
     bool gpio_on_input(uint32_t index) noexcept {
-        if (gpio_direction != 0u) return true;
+        if (gpio_direction & (1u << index)) return true;
         for (PwmChannel& channel : channels) {
             if (channel.pin_b1 == static_cast<int64_t>(index) || channel.pin_b2 == static_cast<int64_t>(index)) {
                 if (!channel.gpio_b_changed()) return false;
