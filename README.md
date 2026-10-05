@@ -205,7 +205,10 @@ file already on disk:
 > | CPython 3.10 + `rp2040py.native` (on by default) | ~0.02 s |
 > | CPython 3.10, pure Python (`RP2040PY_SKIP_CYTHON=1`) | ~1.9 s |
 > | PyPy 3.10 (pure Python - the native build is skipped there) | ~1.3 s |
+> | PyPy 3.10 + `rp2040py.native` (opt-in, `RP2040PY_FORCE_NATIVE_ON_PYPY=1`, not the main path) | ~0.02-0.03 s (~0.55 s with the interpreter's start-up) |
 > | rp2040js (Node 22) | ~3 s past Node's start-up (~3.5 s in total); it steps through idle time instead of skipping it, so this is not a pure instruction-speed figure |
+>
+> PyPy's native build is an experiment, documented rather than recommended: the batch engine is 3-50x faster than PyPy's pure Python, but a call into the extension costs a cpyext round trip, so driving the core one instruction at a time from Python (`--stepwise`, the GDB target) is ~100x slower than PyPy's pure Python there, and the same batch loop runs about half as fast as on CPython (measured 2026-10, one machine, one run per figure, JIT warm-up included).
 >
 > Any recent MicroPython release is fine; 1.21 is not faster than 1.28. Details, the older
 > measurements this replaces and why they were wrong:

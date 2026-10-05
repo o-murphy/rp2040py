@@ -316,5 +316,16 @@ What this changes in the text above:
 - **PyPy was re-measured** (above): ~1.3-1.8 s, i.e. only ~1.4-1.9x faster than CPython's pure build (it was ~16x
   on the old per-instruction engine, whose cost was interpretive overhead PyPy could remove) and ~60x slower than the
   native build. "Run under PyPy" is no longer the advice; the native build is the fast path.
+- **PyPy + the native build (opt-in, `RP2040PY_FORCE_NATIVE_ON_PYPY=1`, the cpyext path of `setup.py`) - documented, not recommended.** PyPy 3.10.16 (7.3.19), 1.28 + littlefs, same machine; pure = `RP2040PY_SKIP_CYTHON=1`:
+
+  | | PyPy pure | PyPy + native |
+  | --- | --- | --- |
+  | boot to the first line, bench loop (3 runs) | 1.32-1.39 s | 0.02-0.03 s |
+  | the same, whole process | 2.3-2.5 s | 0.54-0.59 s |
+  | batch loop, 0.4 simulated s | 1.69 s (0.24x real time) | 0.55 s (0.72x) |
+  | boot + `for i in range(30000)` workload (no littlefs) | 1.18 s + 2.38 s | 0.03 s + 0.37 s |
+  | `bench` synthetic mode, one `execute_instruction()` call from Python each | 26-61M instr/s (the JIT inlines the Python) | **0.59-0.63M instr/s** (a cpyext round trip per call) |
+
+  The batch engine, which is what a run uses, gains 3-50x; the one-instruction-at-a-time Python-driven path (`--stepwise`, the GDB target, tests that call the core directly) is ~100x slower than PyPy's pure Python. Against CPython + native the same batch loop takes 0.30 s (1.36x real time), so PyPy + native is about half as fast, and its process start-up is longer (0.55 s against 0.21 s). One run per figure (three for the boot), JIT warm-up included. The commit that added this path (`b035126`) quotes 52-96 -> 108-123 Minstr/s on the synthetic loop; that does not reproduce here (0.6M) and was not chased - the code under it has changed since (the C++ core), or it was measured another way. A side effect worth knowing: the PyPy build leaves its `.so` files (`*.pypy310-pp73-*.so`, git-ignored) beside the CPython ones in `src/rp2040py/native/`, and editable installs of both interpreters share that tree, so a pure PyPy run needs `RP2040PY_SKIP_CYTHON=1` once the native build has been made.
 - Preloading littlefs does not change these numbers measurably: the README figures (taken the same
   way) agree with the table here.
