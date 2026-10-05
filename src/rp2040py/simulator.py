@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import logging
+import os
 import sys
 import threading
 import time
@@ -27,6 +28,28 @@ _logger = logging.getLogger(__name__)
 _PACE_MIN_SLEEP_SECONDS = 0.002
 _PACE_MAX_CREDIT_SECONDS = 0.05
 _HELD_IN_RESET_POLL_SECONDS = 0.005
+
+# The GIL's switch interval while the engine-room thread runs. CPython's default (5 ms) makes a thread that wants the GIL wait that long for a holder that never blocks, and the
+# engine thread is exactly that: a host thread doing ordinary Python work next to it (a GUI, an image decoder, a test driver - each of whose file reads, sleeps and locks
+# releases the GIL and must win it back) pays up to one interval per release. A demo whose host thread decoded and saved five e-paper frames spent ~40 s of a 1 s emulation
+# waiting for the GIL at 5 ms and ~1 s at 1 ms (measured on the 2.9" e-paper demo, docs/records/0096). Process-wide by nature, set once when the engine-room thread is created,
+# and only when the interpreter is still at its default: an embedder's own choice, or RP2040PY_SWITCH_INTERVAL (seconds, 0 to leave it alone), wins.
+_ENGINE_SWITCH_INTERVAL_SECONDS = 0.001
+_DEFAULT_SWITCH_INTERVAL_SECONDS = 0.005
+
+
+def _tune_gil_switch_interval() -> None:
+    override = os.environ.get("RP2040PY_SWITCH_INTERVAL")
+    if override is not None:
+        try:
+            seconds = float(override)
+        except ValueError:
+            return
+        if seconds > 0:
+            sys.setswitchinterval(seconds)
+        return
+    if sys.getswitchinterval() == _DEFAULT_SWITCH_INTERVAL_SECONDS:
+        sys.setswitchinterval(_ENGINE_SWITCH_INTERVAL_SECONDS)
 
 
 class ShutdownRequest:
@@ -126,6 +149,7 @@ class Simulator:
         if self._loop is None:
             with self._loop_init_lock:
                 if self._loop is None:
+                    _tune_gil_switch_interval()
                     self._loop, self._loop_thread = start_loop_thread()
         return self._loop
 
