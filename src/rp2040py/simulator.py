@@ -167,6 +167,30 @@ class Simulator:
         bridge in from another thread."""
         self._loop = loop if loop is not None else asyncio.get_running_loop()
 
+    def pump(self, seconds: float = 0.0) -> None:
+        """Drives the engine on the *calling* thread, for a synchronous caller with no loop of its own (a Tk window, a script, a test): runs the loop registered by `bind_loop()`
+        - which nobody else is running - for `seconds` of wall time, and returns. The simulation advances only while this runs; between calls it is paused, exactly as an
+        `await`-ing host's engine pauses while the host does its own work. No thread, so no GIL hand-offs (see `_tune_gil_switch_interval`). Typical use:
+
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(device.astart())                  # binds `loop` and starts the engine as a task on it
+            task = loop.create_task(device.aexec_file(script))
+            while not task.done():
+                device.simulator.pump(0.02)
+                ...                                                    # draw, poll a GUI, drain queues
+
+        Not for use from inside a running loop (`await` there instead) or from another thread (`schedule_threadsafe()`/`call()` are the bridges)."""
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError(
+                "pump() needs a loop registered with bind_loop() (device.astart() inside loop.run_until_complete() does it)"
+            )
+        if loop.is_running():
+            raise RuntimeError(
+                "pump() drives a loop that is not running: await instead, or call it from outside the loop"
+            )
+        loop.run_until_complete(asyncio.sleep(seconds))
+
     def start_execution(self) -> None:
         """Schedules execute() to start running on this Simulator's own engine-room thread and
         returns immediately - the replacement for `threading.Thread(target=simulator.execute,

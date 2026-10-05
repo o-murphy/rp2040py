@@ -28,6 +28,7 @@ bytes into a picture is this demo's job, via `_decode_frame` below.
 """
 
 import argparse
+import asyncio
 import dataclasses
 import os
 import queue
@@ -155,11 +156,10 @@ def main() -> None:
 
     renderer: Renderer = TkinterRenderer() if args.tkinter else ScreenshotRenderer(Path(args.screenshot or "eink_out"))
 
-    # frame_queue exists because Epd2in9G.on_frame fires from MicroPythonDevice's own
-    # engine-room thread (Simulator._ensure_loop()'s lazily-created background thread, since this
-    # script never calls astart()/bind_loop() - see the device.start_async() comment below), not
-    # this one; Tkinter widgets may only be touched from the thread that created them, so raw
-    # frames are handed off here and only ever decoded and drawn from the loop below.
+    # No thread: the engine runs as a task on `loop`, which this script runs itself - `pump()` below advances the emulator for a slice of wall time and returns, and the frames
+    # `Epd2in9G.on_frame` hands over are decoded and drawn between slices (the emulated chip is paused meanwhile, which costs nothing: its time is virtual). Tkinter widgets
+    # may only be touched from the thread that created them, which is this one. A separate engine-room thread would work too (device.start_async()), but its GIL hand-offs
+    # with the decode/draw work below made this demo spend ~40 s of a ~1 s run waiting for the GIL.
     frame_queue: queue.Queue[bytes] = queue.Queue()
 
     image_path = retrieve(MICROPYTHON, args.image)
@@ -171,7 +171,7 @@ def main() -> None:
     device = MicroPythonDevice(board=board, log_level=LogLevel.ERROR)
 
     # attach_external_devices() (external/device.py) is only safe before Simulator.start_execution()
-    # - so this runs before start_async() below, not after.
+    # - so this runs before astart() below, not after.
     epd = Epd2in9G(
         on_frame=frame_queue.put,
         busy_nanos_power=_DEMO_BUSY_NANOS_POWER,
@@ -179,50 +179,50 @@ def main() -> None:
     )
     attach_external_devices(device.mcu, epd)
 
-    # MicroPythonDevice is async-native now (no blocking start()) - exec_file_async() staying
-    # Future-based is unaffected. start_async() alone (no astart()/bind_loop() call) leaves this
-    # Simulator on its own lazily-created background thread (Simulator._ensure_loop()), exactly
-    # like the old dedicated worker thread this blocking .result() replaces - which is what lets
-    # Epd2in9G.on_frame fire off-thread from this Tkinter-driving main thread.
-    device.start_async().result()
-
-    deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
-    future = device.exec_file_async(_DEMO_SCRIPT, timeout=None)
+    loop = asyncio.new_event_loop()
+    simulator = device.simulator
     try:
-        while not future.done() and not (deadline is not None and time.monotonic() > deadline):
-            _drain(frame_queue, renderer)
-            renderer.pump()
-            time.sleep(0.05)
-    except KeyboardInterrupt:
-        device.stop()
-        os._exit(130)
+        loop.run_until_complete(device.astart())  # binds `loop` and starts the engine as a task on it
 
-    if not future.done():
-        print(f"Demo script did not finish within {args.timeout}s", file=sys.stderr)
-        _drain(frame_queue, renderer)
-        device.stop()
-        os._exit(1)
-
-    stdout, stderr = future.result()
-    _drain(frame_queue, renderer)
-    if stdout:
-        print(stdout.decode(errors="replace"), end="")
-    if stderr:
-        print(stderr.decode(errors="replace"), end="", file=sys.stderr)
-
-    # Keep a Tk window open (and responsive) after the demo finishes so the final frame stays
-    # visible, instead of the window vanishing the instant the script completes.
-    if isinstance(renderer, TkinterRenderer):
-        import tkinter
-
+        deadline = time.monotonic() + args.timeout if args.timeout > 0 else None
+        task = loop.create_task(device.aexec_file(_DEMO_SCRIPT, timeout=None))
         try:
-            while True:
+            while not task.done() and not (deadline is not None and time.monotonic() > deadline):
+                simulator.pump(0.02)
+                _drain(frame_queue, renderer)
                 renderer.pump()
-                time.sleep(0.05)
-        except (KeyboardInterrupt, tkinter.TclError):  # TclError: the user closed the window
-            pass
+        except KeyboardInterrupt:
+            device.stop()
+            os._exit(130)
 
-    device.stop()
+        if not task.done():
+            print(f"Demo script did not finish within {args.timeout}s", file=sys.stderr)
+            _drain(frame_queue, renderer)
+            device.stop()
+            os._exit(1)
+
+        stdout, stderr = task.result()
+        _drain(frame_queue, renderer)
+        if stdout:
+            print(stdout.decode(errors="replace"), end="")
+        if stderr:
+            print(stderr.decode(errors="replace"), end="", file=sys.stderr)
+
+        # Keep a Tk window open (and responsive) after the demo finishes, so the final frame stays
+        # visible, instead of the window vanishing the instant the script completes.
+        if isinstance(renderer, TkinterRenderer):
+            import tkinter
+
+            try:
+                while True:
+                    renderer.pump()
+                    time.sleep(0.05)
+            except (KeyboardInterrupt, tkinter.TclError):  # TclError: the user closed the window
+                pass
+    finally:
+        device.stop()
+        simulator.pump(0.01)
+        loop.close()
 
 
 if __name__ == "__main__":
