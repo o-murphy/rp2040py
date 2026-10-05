@@ -53,7 +53,7 @@ def test_bare_rp2040_schedule_threadsafe_raises_without_an_owning_simulator(rp20
 
 
 def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_caller(rp2040_factory):
-    simulator = Simulator(rp2040=rp2040_factory())
+    simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
     # No bootrom/firmware loaded - core.waiting=True keeps the engine room in _execute_batch()'s
     # cheap idle-jump branch (see test_simulator.py) instead of actually executing garbage
     # instructions from PC 0, which would otherwise spam "not implemented"/"invalid memory
@@ -82,7 +82,7 @@ def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_c
 
 
 def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread(rp2040_factory):
-    simulator = Simulator(rp2040=rp2040_factory())
+    simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
     simulator.rp2040.core.waiting = True  # see the sibling test above for why
     simulator.start_execution()
     try:
