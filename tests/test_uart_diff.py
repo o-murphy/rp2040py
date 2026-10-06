@@ -22,7 +22,9 @@ def test_the_pure_python_uart_and_the_default_uart_agree(seed):
 
 def _feed_an_extra_byte(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.uart[0].feed_byte(0x5A)
+        uart = candidate.chip.uart[0]
+        uart._ctrl_register |= 0x301  # a disabled UART takes nothing from the line; this one is damaged while enabled
+        uart.feed_byte(0x5A)
 
 
 def _write_a_register(candidate: Rig, step: int) -> None:

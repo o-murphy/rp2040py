@@ -15,7 +15,10 @@
 //   - the RX FIFO is 32 deep whatever LCR_H.FEN says, a push on a full FIFO drops the byte, a pull from an empty one reads 0;
 //   - `UARTICR` clears the bits of the *raw* value the bus passed, not of the alias-decoded value, and a direct (non-atomic) write keeps the raw value the last atomic
 //     write left;
-//   - the UARTCR write drives the TX DREQ from UARTEN alone (never the RX one, never TXE/RXE);
+//   - the TX DREQ is asked for when UARTEN, TXE and DMACR.TXDMAE are set (the TX FIFO never fills), the RX one when UARTEN, RXE and RXDMAE are set and the FIFO holds a byte (and DMAONERR is
+//     not holding it back); every change of CR, DMACR, the FIFO's emptiness or the error interrupts re-announces both (TX then RX);
+//   - a disabled UART (UARTEN 0), transmitter (TXE 0) or receiver (RXE 0) sends / receives nothing; an overrun drops the byte and sets UARTRSR.OE and the OE interrupt;
+//   - UARTIFLS, UARTILPR, UARTDMACR (and CR, LCR_H) keep only their datasheet bits; IFLS and ILPR are stored and not acted on;
 //   - IBRD/FBRD writes announce the baud rate every time (the host decides whether anyone listens); IBRD is masked to 16 bits, FBRD to 6, IMSC to 11;
 //   - an alias write decodes against a *read* of the register, with that read's side effects (a SET/CLR/XOR write of DR pulls a byte from the FIFO);
 //   - `reset()` clears the registers and the FIFO and drops the interrupt line, but never the host's callbacks (wiring, not state) and never `raw_write_value`;
@@ -32,7 +35,7 @@
 namespace rp2040core {
 
 using UartIrqFn = bool (*)(void* ctx, bool level);               // false: failure parked
-using UartDreqFn = bool (*)(void* ctx, bool asserted);           // the TX DREQ; false: failure parked
+using UartDreqFn = bool (*)(void* ctx, bool rx, bool asserted);  // the TX (rx false) or RX DREQ; false: failure parked
 using UartByteFn = bool (*)(void* ctx, uint32_t byte);           // a transmitted byte, already masked to 8 bits; false: failure parked
 using UartBaudFn = bool (*)(void* ctx);                          // IBRD/FBRD changed: the host announces the new baud rate; false: failure parked
 // The messages the Python block logs through `BasePeripheral.warn` (see core_host.hpp); the host formats them.
@@ -50,14 +53,19 @@ struct UartHost {
 };
 
 namespace uart_regs {
-constexpr uint32_t DR = 0x0, FR = 0x18, IBRD = 0x24, FBRD = 0x28, LCR_H = 0x2C, CR = 0x30, IMSC = 0x38, IRIS = 0x3C, IMIS = 0x40, ICR = 0x44;
+constexpr uint32_t DR = 0x0, RSR = 0x4, FR = 0x18, ILPR = 0x20, IBRD = 0x24, FBRD = 0x28, LCR_H = 0x2C, CR = 0x30, IFLS = 0x34, IMSC = 0x38, IRIS = 0x3C, IMIS = 0x40, ICR = 0x44, DMACR = 0x48;
 constexpr uint32_t PERIPHID0 = 0xFE0, PERIPHID1 = 0xFE4, PERIPHID2 = 0xFE8, PERIPHID3 = 0xFEC;
 constexpr uint32_t PCELLID0 = 0xFF0, PCELLID1 = 0xFF4, PCELLID2 = 0xFF8, PCELLID3 = 0xFFC;
 constexpr uint32_t FR_TXFE = 1u << 7, FR_RXFF = 1u << 6, FR_RXFE = 1u << 4;
 [[maybe_unused]] constexpr uint32_t LCR_FEN = 1u << 4;  // the shell's `fifos_enabled`; the block itself never looks at it (the FIFO is 32 deep either way)
 constexpr uint32_t CR_RXE = 1u << 9, CR_TXE = 1u << 8, CR_UARTEN = 1u << 0;
-constexpr uint32_t INT_TX = 1u << 5, INT_RX = 1u << 4;
+constexpr uint32_t INT_OE = 1u << 10, INT_TX = 1u << 5, INT_RX = 1u << 4;
+constexpr uint32_t INT_ERRORS = 0x780u;  // OE, BE, PE, FE
 constexpr uint32_t IMSC_MASK = 0x7FFu;
+constexpr uint32_t RSR_OE = 1u << 3;
+constexpr uint32_t DMACR_DMAONERR = 1u << 2, DMACR_TXDMAE = 1u << 1, DMACR_RXDMAE = 1u << 0;
+// What each register keeps (RP2040 datasheet, 4.2.8): the rest is reserved.
+constexpr uint32_t LCR_H_MASK = 0xFFu, CR_MASK = 0xFF87u, IFLS_MASK = 0x3Fu, IFLS_RESET = 0x12u, DMACR_MASK = 0x7u, ILPR_MASK = 0xFFu;
 }  // namespace uart_regs
 
 class UartBlock {
@@ -73,6 +81,8 @@ public:
     uint32_t line_ctrl = 0;
     uint32_t int_divisor = 0, frac_divisor = 0;
     uint32_t interrupt_mask = 0, interrupt_status = 0;
+    // Stored, not acted on: the RX interrupt comes with every byte (a superset of any trigger level), the TX FIFO never fills, there is no IrDA.
+    uint32_t ifls = uart_regs::IFLS_RESET, ilpr = 0, dmacr = 0, rsr = 0;
 
     void init(const UartHost& host) noexcept { host_ = host; }
 
@@ -108,6 +118,8 @@ public:
         return (rx_full() ? FR_RXFF : 0u) | (rx_empty() ? FR_RXFE : 0u) | FR_TXFE;
     }
     bool enabled() const noexcept { return (ctrl & uart_regs::CR_UARTEN) != 0; }
+    bool tx_enabled() const noexcept { return (ctrl & uart_regs::CR_TXE) != 0; }
+    bool rx_enabled() const noexcept { return (ctrl & uart_regs::CR_RXE) != 0; }
 
     // False: a failure is pending.
     bool check_interrupts() noexcept {
@@ -115,11 +127,30 @@ public:
         return true;
     }
 
-    // A byte arrives from the wire (the CLI's console, a test); a push on a full FIFO drops it.
+    // The two DMA requests. TX: the transmit FIFO never fills, so it asks whenever the transmitter is enabled and TXDMAE is set. RX: whenever the receiver is enabled, RXDMAE is set and the
+    // FIFO holds a byte - unless DMAONERR is set and an error interrupt is up ("the DMA receive request outputs ... are disabled when the UART error interrupt is asserted").
+    bool update_dreq() noexcept {
+        using namespace uart_regs;
+        const bool ready = enabled();
+        const bool tx = ready && tx_enabled() && (dmacr & DMACR_TXDMAE) != 0;
+        const bool rx = ready && rx_enabled() && (dmacr & DMACR_RXDMAE) != 0 && !rx_empty() && !((dmacr & DMACR_DMAONERR) != 0 && (interrupt_status & INT_ERRORS) != 0);
+        if (!host_.dreq(host_.ctx, false, tx)) return false;
+        return host_.dreq(host_.ctx, true, rx);
+    }
+
+    // A byte arrives from the wire (the CLI's console, a test). A disabled receiver (or UART) takes nothing; on a full FIFO the byte is dropped and OE and its interrupt are set.
     bool feed_byte(uint32_t value) noexcept {
-        rx_push(value);
-        interrupt_status |= uart_regs::INT_RX;
-        return check_interrupts();
+        using namespace uart_regs;
+        if (!(enabled() && rx_enabled())) return true;
+        if (rx_full()) {
+            rsr |= RSR_OE;
+            interrupt_status |= INT_OE;
+        } else {
+            rx_push(value);
+            interrupt_status |= INT_RX;  // not held back until a trigger level (UARTIFLS): see the note on `ifls`
+        }
+        if (!check_interrupts()) return false;
+        return update_dreq();
     }
 
     // False: a failure is pending (the register state is already what the reference's exception would have left).
@@ -131,7 +162,10 @@ public:
         interrupt_status = 0;
         int_divisor = 0;
         frac_divisor = 0;
-        return host_.irq(host_.ctx, false);
+        ifls = uart_regs::IFLS_RESET;
+        ilpr = dmacr = rsr = 0;
+        if (!host_.irq(host_.ctx, false)) return false;
+        return update_dreq();
     }
 
     // Reads a register. A failure of a host call leaves the flag raised and the value already computed (the reference had raised after the same side effects).
@@ -146,13 +180,18 @@ public:
                     interrupt_status &= ~INT_RX;
                 }
                 (void)check_interrupts();
+                (void)update_dreq();
                 return value;
             }
+            case RSR: return rsr;
+            case ILPR: return ilpr;
             case FR: return flags();
             case IBRD: return int_divisor;
             case FBRD: return frac_divisor;
             case LCR_H: return line_ctrl;
             case CR: return ctrl;
+            case IFLS: return ifls;
+            case DMACR: return dmacr;
             case IMSC: return interrupt_mask;
             case IRIS: return interrupt_status;
             case IMIS: return interrupt_status & interrupt_mask;
@@ -178,25 +217,34 @@ public:
         using namespace uart_regs;
         switch (offset) {
             case DR:
+                // "TXE: Transmit enable": a disabled transmitter (or UART) sends nothing - the byte goes nowhere
+                if (!(enabled() && tx_enabled())) return true;
                 if (!host_.on_byte(host_.ctx, static_cast<uint32_t>(value) & 0xFFu)) return false;
                 interrupt_status |= INT_TX;
                 return check_interrupts();
+            case RSR: rsr = 0; return true;  // the write is UARTECR: it clears the error flags
+            case ILPR: ilpr = static_cast<uint32_t>(value) & ILPR_MASK; return true;
             case IBRD:
                 int_divisor = static_cast<uint32_t>(value) & 0xFFFFu;
                 return host_.baud_changed(host_.ctx);
             case FBRD:
                 frac_divisor = static_cast<uint32_t>(value) & 0x3Fu;
                 return host_.baud_changed(host_.ctx);
-            case LCR_H: line_ctrl = static_cast<uint32_t>(value); return true;
+            case LCR_H: line_ctrl = static_cast<uint32_t>(value) & LCR_H_MASK; return true;
             case CR:
-                ctrl = static_cast<uint32_t>(value);
-                return host_.dreq(host_.ctx, enabled());
+                ctrl = static_cast<uint32_t>(value) & CR_MASK;
+                return update_dreq();
+            case IFLS: ifls = static_cast<uint32_t>(value) & IFLS_MASK; return true;
+            case DMACR:
+                dmacr = static_cast<uint32_t>(value) & DMACR_MASK;
+                return update_dreq();
             case IMSC:
                 interrupt_mask = static_cast<uint32_t>(value) & IMSC_MASK;
                 return check_interrupts();
             case ICR:
                 interrupt_status &= ~static_cast<uint32_t>(raw_write_value_);
-                return check_interrupts();
+                if (!check_interrupts()) return false;
+                return update_dreq();  // DMAONERR: clearing the error interrupt lets the receive request through again
             default: break;
         }
         if (host_.warn) host_.warn(host_.ctx, kUartWarnWrite, offset, value);

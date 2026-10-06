@@ -28,15 +28,19 @@ def _baud_rate(clk_peri: float, baud_divider: float) -> int:
 
 
 UARTDR = 0x0
+UARTRSR = 0x4  # reads the receive status (OE, BE, PE, FE); a write is UARTECR and clears it
 UARTFR = 0x18
+UARTILPR = 0x20
 UARTIBRD = 0x24
 UARTFBRD = 0x28
 UARTLCR_H = 0x2C
 UARTCR = 0x30
+UARTIFLS = 0x34
 UARTIMSC = 0x38
 UARTIRIS = 0x3C
 UARTIMIS = 0x40
 UARTICR = 0x44
+UARTDMACR = 0x48
 UARTPERIPHID0 = 0xFE0
 UARTPERIPHID1 = 0xFE4
 UARTPERIPHID2 = 0xFE8
@@ -60,8 +64,26 @@ TXE = 1 << 8
 UARTEN = 1 << 0
 
 # Interrupt bits
+UARTOEINTR = 1 << 10
 UARTTXINTR = 1 << 5
 UARTRXINTR = 1 << 4
+UART_ERROR_INTERRUPTS = 0x780  # UARTOEINTR, UARTBEINTR, UARTPEINTR, UARTFEINTR
+
+# UARTRSR bits
+RSR_OE = 1 << 3
+
+# UARTDMACR bits
+DMACR_DMAONERR = 1 << 2
+DMACR_TXDMAE = 1 << 1
+DMACR_RXDMAE = 1 << 0
+
+# What each register keeps (RP2040 datasheet, 4.2.8): the rest is reserved
+LCR_H_MASK = 0xFF  # SPS, WLEN, FEN, STP2, EPS, PEN, BRK
+CR_MASK = 0xFF87  # CTSEN .. LBE (15:7), SIRLP, SIREN, UARTEN; 6:3 are reserved
+IFLS_MASK = 0x3F  # RXIFLSEL 5:3, TXIFLSEL 2:0
+IFLS_RESET = 0x12  # both b010: 1/2 full
+DMACR_MASK = 0x7
+ILPR_MASK = 0xFF
 
 _WORD_LENGTH_BY_LCR_WLEN = {0b00: 5, 0b01: 6, 0b10: 7, 0b11: 8}
 
@@ -84,6 +106,12 @@ class RPUART(BasePeripheral):
         self._interrupt_status = 0
         self._int_divisor = 0
         self._frac_divisor = 0
+        # Stored, not acted on: the RX interrupt comes with every byte (a superset of any trigger level, so a driver that drains the FIFO in its handler works the same), the TX FIFO never
+        # fills, and there is no IrDA. They read back what was written, as the datasheet's registers do.
+        self._ifls = IFLS_RESET
+        self._ilpr = 0
+        self._dmacr = 0
+        self._rsr = 0
 
         self.on_byte: Callable[[int], None] | None = None
         self.on_baud_rate_change: Callable[[int], None] | None = None
@@ -102,7 +130,12 @@ class RPUART(BasePeripheral):
         self._interrupt_status = 0
         self._int_divisor = 0
         self._frac_divisor = 0
+        self._ifls = IFLS_RESET
+        self._ilpr = 0
+        self._dmacr = 0
+        self._rsr = 0
         self.rp2040.set_interrupt(self.irq, False)
+        self._update_dreq()
 
     @property
     def enabled(self) -> bool:
@@ -145,11 +178,35 @@ class RPUART(BasePeripheral):
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self._interrupt_status & self._interrupt_mask))
 
+    def _update_dreq(self) -> None:
+        """The two DMA requests. TX: the transmit FIFO never fills, so it is asking whenever the transmitter is enabled and TXDMAE is set. RX: whenever the receiver is enabled, RXDMAE is set
+        and the FIFO holds a byte - unless DMAONERR is set and an error interrupt is up ("the DMA receive request outputs ... are disabled when the UART error interrupt is asserted")."""
+        ready = self.enabled
+        tx = ready and self.tx_enabled and bool(self._dmacr & DMACR_TXDMAE)
+        rx = (
+            ready
+            and self.rx_enabled
+            and bool(self._dmacr & DMACR_RXDMAE)
+            and not self.rx_fifo.empty
+            and not (self._dmacr & DMACR_DMAONERR and self._interrupt_status & UART_ERROR_INTERRUPTS)
+        )
+        (self.rp2040.dma.set_dreq if tx else self.rp2040.dma.clear_dreq)(self.dreq.tx)
+        (self.rp2040.dma.set_dreq if rx else self.rp2040.dma.clear_dreq)(self.dreq.rx)
+
     def feed_byte(self, value: int) -> None:
-        self.rx_fifo.push(value)
-        # TODO check if the FIFO has reached the threshold level
-        self._interrupt_status |= UARTRXINTR
+        # "RXE: Receive enable": a disabled receiver (or UART) takes nothing from the line
+        if not (self.enabled and self.rx_enabled):
+            return
+        if self.rx_fifo.full:
+            # "OE: Overrun error. This bit is set to 1 if data is received and the FIFO is already full ... no more data is written when the FIFO is full"
+            self._rsr |= RSR_OE
+            self._interrupt_status |= UARTOEINTR
+        else:
+            self.rx_fifo.push(value)
+            # The RX interrupt is not held back until a trigger level (UARTIFLS): see the note on `_ifls`
+            self._interrupt_status |= UARTRXINTR
         self.check_interrupts()
+        self._update_dreq()
 
     def read_uint32(self, offset: int) -> int:
         if offset == UARTDR:
@@ -159,9 +216,14 @@ class RPUART(BasePeripheral):
             else:
                 self._interrupt_status &= ~UARTRXINTR
             self.check_interrupts()
+            self._update_dreq()
             return value
+        if offset == UARTRSR:
+            return self._rsr
         if offset == UARTFR:
             return self.flags
+        if offset == UARTILPR:
+            return self._ilpr
         if offset == UARTIBRD:
             return self._int_divisor
         if offset == UARTFBRD:
@@ -170,6 +232,10 @@ class RPUART(BasePeripheral):
             return self._line_ctrl_register
         if offset == UARTCR:
             return self._ctrl_register
+        if offset == UARTIFLS:
+            return self._ifls
+        if offset == UARTDMACR:
+            return self._dmacr
         if offset == UARTIMSC:
             return self._interrupt_mask
         if offset == UARTIRIS:
@@ -196,13 +262,21 @@ class RPUART(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == UARTDR:
-            if self.on_byte:
-                self.on_byte(value & 0xFF)
-            # The byte leaves the (never-filling) TX FIFO at once; the PL011 TX interrupt is
-            # edge-like - set by that, never while the FIFO merely stays empty - so UARTICR clears
-            # it for good instead of it being re-asserted (an IRQ storm in the guest otherwise).
-            self._interrupt_status |= UARTTXINTR
-            self.check_interrupts()
+            # "TXE: Transmit enable": a disabled transmitter (or UART) sends nothing - the byte goes nowhere, as the FIFO behind it is never read
+            if self.enabled and self.tx_enabled:
+                if self.on_byte:
+                    self.on_byte(value & 0xFF)
+                # The byte leaves the (never-filling) TX FIFO at once; the PL011 TX interrupt is
+                # edge-like - set by that, never while the FIFO merely stays empty - so UARTICR clears
+                # it for good instead of it being re-asserted (an IRQ storm in the guest otherwise).
+                self._interrupt_status |= UARTTXINTR
+                self.check_interrupts()
+
+        elif offset == UARTRSR:
+            self._rsr = 0  # the write is UARTECR: "cleared to 0 by a write to UARTECR"
+
+        elif offset == UARTILPR:
+            self._ilpr = value & ILPR_MASK
 
         elif offset == UARTIBRD:
             self._int_divisor = value & 0xFFFF
@@ -215,14 +289,18 @@ class RPUART(BasePeripheral):
                 self.on_baud_rate_change(self.baud_rate)
 
         elif offset == UARTLCR_H:
-            self._line_ctrl_register = value
+            self._line_ctrl_register = value & LCR_H_MASK
 
         elif offset == UARTCR:
-            self._ctrl_register = value
-            if self.enabled:
-                self.rp2040.dma.set_dreq(self.dreq.tx)
-            else:
-                self.rp2040.dma.clear_dreq(self.dreq.tx)
+            self._ctrl_register = value & CR_MASK
+            self._update_dreq()
+
+        elif offset == UARTIFLS:
+            self._ifls = value & IFLS_MASK
+
+        elif offset == UARTDMACR:
+            self._dmacr = value & DMACR_MASK
+            self._update_dreq()
 
         elif offset == UARTIMSC:
             self._interrupt_mask = value & 0x7FF
@@ -231,6 +309,7 @@ class RPUART(BasePeripheral):
         elif offset == UARTICR:
             self._interrupt_status &= ~self.raw_write_value
             self.check_interrupts()
+            self._update_dreq()  # DMAONERR: clearing the error interrupt lets the receive request through again
 
         else:
             super().write_uint32(offset, value)

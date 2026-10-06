@@ -12,7 +12,7 @@ cdef extern from "uart.hpp" namespace "rp2040core":
     cdef const uint32_t kUartWarnWrite
 
     ctypedef cppbool (*UartIrqFn)(void* ctx, cppbool level)
-    ctypedef cppbool (*UartDreqFn)(void* ctx, cppbool asserted)
+    ctypedef cppbool (*UartDreqFn)(void* ctx, cppbool rx, cppbool asserted)
     ctypedef cppbool (*UartByteFn)(void* ctx, uint32_t byte)
     ctypedef cppbool (*UartBaudFn)(void* ctx)
     ctypedef void (*UartWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
@@ -34,6 +34,10 @@ cdef extern from "uart.hpp" namespace "rp2040core":
         uint32_t frac_divisor
         uint32_t interrupt_mask
         uint32_t interrupt_status
+        uint32_t ifls
+        uint32_t ilpr
+        uint32_t dmacr
+        uint32_t rsr
         UartBlock() noexcept
         void init(const UartHost& host) noexcept
         int64_t raw_write_value() noexcept
@@ -47,6 +51,7 @@ cdef extern from "uart.hpp" namespace "rp2040core":
         void rx_reset() noexcept
         uint32_t flags() noexcept
         cppbool enabled() noexcept
+        cppbool update_dreq() noexcept
         cppbool check_interrupts() noexcept
         cppbool feed_byte(uint32_t value) noexcept
         cppbool reset() noexcept

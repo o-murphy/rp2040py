@@ -43,13 +43,14 @@ cdef cppbool _irq_trampoline(void* ctx, cppbool level) noexcept:
     return True
 
 
-cdef cppbool _dreq_trampoline(void* ctx, cppbool asserted) noexcept:
+cdef cppbool _dreq_trampoline(void* ctx, cppbool rx, cppbool asserted) noexcept:
     cdef RPUART uart = <RPUART> ctx
     try:
+        channel = uart.dreq.rx if rx else uart.dreq.tx
         if asserted:
-            uart.rp2040.dma.set_dreq(uart.dreq.tx)
+            uart.rp2040.dma.set_dreq(channel)
         else:
-            uart.rp2040.dma.clear_dreq(uart.dreq.tx)
+            uart.rp2040.dma.clear_dreq(channel)
     except BaseException as error:
         park_error(error)
         return False
@@ -208,6 +209,42 @@ cdef class RPUART:
     @_interrupt_status.setter
     def _interrupt_status(self, value):
         self._block.interrupt_status = <uint32_t> (<int64_t> value)
+
+    @property
+    def _ifls(self):
+        return self._block.ifls
+
+    @_ifls.setter
+    def _ifls(self, value):
+        self._block.ifls = <uint32_t> (<int64_t> value)
+
+    @property
+    def _ilpr(self):
+        return self._block.ilpr
+
+    @_ilpr.setter
+    def _ilpr(self, value):
+        self._block.ilpr = <uint32_t> (<int64_t> value)
+
+    @property
+    def _dmacr(self):
+        return self._block.dmacr
+
+    @_dmacr.setter
+    def _dmacr(self, value):
+        self._block.dmacr = <uint32_t> (<int64_t> value)
+
+    @property
+    def _rsr(self):
+        return self._block.rsr
+
+    @_rsr.setter
+    def _rsr(self, value):
+        self._block.rsr = <uint32_t> (<int64_t> value)
+
+    def _update_dreq(self):
+        if not self._block.update_dreq():
+            raise_if_pending()
 
     @property
     def enabled(self):

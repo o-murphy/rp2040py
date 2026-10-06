@@ -22,8 +22,9 @@ struct Env {
     // the interrupt line: every call, in order
     bool irq_calls[256];
     int irq_n = 0;
-    // the TX DREQ
-    bool dreq_calls[64];
+    // the DREQs (TX and RX)
+    bool dreq_calls[256];
+    bool dreq_rx[256];  // which of the two requests the call was for
     int dreq_n = 0;
     // transmitted bytes
     uint32_t bytes[64];
@@ -45,8 +46,11 @@ static bool on_irq(void*, bool level) {
     if (env.fail_irq) { env.failed = 1; return false; }
     return true;
 }
-static bool on_dreq(void*, bool asserted) {
-    if (env.dreq_n < 64) env.dreq_calls[env.dreq_n] = asserted;
+static bool on_dreq(void*, bool rx, bool asserted) {
+    if (env.dreq_n < 256) {
+        env.dreq_calls[env.dreq_n] = asserted;
+        env.dreq_rx[env.dreq_n] = rx;
+    }
     ++env.dreq_n;
     if (env.fail_dreq) { env.failed = 1; return false; }
     return true;
@@ -73,7 +77,7 @@ static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
 
 static UartBlock uart;
 
-static void fresh() {
+static void fresh_power_on() {
     env = Env();
     UartHost host;
     host.irq = on_irq;
@@ -90,19 +94,27 @@ static void fresh() {
     uart.interrupt_mask = uart.interrupt_status = 0;
     uart.rx_reset();
     (void)uart.write_atomic(ICR, 0, kAtomicNormal);  // raw_write_value back to 0
+    uart.ifls = IFLS_RESET;
+    uart.ilpr = uart.dmacr = uart.rsr = 0;
     env.irq_n = env.dreq_n = env.bytes_n = env.baud_calls = env.warns = 0;
+}
+// An enabled UART (UARTEN, TXE, RXE), as a firmware leaves it: a disabled one neither sends nor receives (RP2040 datasheet, UARTCR).
+static void fresh() {
+    fresh_power_on();
+    uart.ctrl = CR_UARTEN | CR_RXE | CR_TXE;
 }
 static uint32_t rd(uint32_t offset) { return uart.read(offset); }
 static bool wr(uint32_t offset, int64_t value, uint32_t atomic = kAtomicNormal) { return uart.write_atomic(offset, value, atomic); }
 static bool last_irq() { return env.irq_n > 0 && env.irq_calls[env.irq_n - 1]; }
 
 static void test_power_on_state() {
-    fresh();
+    fresh_power_on();
     CHECK(rd(CR) == (CR_RXE | CR_TXE));
     CHECK(rd(FR) == (FR_TXFE | FR_RXFE));
     CHECK(rd(LCR_H) == 0 && rd(IBRD) == 0 && rd(FBRD) == 0 && rd(IMSC) == 0 && rd(IRIS) == 0 && rd(IMIS) == 0);
     CHECK(rd(PERIPHID0) == 0x11 && rd(PERIPHID1) == 0x10 && rd(PERIPHID2) == 0x34 && rd(PERIPHID3) == 0x00);
     CHECK(rd(PCELLID0) == 0x0D && rd(PCELLID1) == 0xF0 && rd(PCELLID2) == 0x05 && rd(PCELLID3) == 0xB1);
+    CHECK(rd(IFLS) == 0x12 && rd(ILPR) == 0 && rd(DMACR) == 0 && rd(RSR) == 0);
     CHECK(env.warns == 0);
 }
 
@@ -145,7 +157,7 @@ static void test_a_dr_read_keeps_rxintr_while_bytes_remain_and_empty_reads_zero(
 
 static void test_the_rx_fifo_is_32_deep_and_drops_what_does_not_fit() {
     fresh();
-    for (uint32_t i = 0; i < 40; ++i) uart.feed_byte(i + 1);
+    for (uint32_t i = 0; i < 40; ++i) uart.feed_byte(i + 1);  // the 33rd and later are an overrun: dropped, OE set
     CHECK(uart.rx_count() == 32 && uart.rx_full());
     CHECK((rd(FR) & FR_RXFF) != 0 && (rd(FR) & FR_RXFE) == 0);
     for (uint32_t i = 0; i < 32; ++i) CHECK(rd(DR) == i + 1);   // the first 32 survive, in order; 33..40 were dropped
@@ -218,7 +230,7 @@ static void test_the_baud_divisors_are_masked_and_announced_every_time() {
     CHECK(wr(IBRD, 0x12345) && rd(IBRD) == 0x2345 && env.baud_calls == 1);
     CHECK(wr(FBRD, 0xFF) && rd(FBRD) == 0x3F && env.baud_calls == 2);
     CHECK(wr(FBRD, 0x3F) && env.baud_calls == 3);                // even with no change
-    CHECK(wr(LCR_H, 0xFFFFFFFFu) && rd(LCR_H) == 0xFFFFFFFFu);   // stored whole
+    CHECK(wr(LCR_H, 0xFFFFFFFFu) && rd(LCR_H) == 0xFFu);          // 31:8 are reserved
     CHECK(env.baud_calls == 3);                                  // LCR_H announces nothing
 }
 
@@ -229,13 +241,51 @@ static void test_imsc_is_masked_to_eleven_bits_and_drives_the_line() {
     CHECK(wr(IMSC, 0) && !last_irq());
 }
 
-static void test_cr_drives_the_tx_dreq_from_uarten_alone() {
+static bool dreq_pair_is(int first, bool tx, bool rx) {  // the last two calls, TX then RX
+    return env.dreq_n >= first + 2 && !env.dreq_rx[first] && env.dreq_rx[first + 1] && env.dreq_calls[first] == tx && env.dreq_calls[first + 1] == rx;
+}
+
+static void test_the_dma_requests_follow_dmacr_and_the_enables() {
+    fresh_power_on();
+    CHECK(wr(CR, CR_UARTEN | CR_TXE | CR_RXE) && env.dreq_n == 2 && dreq_pair_is(0, false, false));  // TXDMAE and RXDMAE are 0: nothing asks
+    CHECK(wr(DMACR, DMACR_TXDMAE | DMACR_RXDMAE) && dreq_pair_is(2, true, false));                    // the TX FIFO never fills; the RX FIFO is empty
+    CHECK(uart.feed_byte(0x42) && dreq_pair_is(4, true, true));
+    CHECK(rd(DR) == 0x42 && dreq_pair_is(6, true, false));
+    CHECK(wr(CR, CR_UARTEN | CR_RXE) && dreq_pair_is(8, false, false));                              // the transmitter is off
+    CHECK(wr(CR, CR_TXE | CR_RXE) && dreq_pair_is(10, false, false));                                // UARTEN is what everything hangs on
+    CHECK(wr(CR, 0xFFFFFFFFu) && rd(CR) == 0xFF87u);                                                  // 6:3 and 31:16 are reserved
+    CHECK(wr(CR, 0) && env.dreq_n == 16 && dreq_pair_is(14, false, false));
+}
+
+static void test_dmaonerr_holds_the_receive_request_back_while_an_error_interrupt_is_up() {
     fresh();
-    CHECK(wr(CR, CR_UARTEN | CR_TXE | CR_RXE) && env.dreq_n == 1 && env.dreq_calls[0]);
-    CHECK(wr(CR, CR_TXE | CR_RXE) && env.dreq_n == 2 && !env.dreq_calls[1]);   // TXE alone does not assert it
-    CHECK(wr(CR, CR_UARTEN) && env.dreq_calls[2]);                              // UARTEN alone does
-    CHECK(wr(CR, 0x1FFFFu) && rd(CR) == 0x1FFFFu && env.dreq_calls[3]);          // stored whole
-    CHECK(wr(CR, 0) && !env.dreq_calls[4] && env.dreq_n == 5);
+    wr(DMACR, DMACR_RXDMAE | DMACR_DMAONERR);
+    for (uint32_t i = 0; i < 33; ++i) uart.feed_byte(i);  // the 33rd arrives with the FIFO full: an overrun
+    CHECK(rd(RSR) == RSR_OE && (rd(IRIS) & INT_OE) != 0);
+    CHECK(env.dreq_n > 0 && env.dreq_rx[env.dreq_n - 1] && !env.dreq_calls[env.dreq_n - 1]);  // data is waiting, but the request is held back
+    CHECK(wr(ICR, INT_OE));
+    CHECK(env.dreq_rx[env.dreq_n - 1] && env.dreq_calls[env.dreq_n - 1]);                      // cleared: it goes through
+    CHECK(wr(RSR, 0xFF) && rd(RSR) == 0);                                                      // UARTECR clears the flags
+}
+
+static void test_a_disabled_uart_sends_and_receives_nothing() {
+    fresh_power_on();  // UARTEN is 0
+    CHECK(wr(DR, 0x41) && env.bytes_n == 0 && rd(IRIS) == 0);
+    CHECK(uart.feed_byte(0x42) && uart.rx_empty() && env.irq_n == 0);
+    wr(CR, CR_UARTEN | CR_RXE);  // the transmitter off
+    CHECK(wr(DR, 0x41) && env.bytes_n == 0);
+    CHECK(uart.feed_byte(0x42) && uart.rx_count() == 1);
+    wr(CR, CR_UARTEN | CR_TXE);  // the receiver off
+    CHECK(uart.feed_byte(0x43) && uart.rx_count() == 1);
+    CHECK(wr(DR, 0x44) && env.bytes_n == 1 && env.bytes[0] == 0x44);
+}
+
+static void test_ifls_ilpr_and_dmacr_keep_only_their_bits() {
+    fresh();
+    CHECK(wr(IFLS, 0xFFFFFFFFu) && rd(IFLS) == 0x3F);
+    CHECK(wr(ILPR, 0xFFFFFFFFu) && rd(ILPR) == 0xFF);
+    CHECK(wr(DMACR, 0xFFFFFFFFu) && rd(DMACR) == 0x7);
+    CHECK(env.warns == 0);
 }
 
 static void test_alias_writes_decode_against_a_read_with_its_side_effects() {
@@ -252,7 +302,7 @@ static void test_alias_writes_decode_against_a_read_with_its_side_effects() {
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
     fresh();
-    CHECK(rd(0x04) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kUartWarnRead && env.warn_offset[0] == 0x04);
+    CHECK(rd(0x08) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kUartWarnRead && env.warn_offset[0] == 0x08);
     env.warns = 0;
     CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2);          // above 0x1000 the atomic-region warning follows
     CHECK(env.warn_kind[1] == kUartWarnReadAtomicArea);
@@ -274,7 +324,7 @@ static void test_reset_clears_the_registers_and_the_fifo_and_drops_the_line_only
     wr(IBRD, 67);
     wr(FBRD, 52);
     wr(LCR_H, 0x70);
-    wr(CR, CR_UARTEN);
+    wr(CR, CR_UARTEN | CR_TXE | CR_RXE);
     wr(DR, 1);                                                   // TXINTR pending too
     wr(IMSC, INT_RX | INT_TX);                                   // the last write: raw_write_value is now nonzero
     CHECK(rd(IRIS) == (INT_RX | INT_TX));
@@ -284,7 +334,8 @@ static void test_reset_clears_the_registers_and_the_fifo_and_drops_the_line_only
     CHECK(rd(CR) == (CR_RXE | CR_TXE) && rd(LCR_H) == 0 && rd(IBRD) == 0 && rd(FBRD) == 0 && rd(IMSC) == 0 && rd(IRIS) == 0);
     CHECK(uart.rx_empty() && rd(FR) == (FR_TXFE | FR_RXFE));
     CHECK(env.irq_n == 1 && !env.irq_calls[0]);                  // the line dropped, once
-    CHECK(env.dreq_n == 0 && env.baud_calls == 0);               // no DREQ change, no announcement
+    CHECK(env.dreq_n == 2 && !env.dreq_calls[0] && !env.dreq_calls[1] && env.baud_calls == 0);  // both DREQs dropped; no announcement
+    CHECK(rd(IFLS) == 0x12 && rd(ILPR) == 0 && rd(DMACR) == 0 && rd(RSR) == 0);
     CHECK(uart.raw_write_value() == raw);                        // not part of the reset
 }
 
@@ -308,7 +359,7 @@ static void test_a_failing_host_call_stops_the_block_where_the_reference_would_h
     env.failed = 0;
 
     env.fail_dreq = true;
-    CHECK(!wr(CR, CR_UARTEN) && rd(CR) == CR_UARTEN);
+    CHECK(!wr(CR, CR_UARTEN) && rd(CR) == CR_UARTEN);  // the register took the value, the DREQ call raised
     env.fail_dreq = false;
     env.failed = 0;
 
@@ -352,7 +403,10 @@ int main() {
     test_icr_uses_the_raw_value_whatever_the_alias_and_a_direct_write_the_stale_one();
     test_the_baud_divisors_are_masked_and_announced_every_time();
     test_imsc_is_masked_to_eleven_bits_and_drives_the_line();
-    test_cr_drives_the_tx_dreq_from_uarten_alone();
+    test_the_dma_requests_follow_dmacr_and_the_enables();
+    test_dmaonerr_holds_the_receive_request_back_while_an_error_interrupt_is_up();
+    test_a_disabled_uart_sends_and_receives_nothing();
+    test_ifls_ilpr_and_dmacr_keep_only_their_bits();
     test_alias_writes_decode_against_a_read_with_its_side_effects();
     test_unimplemented_offsets_warn_and_read_all_ones();
     test_reset_clears_the_registers_and_the_fifo_and_drops_the_line_only();

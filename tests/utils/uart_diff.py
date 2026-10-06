@@ -31,11 +31,23 @@ NVIC_ISPR = 0xE000E200
 ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 
 REGISTERS = (
-    U.UARTFR, U.UARTIBRD, U.UARTFBRD, U.UARTLCR_H, U.UARTCR, U.UARTIMSC, U.UARTIRIS, U.UARTIMIS, U.UARTPERIPHID0, U.UARTPERIPHID1, U.UARTPERIPHID2, U.UARTPERIPHID3,
+    U.UARTRSR, U.UARTILPR, U.UARTIFLS, U.UARTDMACR, U.UARTFR, U.UARTIBRD, U.UARTFBRD, U.UARTLCR_H, U.UARTCR, U.UARTIMSC, U.UARTIRIS, U.UARTIMIS, U.UARTPERIPHID0, U.UARTPERIPHID1, U.UARTPERIPHID2, U.UARTPERIPHID3,
     U.UARTPCELLID0, U.UARTPCELLID1, U.UARTPCELLID2, U.UARTPCELLID3,
 )  # fmt: skip
-WRITABLE = (U.UARTDR, U.UARTIBRD, U.UARTFBRD, U.UARTLCR_H, U.UARTCR, U.UARTIMSC, U.UARTICR)
-UNIMPLEMENTED = (0x04, 0x08, 0x14, 0x1C, 0x20, 0x34, 0x48, 0x4C, 0x80, 0x100, 0xF00, 0xFDC, 0xFFC + 4)
+WRITABLE = (
+    U.UARTDR,
+    U.UARTRSR,
+    U.UARTILPR,
+    U.UARTIBRD,
+    U.UARTFBRD,
+    U.UARTLCR_H,
+    U.UARTCR,
+    U.UARTIFLS,
+    U.UARTIMSC,
+    U.UARTICR,
+    U.UARTDMACR,
+)
+UNIMPLEMENTED = (0x08, 0x14, 0x1C, 0x4C, 0x80, 0x100, 0xF00, 0xFDC, 0xFFC + 4)
 CLOCKS = (125_000_000, 48_000_000, 12_000_000, 133_000_000, 1, 0)
 INTERRUPT_BITS = (0x10, 0x20, 0x30, 0x7FF, 0x400, 0x1)
 
@@ -129,6 +141,10 @@ class Rig:
                 int(uart._frac_divisor),
                 int(uart._interrupt_mask),
                 int(uart._interrupt_status),
+                int(uart._ifls),
+                int(uart._ilpr),
+                int(uart._dmacr),
+                int(uart._rsr),
                 int(uart.raw_write_value),
             ),
             "rx": (bool(fifo.empty), bool(fifo.full), int(fifo.item_count), tuple(int(v) for v in fifo.items)),
@@ -156,7 +172,77 @@ def mutant_rig(name: str) -> Rig:
                 return (super().flags & ~U.RXFF) | (U.RXFF if self.rx_fifo.item_count > 16 else 0)
             return super().flags
 
+        def _update_dreq(self) -> None:
+            if name == "dreq_tx_ignores_dmacr":
+                tx = self.enabled and self.tx_enabled
+                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+            elif name == "dreq_tx_ignores_txe":
+                tx = self.enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+            elif name == "dreq_rx_ignores_dmacr":
+                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self.enabled and self.rx_enabled and not self.rx_fifo.empty
+            elif name == "dreq_rx_when_empty":
+                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE)
+            elif name == "dreq_rx_ignores_rxe":
+                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self.enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+            elif name == "dreq_ignores_dmaonerr":
+                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+            elif name == "dreq_swapped_channels":
+                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = (
+                    self.enabled
+                    and self.rx_enabled
+                    and bool(self._dmacr & U.DMACR_RXDMAE)
+                    and not self.rx_fifo.empty
+                    and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
+                )
+            elif name == "dreq_ignores_uarten":
+                tx = self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = (
+                    self.rx_enabled
+                    and bool(self._dmacr & U.DMACR_RXDMAE)
+                    and not self.rx_fifo.empty
+                    and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
+                )
+            else:
+                super()._update_dreq()
+                return
+            dma = self.rp2040.dma
+            dreq = self.dreq
+            if name == "dreq_swapped_channels":
+                dreq = U.IUARTDMAChannels(rx=dreq.tx, tx=dreq.rx)
+            (dma.set_dreq if tx else dma.clear_dreq)(dreq.tx)
+            (dma.set_dreq if rx else dma.clear_dreq)(dreq.rx)
+
         def feed_byte(self, value: int) -> None:
+            if name == "feed_ignores_enable":
+                self.rx_fifo.push(value)
+                self._interrupt_status |= U.UARTRXINTR
+                self.check_interrupts()
+                self._update_dreq()
+                return
+            if name == "feed_ignores_rxe" and self.enabled:
+                self.rx_fifo.push(value)
+                self._interrupt_status |= U.UARTRXINTR
+                self.check_interrupts()
+                self._update_dreq()
+                return
+            if name == "overrun_no_status" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+                return
+            if name == "overrun_no_interrupt" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+                self._rsr |= U.RSR_OE
+                return
+            if name == "overrun_pushes" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+                self._rsr |= U.RSR_OE
+                self._interrupt_status |= U.UARTOEINTR
+                self.rx_fifo.pull()
+                self.rx_fifo.push(value)
+                self.check_interrupts()
+                return
             if name == "rx_full_overwrites" and self.rx_fifo.full:
                 self.rx_fifo.pull()
             if name == "feed_no_irq_update":
@@ -169,7 +255,20 @@ def mutant_rig(name: str) -> Rig:
             if offset == U.UARTDR and name == "dr_read_keeps_rxintr":
                 value = self.rx_fifo.pull()
                 self.check_interrupts()
+                self._update_dreq()
                 return value
+            if offset == U.UARTDR and name == "dr_read_no_dreq_update":
+                value = self.rx_fifo.pull()
+                if not self.rx_fifo.empty:
+                    self._interrupt_status |= U.UARTRXINTR
+                else:
+                    self._interrupt_status &= ~U.UARTRXINTR
+                self.check_interrupts()
+                return value
+            if offset == U.UARTIFLS and name == "ifls_reads_ilpr":
+                return self._ilpr
+            if offset == U.UARTRSR and name == "rsr_reads_zero":
+                return 0
             if offset == U.UARTDR and name == "dr_read_peeks":
                 return self.rx_fifo.peek()
             return super().read_uint32(offset)
@@ -210,27 +309,44 @@ def mutant_rig(name: str) -> Rig:
             if offset == U.UARTIBRD and name == "ibrd_no_callback":
                 self._int_divisor = value & 0xFFFF
                 return
-            if offset == U.UARTCR and name == "cr_dreq_inverted":
+            if offset == U.UARTCR and name == "cr_unmasked":
                 self._ctrl_register = value
+                self._update_dreq()
+                return
+            if offset == U.UARTLCR_H and name == "lcr_unmasked":
+                self._line_ctrl_register = value
+                return
+            if offset == U.UARTIFLS and name == "ifls_unmasked":
+                self._ifls = value
+                return
+            if offset == U.UARTDMACR and name == "dmacr_unmasked":
+                self._dmacr = value
+                self._update_dreq()
+                return
+            if offset == U.UARTDMACR and name == "dmacr_no_dreq_update":
+                self._dmacr = value & 0x7
+                return
+            if offset == U.UARTILPR and name == "ilpr_unmasked":
+                self._ilpr = value
+                return
+            if offset == U.UARTRSR and name == "ecr_does_not_clear":
+                return
+            if offset == U.UARTDR and name == "dr_write_ignores_enable":
+                if self.on_byte:
+                    self.on_byte(value & 0xFF)
+                self._interrupt_status |= U.UARTTXINTR
+                self.check_interrupts()
+                return
+            if offset == U.UARTDR and name == "dr_write_ignores_txe":
                 if self.enabled:
-                    self.rp2040.dma.clear_dreq(self.dreq.tx)
-                else:
-                    self.rp2040.dma.set_dreq(self.dreq.tx)
+                    if self.on_byte:
+                        self.on_byte(value & 0xFF)
+                    self._interrupt_status |= U.UARTTXINTR
+                    self.check_interrupts()
                 return
-            if offset == U.UARTCR and name == "cr_also_rx_dreq":
-                super().write_uint32(offset, value)
-                if self.enabled:
-                    self.rp2040.dma.set_dreq(self.dreq.rx)
-                return
-            if offset == U.UARTCR and name == "cr_tx_enable_decides":
-                self._ctrl_register = value
-                if self.tx_enabled:
-                    self.rp2040.dma.set_dreq(self.dreq.tx)
-                else:
-                    self.rp2040.dma.clear_dreq(self.dreq.tx)
-                return
-            if offset == U.UARTLCR_H and name == "lcr_masked":
-                self._line_ctrl_register = value & 0xFF
+            if offset == U.UARTICR and name == "icr_no_dreq_update":
+                self._interrupt_status &= ~self.raw_write_value
+                self.check_interrupts()
                 return
             super().write_uint32(offset, value)
 
@@ -244,6 +360,21 @@ def mutant_rig(name: str) -> Rig:
 
         def reset(self) -> None:
             on_byte, on_baud = self.on_byte, self.on_baud_rate_change
+            if name == "reset_keeps_ifls":
+                kept = self._ifls
+                super().reset()
+                self._ifls = kept
+                return
+            if name == "reset_keeps_dmacr":
+                kept = self._dmacr
+                super().reset()
+                self._dmacr = kept
+                return
+            if name == "reset_keeps_rsr":
+                kept = self._rsr
+                super().reset()
+                self._rsr = kept
+                return
             if name == "reset_keeps_rx":
                 kept = list(self.rx_fifo.items)
                 super().reset()
@@ -263,8 +394,12 @@ def mutant_rig(name: str) -> Rig:
 
 MUTANTS = (
     "fifo_16", "flags_no_txfe", "flags_rxff_wrong", "rx_full_overwrites", "feed_no_irq_update", "dr_read_keeps_rxintr", "dr_read_peeks", "dr_write_no_txintr",
-    "dr_write_unmasked_byte", "icr_decoded_value", "icr_clears_all", "imsc_unmasked", "ibrd_unmasked", "fbrd_unmasked", "ibrd_no_callback", "cr_dreq_inverted",
-    "cr_also_rx_dreq", "cr_tx_enable_decides", "lcr_masked", "baud_floor", "reset_keeps_rx", "reset_clears_callbacks",
+    "dr_write_unmasked_byte", "icr_decoded_value", "icr_clears_all", "imsc_unmasked", "ibrd_unmasked", "fbrd_unmasked", "ibrd_no_callback", "baud_floor",
+    "reset_keeps_rx", "reset_clears_callbacks", "reset_keeps_ifls", "reset_keeps_dmacr", "reset_keeps_rsr", "cr_unmasked", "lcr_unmasked", "ifls_unmasked",
+    "dmacr_unmasked", "dmacr_no_dreq_update", "ilpr_unmasked", "ecr_does_not_clear", "dr_write_ignores_enable", "dr_write_ignores_txe", "icr_no_dreq_update",
+    "dreq_tx_ignores_dmacr", "dreq_tx_ignores_txe", "dreq_rx_ignores_dmacr", "dreq_rx_when_empty", "dreq_rx_ignores_rxe", "dreq_ignores_dmaonerr",
+    "dreq_ignores_uarten", "dreq_swapped_channels", "feed_ignores_enable", "feed_ignores_rxe", "overrun_no_status", "overrun_no_interrupt", "overrun_pushes",
+    "dr_read_no_dreq_update", "ifls_reads_ilpr", "rsr_reads_zero",
 )  # fmt: skip
 
 
@@ -285,6 +420,12 @@ def _value(r: random.Random, offset: int) -> int:
         )
     if offset == U.UARTLCR_H:
         return r.choice((0, 0x70, 0x60, 0x10, 0x30, 0x7F, 0x1FF, r.getrandbits(8), r.getrandbits(32)))
+    if offset == U.UARTDMACR:
+        return r.choice((0, 1, 2, 3, 5, 7, r.getrandbits(3), r.getrandbits(32)))
+    if offset == U.UARTIFLS:
+        return r.choice((0, 0x12, 0x3F, r.getrandbits(6), r.getrandbits(32)))
+    if offset == U.UARTRSR:
+        return r.choice((0, 0xFF, r.getrandbits(32)))
     if offset == U.UARTDR:
         return r.getrandbits(8) if roll < 0.8 else r.getrandbits(32)
     return r.getrandbits(32)
@@ -292,10 +433,17 @@ def _value(r: random.Random, offset: int) -> int:
 
 def generate(seed: int, steps: int) -> list[tuple]:
     r = random.Random(seed)
-    ops: list[tuple] = []
+    ops: list[tuple] = [
+        ("write", U.UARTCR, 0x301, ALIASES[0]),
+        ("write", U.UARTDMACR, 3, ALIASES[0]),
+    ]  # an enabled UART, as a firmware leaves it
     while len(ops) < steps:
         roll = r.random()
-        if roll < 0.30:
+        if roll < 0.04:  # firmware (re)enabling the UART and its DMA requests
+            ops.append(("write", U.UARTCR, r.choice((0x301, 0x301, 0x201, 0x101, 0x1)), ALIASES[0]))
+            ops.append(("write", U.UARTDMACR, r.choice((3, 3, 1, 2, 5, 7)), ALIASES[0]))
+            ops.append(("write", U.UARTIMSC, r.choice((0x10, 0x30, 0x7FF, 0x400)), ALIASES[0]))
+        elif roll < 0.30:
             offset = r.choice(WRITABLE + (U.UARTIMSC, U.UARTICR, U.UARTCR, U.UARTDR))
             alias = ALIASES[0] if r.random() < 0.7 else r.choice(ALIASES[1:])
             ops.append(("write", offset, _value(r, offset), alias))
@@ -318,6 +466,8 @@ def generate(seed: int, steps: int) -> list[tuple]:
             )
         elif roll < 0.87:
             ops.append(("reset",))
+            if r.random() < 0.8:
+                ops.append(("write", U.UARTCR, 0x301, ALIASES[0]))
         elif roll < 0.92:
             ops.append(("callbacks", r.random() < 0.7, r.random() < 0.7))
         elif roll < 0.96:
