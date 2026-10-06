@@ -184,6 +184,8 @@ cdef class _Channel:
     cdef public object timer
     cdef public object alarm_a
     cdef public object alarm_b
+    cdef public object alarm_a_rise
+    cdef public object alarm_b_rise
     cdef public object alarm_bottom
 
     @property
@@ -245,6 +247,35 @@ cdef class _Channel:
     @top.setter
     def top(self, value):
         self._channel.top = <uint32_t> (<int64_t> value)
+
+    @property
+    def latched_top(self):
+        cdef int64_t value = self._channel.latched_top
+        return None if value < 0 else value
+
+    @latched_top.setter
+    def latched_top(self, value):
+        self._channel.latched_top = -1 if value is None else <int64_t> value
+
+    @property
+    def latched_cc_a(self):
+        return self._channel.latched_cc_a
+
+    @latched_cc_a.setter
+    def latched_cc_a(self, value):
+        self._channel.latched_cc_a = <uint32_t> (<int64_t> value)
+
+    @property
+    def latched_cc_b(self):
+        return self._channel.latched_cc_b
+
+    @latched_cc_b.setter
+    def latched_cc_b(self, value):
+        self._channel.latched_cc_b = <uint32_t> (<int64_t> value)
+
+    @property
+    def counter(self):
+        return self._channel.counter()
 
     @property
     def last_b_value(self):
@@ -383,6 +414,14 @@ cdef class RPPWM:
             alarm._owner = self
             alarm._alarm = &self._block.channels[i].alarm_b
             channel.alarm_b = alarm
+            alarm = _AlarmView.__new__(_AlarmView)
+            alarm._owner = self
+            alarm._alarm = &self._block.channels[i].alarm_a_rise
+            channel.alarm_a_rise = alarm
+            alarm = _AlarmView.__new__(_AlarmView)
+            alarm._owner = self
+            alarm._alarm = &self._block.channels[i].alarm_b_rise
+            channel.alarm_b_rise = alarm
             alarm = _AlarmView.__new__(_AlarmView)
             alarm._owner = self
             alarm._alarm = &self._block.channels[i].alarm_bottom

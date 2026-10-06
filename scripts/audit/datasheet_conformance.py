@@ -58,7 +58,9 @@ BASES = {
 }
 
 HEADER = re.compile(r"^\s{0,30}([A-Z0-9_]+): (.+?) Registers?\s*$")
-OFFSET = re.compile(r"^\s*Offset: (0x[0-9a-fA-F]+)\s*$")
+OFFSET = re.compile(
+    r"^\s*Offsets?: (0x[0-9a-fA-F]+)\b.*$"
+)  # "Offsets: 0x00, 0x14, ..." for a table shared by several instances (the first is checked)
 ROW = re.compile(r"^\s{10,40}(\d+(?::\d+)?)\s{2,}(\S.*)$")
 TAIL = re.compile(r"\s(RW|RO|WO|SC|WC|W1C|RWF|RF|FIFO|-)\s+(0x[0-9a-fA-F]+|-)\s*$")
 NAME = re.compile(r"\s+\S+\s+([A-Za-z0-9_\[\]]+):")

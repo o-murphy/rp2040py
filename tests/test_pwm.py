@@ -15,15 +15,18 @@ def _ch(channel: int, register: int) -> int:
     return PWM_BASE + channel * 0x14 + register
 
 
-def _running_channel_0(top: int = 100) -> RP2040:
+def _running_channel_0(top: int = 100, div: int = 0x10) -> RP2040:
+    """`div` is the DIV register: 1.0 by default. PH_ADV needs a divider above 1 ("Counter must be running at less than full speed (div_int + div_frac / 16 > 1)", RP2040 datasheet,
+    PWM CSR): at full speed there is no gap in the clock enable to insert a pulse into, so the PH_ADV tests below run at 2.0."""
     chip = RP2040()
+    chip.write_uint32(_ch(0, DIV), div)
     chip.write_uint32(_ch(0, TOP), top)
     chip.write_uint32(_ch(0, CSR), CSR_EN)
     return chip
 
 
 def test_ph_adv_advances_a_running_counter_by_one_each_time():
-    chip = _running_channel_0()
+    chip = _running_channel_0(div=0x20)
     assert chip.read_uint32(_ch(0, CTR)) == 0
     chip.write_uint32(_ch(0, CSR), CSR_EN | CSR_PH_ADV)
     assert chip.read_uint32(_ch(0, CTR)) == 1
@@ -43,7 +46,7 @@ def test_ph_ret_retards_the_counter_and_wraps_past_zero_to_top():
 
 
 def test_both_strobes_in_one_write_cancel():
-    chip = _running_channel_0()
+    chip = _running_channel_0(div=0x20)
     chip.write_uint32(_ch(0, CTR), 10)
     chip.write_uint32(_ch(0, CSR), CSR_EN | CSR_PH_ADV | CSR_PH_RET)
     assert chip.read_uint32(_ch(0, CTR)) == 10
@@ -66,10 +69,12 @@ def test_the_strobes_are_self_clearing_and_never_read_back():
 
 
 def test_an_advance_moves_the_next_alarm_one_cycle_closer():
-    chip = _running_channel_0(top=9)  # CC is 0: every compare alarm and the wrap are one wrap (10 cycles of 8 ns) away
+    chip = _running_channel_0(
+        top=9, div=0x20
+    )  # CC is 0: every compare alarm and the wrap are one wrap (10 counts of 16 ns at DIV 2) away
     before = chip.clock.nanos_to_next_alarm
     chip.write_uint32(_ch(0, CSR), CSR_EN | CSR_PH_ADV)
-    assert chip.clock.nanos_to_next_alarm == before - 8.0
+    assert chip.clock.nanos_to_next_alarm == before - 16.0
 
 
 def test_the_en_register_reads_the_enable_bit_of_every_channel():

@@ -61,6 +61,11 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         Timer32 timer
         Timer32PeriodicAlarm alarm_a
         Timer32PeriodicAlarm alarm_b
+        Timer32PeriodicAlarm alarm_a_rise
+        Timer32PeriodicAlarm alarm_b_rise
+        int64_t latched_top
+        uint32_t latched_cc_a
+        uint32_t latched_cc_b
         Timer32PeriodicAlarm alarm_bottom
         uint32_t csr
         uint32_t div
@@ -76,6 +81,7 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         int64_t pin_a2
         int64_t pin_b2
         uint32_t index
+        uint32_t counter() noexcept
         uint32_t div_mode_raw() noexcept
         void set_div_mode_raw(uint32_t value) noexcept
         uint32_t read_register(uint32_t offset) noexcept

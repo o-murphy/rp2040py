@@ -68,7 +68,10 @@ public:
 
     // The state, public for the shell (the reference's attributes are read and, by tests, written directly).
     Timer32 timer;
-    Timer32PeriodicAlarm alarm_a, alarm_b, alarm_bottom;
+    Timer32PeriodicAlarm alarm_a, alarm_b, alarm_a_rise, alarm_b_rise, alarm_bottom;
+    // The internal copies of CC and TOP, "updated from the first register at the instant the counter wraps" (datasheet, 4.5.2.3); latched_top is -1 until the first update.
+    int64_t latched_top = -1;
+    uint32_t latched_cc_a = 0, latched_cc_b = 0;
     uint32_t csr = 0, div = 0, cc = 0, top = 0;
     bool last_b_value = false, counting_up = true, cc_updated = false, top_updated = false;
     double tick_counter = 0.0;
@@ -85,6 +88,8 @@ public:
         timer.init(clock, clock_freq);
         alarm_a.init(&timer, &PwmChannel::on_alarm_a, this);
         alarm_b.init(&timer, &PwmChannel::on_alarm_b, this);
+        alarm_a_rise.init(&timer, &PwmChannel::on_alarm_a_rise, this);
+        alarm_b_rise.init(&timer, &PwmChannel::on_alarm_b_rise, this);
         alarm_bottom.init(&timer, &PwmChannel::on_wrap, this);
         pin_a1 = static_cast<int64_t>(channel) * 2;
         pin_b1 = pin_a1 + 1;
@@ -92,12 +97,16 @@ public:
         pin_b2 = channel < 7 ? 16 + static_cast<int64_t>(channel) * 2 + 1 : -1;
         alarm_a.set_enable(true);
         alarm_b.set_enable(true);
+        alarm_a_rise.set_enable(true);
+        alarm_b_rise.set_enable(true);
         alarm_bottom.set_enable(true);
     }
 
     void detach() noexcept {
         alarm_a.detach();
         alarm_b.detach();
+        alarm_a_rise.detach();
+        alarm_b_rise.detach();
         alarm_bottom.detach();
     }
 
@@ -106,11 +115,19 @@ public:
         switch (offset) {
             case CHN_CSR: return csr;
             case CHN_DIV: return div;
-            case CHN_CTR: return timer.counter();
+            case CHN_CTR: return counter();
             case CHN_CC: return cc;
             case CHN_TOP: return top;
             default: return 0;  // "Shouldn't get here"
         }
+    }
+
+    // CTR: the count. In phase-correct mode the timer runs one 2 * (TOP + 1) period (0 .. TOP up, then TOP .. 0 down: the 0 and the TOP are each held for two counts) and the count the
+    // slice shows is the position on that triangle.
+    uint32_t counter() const noexcept {
+        int64_t raw = static_cast<int64_t>(timer.counter());
+        if ((csr & pwm_regs::CSR_PH_CORRECT) && latched_top >= 0 && raw > latched_top) raw = 2 * latched_top + 1 - raw;
+        return static_cast<uint32_t>(raw) & 0xFFFFu;
     }
 
     inline bool write_register(uint32_t offset, uint32_t value) noexcept;
@@ -126,20 +143,49 @@ public:
     inline bool set_en(bool value) noexcept;
 
     void update_double_buffered() noexcept {
+        bool changed = false;
         if (cc_updated) {
-            alarm_b.set_target(static_cast<int64_t>(cc >> 16));
-            alarm_a.set_target(static_cast<int64_t>(cc & 0xFFFFu));
+            latched_cc_b = cc >> 16;
+            latched_cc_a = cc & 0xFFFFu;
             cc_updated = false;
+            changed = true;
         }
         if (top_updated) {
-            timer.set_top(static_cast<int64_t>(top));
+            latched_top = static_cast<int64_t>(top);
             top_updated = false;
+            changed = true;
+        }
+        if (changed) apply_latched();
+    }
+
+    // The period and the compare events, from the internal copies of TOP and CC and the mode: the counter is an INCREMENT timer of one period of counts - TOP + 1, or 2 * (TOP + 1) in
+    // phase-correct mode ("period = (TOP + 1) x (CSR_PH_CORRECT + 1) x (DIV_INT + DIV_FRAC / 16)", datasheet 4.5.2.6) - and an output is high while the counter is below CC (Figure 104), so it
+    // falls when the counter reaches CC and, in phase-correct mode only, rises again on the way down (through CC - 1). A CC above TOP is never reached (100 %); a CC of 0 is never above the count (0 %).
+    void apply_latched() noexcept {
+        if (latched_top < 0) return;  // nothing has been latched yet: the counter is free-running and the compares sit at 0
+        const bool phase_correct = (csr & pwm_regs::CSR_PH_CORRECT) != 0;
+        const int64_t period = (latched_top + 1) * (phase_correct ? 2 : 1);
+        if (timer.top() != period - 1) timer.set_top(period - 1);
+        Timer32PeriodicAlarm* const falls[2] = {&alarm_a, &alarm_b};
+        Timer32PeriodicAlarm* const rises[2] = {&alarm_a_rise, &alarm_b_rise};
+        const int64_t ccs[2] = {static_cast<int64_t>(latched_cc_a), static_cast<int64_t>(latched_cc_b)};
+        for (int i = 0; i < 2; ++i) {
+            const int64_t level = ccs[i];
+            if (phase_correct) {
+                falls[i]->set_target(level <= latched_top ? level : period);
+                rises[i]->set_target(level >= 1 && level <= latched_top ? period - level : period);
+            } else {
+                falls[i]->set_target(level);  // a CC above TOP never comes: a target above TOP never fires
+                rises[i]->set_target(period);  // (unused: the wrap raises the output)
+            }
         }
     }
 
 private:
     static bool on_alarm_a(void* ctx) noexcept { return static_cast<PwmChannel*>(ctx)->set_a(false); }
     static bool on_alarm_b(void* ctx) noexcept { return static_cast<PwmChannel*>(ctx)->set_b(false); }
+    static bool on_alarm_a_rise(void* ctx) noexcept { return static_cast<PwmChannel*>(ctx)->set_a(true); }
+    static bool on_alarm_b_rise(void* ctx) noexcept { return static_cast<PwmChannel*>(ctx)->set_b(true); }
     static bool on_wrap(void* ctx) noexcept { return static_cast<PwmChannel*>(ctx)->wrap(); }
     inline bool wrap() noexcept;
     inline bool set_b_direction(bool output) noexcept;
@@ -373,10 +419,8 @@ inline bool PwmChannel::gpio_b_changed() noexcept {
 inline bool PwmChannel::wrap() noexcept {
     if (!pwm_->channel_interrupt(index)) return false;
     update_double_buffered();
-    if (!(csr & pwm_regs::CSR_PH_CORRECT)) {
-        if (!set_a(alarm_a.target() > 0)) return false;
-        if (!set_b(alarm_b.target() > 0)) return false;
-    }
+    if (!set_a(latched_cc_a > 0)) return false;
+    if (!set_b(latched_cc_b > 0)) return false;
     return true;
 }
 
@@ -385,10 +429,12 @@ inline bool PwmChannel::write_register(uint32_t offset, uint32_t value) noexcept
     switch (offset) {
         case CHN_CSR: {
             if ((value & CSR_EN) && !(csr & CSR_EN)) update_double_buffered();
-            // PH_ADV and PH_RET are self-clearing strobes: they act on the written value, never appear in the stored CSR, and move a *running* counter, so they need the enable in the same write.
-            csr = value & ~(CSR_PH_ADV | CSR_PH_RET);
+            const bool was_phase_correct = (csr & CSR_PH_CORRECT) != 0;
+            // Only bits 5:0 exist (DIVMODE, B_INV, A_INV, PH_CORRECT, EN); 31:8 are reserved and PH_ADV/PH_RET (7:6) are self-clearing strobes that move a *running* counter, so they need the
+            // enable in the same write. "PH_ADV: ... Counter must be running at less than full speed (div_int + div_frac / 16 > 1)": at full speed there is no gap to insert a pulse into.
+            csr = value & 0x3Fu;
             if (value & CSR_EN) {
-                if (value & CSR_PH_ADV) timer.advance(1);
+                if ((value & CSR_PH_ADV) && timer.prescaler() > 1.0) timer.advance(1);
                 if (value & CSR_PH_RET) timer.advance(-1);
             }
             div_mode = static_cast<PwmDivMode>((csr >> CSR_DIVMODE_SHIFT) & CSR_DIVMODE_MASK);
@@ -397,11 +443,11 @@ inline bool PwmChannel::write_register(uint32_t offset, uint32_t value) noexcept
             bool level = false;
             if (!gpio_b_value(&level)) return false;
             last_b_value = level;
-            timer.set_mode((value & CSR_PH_CORRECT) ? TimerMode::kZigzag : TimerMode::kIncrement);
+            if (((csr & CSR_PH_CORRECT) != 0) != was_phase_correct) apply_latched();  // the period and the compare events depend on the mode
             return true;
         }
         case CHN_DIV: {
-            div = value & 0x000FFFFFu;
+            div = value & 0xFFFu;  // INT 11:4, FRAC 3:0; 31:12 are reserved
             const uint32_t int_value = (value >> 4) & 0xFFu;
             const uint32_t frac_value = value & 0xFu;
             timer.set_prescaler(static_cast<double>(int_value ? int_value : 256u) + static_cast<double>(frac_value) / 16.0);

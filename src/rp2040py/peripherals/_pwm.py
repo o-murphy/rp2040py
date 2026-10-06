@@ -6,7 +6,7 @@ from rp2040py.clock.clock import IClock
 from rp2040py.irq import IRQ
 from rp2040py.peripherals.dma import DREQChannel
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.utils.timer32 import Timer32, Timer32PeriodicAlarm, TimerMode
+from rp2040py.utils.timer32 import Timer32, Timer32PeriodicAlarm
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -68,8 +68,14 @@ class PWMChannel:
         self.index = index
 
         self.timer = Timer32(self.clock, self.pwm.clock_freq)
+        # The counter is always an INCREMENT timer of one *period* of counts: TOP + 1 of them, or in phase-correct mode 2 * (TOP + 1) - "period = (TOP + 1) x (CSR_PH_CORRECT + 1) x
+        # (DIV_INT + DIV_FRAC / 16)" (RP2040 datasheet, 4.5.2.6). The output is high while the counter is below CC ("When the input value is higher than the counter, the output is
+        # driven high", Figure 104), so an output *falls* when the counter reaches CC and, in phase-correct mode only, *rises* again on the way down; the compare alarms are those two events
+        # (`alarm_a`/`alarm_b` fall, `alarm_a_rise`/`alarm_b_rise` rise), at targets `_apply_latched` computes; `alarm_bottom` is the wrap (the 0 -> 0 transition in phase-correct mode).
         self.alarm_a = Timer32PeriodicAlarm(self.timer, lambda: self.set_a(False))
         self.alarm_b = Timer32PeriodicAlarm(self.timer, lambda: self.set_b(False))
+        self.alarm_a_rise = Timer32PeriodicAlarm(self.timer, lambda: self.set_a(True))
+        self.alarm_b_rise = Timer32PeriodicAlarm(self.timer, lambda: self.set_b(True))
         self.alarm_bottom = Timer32PeriodicAlarm(self.timer, self._wrap)
 
         self.csr = 0
@@ -80,6 +86,10 @@ class PWMChannel:
         self.counting_up = True
         self.cc_updated = False
         self.top_updated = False
+        # The internal copies of CC and TOP, "updated from the first register at the instant the counter wraps" (datasheet, 4.5.2.3 Double Buffering); None until the first update
+        self.latched_top: int | None = None
+        self.latched_cc_a = 0
+        self.latched_cc_b = 0
         self.tick_counter: float = 0
         self.div_mode = PWMDivMode.FREE_RUNNING
 
@@ -91,6 +101,8 @@ class PWMChannel:
 
         self.alarm_a.enable = True
         self.alarm_b.enable = True
+        self.alarm_a_rise.enable = True
+        self.alarm_b_rise.enable = True
         self.alarm_bottom.enable = True
 
     def read_register(self, offset: int) -> int:
@@ -99,7 +111,7 @@ class PWMChannel:
         if offset == CHN_DIV:
             return self.div
         if offset == CHN_CTR:
-            return self.timer.counter
+            return self.counter
         if offset == CHN_CC:
             return self.cc
         if offset == CHN_TOP:
@@ -107,15 +119,29 @@ class PWMChannel:
         # Shouldn't get here
         return 0
 
+    @property
+    def counter(self) -> int:
+        """CTR: the count. In phase-correct mode the timer runs one 2 * (TOP + 1) period (0 .. TOP up, then TOP .. 0 down: the 0 and the TOP are each held for two counts), and the count
+        the slice shows is the position on that triangle."""
+        raw = self.timer.counter
+        if self.csr & CSR_PH_CORRECT and self.latched_top is not None:
+            top = self.latched_top
+            if raw > top:
+                raw = 2 * top + 1 - raw
+        return raw & 0xFFFF
+
     def write_register(self, offset: int, value: int) -> None:
         if offset == CHN_CSR:
             if value & CSR_EN and not (self.csr & CSR_EN):
                 self._update_double_buffered()
             # PH_ADV and PH_RET are self-clearing strobes: they act on the written value and never appear in the stored CSR. They advance or retard a *running* counter, so
             # they need the enable in the same write (rp2040js 1.4.0, which had the same bug).
-            self.csr = value & ~(CSR_PH_ADV | CSR_PH_RET)
+            was_phase_correct = self.csr & CSR_PH_CORRECT
+            # Only bits 5:0 exist (DIVMODE, B_INV, A_INV, PH_CORRECT, EN); 31:8 are reserved and PH_ADV/PH_RET (7:6) are the strobes
+            self.csr = value & 0x3F
             if value & CSR_EN:
-                if value & CSR_PH_ADV:
+                # "PH_ADV: ... Counter must be running at less than full speed (div_int + div_frac / 16 > 1)": at full speed there is no gap to insert a pulse into
+                if value & CSR_PH_ADV and self.timer.prescaler > 1:
                     self.timer.advance(1)
                 if value & CSR_PH_RET:
                     self.timer.advance(-1)
@@ -123,10 +149,11 @@ class PWMChannel:
             self.set_b_direction(self.div_mode == PWMDivMode.FREE_RUNNING)
             self.update_enable()
             self.last_b_value = self.gpio_b_value
-            self.timer.mode = TimerMode.ZIGZAG if value & CSR_PH_CORRECT else TimerMode.INCREMENT
+            if (self.csr & CSR_PH_CORRECT) != was_phase_correct:
+                self._apply_latched()  # the period and the compare events depend on the mode
 
         elif offset == CHN_DIV:
-            self.div = value & 0x000FFFFF
+            self.div = value & 0xFFF  # INT 11:4, FRAC 3:0; 31:12 are reserved
             int_value = (value >> 4) & 0xFF
             frac_value = value & 0xF
             self.timer.prescaler = (int_value if int_value else 256) + frac_value / 16
@@ -153,20 +180,45 @@ class PWMChannel:
         self.timer.reset()
 
     def _update_double_buffered(self) -> None:
+        changed = False
         if self.cc_updated:
-            self.alarm_b.target = self.cc >> 16
-            self.alarm_a.target = self.cc & 0xFFFF
+            self.latched_cc_b = self.cc >> 16
+            self.latched_cc_a = self.cc & 0xFFFF
             self.cc_updated = False
+            changed = True
         if self.top_updated:
-            self.timer.top = self.top
+            self.latched_top = self.top
             self.top_updated = False
+            changed = True
+        if changed:
+            self._apply_latched()
+
+    def _apply_latched(self) -> None:
+        """The period and the compare events, from the internal copies of TOP and CC and the mode (see the alarms' comment in `__init__`)."""
+        top = self.latched_top
+        if top is None:
+            return  # nothing has been latched yet: the counter is free-running and the compares sit at 0
+        phase_correct = bool(self.csr & CSR_PH_CORRECT)
+        period = (top + 1) * (2 if phase_correct else 1)
+        if self.timer.top != period - 1:
+            self.timer.top = period - 1
+        for fall, rise, cc in (
+            (self.alarm_a, self.alarm_a_rise, self.latched_cc_a),
+            (self.alarm_b, self.alarm_b_rise, self.latched_cc_b),
+        ):
+            if phase_correct:
+                # up through CC: the output falls; down through CC - 1: it rises. A CC above TOP is never reached - 100 % - and a CC of 0 is never above the count - 0 %.
+                fall.target = cc if cc <= top else period
+                rise.target = period - cc if 1 <= cc <= top else period
+            else:
+                fall.target = cc  # a CC above TOP never comes: a target above TOP never fires
+                rise.target = period  # (unused: the wrap raises the output)
 
     def _wrap(self) -> None:
         self.pwm.channel_interrupt(self.index)
         self._update_double_buffered()
-        if not (self.csr & CSR_PH_CORRECT):
-            self.set_a(self.alarm_a.target > 0)
-            self.set_b(self.alarm_b.target > 0)
+        self.set_a(self.latched_cc_a > 0)
+        self.set_b(self.latched_cc_b > 0)
 
     def set_a(self, value: bool) -> None:
         if self.csr & CSR_A_INV:
