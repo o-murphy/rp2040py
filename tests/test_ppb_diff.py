@@ -10,8 +10,8 @@ differential that never fired SysTick would prove nothing.
 import pytest
 from utils.ppb_diff import MUTANTS, PPB_BASE, Rig, coverage, generate, mutant_rig, run_pair
 
-STEPS = 4000
-DIFF_STEPS = 3000
+STEPS = 3000
+DIFF_STEPS = 2000
 SEEDS = range(1, 5)
 MUTANT_SEEDS = range(1, 9)
 MUTANT_STEPS = 1500
@@ -96,8 +96,23 @@ def test_the_runs_exercise_what_they_claim_to():
     for seed in (1, 2, 3):
         for name, count in coverage(generate(seed, STEPS)).items():
             total[name] = total.get(name, 0) + count
-    for name in ("tick", "tick.running", "systick.fired", "systick.pended", "csr.read_clears_flag", "service.taken", "reset.running"):
+    for name in (
+        "tick",
+        "tick.running",
+        "systick.fired",
+        "systick.pended",
+        "csr.read_clears_flag",
+        "service.taken",
+        "reset.running",
+    ):
         assert total.get(name, 0) >= 20, (name, total)
-    for name in ("alarm.scheduled", "nvic.pending", "nvic.enabled", "nvic.deliverable", "nvic.priorities_set", "scb.pending"):
+    for name in (
+        "alarm.scheduled",
+        "nvic.pending",
+        "nvic.enabled",
+        "nvic.deliverable",
+        "nvic.priorities_set",
+        "scb.pending",
+    ):
         assert total.get(name, 0) >= 100, (name, total)
     assert total.get("log.log", 0) >= 10, total

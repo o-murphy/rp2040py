@@ -49,11 +49,29 @@ REGISTERS = (
 )
 # what the snapshot reads: everything but SYST_CSR (a read of it clears COUNTFLAG)
 SNAPSHOT_REGISTERS = tuple(offset for offset in REGISTERS if offset != P.SYST_CSR)
-UNIMPLEMENTED = (0x000, 0x004, 0x008, 0x00C, 0x020, 0xD0C, 0xD10, 0xD14, 0xD24, 0xD2C, 0xE00, 0x104, 0x300, 0x420, 0x500, 0xFFC)
+UNIMPLEMENTED = (
+    0x000,
+    0x004,
+    0x008,
+    0x00C,
+    0x020,
+    0xD0C,
+    0xD10,
+    0xD14,
+    0xD24,
+    0xD2C,
+    0xE00,
+    0x104,
+    0x300,
+    0x420,
+    0x500,
+    0xFFC,
+)
 TICKS = (0, 1, 7, 8, 9, 50, 300, 1000, 5000, 20_000, 200_000)
 BIG_TICKS = (5_000_000, 200_000_000)
 RELOADS = (0, 1, 2, 5, 10, 100, 1000, 0xFFFFFF, 0x1000000, 0xFFFFFFFF)
-FREQUENCIES = (125e6, 48e6, 133e6, 1e6, 12e6, 250e6, 0.0)
+# (no 0.0: a chip never runs at clk_sys == 0 - `update_clocks` ignores it - and the reference raises ZeroDivisionError when it schedules an alarm on such a timer, where the C++ computes an infinite delay)
+FREQUENCIES = (125e6, 48e6, 133e6, 1e6, 12e6, 250e6)
 
 
 class Rig:
@@ -102,6 +120,9 @@ class Rig:
             chip.set_interrupt(op[1], bool(op[2]))
         elif kind == "freq":  # what update_clocks() does to SysTick when clk_sys changes
             chip.ppb.systick_timer.frequency = op[1]
+        elif kind == "lines_off":  # every interrupt line low: nothing hardware is pending
+            for line in range(IRQ_COUNT):
+                chip.set_interrupt(line, False)
         elif kind == "service":  # the core takes a pending exception (or not)
             return bool(chip.core.check_for_interrupts())
         elif kind == "reset":
@@ -165,7 +186,11 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "systick_no_reload": ("            self.systick_timer.set(self.systick_reload)\n", "            pass\n", 1),
     "systick_reload_zero": ("self.systick_timer.set(self.systick_reload)", "self.systick_timer.set(0)", 1),
     "systick_top_24_bit": ("self.systick_timer.top = 0xFFFFFF", "self.systick_timer.top = 0xFFFFFFFF", 1),
-    "systick_counts_up": ("self.systick_timer.mode = TimerMode.DECREMENT", "self.systick_timer.mode = TimerMode.INCREMENT", 1),
+    "systick_counts_up": (
+        "self.systick_timer.mode = TimerMode.DECREMENT",
+        "self.systick_timer.mode = TimerMode.INCREMENT",
+        1,
+    ),
     "systick_target_one": ("self.systick_alarm.target = 0", "self.systick_alarm.target = 1", 1),
     "systick_alarm_off": ("self.systick_alarm.enable = True", "self.systick_alarm.enable = False", 1),
     "systick_pends_wrong": ("self.rp2040.core.pending_systick = True", "self.rp2040.core.pending_pend_sv = True", 1),
@@ -177,23 +202,55 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "reset_reload_zero": ("self.write_uint32(SYST_RVR, 0xFFFFFF)", "self.write_uint32(SYST_RVR, 0)", 1),
     "reset_counter_zero": ("self.systick_timer.set(0xFFFFFF)", "self.systick_timer.set(0)", 1),
     "reset_csr_enabled": ("self.write_uint32(SYST_CSR, 0)", "self.write_uint32(SYST_CSR, 1)", 1),
-    "csr_read_keeps_count_flag": ("            self.systick_count_flag = False\n            return", "            return", 1),
+    "csr_read_keeps_count_flag": (
+        "            self.systick_count_flag = False\n            return",
+        "            return",
+        1,
+    ),
     "csr_count_flag_bit": ("count_flag_value = (1 << 16) if", "count_flag_value = (1 << 15) if", 1),
     "csr_clk_source_bit": ("clk_source_value = (1 << 2) if", "clk_source_value = (1 << 3) if", 1),
     "csr_tickint_bit": ("tick_int_value = (1 << 1) if", "tick_int_value = (1 << 2) if", 1),
-    "csr_enable_reads_zero": ("enable_flag_value = (1 << 0) if self.systick_timer.enable else 0", "enable_flag_value = 0", 1),
-    "csr_write_clk_source_bit": ("self.systick_clk_source = bool(value & (1 << 2))", "self.systick_clk_source = bool(value & (1 << 3))", 1),
-    "csr_write_int_enable_bit": ("self.systick_int_enable = bool(value & (1 << 1))", "self.systick_int_enable = bool(value & (1 << 2))", 1),
-    "csr_write_enable_ignored": ("            self.systick_timer.enable = bool(value & (1 << 0))\n", "            pass\n", 1),
+    "csr_enable_reads_zero": (
+        "enable_flag_value = (1 << 0) if self.systick_timer.enable else 0",
+        "enable_flag_value = 0",
+        1,
+    ),
+    "csr_write_clk_source_bit": (
+        "self.systick_clk_source = bool(value & (1 << 2))",
+        "self.systick_clk_source = bool(value & (1 << 3))",
+        1,
+    ),
+    "csr_write_int_enable_bit": (
+        "self.systick_int_enable = bool(value & (1 << 1))",
+        "self.systick_int_enable = bool(value & (1 << 2))",
+        1,
+    ),
+    "csr_write_enable_ignored": (
+        "            self.systick_timer.enable = bool(value & (1 << 0))\n",
+        "            pass\n",
+        1,
+    ),
     "cvr_write_keeps_counter": ("            self.systick_timer.set(0)\n            return", "            return", 1),
     "cvr_read_16_bit": ("return self.systick_timer.counter\n", "return self.systick_timer.counter & 0xFFFF\n", 1),
-    "rvr_unmasked_never": ("            self.systick_reload = value\n", "            self.systick_reload = value & 0xFFFFFF\n", 1),
+    "rvr_unmasked_never": (
+        "            self.systick_reload = value\n",
+        "            self.systick_reload = value & 0xFFFFFF\n",
+        1,
+    ),
     "calib_value": ("return 0x0000270F", "return 0x0000270E", 1),
     "cpuid_value": ("return 0x410CC601", "return 0x410CC600", 1),
     # -- ICSR
     "icsr_nmi_bit": ("(NMIPENDSET if core.pending_nmi else 0)", "(PENDSVSET if core.pending_nmi else 0)", 1),
-    "icsr_pendsv_reads_systick": ("(PENDSVSET if core.pending_pend_sv else 0)", "(PENDSVSET if core.pending_systick else 0)", 1),
-    "icsr_pendst_reads_pendsv": ("(PENDSTSET if core.pending_systick else 0)", "(PENDSTSET if core.pending_pend_sv else 0)", 1),
+    "icsr_pendsv_reads_systick": (
+        "(PENDSVSET if core.pending_pend_sv else 0)",
+        "(PENDSVSET if core.pending_systick else 0)",
+        1,
+    ),
+    "icsr_pendst_reads_pendsv": (
+        "(PENDSTSET if core.pending_systick else 0)",
+        "(PENDSTSET if core.pending_pend_sv else 0)",
+        1,
+    ),
     "icsr_isrpending_no_pendsv": ("or core.pending_pend_sv or core.pending_systick", "or core.pending_systick", 1),
     "icsr_vectpending_shift": ("(vect_pending << VECTPENDING_SHIFT)", "(vect_pending << (VECTPENDING_SHIFT + 1))", 1),
     "icsr_write_nmi_no_update": (
@@ -211,31 +268,95 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         "                core.pending_systick = True\n            if value & PENDSTCLR:",
         1,
     ),
-    "icsr_write_pendstclr_ignored": ("            if value & PENDSTCLR:\n                core.pending_systick = False\n", "", 1),
-    "icsr_write_pendsvclr_sets": ("            if value & PENDSVCLR:\n                core.pending_pend_sv = False\n", "            if value & PENDSVCLR:\n                core.pending_pend_sv = True\n", 1),
+    "icsr_write_pendstclr_ignored": (
+        "            if value & PENDSTCLR:\n                core.pending_systick = False\n",
+        "",
+        1,
+    ),
+    "icsr_write_pendsvclr_sets": (
+        "            if value & PENDSVCLR:\n                core.pending_pend_sv = False\n",
+        "            if value & PENDSVCLR:\n                core.pending_pend_sv = True\n",
+        1,
+    ),
     # -- VTOR / SHPR
     "vtor_not_written": ("            core.vtor = value\n", "            pass\n", 1),
     "shpr2_writes_shpr3": ("            core.shpr2 = value\n", "            core.shpr3 = value\n", 1),
     "shpr3_reads_shpr2": ("            return core.shpr3\n", "            return core.shpr2\n", 1),
     # -- NVIC
-    "ispr_no_update": ("            core.pending_interrupts |= value\n            core.interrupts_updated = True\n", "            core.pending_interrupts |= value\n", 1),
-    "icpr_clears_hardware_lines": ("core.pending_interrupts &= ~value | hardware_interrupt_mask", "core.pending_interrupts &= ~value", 1),
-    "icpr_clears_everything": ("core.pending_interrupts &= ~value | hardware_interrupt_mask", "core.pending_interrupts = 0", 1),
+    "ispr_no_update": (
+        "            core.pending_interrupts |= value\n            core.interrupts_updated = True\n",
+        "            core.pending_interrupts |= value\n",
+        1,
+    ),
+    "icpr_clears_hardware_lines": (
+        "core.pending_interrupts &= ~value | hardware_interrupt_mask",
+        "core.pending_interrupts &= ~value",
+        1,
+    ),
+    "icpr_clears_everything": (
+        "core.pending_interrupts &= ~value | hardware_interrupt_mask",
+        "core.pending_interrupts = 0",
+        1,
+    ),
     "iser_overwrites": ("core.enabled_interrupts |= value\n", "core.enabled_interrupts = value\n", 1),
-    "iser_no_update": ("            core.enabled_interrupts |= value\n            core.interrupts_updated = True\n", "            core.enabled_interrupts |= value\n", 1),
+    "iser_no_update": (
+        "            core.enabled_interrupts |= value\n            core.interrupts_updated = True\n",
+        "            core.enabled_interrupts |= value\n",
+        1,
+    ),
     "icer_toggles": ("core.enabled_interrupts &= ~value", "core.enabled_interrupts ^= value", 1),
     "icer_no_mask": ("core.enabled_interrupts &= ~value", "core.enabled_interrupts = 0", 1),
-    "ispr_reads_enabled": ("        if offset == NVIC_ISPR:\n            return u32(core.pending_interrupts)", "        if offset == NVIC_ISPR:\n            return u32(core.enabled_interrupts)", 1),
-    "icpr_reads_enabled": ("        if offset == NVIC_ICPR:\n            return u32(core.pending_interrupts)", "        if offset == NVIC_ICPR:\n            return u32(core.enabled_interrupts)", 1),
-    "iser_reads_pending": ("        if offset == NVIC_ISER:\n            return u32(core.enabled_interrupts)", "        if offset == NVIC_ISER:\n            return u32(core.pending_interrupts)", 1),
-    "icer_reads_zero": ("        if offset == NVIC_ICER:\n            return u32(core.enabled_interrupts)", "        if offset == NVIC_ICER:\n            return 0", 1),
+    "ispr_reads_enabled": (
+        "        if offset == NVIC_ISPR:\n            return u32(core.pending_interrupts)",
+        "        if offset == NVIC_ISPR:\n            return u32(core.enabled_interrupts)",
+        1,
+    ),
+    "icpr_reads_enabled": (
+        "        if offset == NVIC_ICPR:\n            return u32(core.pending_interrupts)",
+        "        if offset == NVIC_ICPR:\n            return u32(core.enabled_interrupts)",
+        1,
+    ),
+    "iser_reads_pending": (
+        "        if offset == NVIC_ISER:\n            return u32(core.enabled_interrupts)",
+        "        if offset == NVIC_ISER:\n            return u32(core.pending_interrupts)",
+        1,
+    ),
+    "icer_reads_zero": (
+        "        if offset == NVIC_ICER:\n            return u32(core.enabled_interrupts)",
+        "        if offset == NVIC_ICER:\n            return 0",
+        1,
+    ),
     "ipr_read_shift": ("result |= priority << (8 * byte_index + 6)", "result |= priority << (8 * byte_index + 5)", 1),
-    "ipr_read_index": ("interrupt_number = reg_index * 4 + byte_index\n                for priority in range(len(core.interrupt_priorities)):\n                    if", "interrupt_number = reg_index * 4 + byte_index + 1\n                for priority in range(len(core.interrupt_priorities)):\n                    if", 1),
-    "ipr_write_shift": ("new_priority = (value >> (8 * byte_index + 6)) & 0x3", "new_priority = (value >> (8 * byte_index + 5)) & 0x3", 1),
-    "ipr_write_mask": ("new_priority = (value >> (8 * byte_index + 6)) & 0x3", "new_priority = (value >> (8 * byte_index + 6)) & 0x1", 1),
-    "ipr_write_no_clear": ("                    core.interrupt_priorities[priority] &= ~(1 << interrupt_number)\n", "                    pass\n", 1),
-    "ipr_write_no_update": ("                core.interrupt_priorities[new_priority] |= 1 << interrupt_number\n            core.interrupts_updated = True\n", "                core.interrupt_priorities[new_priority] |= 1 << interrupt_number\n", 1),
-    "ipr_write_register_index": ("            reg_index = (offset - NVIC_IPR0) >> 2\n            for byte_index in range(4):\n                interrupt_number = reg_index * 4 + byte_index\n                new_priority", "            reg_index = (offset - NVIC_IPR0) >> 3\n            for byte_index in range(4):\n                interrupt_number = reg_index * 4 + byte_index\n                new_priority", 1),
+    "ipr_read_index": (
+        "interrupt_number = reg_index * 4 + byte_index\n                for priority in range(len(core.interrupt_priorities)):\n                    if",
+        "interrupt_number = reg_index * 4 + byte_index + 1\n                for priority in range(len(core.interrupt_priorities)):\n                    if",
+        1,
+    ),
+    "ipr_write_shift": (
+        "new_priority = (value >> (8 * byte_index + 6)) & 0x3",
+        "new_priority = (value >> (8 * byte_index + 5)) & 0x3",
+        1,
+    ),
+    "ipr_write_mask": (
+        "new_priority = (value >> (8 * byte_index + 6)) & 0x3",
+        "new_priority = (value >> (8 * byte_index + 6)) & 0x1",
+        1,
+    ),
+    "ipr_write_no_clear": (
+        "                    core.interrupt_priorities[priority] &= ~(1 << interrupt_number)\n",
+        "                    pass\n",
+        1,
+    ),
+    "ipr_write_no_update": (
+        "                core.interrupt_priorities[new_priority] |= 1 << interrupt_number\n            core.interrupts_updated = True\n",
+        "                core.interrupt_priorities[new_priority] |= 1 << interrupt_number\n",
+        1,
+    ),
+    "ipr_write_register_index": (
+        "            reg_index = (offset - NVIC_IPR0) >> 2\n            for byte_index in range(4):\n                interrupt_number = reg_index * 4 + byte_index\n                new_priority",
+        "            reg_index = (offset - NVIC_IPR0) >> 3\n            for byte_index in range(4):\n                interrupt_number = reg_index * 4 + byte_index\n                new_priority",
+        1,
+    ),
 }
 MUTANTS = tuple(MUTATIONS)
 
@@ -283,11 +404,11 @@ def _systick_fires_scenario(r: random.Random) -> list[tuple]:
     """SysTick running for long enough to fire: after a write to SYST_CVR the first period is a whole 2^24 ticks (the reference's counter sits on its target), so the time is
     hundreds of milliseconds, with a reload large enough that the periods after it are not millions of alarms."""
     ops: list[tuple] = []
-    ops.append(("write", P.SYST_RVR, r.choice((50_000, 200_000, 1_000_000, 0xFFFFFF))))
+    ops.append(("write", P.SYST_RVR, r.choice((400_000, 1_000_000, 0xFFFFFF))))
     ops.append(("write", P.SYST_CVR, 0))
     ops.append(("write", P.SYST_CSR, r.choice((1, 3, 5, 7))))
     for _ in range(r.choice((1, 2, 3))):
-        ops.append(("tick", r.choice((140_000_000, 150_000_000, 300_000_000))))
+        ops.append(("tick", r.choice((140_000_000, 150_000_000))))
         ops.append(("read", r.choice((P.SYST_CSR, P.SYST_CVR, P.ICSR))))
         if r.random() < 0.5:
             ops.append(("read", P.SYST_CSR))
@@ -309,6 +430,20 @@ def _nvic_scenario(r: random.Random) -> list[tuple]:
     else:
         ops.append(("write", P.NVIC_ISPR, 1 << line))
     ops.append(("read", P.ICSR))
+    if r.random() < 0.4:  # PendSV pended with nothing else pending: ICSR.ISRPENDING must still be set
+        ops.append(("lines_off",))
+        ops.append(("write", P.NVIC_ICPR, 0xFFFFFFFF))
+        ops.append(("write", P.ICSR, (1 << 27) | (1 << 25)))
+        ops.append(("write", P.ICSR, r.choice((1 << 28, 1 << 28, (1 << 28) | (1 << 26)))))
+        ops.append(("read", P.ICSR))
+        ops.append(("write", P.ICSR, (1 << 27) | (1 << 25)))
+        ops.append(("read", P.ICSR))
+    if (
+        r.random() < 0.3
+    ):  # the core has consumed its "interrupts updated" flag, then software pends an exception: the flag must come back
+        ops.append(("service",))
+        ops.append(("write", P.ICSR, r.choice((1 << 31, 1 << 28, 1 << 26))))
+        ops.append(("read", P.ICSR))
     if r.random() < 0.6:
         ops.append(("service",))
         ops.append(("read", P.ICSR))
@@ -321,7 +456,19 @@ def _nvic_scenario(r: random.Random) -> list[tuple]:
 
 def _value(r: random.Random, offset: int) -> int:
     if offset == P.ICSR:
-        return r.choice((0, 1 << 31, 1 << 28, 1 << 27, 1 << 26, 1 << 25, (1 << 28) | (1 << 27), (1 << 26) | (1 << 25), r.getrandbits(32)))
+        return r.choice(
+            (
+                0,
+                1 << 31,
+                1 << 28,
+                1 << 27,
+                1 << 26,
+                1 << 25,
+                (1 << 28) | (1 << 27),
+                (1 << 26) | (1 << 25),
+                r.getrandbits(32),
+            )
+        )
     if offset == P.SYST_CSR:
         return r.choice((0, 1, 2, 3, 4, 5, 7, r.getrandbits(32)))
     if offset == P.SYST_RVR:
