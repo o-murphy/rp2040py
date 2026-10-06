@@ -149,7 +149,7 @@ def test_spi_dma_paired_tx_rx_transfer_completes_without_listener(rp2040_factory
     for i, value in enumerate(message):
         cpu.write_uint8(src_addr + i, value)
 
-    # spi_init()-equivalent: enable the SPI peripheral and, as pico-sdk's spi_init() does ("always enable DREQ signals"), both DMA enables - the datasheet gates the requests
+    # spi_init()-equivalent: enable the SPI peripheral and, as pico-sdk's spi_init() does (src/rp2_common/hardware_spi/spi.c: "Always enable DREQ signals"), both DMA enables - the datasheet gates the requests
     # on SSE and SSPDMACR (docs/records/0098-datasheet-conformance-audit.md).
     cpu.write_uint32(SSPDMACR, 3)
     cpu.write_uint32(SSPCR1, SSE)
