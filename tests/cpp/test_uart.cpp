@@ -197,6 +197,18 @@ static void test_a_dr_write_transmits_at_once_and_raises_txintr() {
     CHECK(rd(FR) == (FR_TXFE | FR_RXFE));                        // FR never shows TXFF or BUSY
 }
 
+// RP2040 datasheet 4.2.3.2.6: with UARTCR.LBE set the transmit path is fed back to the receive path.
+static void test_loopback_feeds_a_written_byte_to_the_receiver() {
+    fresh();
+    CHECK(wr(CR, CR_UARTEN | CR_TXE | CR_RXE | CR_LBE));
+    const int sent_before = env.bytes_n;
+    CHECK(wr(DR, 0x5A));
+    CHECK(env.bytes_n == sent_before);                    // nothing reaches the device
+    CHECK((rd(FR) & FR_RXFE) == 0 && rd(DR) == 0x5A);    // the receiver got it
+    CHECK(wr(CR, CR_UARTEN | CR_TXE | CR_RXE));
+    CHECK(wr(DR, 0x5B) && env.bytes_n == sent_before + 1 && (rd(FR) & FR_RXFE) != 0);
+}
+
 static void test_icr_clears_the_raw_value_bits_for_good() {
     fresh();
     wr(IMSC, INT_TX | INT_RX);
@@ -399,6 +411,7 @@ int main() {
     test_full_means_exactly_32_and_rx_at_follows_the_ring();
     test_the_fed_value_is_kept_whole_and_the_ring_wraps();
     test_a_dr_write_transmits_at_once_and_raises_txintr();
+    test_loopback_feeds_a_written_byte_to_the_receiver();
     test_icr_clears_the_raw_value_bits_for_good();
     test_icr_uses_the_raw_value_whatever_the_alias_and_a_direct_write_the_stale_one();
     test_the_baud_divisors_are_masked_and_announced_every_time();

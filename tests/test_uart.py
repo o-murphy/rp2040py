@@ -84,6 +84,18 @@ def test_a_disabled_uart_sends_and_receives_nothing(rp2040_factory):
     assert sent == [] and uart.read_uint32(UARTDR) == 0x42
 
 
+def test_loopback_feeds_a_written_byte_to_the_receiver(rp2040_factory):
+    uart, _dreqs = _fresh(rp2040_factory)
+    sent = []
+    uart.on_byte = sent.append
+    uart.write_uint32(UARTCR, 1 | (1 << 7) | (1 << 8) | (1 << 9))  # UARTEN | LBE | TXE | RXE
+    uart.write_uint32(UARTDR, 0x5A)
+    assert sent == [] and uart.read_uint32(UARTDR) == 0x5A
+    uart.write_uint32(UARTCR, 1 | (1 << 8) | (1 << 9))
+    uart.write_uint32(UARTDR, 0x5B)
+    assert sent == [0x5B]
+
+
 def test_cr_and_lcr_h_keep_only_the_bits_that_exist(rp2040_factory):
     uart, _dreqs = _fresh(rp2040_factory)
     uart.write_uint32(UARTCR, 0xFFFFFFFF)

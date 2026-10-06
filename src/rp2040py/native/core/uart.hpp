@@ -18,6 +18,7 @@
 //   - the TX DREQ is asked for when UARTEN, TXE and DMACR.TXDMAE are set (the TX FIFO never fills), the RX one when UARTEN, RXE and RXDMAE are set and the FIFO holds a byte (and DMAONERR is
 //     not holding it back); every change of CR, DMACR, the FIFO's emptiness or the error interrupts re-announces both (TX then RX);
 //   - a disabled UART (UARTEN 0), transmitter (TXE 0) or receiver (RXE 0) sends / receives nothing; an overrun drops the byte and sets UARTRSR.OE and the OE interrupt;
+//   - UARTCR.LBE (loopback): a byte written to DR enters the receiver (as `feed_byte`) instead of reaching the device;
 //   - UARTIFLS, UARTILPR, UARTDMACR (and CR, LCR_H) keep only their datasheet bits; IFLS and ILPR are stored and not acted on;
 //   - IBRD/FBRD writes announce the baud rate every time (the host decides whether anyone listens); IBRD is masked to 16 bits, FBRD to 6, IMSC to 11;
 //   - an alias write decodes against a *read* of the register, with that read's side effects (a SET/CLR/XOR write of DR pulls a byte from the FIFO);
@@ -58,7 +59,7 @@ constexpr uint32_t PERIPHID0 = 0xFE0, PERIPHID1 = 0xFE4, PERIPHID2 = 0xFE8, PERI
 constexpr uint32_t PCELLID0 = 0xFF0, PCELLID1 = 0xFF4, PCELLID2 = 0xFF8, PCELLID3 = 0xFFC;
 constexpr uint32_t FR_TXFE = 1u << 7, FR_RXFF = 1u << 6, FR_RXFE = 1u << 4;
 [[maybe_unused]] constexpr uint32_t LCR_FEN = 1u << 4;  // the shell's `fifos_enabled`; the block itself never looks at it (the FIFO is 32 deep either way)
-constexpr uint32_t CR_RXE = 1u << 9, CR_TXE = 1u << 8, CR_UARTEN = 1u << 0;
+constexpr uint32_t CR_RXE = 1u << 9, CR_TXE = 1u << 8, CR_UARTEN = 1u << 0, CR_LBE = 1u << 7;
 constexpr uint32_t INT_OE = 1u << 10, INT_TX = 1u << 5, INT_RX = 1u << 4;
 constexpr uint32_t INT_ERRORS = 0x780u;  // OE, BE, PE, FE
 constexpr uint32_t IMSC_MASK = 0x7FFu;
@@ -219,7 +220,12 @@ public:
             case DR:
                 // "TXE: Transmit enable": a disabled transmitter (or UART) sends nothing - the byte goes nowhere
                 if (!(enabled() && tx_enabled())) return true;
-                if (!host_.on_byte(host_.ctx, static_cast<uint32_t>(value) & 0xFFu)) return false;
+                if (ctrl & CR_LBE) {
+                    // "LBE: Loop back enable": the byte reaches the receiver, not the device
+                    if (!feed_byte(static_cast<uint32_t>(value) & 0xFFu)) return false;
+                } else if (!host_.on_byte(host_.ctx, static_cast<uint32_t>(value) & 0xFFu)) {
+                    return false;
+                }
                 interrupt_status |= INT_TX;
                 return check_interrupts();
             case RSR: rsr = 0; return true;  // the write is UARTECR: it clears the error flags

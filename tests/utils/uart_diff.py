@@ -344,6 +344,13 @@ def mutant_rig(name: str) -> Rig:
                     self._interrupt_status |= U.UARTTXINTR
                     self.check_interrupts()
                 return
+            if offset == U.UARTDR and name == "loopback_ignored":
+                if self.enabled and self.tx_enabled:
+                    if self.on_byte:
+                        self.on_byte(value & 0xFF)
+                    self._interrupt_status |= U.UARTTXINTR
+                    self.check_interrupts()
+                return
             if offset == U.UARTICR and name == "icr_no_dreq_update":
                 self._interrupt_status &= ~self.raw_write_value
                 self.check_interrupts()
@@ -399,7 +406,7 @@ MUTANTS = (
     "dmacr_unmasked", "dmacr_no_dreq_update", "ilpr_unmasked", "ecr_does_not_clear", "dr_write_ignores_enable", "dr_write_ignores_txe", "icr_no_dreq_update",
     "dreq_tx_ignores_dmacr", "dreq_tx_ignores_txe", "dreq_rx_ignores_dmacr", "dreq_rx_when_empty", "dreq_rx_ignores_rxe", "dreq_ignores_dmaonerr",
     "dreq_ignores_uarten", "dreq_swapped_channels", "feed_ignores_enable", "feed_ignores_rxe", "overrun_no_status", "overrun_no_interrupt", "overrun_pushes",
-    "dr_read_no_dreq_update", "ifls_reads_ilpr", "rsr_reads_zero",
+    "dr_read_no_dreq_update", "ifls_reads_ilpr", "rsr_reads_zero", "loopback_ignored",
 )  # fmt: skip
 
 
@@ -440,7 +447,7 @@ def generate(seed: int, steps: int) -> list[tuple]:
     while len(ops) < steps:
         roll = r.random()
         if roll < 0.04:  # firmware (re)enabling the UART and its DMA requests
-            ops.append(("write", U.UARTCR, r.choice((0x301, 0x301, 0x201, 0x101, 0x1)), ALIASES[0]))
+            ops.append(("write", U.UARTCR, r.choice((0x301, 0x301, 0x381, 0x201, 0x101, 0x1)), ALIASES[0]))
             ops.append(("write", U.UARTDMACR, r.choice((3, 3, 1, 2, 5, 7)), ALIASES[0]))
             ops.append(("write", U.UARTIMSC, r.choice((0x10, 0x30, 0x7FF, 0x400)), ALIASES[0]))
         elif roll < 0.30:

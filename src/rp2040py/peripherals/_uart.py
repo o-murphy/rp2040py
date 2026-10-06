@@ -62,6 +62,7 @@ FEN = 1 << 4
 RXE = 1 << 9
 TXE = 1 << 8
 UARTEN = 1 << 0
+LBE = 1 << 7
 
 # Interrupt bits
 UARTOEINTR = 1 << 10
@@ -264,7 +265,10 @@ class RPUART(BasePeripheral):
         if offset == UARTDR:
             # "TXE: Transmit enable": a disabled transmitter (or UART) sends nothing - the byte goes nowhere, as the FIFO behind it is never read
             if self.enabled and self.tx_enabled:
-                if self.on_byte:
+                if self._ctrl_register & LBE:
+                    # "LBE: Loop back enable ... the UARTTXD path is fed back to the UARTRXD path": the byte reaches the receiver, not the device
+                    self.feed_byte(value & 0xFF)
+                elif self.on_byte:
                     self.on_byte(value & 0xFF)
                 # The byte leaves the (never-filling) TX FIFO at once; the PL011 TX interrupt is
                 # edge-like - set by that, never while the FIFO merely stays empty - so UARTICR clears
