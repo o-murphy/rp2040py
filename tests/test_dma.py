@@ -28,6 +28,7 @@ TREQ_PERMANENT = 0x3F
 
 SPI0_BASE = 0x4003C000
 SSPCR1 = SPI0_BASE + 0x004
+SSPDMACR = SPI0_BASE + 0x024
 SSPDR = SPI0_BASE + 0x008
 SSE = bit(1)
 
@@ -148,7 +149,10 @@ def test_spi_dma_paired_tx_rx_transfer_completes_without_listener(rp2040_factory
     for i, value in enumerate(message):
         cpu.write_uint8(src_addr + i, value)
 
-    cpu.write_uint32(SSPCR1, SSE)  # spi_init()-equivalent: enable the SPI peripheral.
+    # spi_init()-equivalent: enable the SPI peripheral and, as pico-sdk's spi_init() does ("always enable DREQ signals"), both DMA enables - the datasheet gates the requests
+    # on SSE and SSPDMACR (docs/records/0098-datasheet-conformance-audit.md).
+    cpu.write_uint32(SSPDMACR, 3)
+    cpu.write_uint32(SSPCR1, SSE)
 
     # Channel 0 = TX: src_addr -> SSPDR, paced by DREQ_SPI0_TX, chained to itself (no chaining).
     cpu.write_uint32(CH0_READ_ADDR, src_addr)

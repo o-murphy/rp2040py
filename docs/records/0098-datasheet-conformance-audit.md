@@ -349,10 +349,24 @@ Read: the UARTDR, UARTRSR, UARTFR, UARTLCR_H, UARTCR, UARTIFLS, UARTIMSC, UARTRI
 - **Left, deliberately:** the RX FIFO is 32 deep whatever `FEN` says (the datasheet: with FIFOs disabled it is a 1-byte holding register; but bytes arrive here in instant bursts that a real line would space at the baud rate, so a 1-deep register would drop what hardware would not); no break/parity/framing errors, no modem lines, no loopback, no timing of transmission.
 - Tests: `tests/test_uart.py` (seven datasheet cases), `tests/cpp/test_uart.cpp` rewritten around the new DREQ rule and the gating, the oracle (`tests/utils/uart_diff.py`: the new registers in the stream, an enabling scenario so that traffic passes, 47 mutants - the three obsolete CR-DREQ ones replaced by 14 DREQ/gating/overrun/register mutants).
 
+### SPI (datasheet 4.4, the PL022)
+
+Read: 4.4.2 (the block), 4.4.3.2-4.4.3.6 (configuring, enabling, clock ratios, SSPCR0/SSPCR1, bit rate), the DMA interface text (4.4.3.16) and every register table (SSPCR0 .. SSPDMACR, the ID registers; the values the reference returns for those, `0x22 0x10 0x34 0x00` and `0x0D 0xF0 0x05 0xB1`, are right - the tool's PCELLID3 "reset" finding is its own misparse).
+
+- **Reserved bits stuck:** SSPCR0 kept bits 31:16, SSPCR1 and SSPIMSC bits 31:4, SSPDMACR bits 31:2. Now 0xFFFF, 0xF, 0xF, 0x3. (SSPCPSR's bit 0 "not sticking" is right: "the least significant bit always returns zero on reads"; the reference already masked 0xFE.)
+- **A disabled SSP sent.** "You can prime the transmit FIFO ... when the PrimeCell SSP is disabled ... Once enabled, transmission or reception of data begins" (4.4.3.3): the reference pushed a word to the device as soon as it was written, whatever SSE said. Now nothing leaves while SSE is 0 and a primed FIFO starts when SSPCR1 enables it.
+- **The DMA requests ignored SSE and SSPDMACR.** "All request signals are deasserted if the PrimeCell SSP is disabled, or the DMA enable signal is cleared" (4.4.3.16): the reference kept the TX request up whenever the FIFO had room and the RX one whenever it had a word. Now TX needs SSE and TXDMAE, RX needs SSE and RXDMAE, and both are re-published on every write of SSPCR1 and SSPDMACR as well as on every FIFO change. pico-sdk's `spi_init` writes SSPDMACR with both enables and enables the SSP, so real firmware is unaffected.
+- **Loop back (SSPCR1.LBM) was not implemented.** "Output of transmit serial shifter is connected to input of receive serial shifter internally": the word written to SSPDR now comes straight back into the RX FIFO and does not reach the device.
+- **`SSPRIS` reset:** the datasheet has TXRIS = 1 at reset (the TX FIFO is empty, "half empty or less"); the reference started at 0 and only set it after the first FIFO change. Fixed at power-on and at `reset()`.
+- **Checked and consistent:** the FIFOs (16 bits wide, 8 deep), the interrupt thresholds (TX at 4 or fewer, RX at 4 or more), the overrun interrupt, SSPICR clearing only RT and ROR, `SSPSR` (BSY while a frame is in flight or the TX FIFO is not empty), the bit-rate formula `clk_peri / (CPSDVSR x (1 + SCR))`, data size = DSS + 1.
+- **Left, deliberately:** the frame format (FRF, TI/Microwire), the receive-timeout interrupt (RT never rises), slave mode (MS and SOD are stored; the block still masters), the burst DMA requests (the chip has one request per direction), the rule that MS can be changed only with SSE = 0, and the DSS values 0-2 (reserved, "undefined operation": treated as 1-3 bits).
+- Tests: `tests/test_spi.py` (four datasheet cases), `tests/cpp/test_spi.cpp` (the three new behaviours, the old checks now run with the SSP enabled as a firmware has it), the oracle (`tests/utils/spi_diff.py`: SSPDMACR values in the stream, 13 new mutants for the masks, the gating, the loop back, the start on enable and the reset value; `imsc_masked`, which the fix made equal to the reference, became `imsc_unmasked`).
+
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
 - 2026-10-06: **TIMER read against the datasheet and fixed** (PAUSE, TIMEHW/TIMELW, DBGPAUSE, the 64-bit wrap and the C++ int64 undefined behaviour it exposed). Next: ADC.
 - 2026-10-06: **ADC read against the datasheet and fixed** (8-entry FIFO, READY needs EN, DIV 24 bits). Next: PWM.
 - 2026-10-06: **PWM read against the datasheet and fixed** - the phase-correct output and period (the 0096 "bug 4"), CSR/DIV reserved bits, PH_ADV at full speed. Next: UART.
-- UART read against the datasheet and fixed (reserved bits, IFLS/ILPR/DMACR/RSR/ECR, DREQ rule, TXE/RXE/UARTEN gating, overrun); reference, C++, oracle and tests together. Next: SPI.
+- 2026-10-06: **UART read against the datasheet and fixed (reserved bits, IFLS/ILPR/DMACR/RSR/ECR, DREQ rule, TXE/RXE/UARTEN gating, overrun)**; reference, C++, oracle and tests together.
+- 2026-10-06: **SPI read against the datasheet and fixed** (reserved bits, nothing sent while SSE = 0, the DMA requests gated by SSE and SSPDMACR, loop back, SSPRIS reset). Next: I2C.

@@ -59,6 +59,12 @@ TFE = 1 << 0
 CPSDVSR_MASK = 0xFE
 CPSDVSR_SHIFT = 0
 
+# Reserved bits (RP2040 datasheet 4.4.4: SSPCR0 31:16, SSPCR1 31:4, SSPIMSC 31:4, SSPDMACR 31:2) read as zero and are not stored.
+CR0_MASK = 0xFFFF
+CR1_MASK = 0xF
+IMSC_MASK = 0xF
+DMACR_MASK = 0x3
+
 # SSPDMACR bits:
 TXDMAE = 1 << 1
 RXDMAE = 1 << 0
@@ -99,7 +105,7 @@ class RPSPI(BasePeripheral):
         self._control1 = 0
         self._dma_control = 0
         self._clock_divisor = 0
-        self._int_raw = 0
+        self._int_raw = SSPTXINTR  # SSPRIS resets to 0x8: the TX FIFO is empty, so "half empty or less" holds
         self._int_enable = 0
 
         self._update_dma_tx()
@@ -119,7 +125,7 @@ class RPSPI(BasePeripheral):
         self._control1 = 0
         self._dma_control = 0
         self._clock_divisor = 0
-        self._int_raw = 0
+        self._int_raw = SSPTXINTR
         self._int_enable = 0
         self._update_dma_tx()
         self._update_dma_rx()
@@ -155,22 +161,28 @@ class RPSPI(BasePeripheral):
         return _clock_frequency(self.rp2040.clk_peri, self._clock_divisor, (self._control0 >> SCR_SHIFT) & SCR_MASK)
 
     def _update_dma_tx(self) -> None:
-        if self.tx_fifo.full:
+        # "All request signals are deasserted if the PrimeCell SSP is disabled, or the DMA enable signal is cleared" (datasheet 4.4.3.16): SSE and TXDMAE gate the request, which is
+        # otherwise up while the TX FIFO has an empty place.
+        if self.tx_fifo.full or not (self._control1 & SSE and self._dma_control & TXDMAE):
             self.rp2040.dma.clear_dreq(self.dreq.tx)
         else:
             self.rp2040.dma.set_dreq(self.dreq.tx)
 
     def _update_dma_rx(self) -> None:
-        if self.rx_fifo.empty:
+        if self.rx_fifo.empty or not (self._control1 & SSE and self._dma_control & RXDMAE):
             self.rp2040.dma.clear_dreq(self.dreq.rx)
         else:
             self.rp2040.dma.set_dreq(self.dreq.rx)
 
     def _do_tx(self) -> None:
-        if not self._busy and not self.tx_fifo.empty:
+        # "You can prime the transmit FIFO ... when the PrimeCell SSP is disabled ... Once enabled, transmission ... begins" (4.4.3.3): nothing leaves a disabled SSP.
+        if not self._busy and not self.tx_fifo.empty and self._control1 & SSE:
             value = self.tx_fifo.pull()
             self._busy = True
-            self.on_transmit(value)
+            if self._control1 & LBM:  # loop back: the output of the transmit shifter feeds the receive shifter
+                self.complete_transmit(value)
+            else:
+                self.on_transmit(value)
             self._fifos_updated()
 
     def complete_transmit(self, rx_value: int) -> None:
@@ -253,9 +265,12 @@ class RPSPI(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == SSPCR0:
-            self._control0 = value
+            self._control0 = value & CR0_MASK
         elif offset == SSPCR1:
-            self._control1 = value
+            self._control1 = value & CR1_MASK
+            # enabling starts a primed FIFO and publishes the DMA requests, which SSE gates
+            self._do_tx()
+            self._fifos_updated()
         elif offset == SSPDR:
             if not self.tx_fifo.full:
                 # decoded with respect to SSPCR0.DSS
@@ -265,10 +280,12 @@ class RPSPI(BasePeripheral):
         elif offset == SSPCPSR:
             self._clock_divisor = value & CPSDVSR_MASK
         elif offset == SSPIMSC:
-            self._int_enable = value
+            self._int_enable = value & IMSC_MASK
             self.check_interrupts()
         elif offset == SSPDMACR:
-            self._dma_control = value
+            self._dma_control = value & DMACR_MASK
+            self._update_dma_tx()
+            self._update_dma_rx()
         elif offset == SSPICR:
             # By the bits the bus passed, not the alias-decoded value - the rule of the UART's and the DMA's write-1-to-clear registers (an alias decodes against a read
             # of ICR, which is write-only and reads as all ones here, so a CLR/XOR/SET write would otherwise clear the wrong bits).

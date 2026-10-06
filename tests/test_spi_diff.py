@@ -57,7 +57,7 @@ def _drain_a_byte(candidate: Rig, step: int) -> None:
     ids=lambda f: f.__name__.lstrip("_"),
 )
 def test_a_damaged_candidate_is_caught_where_it_was_damaged(perturb):
-    divergence = run_pair(generate(3, 1500), perturb=perturb)
+    divergence = run_pair(generate(4, 1500), perturb=perturb)
     assert divergence is not None
     assert divergence.step == 700, divergence
 

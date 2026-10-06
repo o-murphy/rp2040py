@@ -69,7 +69,8 @@ static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
     ++env.warns;
 }
 
-static void fresh(int mode = kDefault) {
+// `enabled`: SSE set, as a firmware that is about to transfer has it (a disabled SSP sends nothing and raises no DMA request); the power-on tests ask for it off.
+static void fresh(int mode = kDefault, bool enabled = true) {
     env = Env();
     env.mode = mode;
     SpiHost host;
@@ -79,8 +80,10 @@ static void fresh(int mode = kDefault) {
     host.warn = on_warn;
     host.failed = &env.failed;
     spi.init(host);
-    spi.control0 = spi.control1 = spi.dma_control = spi.clock_divisor = 0;
-    spi.int_raw = spi.int_enable = 0;
+    spi.control0 = spi.dma_control = spi.clock_divisor = 0;
+    spi.control1 = enabled ? CR1_SSE : 0;
+    spi.int_raw = INT_TX;
+    spi.int_enable = 0;
     spi.busy = false;
     spi.rx.reset();
     spi.tx.reset();
@@ -115,33 +118,84 @@ static void test_fifo_template() {
 
 static void test_a_default_constructed_block_is_at_power_on() {
     static SpiBlock block;
-    CHECK(block.control0 == 0 && block.control1 == 0 && block.dma_control == 0 && block.clock_divisor == 0 && block.int_raw == 0 && block.int_enable == 0);
+    CHECK(block.control0 == 0 && block.control1 == 0 && block.dma_control == 0 && block.clock_divisor == 0 && block.int_raw == INT_TX && block.int_enable == 0);  // RIS resets to 0x8
     CHECK(!block.busy && block.rx.empty() && block.tx.empty() && block.raw_write_value() == 0);
 }
 
 static void test_power_on_publishes_both_dreqs() {
-    fresh();
+    fresh(kDefault, false);
     CHECK(spi.power_on());
-    CHECK(env.dreq_n == 2 && env.dreq_calls[0] == 3 && env.dreq_calls[1] == 0);   // TX asserted (FIFO not full), RX not (FIFO empty)
-    CHECK(rd(SR) == (SR_TNF | SR_TFE));
+    CHECK(env.dreq_n == 2 && env.dreq_calls[0] == 2 && env.dreq_calls[1] == 0);   // both withdrawn: a disabled SSP raises no request
+    CHECK(rd(SR) == (SR_TNF | SR_TFE) && rd(RIS) == INT_TX);
+    fresh();
+    spi.dma_control = DMACR_TXDMAE;
+    CHECK(spi.power_on());
+    CHECK(env.dreq_n == 2 && env.dreq_calls[0] == 3 && env.dreq_calls[1] == 0);   // enabled with TXDMAE: TX asserted (FIFO not full), RX not (FIFO empty)
     CHECK(rd(PERIPHID0) == 0x22 && rd(PERIPHID1) == 0x10 && rd(PERIPHID2) == 0x34 && rd(PERIPHID3) == 0x00);
     CHECK(rd(PCELLID0) == 0x0D && rd(PCELLID1) == 0xF0 && rd(PCELLID2) == 0x05 && rd(PCELLID3) == 0xB1);
 }
 
-static void test_registers_are_stored_whole_except_cpsr() {
-    fresh();
+static void test_reserved_bits_are_not_stored() {
+    fresh(kSilent);
     wr(CR0, 0xFFFFFFF1u);
     wr(CR1, 0xFFFFFFF2u);
     wr(IMSC, 0xFFFFFFF3u);
     wr(DMACR, 0xFFFFFFF4u);
     wr(CPSR, 0xFFFFFFF5u);
-    CHECK(rd(CR0) == 0xFFFFFFF1u && rd(CR1) == 0xFFFFFFF2u && rd(IMSC) == 0xFFFFFFF3u && rd(DMACR) == 0xFFFFFFF4u);
+    CHECK(rd(CR0) == 0xFFF1u && rd(CR1) == 0x2u && rd(IMSC) == 0x3u && rd(DMACR) == 0x0u);   // datasheet 4.4.4: CR0 15:0, CR1 3:0, IMSC 3:0, DMACR 1:0
     CHECK(rd(CPSR) == 0xF4);
+    wr(CR1, 0xFFFFFFFFu);
+    wr(DMACR, 0xFFFFFFFFu);
+    CHECK(rd(CR1) == 0xF && rd(DMACR) == 0x3);
     wr(CR0, 0xFFFFFFFFu);
     wr(CR1, 0xFFFFFFFFu);
     CHECK(spi.enabled() && spi.data_bits() == 16);
     wr(CR1, 0);
     CHECK(!spi.enabled());
+}
+
+static void test_a_disabled_ssp_sends_nothing_and_enabling_starts_the_fifo() {
+    fresh(kSilent, false);
+    dr(1);
+    dr(2);
+    CHECK(env.sent_n == 0 && !spi.busy && spi.tx.count() == 2);   // primed while disabled (datasheet 4.4.3.3)
+    CHECK(wr(CR1, CR1_SSE));
+    CHECK(env.sent_n == 1 && env.sent[0] == 1 && spi.busy && spi.tx.count() == 1);
+    fresh(kDefault, false);
+    dr(5);
+    CHECK(env.sent_n == 0);
+    CHECK(wr(CR1, CR1_SSE));
+    CHECK(env.sent_n == 1 && spi.rx.count() == 1 && spi.tx.empty());   // the default device answered
+}
+
+static void test_loop_back_feeds_the_transmit_shifter_to_the_receive_shifter() {
+    fresh(kSilent);
+    CHECK(wr(CR1, CR1_SSE | CR1_LBM));
+    wr(CR0, 0x7);
+    dr(0x1A5);
+    dr(0x3C);
+    CHECK(env.sent_n == 0 && !spi.busy && spi.tx.empty() && spi.rx.count() == 2);   // nothing reaches the device
+    CHECK(rd(DR) == 0xA5 && rd(DR) == 0x3C);
+    wr(CR1, CR1_SSE);
+    dr(1);
+    CHECK(env.sent_n == 1 && spi.busy);
+}
+
+static void test_dma_requests_need_sse_and_the_dma_enable() {
+    fresh(kSilent, false);
+    spi.int_raw = INT_TX;
+    wr(DMACR, 3);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 2 && env.dreq_calls[env.dreq_n - 1] == 0);   // disabled SSP: nothing asserted
+    wr(CR1, CR1_SSE);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 3 && env.dreq_calls[env.dreq_n - 1] == 0);   // TX asserted, RX has nothing yet
+    spi.complete_transmit(9);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 3 && env.dreq_calls[env.dreq_n - 1] == 1);
+    wr(DMACR, 1);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 2 && env.dreq_calls[env.dreq_n - 1] == 1);   // TXDMAE cleared: TX withdrawn
+    wr(DMACR, 2);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 3 && env.dreq_calls[env.dreq_n - 1] == 0);   // RXDMAE cleared: RX withdrawn
+    wr(CR1, 0);
+    CHECK(env.dreq_calls[env.dreq_n - 2] == 2 && env.dreq_calls[env.dreq_n - 1] == 0);   // SSE cleared: both
 }
 
 static void test_a_written_value_is_masked_to_dss_plus_one_bits() {
@@ -286,6 +340,7 @@ static void test_raw_write_value_and_failed_report_what_the_bus_and_host_did() {
 static void test_dr_reads_drain_publish_the_rx_dreq_and_read_zero_when_empty() {
     fresh(kSilent);
     CHECK(rd(DR) == 0);
+    spi.dma_control = DMACR_RXDMAE;
     spi.complete_transmit(5);
     CHECK(env.dreq_calls[env.dreq_n - 1] == 1);                  // RX asserted: not empty
     CHECK(rd(DR) == 5);
@@ -314,11 +369,12 @@ static void test_reset_clears_everything_republishes_the_dreqs_and_keeps_the_hos
     const int64_t raw = spi.raw_write_value();
     env.irq_n = env.dreq_n = 0;
     CHECK(spi.reset());
-    CHECK(rd(CR0) == 0 && rd(CR1) == 0 && rd(CPSR) == 0 && rd(IMSC) == 0 && rd(DMACR) == 0 && rd(RIS) == 0);
+    CHECK(rd(CR0) == 0 && rd(CR1) == 0 && rd(CPSR) == 0 && rd(IMSC) == 0 && rd(DMACR) == 0 && rd(RIS) == INT_TX);
     CHECK(spi.rx.empty() && spi.tx.empty() && !spi.busy);
-    CHECK(env.dreq_n == 2 && env.dreq_calls[0] == 3 && env.dreq_calls[1] == 0);  // republished: TX asserted, RX withdrawn
+    CHECK(env.dreq_n == 2 && env.dreq_calls[0] == 2 && env.dreq_calls[1] == 0);  // republished: both withdrawn (SSE and the DMA enables are 0 again)
     CHECK(env.irq_n == 1 && !env.irq_calls[0]);
     CHECK(spi.raw_write_value() == raw);
+    wr(CR1, 2);
     dr(7);                                                       // the host is still wired: the byte goes out
     CHECK(env.sent[env.sent_n - 1] == 1);                        // (CR0 is 0 again: a 1-bit mask, 7 & 1)
 }
@@ -370,7 +426,7 @@ static void test_a_failing_host_call_stops_the_block_where_the_reference_would_h
     env.fail_transmit = true;
     CHECK(!spi.write(DR, 0x42));                                 // the callback raised: the byte left the FIFO, the block is busy, the FIFOs were not updated
     CHECK(spi.busy && spi.tx.empty() && env.sent_n == 1);
-    CHECK((spi.int_raw & INT_TX) == 0);
+    CHECK((spi.int_raw & INT_TX) != 0);                          // not updated: still what it was
     env.fail_transmit = false;
     env.failed = 0;
 
@@ -430,7 +486,10 @@ int main() {
     test_fifo_template();
     test_a_default_constructed_block_is_at_power_on();
     test_power_on_publishes_both_dreqs();
-    test_registers_are_stored_whole_except_cpsr();
+    test_reserved_bits_are_not_stored();
+    test_a_disabled_ssp_sends_nothing_and_enabling_starts_the_fifo();
+    test_loop_back_feeds_the_transmit_shifter_to_the_receive_shifter();
+    test_dma_requests_need_sse_and_the_dma_enable();
     test_a_written_value_is_masked_to_dss_plus_one_bits();
     test_the_tx_fifo_drops_a_write_when_full_and_the_status_follows();
     test_sr_reports_busy_not_full_and_empty_separately();

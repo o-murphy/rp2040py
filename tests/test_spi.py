@@ -48,3 +48,60 @@ def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == SSPRTINTR
     chip.write_uint32(SPI0_BASE + SSPICR, SSPRTINTR)
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == 0
+
+
+SSPDR, SSPDMACR = 0x008, 0x024
+SSE, LBM = 1 << 1, 1 << 0
+DREQ_SPI0_TX, DREQ_SPI0_RX = 16, 17
+
+
+def test_reserved_bits_read_zero_and_ris_resets_to_the_tx_interrupt(rp2040_factory):
+    chip = rp2040_factory()
+    assert chip.read_uint32(SPI0_BASE + SSPRIS) == 1 << 3  # datasheet: SSPRIS resets to 0x8 (the TX FIFO is empty)
+    for offset, kept in ((SSPCR0, 0xFFFF), (SSPCR1, 0xF), (SSPIMSC, 0xF), (SSPDMACR, 0x3)):
+        chip.write_uint32(SPI0_BASE + offset, 0xFFFFFFFF)
+        assert chip.read_uint32(SPI0_BASE + offset) == kept, hex(offset)
+
+
+def test_a_disabled_ssp_sends_nothing_until_enabled(rp2040_factory):
+    chip = rp2040_factory()
+    spi = chip.spi[0]
+    sent = []
+    spi.on_transmit = sent.append  # a device that holds the word
+    chip.write_uint32(SPI0_BASE + SSPCR0, 0x7)  # 8-bit words
+    chip.write_uint32(SPI0_BASE + SSPDR, 0x12)
+    chip.write_uint32(SPI0_BASE + SSPDR, 0x34)
+    assert sent == []  # the FIFO can be primed while disabled
+    chip.write_uint32(SPI0_BASE + SSPCR1, SSE)
+    assert sent == [0x12]
+
+
+def test_loop_back_returns_the_transmitted_word(rp2040_factory):
+    chip = rp2040_factory()
+    spi = chip.spi[0]
+    sent = []
+    spi.on_transmit = sent.append
+    chip.write_uint32(SPI0_BASE + SSPCR0, 0x7)
+    chip.write_uint32(SPI0_BASE + SSPCR1, SSE | LBM)
+    chip.write_uint32(SPI0_BASE + SSPDR, 0x1A5)
+    assert sent == []
+    assert chip.read_uint32(SPI0_BASE + SSPDR) == 0xA5
+
+
+def test_dma_requests_need_the_ssp_enabled_and_the_dma_enable(rp2040_factory):
+    chip = rp2040_factory()
+
+    def asked() -> tuple[bool, bool]:
+        return bool(chip.dma.dreq.get(DREQ_SPI0_TX, False)), bool(chip.dma.dreq.get(DREQ_SPI0_RX, False))
+
+    chip.write_uint32(SPI0_BASE + SSPDMACR, 3)
+    assert asked() == (False, False)  # DMA enabled, SSP not: nothing asked for
+    chip.write_uint32(SPI0_BASE + SSPCR1, SSE)
+    assert asked() == (True, False)  # TX has room, RX has nothing
+    chip.write_uint32(SPI0_BASE + SSPDMACR, 0)
+    assert asked() == (False, False)
+    chip.write_uint32(SPI0_BASE + SSPDMACR, 1)
+    chip.spi[0].complete_transmit(7)  # a word arrives
+    assert asked() == (False, True)
+    chip.write_uint32(SPI0_BASE + SSPCR1, 0)
+    assert asked() == (False, False)

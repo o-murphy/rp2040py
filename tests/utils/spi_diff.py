@@ -193,6 +193,8 @@ def mutant_rig(name: str) -> Rig:
             if name == "fifo_depth_16":
                 self.rx_fifo = P.FIFO(16)
                 self.tx_fifo = P.FIFO(16)
+            if name == "init_raw_zero":
+                self._int_raw = 0
 
         @property
         def spi_mode(self) -> int:
@@ -217,11 +219,27 @@ def mutant_rig(name: str) -> Rig:
             if name == "dma_tx_inverted":
                 (self.rp2040.dma.set_dreq if self.tx_fifo.full else self.rp2040.dma.clear_dreq)(self.dreq.tx)
                 return
+            if name in ("dma_tx_ignores_sse", "dma_tx_ignores_txdmae"):
+                gate = (self._control1 & P.SSE if name == "dma_tx_ignores_txdmae" else True) and (
+                    self._dma_control & P.TXDMAE if name == "dma_tx_ignores_sse" else True
+                )
+                (self.rp2040.dma.clear_dreq if self.tx_fifo.full or not gate else self.rp2040.dma.set_dreq)(
+                    self.dreq.tx
+                )
+                return
             super()._update_dma_tx()
 
         def _update_dma_rx(self) -> None:
             if name == "dma_rx_inverted":
                 (self.rp2040.dma.set_dreq if self.rx_fifo.empty else self.rp2040.dma.clear_dreq)(self.dreq.rx)
+                return
+            if name in ("dma_rx_ignores_sse", "dma_rx_ignores_rxdmae"):
+                gate = (self._control1 & P.SSE if name == "dma_rx_ignores_rxdmae" else True) and (
+                    self._dma_control & P.RXDMAE if name == "dma_rx_ignores_sse" else True
+                )
+                (self.rp2040.dma.clear_dreq if self.rx_fifo.empty or not gate else self.rp2040.dma.set_dreq)(
+                    self.dreq.rx
+                )
                 return
             super()._update_dma_rx()
 
@@ -237,6 +255,23 @@ def mutant_rig(name: str) -> Rig:
                     value = self.tx_fifo.pull()
                     self._busy = True
                     self.on_transmit(value)
+                return
+            if name == "tx_ignores_sse":
+                if not self._busy and not self.tx_fifo.empty:
+                    value = self.tx_fifo.pull()
+                    self._busy = True
+                    if self._control1 & P.LBM:
+                        self.complete_transmit(value)
+                    else:
+                        self.on_transmit(value)
+                    self._fifos_updated()
+                return
+            if name == "loopback_ignored":
+                if not self._busy and not self.tx_fifo.empty and self._control1 & P.SSE:
+                    value = self.tx_fifo.pull()
+                    self._busy = True
+                    self.on_transmit(value)
+                    self._fifos_updated()
                 return
             super()._do_tx()
 
@@ -316,9 +351,24 @@ def mutant_rig(name: str) -> Rig:
                 self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR | P.SSPTXINTR))
                 self.check_interrupts()
                 return
-            if offset == P.SSPIMSC and name == "imsc_masked":
-                self._int_enable = value & 0xF
+            if offset == P.SSPIMSC and name == "imsc_unmasked":
+                self._int_enable = value
                 self.check_interrupts()
+                return
+            if offset == P.SSPCR0 and name == "cr0_unmasked":
+                self._control0 = value
+                return
+            if offset == P.SSPCR1 and name in ("cr1_unmasked", "cr1_write_no_start"):
+                self._control1 = value if name == "cr1_unmasked" else value & P.CR1_MASK
+                if name == "cr1_unmasked":
+                    self._do_tx()
+                    self._fifos_updated()
+                return
+            if offset == P.SSPDMACR and name in ("dmacr_unmasked", "dmacr_write_no_publish"):
+                self._dma_control = value if name == "dmacr_unmasked" else value & P.DMACR_MASK
+                if name == "dmacr_unmasked":
+                    self._update_dma_tx()
+                    self._update_dma_rx()
                 return
             super().write_uint32(offset, value)
 
@@ -334,6 +384,8 @@ def mutant_rig(name: str) -> Rig:
                 self.rp2040.set_interrupt(self.irq, False)
                 return
             super().reset()
+            if name == "reset_raw_zero":
+                self._int_raw = 0
             if name == "reset_clears_callback":
                 self.on_transmit = lambda value: self.complete_transmit(0)
             else:
@@ -345,7 +397,9 @@ def mutant_rig(name: str) -> Rig:
 MUTANTS = (
     "fifo_depth_16", "spi_mode_swapped", "master_mode_inverted", "clock_freq_no_scr", "dma_tx_inverted", "dma_rx_inverted", "busy_not_set", "do_tx_no_fifos_updated",
     "overrun_not_flagged", "complete_no_do_tx", "tx_threshold_lt", "rx_threshold_gt", "dr_read_empty_ff", "sr_bsy_wrong", "mis_unmasked", "dss_mask_ignored",
-    "dr_write_when_full_pushes", "cpsr_mask_ff", "icr_decoded_value", "icr_clears_all", "icr_clears_tx", "imsc_masked", "reset_no_dma_publish", "reset_clears_callback",
+    "dr_write_when_full_pushes", "cpsr_mask_ff", "icr_decoded_value", "icr_clears_all", "icr_clears_tx", "imsc_unmasked", "reset_no_dma_publish", "reset_clears_callback",
+    "init_raw_zero", "reset_raw_zero", "cr0_unmasked", "cr1_unmasked", "dmacr_unmasked", "cr1_write_no_start", "dmacr_write_no_publish", "tx_ignores_sse", "loopback_ignored",
+    "dma_tx_ignores_sse", "dma_tx_ignores_txdmae", "dma_rx_ignores_sse", "dma_rx_ignores_rxdmae",
 )  # fmt: skip
 
 
@@ -357,11 +411,13 @@ def _value(r: random.Random, offset: int) -> int:
     if offset == P.SSPCR0:
         return r.choice((0x7, 0xF, 0x0, 0x4C7, 0x1F7, 0xFF07, r.getrandbits(16), r.getrandbits(32)))
     if offset == P.SSPCR1:
-        return r.choice((0, P.SSE, P.SSE | P.LBM, P.MS | P.SSE, r.getrandbits(4), r.getrandbits(32)))
+        return r.choice((0, P.SSE, P.SSE, P.SSE | P.LBM, P.MS | P.SSE, r.getrandbits(4), r.getrandbits(32)))
     if offset == P.SSPDR:
         return r.getrandbits(r.choice((4, 8, 8, 16))) if roll < 0.9 else r.getrandbits(32)
     if offset == P.SSPCPSR:
         return r.choice((0, 2, 4, 10, 254, 255, 0x100, r.getrandbits(32)))
+    if offset == P.SSPDMACR:
+        return r.choice((0, 1, 2, 3, 3, r.getrandbits(32)))
     if offset in (P.SSPIMSC, P.SSPICR):
         return r.choice(INTERRUPT_BITS) if roll < 0.7 else r.getrandbits(32)
     return r.getrandbits(32)

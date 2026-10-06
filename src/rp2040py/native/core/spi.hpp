@@ -14,11 +14,14 @@
 //
 // Quirks of the reference that are kept (each one is pinned by tests/test_spi_diff.py or the C++ checks):
 //   - a DR write on a full TX FIFO is dropped silently; a completion into a full RX FIFO sets the overrun bit (ROR), raises the line at once and drops the value; a completion with nothing sent is accepted and pushes;
-//   - a written value is masked to DSS + 1 bits (so 1..16, the invalid sizes DSS = 0..2 included), a completed one is kept whole; CR0, CR1, IMSC and DMACR are stored whole, CPSR is masked to 0xFE;
+//   - a written value is masked to DSS + 1 bits (so 1..16, the invalid sizes DSS = 0..2 included), a completed one is kept whole; the reserved bits of CR0, CR1, IMSC and DMACR are not stored (datasheet 4.4.4), CPSR is masked to 0xFE (the datasheet: its bit 0 always reads zero);
 //   - the TX interrupt is raw while the TX FIFO holds at most 4 (half of 8), the RX interrupt while the RX FIFO holds at least 4; ICR clears only RT and ROR, by the *raw* value the bus passed (a direct write keeps the one the last atomic write left);
 //   - SR's BSY is "busy or the TX FIFO is not empty"; SR, RIS and MIS are read-only: a write to them is an unimplemented one;
-//   - both DREQs are re-published on every FIFO change and by `reset()` (and `power_on()`, the constructor's own publication): TX is asserted unless the TX FIFO is full, RX only while the RX
-//     FIFO is not empty;
+//   - both DREQs are re-published on every FIFO change, every write of CR1 and DMACR, and by `reset()` (and `power_on()`, the constructor's own publication): TX is asserted while the TX FIFO
+//     is not full, RX while the RX FIFO is not empty - and only with SSE and the matching DMACR enable set ("all request signals are deasserted if the PrimeCell SSP is disabled, or the DMA
+//     enable signal is cleared", datasheet 4.4.3.16);
+//   - nothing leaves a disabled SSP (a primed TX FIFO starts when CR1 enables it, 4.4.3.3); with CR1.LBM the transmitted word comes straight back into the RX FIFO instead of reaching the device;
+//   - RIS resets to 0x8 (TX FIFO empty);
 //   - a SET/CLR/XOR alias write decodes against a *read* of the register, and a read of SSPDR pulls a byte from the RX FIFO;
 //   - `reset()` clears the registers and both FIFOs, republishes the DREQs and drops the line, and never touches the host's callbacks (wiring, not state) or `raw_write_value`;
 //   - an unimplemented offset warns and reads 0xFFFFFFFF; a read above 0x1000 warns a second time.
@@ -55,7 +58,9 @@ constexpr uint32_t PERIPHID0 = 0xFE0, PERIPHID1 = 0xFE4, PERIPHID2 = 0xFE8, PERI
 constexpr uint32_t PCELLID0 = 0xFF0, PCELLID1 = 0xFF4, PCELLID2 = 0xFF8, PCELLID3 = 0xFFC;
 constexpr uint32_t SR_BSY = 1u << 4, SR_RFF = 1u << 3, SR_RNE = 1u << 2, SR_TNF = 1u << 1, SR_TFE = 1u << 0;
 constexpr uint32_t CR0_DSS_MASK = 0xF;
-constexpr uint32_t CR1_SSE = 1u << 1;
+constexpr uint32_t CR1_SSE = 1u << 1, CR1_LBM = 1u << 0;
+constexpr uint32_t CR0_MASK = 0xFFFF, CR1_MASK = 0xF, IMSC_MASK = 0xF, DMACR_MASK = 0x3;  // the reserved bits are not stored (datasheet 4.4.4)
+constexpr uint32_t DMACR_TXDMAE = 1u << 1, DMACR_RXDMAE = 1u << 0;
 // Read only by the shell's derived properties (`spi_mode`, `master_mode`, `clock_frequency`); `CR1_MS` is SSPCR1 bit 2, 0 = master.
 [[maybe_unused]] constexpr uint32_t CR0_SPH = 1u << 7, CR0_SPO = 1u << 6, CR1_MS = 1u << 2, CR0_SCR_SHIFT = 8, CR0_SCR_MASK = 0xFF;
 constexpr uint32_t CPSR_MASK = 0xFE;
@@ -72,7 +77,7 @@ public:
 
     // The registers, public for the shell (the reference's private attributes `_control0`, ... are read and, by tests, written directly).
     uint32_t control0 = 0, control1 = 0, dma_control = 0, clock_divisor = 0;
-    uint32_t int_raw = 0, int_enable = 0;
+    uint32_t int_raw = spi_regs::INT_TX, int_enable = 0;  // SSPRIS resets to 0x8: the TX FIFO is empty
     bool busy = false;
     Fifo<kFifoDepth> rx, tx;
 
@@ -97,7 +102,8 @@ public:
         tx.reset();
         busy = false;
         control0 = control1 = dma_control = clock_divisor = 0;
-        int_raw = int_enable = 0;
+        int_raw = spi_regs::INT_TX;
+        int_enable = 0;
         if (!update_dma_tx()) return false;
         if (!update_dma_rx()) return false;
         return host_.irq(host_.ctx, false);
@@ -160,8 +166,11 @@ public:
         using namespace spi_regs;
         const uint32_t word = static_cast<uint32_t>(value);
         switch (offset) {
-            case CR0: control0 = word; return true;
-            case CR1: control1 = word; return true;
+            case CR0: control0 = word & CR0_MASK; return true;
+            case CR1:
+                control1 = word & CR1_MASK;
+                if (!do_tx()) return false;  // enabling starts a primed TX FIFO, and SSE gates the DMA requests
+                return fifos_updated();
             case DR:
                 if (!tx.full()) {
                     tx.push(word & ((1u << data_bits()) - 1u));  // decoded with respect to CR0.DSS
@@ -171,9 +180,12 @@ public:
                 return true;
             case CPSR: clock_divisor = word & CPSR_MASK; return true;
             case IMSC:
-                int_enable = word;
+                int_enable = word & IMSC_MASK;
                 return check_interrupts();
-            case DMACR: dma_control = word; return true;
+            case DMACR:
+                dma_control = word & DMACR_MASK;
+                if (!update_dma_tx()) return false;
+                return update_dma_rx();
             case ICR:
                 int_raw &= ~(static_cast<uint32_t>(raw_write_value_) & (INT_RT | INT_ROR));  // the bits the bus passed, whatever the alias (as the UART's ICR)
                 return check_interrupts();
@@ -196,15 +208,20 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<SpiBlock>::handler(this); }
 
 private:
-    bool update_dma_tx() noexcept { return host_.dreq(host_.ctx, true, !tx.full()); }
-    bool update_dma_rx() noexcept { return host_.dreq(host_.ctx, false, !rx.empty()); }
+    // "All request signals are deasserted if the PrimeCell SSP is disabled, or the DMA enable signal is cleared" (datasheet 4.4.3.16).
+    bool update_dma_tx() noexcept { return host_.dreq(host_.ctx, true, !tx.full() && enabled() && (dma_control & spi_regs::DMACR_TXDMAE)); }
+    bool update_dma_rx() noexcept { return host_.dreq(host_.ctx, false, !rx.empty() && enabled() && (dma_control & spi_regs::DMACR_RXDMAE)); }
 
     // Sends the next byte if the wire is free. The block is busy from before the host call until the device completes it - which may be before the host call returns.
     bool do_tx() noexcept {
-        if (!busy && !tx.empty()) {
+        if (!busy && !tx.empty() && enabled()) {  // nothing leaves a disabled SSP (datasheet 4.4.3.3)
             const uint32_t value = tx.pull();
             busy = true;
-            if (!host_.transmit(host_.ctx, value)) return false;
+            if (control1 & spi_regs::CR1_LBM) {  // loop back: the transmit shifter feeds the receive shifter
+                if (!complete_transmit(value)) return false;
+            } else if (!host_.transmit(host_.ctx, value)) {
+                return false;
+            }
             return fifos_updated();
         }
         return true;
