@@ -67,7 +67,8 @@ WRITABLE = ("RW", "WO", "SC", "WC", "W1C", "RWF")
 
 def parse(path: str) -> list[dict]:
     """The datasheet's register tables: [{block, name, offset, fields: [(bits, field name or '?', type or '?', reset or '?')]}]."""
-    text = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        text = handle.read().split("\n")
 
     def in_table(i: int) -> bool:
         for j in range(i, max(i - 200, 0), -1):
