@@ -1,19 +1,16 @@
-from rp2040py.peripherals.peripheral import BasePeripheral
+"""Public facade for SYSINFO: prefers the native block in `rp2040py.native._sysinfo` (a Cython shell over `native/core/sysinfo.hpp`) when it is importable, falling back to the plain-Python reference in
+`_sysinfo.py` otherwise. Every caller imports `RP2040SysInfo` from here - never from `_sysinfo.py` or `rp2040py.native` directly (the pure-Python chip, `_rp2040.py`, is the one deliberate exception).
+Mirrors `peripherals/uart.py`; held to identical behaviour by `tests/test_ident_diff.py` (docs/records/0096-cpp-mcu-core.md).
+"""
 
-__all__ = ("RP2040SysInfo",)
+from rp2040py._native_gate import native_disabled
+from rp2040py.peripherals._sysinfo import CHIP_ID, GITREF_RP2040, PLATFORM
 
-CHIP_ID = 0
-PLATFORM = 0x4
-GITREF_RP2040 = 0x40
+try:
+    if native_disabled():
+        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    from rp2040py.native._sysinfo import RP2040SysInfo
+except ImportError:
+    from rp2040py.peripherals._sysinfo import RP2040SysInfo
 
-
-class RP2040SysInfo(BasePeripheral):
-    def read_uint32(self, offset: int) -> int:
-        # All the values here were verified against the silicon
-        if offset == CHIP_ID:
-            return 0x10002927
-        if offset == PLATFORM:
-            return 0x00000002
-        if offset == GITREF_RP2040:
-            return 0xE0C912E8
-        return super().read_uint32(offset)
+__all__ = ("CHIP_ID", "GITREF_RP2040", "PLATFORM", "RP2040SysInfo")

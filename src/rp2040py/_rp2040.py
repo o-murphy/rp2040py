@@ -29,6 +29,8 @@ from rp2040py.peripherals._spi import (
 from rp2040py.peripherals._ssi import (
     RPSSI,  # the pure chip's own SSI: the native one works on the native chip's flash buffer
 )
+from rp2040py.peripherals._sysinfo import RP2040SysInfo
+from rp2040py.peripherals._tbman import RPTBMAN
 from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native one is the native chip's
     RPUART,
     IUARTDMAChannels,
@@ -66,8 +68,6 @@ from rp2040py.peripherals.reset import (
 )
 from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.syscfg import RP2040SysCfg
-from rp2040py.peripherals.sysinfo import RP2040SysInfo
-from rp2040py.peripherals.tbman import RPTBMAN
 from rp2040py.peripherals.timer import RPTimer
 from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.peripherals.vreg_and_chip_reset import RPVREGAndChipReset
