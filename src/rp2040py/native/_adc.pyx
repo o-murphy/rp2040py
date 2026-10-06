@@ -97,13 +97,13 @@ cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t va
 
 
 cdef class _Fifo:
-    """The conversion FIFO as the reference's `utils.fifo.FIFO(4)` shows it."""
+    """The conversion FIFO as the reference's `utils.fifo.FIFO(8)` shows it."""
 
     cdef RPADC _owner
 
     @property
     def size(self):
-        return 4
+        return 8
 
     @property
     def item_count(self):
@@ -119,7 +119,7 @@ cdef class _Fifo:
 
     @property
     def items(self):
-        cdef Fifo4* fifo = &self._owner._block.fifo
+        cdef Fifo8* fifo = &self._owner._block.fifo
         return [fifo.at(i) for i in range(fifo.count())]
 
     def push(self, value):

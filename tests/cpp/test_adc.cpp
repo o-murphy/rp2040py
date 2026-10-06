@@ -127,7 +127,17 @@ static void test_a_fresh_block_is_at_power_on() {
     adc.busy = true;
     CHECK(rd(CS) == 0);                                              // busy: READY is clear (and the block is not enabled)
     adc.busy = false;
-    CHECK(rd(CS) == CS_READY && rd(RESULT) == 0 && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTR) == FIFO_INT && rd(INTE) == 0 && rd(INTF) == 0 && rd(INTS) == 0);
+    CHECK(rd(CS) == 0 && rd(RESULT) == 0 && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTR) == FIFO_INT && rd(INTE) == 0 && rd(INTF) == 0 && rd(INTS) == 0);
+    wr(CS, CS_EN);  // READY needs the ADC powered up: "writing a 1 to CS.EN will start a short internal power-up sequence ... CS.READY will go high"
+    CHECK(rd(CS) == (CS_EN | CS_READY));
+    adc.busy = true;
+    CHECK(rd(CS) == CS_EN);
+    adc.busy = false;
+    wr(CS, 0);
+    CHECK(rd(CS) == 0);
+    wr(DIV, 0xFFFFFFFFu);  // INT 23:8 and FRAC 7:0; 31:24 are reserved
+    CHECK(rd(DIV) == 0xFFFFFFu);
+    wr(DIV, 0);
     CHECK(adc.num_channels == 5 && adc.sample_time == 2 && adc.current_channel == 0 && !adc.busy && adc.fifo.empty());
     CHECK(adc.divider() == 1.0 && !adc.enabled() && !adc.temperature_enable() && adc.active_channel() == 0);
     CHECK(env.warns == 0 && !adc.failed());
@@ -195,12 +205,12 @@ static void test_the_fifo_shift_error_overflow_and_underflow() {
     CHECK(adc.complete_adc_read(0x123, true) && rd(FIFO) == (FIFO_ERR | 0x123));
     wr(FCS, FCS_EN);                                               // an error without FCS.ERR is not recorded in the FIFO
     CHECK(adc.complete_adc_read(0x123, true) && rd(FIFO) == 0x123);
-    for (uint32_t i = 0; i < 4; ++i) CHECK(adc.complete_adc_read(i + 1, false));
-    CHECK((rd(FCS) & (FCS_FULL | FCS_OVER)) == FCS_FULL && (rd(FCS) >> FCS_LEVEL_SHIFT & 0xF) == 4);
-    CHECK(adc.complete_adc_read(9, false) && (adc.fcs & FCS_OVER) != 0 && adc.fifo.count() == 4 && rd(RESULT) == 9);
+    for (uint32_t i = 0; i < 8; ++i) CHECK(adc.complete_adc_read(i + 1, false));  // an eight-element FIFO
+    CHECK((rd(FCS) & (FCS_FULL | FCS_OVER)) == FCS_FULL && (rd(FCS) >> FCS_LEVEL_SHIFT & 0xF) == 8);
+    CHECK(adc.complete_adc_read(9, false) && (adc.fcs & FCS_OVER) != 0 && adc.fifo.count() == 8 && rd(RESULT) == 9);
     wr(FCS, FCS_EN | FCS_OVER);                                    // write-clear: writing 1 clears OVER and the value is not stored
     CHECK((adc.fcs & FCS_OVER) == 0);
-    for (int i = 0; i < 4; ++i) (void)rd(FIFO);
+    for (int i = 0; i < 8; ++i) (void)rd(FIFO);
     CHECK(rd(FIFO) == 0 && (adc.fcs & FCS_UNDER) != 0);
     wr(FCS, FCS_EN | FCS_UNDER);
     CHECK((adc.fcs & FCS_UNDER) == 0);
@@ -379,7 +389,7 @@ static void test_reset_clears_the_state_the_alarms_and_republishes() {
     CHECK(clk.has_alarm());
     env.irq_n = env.dreq_n = 0;
     CHECK(adc.reset());
-    CHECK(rd(CS) == CS_READY && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTE) == 0 && rd(INTF) == 0 && rd(RESULT) == 0 && adc.current_channel == 0 && !adc.busy);
+    CHECK(rd(CS) == 0 && rd(FCS) == FCS_EMPTY && rd(DIV) == 0 && rd(INTE) == 0 && rd(INTF) == 0 && rd(RESULT) == 0 && adc.current_channel == 0 && !adc.busy);
     CHECK(!clk.has_alarm());                                         // the pending sample is gone
     CHECK(env.irq_n == 1 && !env.irq_levels[0] && env.dreq_n == 1 && !last_dreq());   // the DREQ is republished (down)
     CHECK(tick(5000) && adc.fifo.empty());
@@ -509,7 +519,7 @@ static void test_the_window_handler_and_detach() {
     h.write32(h.ctx, DIV, 0x12, kAtomicNormal);
     h.write32(h.ctx, DIV, 0x01, kAtomicSet);
     CHECK(h.read32(h.ctx, DIV) == 0x13);
-    CHECK(h.read32(h.ctx, CS) == CS_READY);
+    CHECK(h.read32(h.ctx, CS) == 0);
     fresh();
     wr(CS, CS_EN | CS_START_ONE);
     CHECK(clk.has_alarm());

@@ -1,7 +1,7 @@
 // The RP2040 ADC in C++ (docs/records/0096-cpp-mcu-core.md, Phase 4): a faithful translation of peripherals/_adc.py, which stays as the pure-Python reference and the oracle
 // (tests/test_adc_diff.py).
 //
-// What it owns: the register file (CS, FCS, DIV, INTE, INTF, the last RESULT), the 4-entry conversion FIFO, the interrupt and DREQ logic, the round-robin channel selection, the
+// What it owns: the register file (CS, FCS, DIV, INTE, INTF, the last RESULT), the 8-entry conversion FIFO, the interrupt and DREQ logic, the round-robin channel selection, the
 // free-running (START_MANY) schedule and the whole of a conversion's life: `start_adc_read()` marks the block busy and asks the device on the pins for a sample, and the answer
 // arrives later (or at once, from inside the callback) as `complete_adc_read(value, error)`. It has two alarms of its own on the chip's clock (`Clock*`, as the DMA's): the sample
 // alarm (the default device: `sample_time` microseconds after the request the analog value comes out of the host's `channel_values`) and the multi-shot alarm (the gap between two
@@ -70,7 +70,7 @@ constexpr double kClockMhz = 48.0;  // the ADC's clock, for the free-running sch
 
 class AdcBlock {
 public:
-    static constexpr uint32_t kFifoDepth = 4;
+    static constexpr uint32_t kFifoDepth = 8;  // "Eight element receive sample FIFO" (RP2040 datasheet, 4.9)
 
     AdcBlock() = default;
     AdcBlock(const AdcBlock&) = delete;  // the alarms and the window handler hold pointers to this object
@@ -209,7 +209,7 @@ public:
     uint32_t read(uint32_t offset) noexcept {
         using namespace adc_regs;
         switch (offset) {
-            case CS: return cs | (busy ? 0u : CS_READY);
+            case CS: return cs | ((cs & CS_EN) != 0 && !busy ? CS_READY : 0u);  // ready once powered up (EN) and not converting
             case RESULT: return static_cast<uint32_t>(result);
             case adc_regs::FCS:
                 return fcs | ((fifo.count() & FCS_LEVEL_MASK) << FCS_LEVEL_SHIFT) | (fifo.full() ? FCS_FULL : 0u) | (fifo.empty() ? FCS_EMPTY : 0u);
@@ -252,7 +252,7 @@ public:
                 fcs = (fcs & ~FCS_WRITE_MASK) | (word & FCS_WRITE_MASK);
                 if (!update_dma()) return false;  // DREQ_EN or the threshold may have changed
                 return check_interrupts();
-            case DIV: clock_div = word; return true;
+            case DIV: clock_div = word & ((DIV_INT_MASK << DIV_INT_SHIFT) | DIV_FRAC_MASK); return true;  // INT 23:8, FRAC 7:0; 31:24 are reserved
             case INTE:
                 int_enable = word & FIFO_INT;
                 return check_interrupts();

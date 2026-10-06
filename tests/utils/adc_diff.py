@@ -207,8 +207,8 @@ def mutant_rig(name: str) -> Rig:
     class Mutant(P.RPADC):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
-            if name == "fifo_depth_8":
-                self.fifo = P.FIFO(8)
+            if name == "fifo_depth_4":
+                self.fifo = P.FIFO(4)
 
         # -- the sample
         def _default_on_adc_read(self, channel: int) -> None:
@@ -374,6 +374,8 @@ def mutant_rig(name: str) -> Rig:
                 return self.cs | (P.CS_READY if self.busy else 0)
             if offset == P.CS and name == "cs_ready_missing":
                 return self.cs
+            if offset == P.CS and name == "cs_ready_without_en":
+                return self.cs | (0 if self.busy else P.CS_READY)
             if offset == P.FCS and name == "fcs_level_unmasked":
                 return super().read_uint32(offset) | (self.fifo.item_count << 20)
             if offset == P.FCS and name == "fcs_full_missing":
@@ -441,8 +443,8 @@ def mutant_rig(name: str) -> Rig:
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
                 self.check_interrupts()
                 return
-            if offset == P.DIV and name == "div_masked":
-                self.clock_div = value & 0xFFFFFF
+            if offset == P.DIV and name == "div_unmasked":
+                self.clock_div = value
                 return
             if offset == P.INTE and name == "inte_unmasked":
                 self.int_enable = value
@@ -517,13 +519,13 @@ def mutant_rig(name: str) -> Rig:
 
 
 MUTANTS = (
-    "fifo_depth_8", "sample_time_halved", "channel_not_recorded", "sample_reads_active_channel", "sample_flags_error", "multi_shot_ignored", "multi_shot_checks_start_one",
+    "fifo_depth_4", "sample_time_halved", "channel_not_recorded", "sample_reads_active_channel", "sample_flags_error", "multi_shot_ignored", "multi_shot_checks_start_one",
     "start_not_busy", "divider_no_one", "divider_frac_256_wrong", "divider_int_mask_8", "int_raw_gt", "int_status_no_force", "int_status_force_masked",
     "int_status_no_mask", "dma_gt", "dma_ignores_dreq_en", "dma_never_clears", "c_busy_kept", "c_result_not_stored", "c_result_unmasked", "c_err_missing", "c_err_never_cleared", "c_fifo_always",
     "c_overflow_silent", "c_value_unmasked", "c_shift_ignored", "c_shift_8", "c_fifo_err_ignored", "c_no_dma", "c_no_interrupts", "c_no_round_robin", "c_round_robin_same",
-    "c_no_multi_shot", "c_divider_ge", "c_micros_doubled", "cs_ready_inverted", "cs_ready_missing", "fcs_level_unmasked", "fcs_full_missing", "fcs_empty_missing",
+    "c_no_multi_shot", "c_divider_ge", "c_micros_doubled", "cs_ready_inverted", "cs_ready_missing", "cs_ready_without_en", "fcs_level_unmasked", "fcs_full_missing", "fcs_empty_missing",
     "fifo_read_no_under", "fifo_read_no_dma", "intr_is_status", "inte_reads_force", "cs_start_without_en", "cs_start_when_busy", "cs_mask_all",
-    "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_masked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
+    "cs_start_one_only", "fcs_over_not_cleared", "fcs_no_check", "fcs_mask_all", "div_unmasked", "inte_unmasked", "inte_no_check", "intf_unmasked", "intf_no_check",
     "reset_keeps_alarms", "reset_keeps_fifo", "reset_keeps_div", "reset_no_irq", "reset_clears_callback", "reset_clears_channel_values",
     "cs_sticky_in_fcs", "ainsel_setter_shift_mask", "c_round_robin_unwrapped", "fcs_no_dma", "dma_off_keeps", "cs_start_one_sticky",
 )  # fmt: skip

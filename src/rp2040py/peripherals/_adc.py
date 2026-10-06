@@ -99,7 +99,7 @@ class RPADC(BasePeripheral):
         # after `sample_time` microseconds (or else the ADC read will never complete).
         self.on_adc_read: Callable[[int], None] = self._default_on_adc_read
 
-        self.fifo = FIFO(4)
+        self.fifo = FIFO(8)  # "Eight element receive sample FIFO" (RP2040 datasheet, 4.9)
         self.dreq = DREQChannel.DREQ_ADC
 
         # Registers
@@ -245,7 +245,9 @@ class RPADC(BasePeripheral):
 
     def read_uint32(self, offset: int) -> int:
         if offset == CS:
-            return self.cs | (0 if self.busy else CS_READY)
+            # READY: "1 if the ADC is ready to start a new conversion", 0 whilst one is in progress - and the ADC is only powered up, and so ready, once EN is set
+            # ("writing a 1 to CS.EN will start a short internal power-up sequence ... After a few clock cycles, CS.READY will go high"; the power-up is not timed here)
+            return self.cs | (CS_READY if self.cs & CS_EN and not self.busy else 0)
         if offset == RESULT:
             return self.result
         if offset == FCS:
@@ -289,7 +291,9 @@ class RPADC(BasePeripheral):
             self.check_interrupts()
 
         elif offset == DIV:
-            self.clock_div = value
+            self.clock_div = value & (
+                (DIV_INT_MASK << DIV_INT_SHIFT) | DIV_FRAC_MASK
+            )  # INT is bits 23:8, FRAC 7:0; 31:24 are reserved (RP2040 datasheet, ADC DIV)
 
         elif offset == INTE:
             self.int_enable = value & FIFO_INT

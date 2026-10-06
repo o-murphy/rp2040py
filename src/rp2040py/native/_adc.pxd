@@ -8,7 +8,7 @@ from rp2040py.native._clock cimport Alarm, Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "fifo.hpp" namespace "rp2040core":
-    cdef cppclass Fifo4 "rp2040core::Fifo<4>":
+    cdef cppclass Fifo8 "rp2040core::Fifo<8>":
         uint32_t size() noexcept
         uint32_t count() noexcept
         cppbool empty() noexcept
@@ -51,7 +51,7 @@ cdef extern from "adc.hpp" namespace "rp2040core":
         uint32_t current_channel
         int64_t num_channels
         double sample_time
-        Fifo4 fifo
+        Fifo8 fifo
         Alarm sample_alarm
         Alarm multi_shot_alarm
         AdcBlock() noexcept

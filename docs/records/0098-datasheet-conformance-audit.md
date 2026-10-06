@@ -313,7 +313,19 @@ Read: 4.6.1-4.6.4 and the register tables. The reference implemented the counter
 - **Left, deliberately:** the timer counts whether or not the watchdog's 1 us tick is running (the datasheet: "The Watchdog tick must be running for the timer to start counting"). The tick belongs to the WATCHDOG, which is not ported yet; it is on that block's list. Reading `TIMEHW`/`TIMELW` (write-only) warns as an unimplemented read.
 - Tests: `tests/test_timer.py` (the four behaviours), `tests/test_timer_parity.py` (the new offsets are in the random stream, 60 seeds), `tests/cpp/test_timer.cpp`.
 
+### ADC (datasheet 4.9)
+
+Read: 4.9.1-4.9.2.7 and the register tables.
+
+- **The FIFO had 4 entries; the datasheet says "Eight element receive sample FIFO"** (and `FCS.LEVEL` is 4 bits wide). The reference and the C++ block now hold 8, so an overflow comes at the ninth sample and `LEVEL` reaches 8. The oracle's old mutant "the depth is 8" is now "the depth is 4".
+- **`CS.READY` was 1 whenever no conversion was running, including with the ADC disabled.** The datasheet: "writing a 1 to CS.EN will start a short internal power-up sequence ... After a few clock cycles, CS.READY will go high"; reset value 0. READY is now `EN && !busy` (the power-up is not timed). pico-sdk's `adc_init` waits for it after setting EN, so a firmware that does is unaffected.
+- **`DIV` stored the whole word;** bits 31:24 are reserved (INT is 23:8, FRAC 7:0). Masked to 24 bits.
+- **Checked and consistent:** one conversion = 96 cycles of a 48 MHz clk_adc = 2 us; the pacing divider "once per n + 1 cycles" (`1 + INT + FRAC/256`) with the next start measured from the start of the previous one; `START_ONCE` self-clearing; the FIFO word (`ERR` bit 15, 12-bit value, `SHIFT` to bits 11:4); `OVER`/`UNDER` write-1-to-clear; the threshold for IRQ and DREQ is `level >= THRESH`; the round-robin order; `INTS`.
+- **Left, deliberately:** the clk_adc frequency is a fixed 48 MHz (the datasheet: the clock "must be set up correctly before enabling the ADC"; a model that followed `CLK_ADC` would never convert for a firmware that does not program it, which the tests do not); `DIV.FRAC` is an average, not the first-order delta-sigma; "the divider is reset when either of these fields are written" is not modelled; `INTR` is 1 at `THRESH` 0 because `level >= 0` always holds (the datasheet's reset value is 0 - unresolved: it does not say what the comparator does at a threshold of 0).
+- Tests: `tests/test_adc.py` (FIFO depth, READY, DIV mask), `tests/cpp/test_adc.cpp`, and the oracle's mutants (`fifo_depth_4`, `cs_ready_without_en`, `div_unmasked`; two of the old ones turned over).
+
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
 - 2026-10-06: **TIMER read against the datasheet and fixed** (PAUSE, TIMEHW/TIMELW, DBGPAUSE, the 64-bit wrap and the C++ int64 undefined behaviour it exposed). Next: ADC.
+- 2026-10-06: **ADC read against the datasheet and fixed** (8-entry FIFO, READY needs EN, DIV 24 bits). Next: PWM.
