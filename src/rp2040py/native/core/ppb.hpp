@@ -14,7 +14,7 @@
 // Quirks of the reference that are kept (pinned by tests/test_ppb_diff.py and the C++ checks):
 //   - SysTick's `clk_source` bit is stored and read back but changes nothing: the counter always runs from clk_sys;
 //   - SYST_CALIB reads 0x0000270F (measured on the silicon) whatever the clock;
-//   - SYST_RVR keeps the whole 32-bit word as written (no 24-bit mask); a read returns it back, and the reload copies it into the counter, which `Timer32` then counts down from;
+//   - SYST_RVR is 24 bits wide (RELOAD, bits 23:0 - pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR): a write keeps the low 24 bits, a read returns them;
 //   - a read of SYST_CSR returns COUNTFLAG and clears it - the one register read with a side effect;
 //   - ISPR/ICPR read the pending word and ISER/ICER the enabled word (the hardware does too); ICPR cannot clear a hardware line (bits 0..MAX_HW_IRQ-1 stay: the peripheral owns them);
 //   - the priority registers are views of the CPU's four priority *bitmaps* (bit n of bitmap p = "interrupt n has priority p"): a write rebuilds the interrupt's bit in all four, a
@@ -182,7 +182,7 @@ public:
                 timer.set_enable((word & 1u) != 0);
                 return true;
             case SYST_CVR: timer.set(0); return true;
-            case SYST_RVR: reload = word; return true;
+            case SYST_RVR: reload = word & 0xFFFFFFu; return true;
             default: break;
         }
         if (offset >= NVIC_IPR0 && offset < NVIC_IPR_END && (offset & 3) == 0) {

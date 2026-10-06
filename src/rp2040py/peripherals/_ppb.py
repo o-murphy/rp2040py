@@ -238,7 +238,8 @@ class RPPPB(BasePeripheral):
             self.systick_timer.set(0)
             return
         if offset == SYST_RVR:
-            self.systick_reload = value
+            # RELOAD is bits 23:0 (pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR); the rest does not exist
+            self.systick_reload = value & 0xFFFFFF
             return
 
         super().write_uint32(offset, value)

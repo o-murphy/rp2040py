@@ -144,8 +144,8 @@ static void check_csr_bits_and_readback() {
     r.ppb.write(SYST_CSR, 4);  // clk_source alone is stored
     CHECK((r.ppb.read(SYST_CSR) & 7u) == 4u);
     CHECK(r.ppb.clk_source && !r.ppb.int_enable && !r.ppb.timer.enable());
-    r.ppb.write(SYST_RVR, 0xFFFFFFFFu);  // the reference keeps all 32 bits
-    CHECK(r.ppb.read(SYST_RVR) == 0xFFFFFFFFu);
+    r.ppb.write(SYST_RVR, 0xFFFFFFFFu);  // RELOAD is bits 23:0
+    CHECK(r.ppb.read(SYST_RVR) == 0xFFFFFFu);
 }
 
 static void check_icsr() {

@@ -232,11 +232,7 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     ),
     "cvr_write_keeps_counter": ("            self.systick_timer.set(0)\n            return", "            return", 1),
     "cvr_read_16_bit": ("return self.systick_timer.counter\n", "return self.systick_timer.counter & 0xFFFF\n", 1),
-    "rvr_unmasked_never": (
-        "            self.systick_reload = value\n",
-        "            self.systick_reload = value & 0xFFFFFF\n",
-        1,
-    ),
+    "rvr_unmasked": ("self.systick_reload = value & 0xFFFFFF\n", "self.systick_reload = value\n", 1),
     "calib_value": ("return 0x0000270F", "return 0x0000270E", 1),
     "cpuid_value": ("return 0x410CC601", "return 0x410CC600", 1),
     # -- ICSR
