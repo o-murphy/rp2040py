@@ -210,6 +210,8 @@ file already on disk:
 >
 > PyPy's native build is an experiment, documented rather than recommended: the batch engine is 3-50x faster than PyPy's pure Python, but a call into the extension costs a cpyext round trip, so driving the core one instruction at a time from Python (`--stepwise`, the GDB target) is ~100x slower than PyPy's pure Python there, and the same batch loop runs about half as fast as on CPython (measured 2026-10, one machine, one run per figure, JIT warm-up included).
 >
+> `bench` takes `--board`/`--board-spec target:attr` (or `RP2040PY_BOARD_SPEC`) like the other subcommands, so a board file from `boards/` can be measured too. On the Waveshare RP2040-LCD-0.96 (same machine): MicroPython 1.28.0 ~0.02 s to the REPL, CircuitPython 10.2.1 ~1.6 s - the firmware itself boots for ~3.5 s of simulated time before it accepts input.
+>
 > Any recent MicroPython release is fine; 1.21 is not faster than 1.28. Details, the older
 > measurements this replaces and why they were wrong:
 > [docs/records/0017-perf-python-vs-v8.md](docs/records/0017-perf-python-vs-v8.md) and the `bench`
