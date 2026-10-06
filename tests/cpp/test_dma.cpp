@@ -312,7 +312,7 @@ int main() {
         CHECK(dma.get_timer(TREQ_PERMANENT, &ok) == (1.0 * 1e6) / 62.5e6);
     }
     CHECK(dma.read(TIMER0) == ((1u << 16) | 125u) && dma.read(TIMER3) == (125u << 4));
-    CHECK(dma.read(MULTI_CHAN_TRIGGER) == 0 && dma.read(CHAN_ABORT) == 0 && dma.read(FIFO_LEVELS) == 0);   // self-clearing / debug: pico-sdk polls CHAN_ABORT until it reads 0
+    CHECK(dma.read(MULTI_CHAN_TRIGGER) == 0 && dma.read(CHAN_ABORT) == 0 && dma.read(FIFO_LEVELS) == 0);   // self-clearing / debug: the datasheet has CHAN_ABORT polled until it returns all-zero
     // a host that cannot answer clk_sys: the failure surfaces, and nothing is scheduled
     fresh();
     wr(TIMER0, (1u << 16) | 1u);

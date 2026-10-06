@@ -400,8 +400,8 @@ class RPDMA(BasePeripheral):
         if offset == N_CHANNELS:
             return len(self.channels)
         if offset in (MULTI_CHAN_TRIGGER, CHAN_ABORT, FIFO_LEVELS):
-            # MULTI_CHAN_TRIGGER and CHAN_ABORT are self-clearing and an abort is flushed at once here, so firmware polling CHAN_ABORT "until it returns all-zero" (pico-sdk's
-            # dma_channel_abort) sees 0; FIFO_LEVELS are debug levels of the address/data FIFOs, which a transfer model with no FIFOs never fills.
+            # MULTI_CHAN_TRIGGER and CHAN_ABORT are self-clearing and an abort is flushed at once here, so firmware polling CHAN_ABORT "until it returns all-zero" (datasheet, CHAN_ABORT:
+            # "After writing, this register must be polled until it returns all-zero") sees 0; FIFO_LEVELS are debug levels of the address/data FIFOs, which a transfer model with no FIFOs never fills.
             return 0
         return super().read_uint32(offset)
 
