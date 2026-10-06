@@ -32,6 +32,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.irq import IRQ
+from rp2040py.peripherals.peripheral import BasePeripheral
 from rp2040py.rp2040 import RP2040
 
 DMA_BASE = 0x50000000
@@ -270,10 +271,29 @@ def mutant_rig(name: str) -> Rig:
             super().set_dreq(dreq_channel)
 
         def get_timer(self, treq: int) -> float:
-            if name == "timer3_shifts_16" and treq == _dma.TREQ.TIMER3:
-                dividend, divisor = self._timer3 >> 16, self._timer3 & 0xFFFF
-                return 0 if divisor == 0 else ((dividend / divisor) * 1e6) / self.rp2040.clk_sys
+            timers = {
+                _dma.TREQ.TIMER0: self._timer0,
+                _dma.TREQ.TIMER1: self._timer1,
+                _dma.TREQ.TIMER2: self._timer2,
+                _dma.TREQ.TIMER3: self._timer3,
+            }
+            if name == "timer3_shifts_4" and treq == _dma.TREQ.TIMER3:  # the old reading of TIMER3: X from bit 4
+                dividend, divisor = self._timer3 >> 4, self._timer3 & 0xFFFF
+                return (
+                    0 if divisor == 0 or dividend == 0 else (max(divisor / dividend, 1.0) * 1e6) / self.rp2040.clk_sys
+                )
+            if name == "timer_period_inverted" and treq in timers:  # the old period: X/Y cycles instead of Y/X
+                dividend, divisor = timers[treq] >> 16, timers[treq] & 0xFFFF
+                return 0 if divisor == 0 or dividend == 0 else ((dividend / divisor) * 1e6) / self.rp2040.clk_sys
+            if name == "timer_rate_uncapped" and treq in timers:  # a period shorter than one clock cycle
+                dividend, divisor = timers[treq] >> 16, timers[treq] & 0xFFFF
+                return 0 if divisor == 0 or dividend == 0 else ((divisor / dividend) * 1e6) / self.rp2040.clk_sys
             return super().get_timer(treq)
+
+        def read_uint32(self, offset: int) -> int:
+            if name == "abort_read_warns" and offset == _dma.CHAN_ABORT:
+                return BasePeripheral.read_uint32(self, offset)
+            return super().read_uint32(offset)
 
         def reset(self) -> None:
             super().reset()
@@ -296,7 +316,10 @@ MUTANTS = (
     "ring_ignored",
     "bswap_ignored",
     "dreq_does_not_wake",
-    "timer3_shifts_16",
+    "timer3_shifts_4",
+    "timer_period_inverted",
+    "timer_rate_uncapped",
+    "abort_read_warns",
     "reset_clears_dreq",
     "zero_count_stays_busy",
 )

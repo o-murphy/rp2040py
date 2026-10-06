@@ -377,6 +377,29 @@ Read: every register table (IC_CON .. IC_COMP_TYPE) and the description text in 
 - **Left, deliberately:** slave mode (RD_REQ, RX_DONE, GEN_CALL, RESTART_DET never rise), the general call / START byte / high-speed sequences, TX_EMPTY_CTRL, RX_FIFO_FULL_HLD_CTRL, STOP_DET_IF_MASTER_ACTIVE, the "FIFOs stay flushed until IC_CLR_TX_ABRT is read" rule, TX_OVER/RX_OVER/RX_UNDER keeping their level until idle, IC_ENABLE_STATUS bits 2:1.
 - Tests: `tests/test_i2c.py` (three datasheet cases), `tests/cpp/test_i2c.cpp` (one directed test for the new behaviour, the old checks reordered to configure before enabling), the oracle (`tests/utils/i2c_diff.py`: the bring-up stream now disables, configures and enables as pico-sdk does, the new registers in the snapshot, 24 new mutants).
 
+### SIO (datasheet 2.3.1 and 2.3.1.7)
+
+Read: 2.3.1.1-2.3.1.6 (CPUID, GPIO, spinlocks, FIFOs, divider, interpolator including the lane, blend and clamp descriptions) and every register table. The interpolator's worked examples (pico-examples `hello_interp`: the times table, the moving mask with and without sign extension, the lane cross-over, blend 500..998, clamp) are now tests with the output the datasheet prints, and **the reference already produces all of it** - the lane arithmetic is right.
+
+- **`GPIO_HI_OUT` / `GPIO_HI_OE` were 30 bits;** the QSPI bank has six pins (5:0). Now 0x3F.
+- **The divider's reset state:** `DIV_xDIVISOR` reset to 1 and `DIV_CSR` to 0 (READY low, so a driver polling READY before its first division would never see it); the datasheet has the divisor at 0 and READY at 1.
+- **`INTERPx_ACCUMy_ADD` took 32 bits;** the register is 23:0 (datasheet; `SIO_INTERP0_ACCUM0_ADD_BITS 0x00ffffff` in pico-sdk's `sio.h`, `interp_add_accumulator` just stores a `uint32_t`).
+- **`FORCE_MSB` was taken from lane 0's CTRL for both lanes,** and the forced bits were written back into the accumulators by a POP. Each lane has its own field ("ORed into bits 29:28 of the lane result presented to the processor on the bus. No effect on the internal 32-bit datapath"), so lane 1 now uses CTRL_LANE1 and the accumulators take the datapath value.
+- **Checked and consistent:** spinlocks (read claims, any write releases, SPINLOCK_ST), the GPIO SET/CLR/XOR aliases, the divider's signed/unsigned truncation and the quotient/remainder signs, the 8-cycle charge, DIRTY/READY handling, the three lane results, blend/clamp availability per interpolator, the CTRL layout.
+- **Not sourced, left as is:** the quotient and remainder of a **divide by zero** (the datasheet does not say; the reference tests the unmasked dividend with `> 0`, so a negative signed dividend and a zero dividend probably differ from silicon), what a read of a `SET`/`CLR`/`XOR` alias returns (0, "TODO verify with silicon").
+- **Left, deliberately:** the inter-core FIFO and core 1 (record 0053), CPUID is always 0, the two cores' simultaneous writes.
+
+### DMA (datasheet 2.5)
+
+Read: 2.5.2 (aliases, triggers, chaining, null triggers), 2.5.3.1 (the DREQ table - matches the enum), 2.5.4 and the controller-level register tables (INTR .. N_CHANNELS); **not** read: the per-channel CTRL table text beyond the field names, 2.5.5 (the DMA cycle model: FIFOs, bus arbitration, priority), 2.5.6 (the examples), the sniffer's description.
+
+- **The pacing timers' period was inverted:** the datasheet has "TREQ assertions at a rate set by ((X/Y) * sys_clk) ... can only generate TREQs at a rate of 1 per sys_clk (i.e. permanent TREQ) or less", i.e. a period of Y/X cycles, at least one; the reference used X/Y cycles, so `dma_timer_set_fraction(t, 1, 32768)` ran 32768 times too fast. A timer with X or Y at 0 asserts nothing.
+- **TIMER3's X was read from bit 4** (a JavaScript shift-by-36 inherited from rp2040js, flagged in the code as "almost certainly an upstream bug"); X is bits 31:16 of all four timers.
+- **`CHAN_ABORT`, `MULTI_CHAN_TRIGGER` (self-clearing) and `FIFO_LEVELS` (debug) read as unimplemented** - all ones and a warning. pico-sdk's `dma_channel_abort` polls `CHAN_ABORT` "until it returns all-zero", so a firmware that aborts a channel would spin on 0xFFFFFFFF. They read 0 now (an abort is flushed at once here, and there are no address/data FIFOs to fill).
+- **Checked and consistent:** the trigger rules (no start when disabled, already running or a zero write), the chain rules (no self-chain, immediate re-trigger with TRANS_COUNT reload), IRQ_QUIET and the null trigger, INTR/INTS write-1-to-clear, INTE/INTF 16 bits and `INTS = (INTR & INTE) | INTF`, the DREQ numbering, EN cleared while BUSY pausing the channel, N_CHANNELS = 12.
+- **Not implemented, in the backlog:** the sniffer (SNIFF_CTRL, SNIFF_DATA, CTRL.SNIFF_EN), HIGH_PRIORITY and the arbitration, the read/write/AHB error flags, the DBG_CTDREQ counter (never counts), a transfer taking bus cycles (one transfer per alarm).
+- Tests: `tests/test_sio_datasheet.py` (the interpolator examples and the new widths), `tests/cpp/test_sio.cpp`, `tests/cpp/test_dma.cpp` (the timers now follow Y/X), the DMA oracle (`tests/utils/dma_diff.py`: `timer3_shifts_16` became three mutants, `timer3_shifts_4`, `timer_period_inverted` and `timer_rate_uncapped`, plus `abort_read_warns`).
+
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
@@ -386,3 +409,4 @@ Read: every register table (IC_CON .. IC_COMP_TYPE) and the description text in 
 - 2026-10-06: **UART read against the datasheet and fixed (reserved bits, IFLS/ILPR/DMACR/RSR/ECR, DREQ rule, TXE/RXE/UARTEN gating, overrun)**; reference, C++, oracle and tests together.
 - 2026-10-06: **SPI read against the datasheet and fixed** (reserved bits, nothing sent while SSE = 0, the DMA requests gated by SSE and SSPDMACR, loop back, SSPRIS reset). Next: I2C.
 - 2026-10-06: **I2C read against the datasheet's register tables and fixed** (FIRST_DATA_BYTE bit, configuration writable only while disabled, widths and minima, stored registers, RX_FULL as a level, abort flushes RX, ACTIVITY). Next: SIO, DMA, SSI, CLOCKS/PLL, PIO - then the small blocks as they are ported.
+- 2026-10-06: **SIO and DMA read against the datasheet and fixed** (SIO: QSPI GPIO width, divider reset, ACCUM_ADD width, FORCE_MSB per lane; DMA: pacing timer period, TIMER3, reads of CHAN_ABORT/MULTI_CHAN_TRIGGER/FIFO_LEVELS). Next: SSI, CLOCKS/PLL, PIO.

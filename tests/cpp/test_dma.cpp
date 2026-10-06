@@ -280,7 +280,7 @@ int main() {
 
     // ---- pacing timers --------------------------------------------------------------------------------------------------
     fresh();
-    wr(TIMER0, (125u << 16) | 1u);  // 125/1 us at 125 MHz clk: a period of 1.0 us
+    wr(TIMER0, (1u << 16) | 125u);  // X/Y = 1/125: one TREQ every 125 sys_clk cycles = 1.0 us at 125 MHz
     run(0, kRam, kRam + 0x40, 3, ctrl_word(2, true, true, TREQ_TIMER0, 0));
     CHECK(clk.has_alarm() && clk.nanos_to_next_alarm() == 1000.0 && env.clk_calls == 1);
     (void)clk.tick(999);
@@ -292,20 +292,27 @@ int main() {
     CHECK(reg(0, TRANS_COUNT) == 0);
     {
         bool ok;
-        CHECK(dma.get_timer(TREQ_TIMER0, &ok) == 125.0 * 1e6 / 62.5e6 && ok);
+        CHECK(dma.get_timer(TREQ_TIMER0, &ok) == 125.0 * 1e6 / 62.5e6 && ok);   // Y/X = 125 cycles
         CHECK(dma.get_timer(TREQ_TIMER1, &ok) == 0.0 && ok);  // a timer that was never programmed
         wr(TIMER1, (3u << 16) | 0u);
         CHECK(dma.get_timer(TREQ_TIMER1, &ok) == 0.0);  // a zero divisor disables it
+        wr(TIMER1, (0u << 16) | 7u);
+        CHECK(dma.get_timer(TREQ_TIMER1, &ok) == 0.0);  // so does a zero dividend (a rate of 0)
+        wr(TIMER1, (3u << 16) | 2u);
+        CHECK(dma.get_timer(TREQ_TIMER1, &ok) == (1.0 * 1e6) / 62.5e6);  // X/Y > 1: no faster than one TREQ per sys_clk, the permanent TREQ
         env.clk_calls = 0;
         CHECK(dma.get_timer(5, &ok) == 0.0 && env.clk_calls == 0);  // a DREQ number: zero, and the host is not asked
-        // TIMER3's dividend is the register shifted by 4 (the reference's `urshift(x, 36)`), not by 16 like the other three.
-        wr(TIMER3, (125u << 4) | 0u);  // dividend 125, divisor (low 16 bits) 2000
-        CHECK(dma.get_timer(TREQ_TIMER3, &ok) == (125.0 / 2000.0) * 1e6 / 62.5e6);
-        wr(TIMER2, (125u << 4) | 0u);  // the same value in TIMER2: dividend 0 (>> 16), so disabled
+        // TIMER3 is laid out like the other three: X in 31:16 (it used to be read from bit 4)
+        wr(TIMER3, (1u << 16) | 2000u);
+        CHECK(dma.get_timer(TREQ_TIMER3, &ok) == 2000.0 * 1e6 / 62.5e6);
+        wr(TIMER2, (125u << 4) | 0u);  // a value with nothing in bits 31:16: dividend 0, so disabled
         CHECK(dma.get_timer(TREQ_TIMER2, &ok) == 0.0);
+        wr(TIMER3, (125u << 4) | 0u);
+        CHECK(dma.get_timer(TREQ_TIMER3, &ok) == 0.0);
         CHECK(dma.get_timer(TREQ_PERMANENT, &ok) == (1.0 * 1e6) / 62.5e6);
     }
-    CHECK(dma.read(TIMER0) == ((125u << 16) | 1u) && dma.read(TIMER3) == (125u << 4));
+    CHECK(dma.read(TIMER0) == ((1u << 16) | 125u) && dma.read(TIMER3) == (125u << 4));
+    CHECK(dma.read(MULTI_CHAN_TRIGGER) == 0 && dma.read(CHAN_ABORT) == 0 && dma.read(FIFO_LEVELS) == 0);   // self-clearing / debug: pico-sdk polls CHAN_ABORT until it reads 0
     // a host that cannot answer clk_sys: the failure surfaces, and nothing is scheduled
     fresh();
     wr(TIMER0, (1u << 16) | 1u);
@@ -448,10 +455,10 @@ int main() {
     cwr(3, CTRL_TRIG, BUSY | READ_ERROR | WRITE_ERROR);
     CHECK(!(reg(3, CTRL_TRIG) & BUSY) && !(reg(3, CTRL_TRIG) & (READ_ERROR | WRITE_ERROR)));
     // unimplemented registers warn; reads give all ones, with the second warning in the atomic area
-    dma.read(0x440);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kDmaWarnRead && env.warn_offset[0] == 0x440);
+    dma.read(0x438);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kDmaWarnRead && env.warn_offset[0] == 0x438);
     env.warns = 0;
-    CHECK(dma.read(0x1440) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kDmaWarnRead && env.warn_kind[1] == kDmaWarnReadAtomicArea);
+    CHECK(dma.read(0x1438) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kDmaWarnRead && env.warn_kind[1] == kDmaWarnReadAtomicArea);
     wr(0x434, 5);
     CHECK(env.warns == 3 && env.warn_kind[2] == kDmaWarnWrite && env.warn_offset[2] == 0x434);
 

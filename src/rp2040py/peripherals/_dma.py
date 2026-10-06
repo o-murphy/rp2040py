@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.utils.bit import urshift
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -400,6 +399,10 @@ class RPDMA(BasePeripheral):
             return self.int_status1
         if offset == N_CHANNELS:
             return len(self.channels)
+        if offset in (MULTI_CHAN_TRIGGER, CHAN_ABORT, FIFO_LEVELS):
+            # MULTI_CHAN_TRIGGER and CHAN_ABORT are self-clearing and an abort is flushed at once here, so firmware polling CHAN_ABORT "until it returns all-zero" (pico-sdk's
+            # dma_channel_abort) sees 0; FIFO_LEVELS are debug levels of the address/data FIFOs, which a transfer model with no FIFOs never fills.
+            return 0
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
@@ -464,31 +467,19 @@ class RPDMA(BasePeripheral):
 
     def get_timer(self, treq: int) -> float:
         """Returns the number of microseconds for a cycle of the given DMA timer, or 0 if the timer is disabled."""
-        dividend = 0
-        divisor = 1
+        # "The pacing timer produces TREQ assertions at a rate set by ((X/Y) * sys_clk) ... can only generate TREQs at a rate of 1 per sys_clk (i.e. permanent TREQ) or less": the period is
+        # Y/X sys_clk cycles, at least one. X is bits 31:16 of every one of the four timers; a timer with X or Y at 0 (reset: both) asserts nothing.
         if treq == TREQ.PERMANENT:
-            dividend = 1
-            divisor = 1
-        elif treq == TREQ.TIMER0:
-            dividend = self._timer0 >> 16
-            divisor = self._timer0 & 0xFFFF
-        elif treq == TREQ.TIMER1:
-            dividend = self._timer1 >> 16
-            divisor = self._timer1 & 0xFFFF
-        elif treq == TREQ.TIMER2:
-            dividend = self._timer2 >> 16
-            divisor = self._timer2 & 0xFFFF
-        elif treq == TREQ.TIMER3:
-            # TODO: matches upstream rp2040js, which shifts by 36 (JS masks shift amounts to
-            # 0-31, so `>>> 36` behaves like `>>> 4`, not `>>> 16` like the other timers).
-            # Almost certainly an upstream bug, kept as-is for behavioral parity. Revisit if
-            # rp2040js fixes it upstream.
-            dividend = urshift(self._timer3, 36)
-            divisor = self._timer3 & 0xFFFF
-
-        if divisor == 0:
+            cycles = 1.0
+        elif TREQ.TIMER0 <= treq <= TREQ.TIMER3:
+            value = (self._timer0, self._timer1, self._timer2, self._timer3)[treq - TREQ.TIMER0]
+            dividend, divisor = value >> 16, value & 0xFFFF
+            if divisor == 0 or dividend == 0:
+                return 0
+            cycles = max(divisor / dividend, 1.0)
+        else:
             return 0
-        return ((dividend / divisor) * 1e6) / self.rp2040.clk_sys
+        return (cycles * 1e6) / self.rp2040.clk_sys
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.DMA_IRQ0, bool(self.int_status0))

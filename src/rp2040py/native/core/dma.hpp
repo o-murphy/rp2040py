@@ -65,7 +65,7 @@ constexpr uint32_t DBG_CTDREQ = 0x800, DBG_TCR = 0x804;
 // controller
 constexpr uint32_t INTR = 0x400, INTE0 = 0x404, INTF0 = 0x408, INTS0 = 0x40C, INTE1 = 0x414, INTF1 = 0x418, INTS1 = 0x41C;
 constexpr uint32_t TIMER0 = 0x420, TIMER1 = 0x424, TIMER2 = 0x428, TIMER3 = 0x42C;
-constexpr uint32_t MULTI_CHAN_TRIGGER = 0x430, CHAN_ABORT = 0x444, N_CHANNELS = 0x448;
+constexpr uint32_t MULTI_CHAN_TRIGGER = 0x430, FIFO_LEVELS = 0x440, CHAN_ABORT = 0x444, N_CHANNELS = 0x448;
 // CTRL bits
 constexpr uint32_t EN = 1u << 0, INCR_READ = 1u << 4, INCR_WRITE = 1u << 5, RING_SEL = 1u << 10;
 constexpr uint32_t IRQ_QUIET = 1u << 21, BSWAP = 1u << 22, BUSY = 1u << 24;
@@ -152,26 +152,28 @@ public:
     // The period of a pacing timer in microseconds, or 0 when it is disabled; sets `*ok` false if reading clk_sys failed.
     double get_timer(uint32_t treq, bool* ok) noexcept {
         using namespace dma_regs;
-        uint32_t dividend = 0, divisor = 1;
+        // "The pacing timer produces TREQ assertions at a rate set by ((X/Y) * sys_clk) ... can only generate TREQs at a rate of 1 per sys_clk (i.e. permanent TREQ) or less": the period is
+        // Y/X sys_clk cycles, at least one. X is bits 31:16 of every one of the four timers; a timer with X or Y at 0 (reset: both) asserts nothing.
+        double cycles;
         *ok = true;
         if (treq == TREQ_PERMANENT) {
-            dividend = 1;
-            divisor = 1;
+            cycles = 1.0;
         } else if (treq >= TREQ_TIMER0 && treq <= TREQ_TIMER3) {
             const uint32_t value = timers_[treq - TREQ_TIMER0];
-            // TIMER3 shifts by 36, which JavaScript (and `urshift`) takes modulo 32, i.e. by 4, unlike the other three.
-            dividend = treq == TREQ_TIMER3 ? (value >> 4) : (value >> 16);
-            divisor = value & 0xFFFFu;
+            const uint32_t dividend = value >> 16, divisor = value & 0xFFFFu;
+            if (divisor == 0 || dividend == 0) return 0.0;
+            cycles = static_cast<double>(divisor) / static_cast<double>(dividend);
+            if (cycles < 1.0) cycles = 1.0;
+        } else {
+            // every non-timer TREQ is a period of 0 whatever clk_sys is, so the host is not asked: a channel stalled on a DREQ is rescheduled after every transfer, and that must not cross into Python.
+            return 0.0;
         }
-        // A zero dividend (every non-timer TREQ, a disabled timer) is a period of 0 whatever clk_sys is, so the host is not asked: a
-        // channel stalled on a DREQ is rescheduled after every transfer, and that must not cross into Python.
-        if (divisor == 0 || dividend == 0) return 0.0;
         const double clk = host_.clk_sys(host_.ctx);
         if (failed()) {
             *ok = false;
             return 0.0;
         }
-        return ((static_cast<double>(dividend) / static_cast<double>(divisor)) * 1e6) / clk;
+        return (cycles * 1e6) / clk;
     }
 
     // A peripheral's DREQ line going active. Channels waiting on it are woken only on the rising edge.
@@ -226,6 +228,7 @@ public:
             case INTF1: return int_force_[1];
             case INTS1: return int_status1();
             case N_CHANNELS: return kChannels;
+            case MULTI_CHAN_TRIGGER: case CHAN_ABORT: case FIFO_LEVELS: return 0;  // self-clearing (an abort is flushed at once) / debug FIFO levels: see _dma.py
             default: break;
         }
         if (host_.warn) {
