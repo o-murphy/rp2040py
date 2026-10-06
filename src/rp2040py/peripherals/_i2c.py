@@ -150,8 +150,21 @@ R_RX_UNDER = 1 << 0
 INTR_MASK_RESET = 0x8FF
 INTR_MASK_BITS = 0x1FFF
 
-# FIFO entry bits
-FIRST_DATA_BYTE = 1 << 10
+# Writable bits (datasheet 4.3.17: IC_CON 9:0 - bit 10 is read only -, IC_TAR 11:0, IC_DATA_CMD 10:0 of a write, IC_SDA_HOLD 23:0, IC_ENABLE 2:0, ...)
+CON_MASK = 0x3FF
+TAR_MASK = 0xFFF
+DATA_CMD_MASK = 0x7FF
+SDA_HOLD_MASK = 0xFFFFFF
+ENABLE_MASK = 0x7
+# "The minimum valid value is 6 / 8 ...; hardware prevents values less than this being written, and if attempted results in 6 / 8 being set"; IC_FS_SPKLEN's minimum is 1
+SS_HCNT_MIN = 6
+SS_LCNT_MIN = 8
+FS_HCNT_MIN = 6
+FS_LCNT_MIN = 8
+SPKLEN_MIN = 1
+
+# FIFO entry bits (datasheet IC_DATA_CMD: FIRST_DATA_BYTE is bit 11 of what is read, RESTART bit 10 of what is written)
+FIRST_DATA_BYTE = 1 << 11
 RESTART = 1 << 10
 STOP = 1 << 9
 CMD = 1 << 8  # 0 for write, 1 for read
@@ -191,6 +204,14 @@ class RPI2C(BasePeripheral):
         self.int_raw = 0
         self.int_enable = INTR_MASK_RESET
         self._spikelen = 0x07
+        # Stored, not acted on (slave mode and the DMA interface are not modelled): the datasheet's reset values.
+        self.sda_hold = 0x1
+        self.sda_setup = 0x64
+        self.ack_general_call = 0x1
+        self.slv_data_nack_only = 0
+        self.dma_control = 0
+        self.dma_tdlr = 0
+        self.dma_rdlr = 0
 
     def reset(self) -> None:
         """Registers, FIFOs and the bus state machine, back to power-on (0089 Phase 5). The five
@@ -216,6 +237,14 @@ class RPI2C(BasePeripheral):
         self.int_raw = 0
         self.int_enable = INTR_MASK_RESET
         self._spikelen = 0x07
+        # Stored, not acted on (slave mode and the DMA interface are not modelled): the datasheet's reset values.
+        self.sda_hold = 0x1
+        self.sda_setup = 0x64
+        self.ack_general_call = 0x1
+        self.slv_data_nack_only = 0
+        self.dma_control = 0
+        self.dma_tdlr = 0
+        self.dma_rdlr = 0
         self.rp2040.set_interrupt(self.irq, False)
 
     @property
@@ -253,11 +282,31 @@ class RPI2C(BasePeripheral):
             self.int_raw |= mask
             self.check_interrupts()
 
+    @property
+    def _config_open(self) -> bool:
+        """The configuration registers "can be written only when the I2C interface is disabled" (IC_ENABLE[0] = 0); a write at any other time has no effect."""
+        return not (self.enable & ENABLE)
+
+    @property
+    def _clearable_activity(self) -> int:
+        """A read of IC_CLR_ACTIVITY / IC_CLR_INTR "clears the ACTIVITY interrupt if the I2C is not active anymore"; while it is, the bit stays set."""
+        return R_ACTIVITY if self._state == I2CState.IDLE else 0
+
+    def _update_rx_full(self) -> None:
+        """RX_FULL is a level: "set when the receive buffer reaches or goes above the RX_TL threshold ... automatically cleared by hardware when buffer level goes below the threshold"."""
+        if self._rx_fifo.item_count > self.rx_threshold:
+            self._set_interrupts(R_RX_FULL)
+        else:
+            self._clear_interrupts(R_RX_FULL)
+
     def _abort(self, reason: int) -> None:
         # The reasons (bits 0-16) accumulate until read; the flush count (bits 31:23) is replaced by this abort's.
         self.abort_source &= ~(TX_FLUSH_CNT_MASK << TX_FLUSH_CNT_SHIFT)
         self.abort_source |= reason | (self._tx_fifo.item_count << TX_FLUSH_CNT_SHIFT)
         self._tx_fifo.reset()
+        # "The DW_apb_i2c flushes/resets/empties the TX_FIFO and RX_FIFO whenever there is a transmit abort"
+        self._rx_fifo.reset()
+        self._update_rx_full()
         self._set_interrupts(R_TX_ABRT)
 
     def _next_command(self) -> None:
@@ -268,6 +317,7 @@ class RPI2C(BasePeripheral):
         self._busy = True
         restart = bool(self._tx_fifo.peek() & RESTART) and not self._pending_restart and not self._stop
         if self._state == I2CState.IDLE or restart:
+            self._set_interrupts(R_ACTIVITY)  # "captures activity and stays set until it is cleared"
             self._pending_restart = restart
             self._stop = False
             self._state = I2CState.START
@@ -289,8 +339,7 @@ class RPI2C(BasePeripheral):
             self._set_interrupts(R_RX_OVER)
             return
         self._rx_fifo.push(value)
-        if self._rx_fifo.item_count > self.rx_threshold:
-            self._set_interrupts(R_RX_FULL)
+        self._update_rx_full()
 
     def complete_start(self) -> None:
         if self._tx_fifo.empty or self._state != I2CState.START or self._stop:
@@ -367,8 +416,9 @@ class RPI2C(BasePeripheral):
             if self._rx_fifo.empty:
                 self._set_interrupts(R_RX_UNDER)
                 return 0
-            self._clear_interrupts(R_RX_FULL)
-            return self._rx_fifo.pull()
+            value = self._rx_fifo.pull()
+            self._update_rx_full()
+            return value
         if offset == IC_SS_SCL_HCNT:
             return self.ss_clock_high_period
         if offset == IC_SS_SCL_LCNT:
@@ -396,7 +446,7 @@ class RPI2C(BasePeripheral):
                 | R_RD_REQ
                 | R_TX_ABRT
                 | R_RX_DONE
-                | R_ACTIVITY
+                | self._clearable_activity
                 | R_STOP_DET
                 | R_START_DET
                 | R_GEN_CALL
@@ -415,7 +465,9 @@ class RPI2C(BasePeripheral):
         if offset == IC_CLR_RX_DONE:
             return self._clear_interrupts(R_RX_DONE)
         if offset == IC_CLR_ACTIVITY:
-            return self._clear_interrupts(R_ACTIVITY)
+            return self._clear_interrupts(self._clearable_activity)
+        if offset == IC_CLR_RESTART_DET:
+            return self._clear_interrupts(R_RESTART_DET)
         if offset == IC_CLR_STOP_DET:
             return self._clear_interrupts(R_STOP_DET)
         if offset == IC_CLR_START_DET:
@@ -437,7 +489,19 @@ class RPI2C(BasePeripheral):
         if offset == IC_RXFLR:
             return self._rx_fifo.item_count
         if offset == IC_SDA_HOLD:
-            return 0x01
+            return self.sda_hold
+        if offset == IC_SLV_DATA_NACK_ONLY:
+            return self.slv_data_nack_only
+        if offset == IC_DMA_CR:
+            return self.dma_control
+        if offset == IC_DMA_TDLR:
+            return self.dma_tdlr
+        if offset == IC_DMA_RDLR:
+            return self.dma_rdlr
+        if offset == IC_SDA_SETUP:
+            return self.sda_setup
+        if offset == IC_ACK_GENERAL_CALL:
+            return self.ack_general_call
         if offset == IC_TX_ABRT_SOURCE:
             value = self.abort_source
             self.abort_source &= ABRT_SBYTE_NORSTRT  # Clear IC_TX_ABRT_SOURCE, expect for bit 9
@@ -463,20 +527,26 @@ class RPI2C(BasePeripheral):
         if offset == IC_CON:
             if ((value >> SPEED_SHIFT) & SPEED_MASK) == I2CSpeed.INVALID:
                 value = (value & ~(SPEED_MASK << SPEED_SHIFT)) | (I2CSpeed.HIGH_SPEED_MODE << SPEED_SHIFT)
-            self.control = value
+            if self._config_open:
+                self.control = value & CON_MASK
 
         elif offset == IC_TAR:
-            self.target_address = value & 0x3FF
+            if self._config_open:
+                self.target_address = value & TAR_MASK
 
         elif offset == IC_SAR:
-            self.slave_address = value & 0x3FF
+            if self._config_open:
+                self.slave_address = value & 0x3FF
 
         elif offset == IC_DATA_CMD:
             if self._tx_fifo.full:
                 self._set_interrupts(R_TX_OVER)
             else:
-                self._tx_fifo.push(value)
-                self._clear_interrupts(R_TX_EMPTY)
+                self._tx_fifo.push(value & DATA_CMD_MASK)
+                if (
+                    self._tx_fifo.item_count > self.tx_threshold
+                ):  # "automatically cleared by hardware when the buffer level goes above the threshold"
+                    self._clear_interrupts(R_TX_EMPTY)
                 self._next_command()
 
         elif offset == IC_INTR_MASK:
@@ -484,30 +554,58 @@ class RPI2C(BasePeripheral):
             self.check_interrupts()
 
         elif offset == IC_SS_SCL_HCNT:
-            self.ss_clock_high_period = value & 0xFFFF
+            if self._config_open:
+                self.ss_clock_high_period = max(value & 0xFFFF, SS_HCNT_MIN)
 
         elif offset == IC_SS_SCL_LCNT:
-            self.ss_clock_low_period = value & 0xFFFF
+            if self._config_open:
+                self.ss_clock_low_period = max(value & 0xFFFF, SS_LCNT_MIN)
 
         elif offset == IC_FS_SCL_HCNT:
-            self.fs_clock_high_period = value & 0xFFFF
+            if self._config_open:
+                self.fs_clock_high_period = max(value & 0xFFFF, FS_HCNT_MIN)
 
         elif offset == IC_FS_SCL_LCNT:
-            self.fs_clock_low_period = value & 0xFFFF
+            if self._config_open:
+                self.fs_clock_low_period = max(value & 0xFFFF, FS_LCNT_MIN)
 
         elif offset == IC_SDA_HOLD:
-            if not (value & ENABLE) and value != 0x1:
-                self.warn("Unimplemented write to IC_SDA_HOLD")
+            if self._config_open:
+                self.sda_hold = value & SDA_HOLD_MASK
+
+        elif offset == IC_SDA_SETUP:
+            if self._config_open:
+                self.sda_setup = value & 0xFF
+
+        elif offset == IC_SLV_DATA_NACK_ONLY:
+            if (
+                self._config_open
+            ):  # "writable while disabled and with the slave part inactive" - the slave part is never active here
+                self.slv_data_nack_only = value & 0x1
+
+        elif offset == IC_ACK_GENERAL_CALL:
+            self.ack_general_call = value & 0x1
+
+        elif offset == IC_DMA_CR:
+            self.dma_control = value & 0x3
+
+        elif offset == IC_DMA_TDLR:
+            self.dma_tdlr = value & 0xF
+
+        elif offset == IC_DMA_RDLR:
+            self.dma_rdlr = value & 0xF
 
         elif offset == IC_RX_TL:
             self.rx_threshold = value & 0xFF
             self.rx_threshold = min(self.rx_threshold, self._rx_fifo.size)
+            self._update_rx_full()
 
         elif offset == IC_TX_TL:
             self.tx_threshold = value & 0xFF
             self.tx_threshold = min(self.tx_threshold, self._tx_fifo.size)
 
         elif offset == IC_ENABLE:
+            value &= ENABLE_MASK
             # ABORT bit can only be set by software, not cleared.
             value |= self.enable & ABORT
             if value & ABORT:
@@ -519,13 +617,15 @@ class RPI2C(BasePeripheral):
             if not (value & ENABLE):
                 self._tx_fifo.reset()
                 self._rx_fifo.reset()
+                self._update_rx_full()  # the RX FIFO is flushed and held in reset
+                self._clear_interrupts(R_ACTIVITY)  # "Disabling the DW_apb_i2c" clears the ACTIVITY bit
             self.enable = value
             self._next_command()  # TX_CMD_BLOCK may have changed
 
         elif offset == IC_FS_SPKLEN:
-            # Writable only while the I2C is disabled; the field is 8 bits and its minimum is 1 (the hardware ignores a 0).
-            if not (self.enable & ENABLE) and (value & 0xFF) > 0:
-                self._spikelen = value & 0xFF
+            # Writable only while the I2C is disabled; the field is 8 bits and its minimum is 1 ("if attempted results in 1 being set").
+            if not (self.enable & ENABLE):
+                self._spikelen = max(value & 0xFF, SPKLEN_MIN)
 
         else:
             super().write_uint32(offset, value)

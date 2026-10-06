@@ -37,33 +37,31 @@ ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 # registers whose read has no side effect: observed after every step
 PLAIN_REGISTERS = (
     I.IC_CON, I.IC_TAR, I.IC_SAR, I.IC_SS_SCL_HCNT, I.IC_SS_SCL_LCNT, I.IC_FS_SCL_HCNT, I.IC_FS_SCL_LCNT, I.IC_INTR_STAT, I.IC_INTR_MASK, I.IC_RAW_INTR_STAT, I.IC_RX_TL,
-    I.IC_TX_TL, I.IC_ENABLE, I.IC_STATUS, I.IC_TXFLR, I.IC_RXFLR, I.IC_SDA_HOLD, I.IC_ENABLE_STATUS, I.IC_FS_SPKLEN, I.IC_COMP_PARAM_1, I.IC_COMP_VERSION, I.IC_COMP_TYPE,
+    I.IC_TX_TL, I.IC_ENABLE, I.IC_STATUS, I.IC_TXFLR, I.IC_RXFLR, I.IC_SDA_HOLD, I.IC_ENABLE_STATUS, I.IC_FS_SPKLEN, I.IC_COMP_PARAM_1, I.IC_COMP_VERSION, I.IC_COMP_TYPE, I.IC_SLV_DATA_NACK_ONLY, I.IC_DMA_CR, I.IC_DMA_TDLR, I.IC_DMA_RDLR, I.IC_SDA_SETUP,
+    I.IC_ACK_GENERAL_CALL,
 )  # fmt: skip
 # registers whose read changes state: read only as operations
 EFFECT_REGISTERS = (
     I.IC_DATA_CMD, I.IC_CLR_INTR, I.IC_CLR_RX_UNDER, I.IC_CLR_RX_OVER, I.IC_CLR_TX_OVER, I.IC_CLR_RD_REQ, I.IC_CLR_TX_ABRT, I.IC_CLR_RX_DONE, I.IC_CLR_ACTIVITY, I.IC_CLR_STOP_DET,
-    I.IC_CLR_START_DET, I.IC_CLR_GEN_CALL, I.IC_TX_ABRT_SOURCE,
+    I.IC_CLR_START_DET, I.IC_CLR_GEN_CALL, I.IC_TX_ABRT_SOURCE, I.IC_CLR_RESTART_DET,
 )  # fmt: skip
 WRITABLE = (
     I.IC_CON, I.IC_TAR, I.IC_SAR, I.IC_DATA_CMD, I.IC_SS_SCL_HCNT, I.IC_SS_SCL_LCNT, I.IC_FS_SCL_HCNT, I.IC_FS_SCL_LCNT, I.IC_SDA_HOLD, I.IC_RX_TL, I.IC_TX_TL, I.IC_ENABLE,
-    I.IC_FS_SPKLEN, I.IC_INTR_MASK,
+    I.IC_FS_SPKLEN, I.IC_INTR_MASK, I.IC_SLV_DATA_NACK_ONLY, I.IC_DMA_CR, I.IC_DMA_TDLR, I.IC_DMA_RDLR, I.IC_SDA_SETUP, I.IC_ACK_GENERAL_CALL,
 )  # fmt: skip
 UNIMPLEMENTED = (
     0x0C,
     0x24,
     0x28,
-    0x84,
-    I.IC_DMA_CR,
-    I.IC_DMA_TDLR,
-    I.IC_DMA_RDLR,
-    I.IC_SDA_SETUP,
-    I.IC_ACK_GENERAL_CALL,
-    I.IC_CLR_RESTART_DET,
     0xAC,
     0xF0,
     0x100,
     I.IC_INTR_STAT,
 )
+# written only while the block is disabled (datasheet 4.3.17)
+CONFIG = (
+    I.IC_CON, I.IC_SAR, I.IC_SS_SCL_HCNT, I.IC_SS_SCL_LCNT, I.IC_FS_SCL_HCNT, I.IC_FS_SCL_LCNT, I.IC_SDA_HOLD, I.IC_SDA_SETUP, I.IC_FS_SPKLEN, I.IC_SLV_DATA_NACK_ONLY,
+)  # fmt: skip
 CALLBACKS = ("start", "connect", "write", "read", "stop")
 MODES = ("auto", "defer", "silent", "default")
 
@@ -222,6 +220,13 @@ class Rig:
                 int(i2c.fs_clock_high_period),
                 int(i2c.fs_clock_low_period),
                 int(i2c._spikelen),
+                int(i2c.sda_hold),
+                int(i2c.sda_setup),
+                int(i2c.ack_general_call),
+                int(i2c.slv_data_nack_only),
+                int(i2c.dma_control),
+                int(i2c.dma_tdlr),
+                int(i2c.dma_rdlr),
                 int(i2c.raw_write_value),
             ),
             "rx": (bool(rx.empty), bool(rx.full), int(rx.item_count), tuple(int(v) for v in rx.items)),
@@ -256,6 +261,13 @@ def mutant_rig(name: str) -> Rig:
 
         # -- the command engine
         def _next_command(self) -> None:
+            if name == "activity_never_set":
+                had = self.int_raw & I.R_ACTIVITY
+                super()._next_command()
+                if not had and self.int_raw & I.R_ACTIVITY:
+                    self.int_raw &= ~I.R_ACTIVITY
+                    self.check_interrupts()
+                return
             if name == "restart_ignored":
                 enabled, blocked = self.enable & I.ENABLE, self.enable & I.TX_CMD_BLOCK
                 if self._tx_fifo.empty or self._busy or blocked or not enabled:
@@ -347,9 +359,26 @@ def mutant_rig(name: str) -> Rig:
                 if self._rx_fifo.item_count >= self.rx_threshold:
                     self._set_interrupts(I.R_RX_FULL)
                 return
+            if name == "first_data_byte_bit10":  # the old position of the flag
+                self._push_rx_raw(value)
+                return
             super()._push_rx(value)
 
+        def _push_rx_raw(self, value: int) -> None:
+            value = (value & ~I.FIRST_DATA_BYTE) | ((value & I.FIRST_DATA_BYTE) >> 1)
+            if self._rx_fifo.full:
+                self._set_interrupts(I.R_RX_OVER)
+                return
+            self._rx_fifo.push(value)
+            self._update_rx_full()
+
         def _abort(self, reason: int) -> None:
+            if name == "abort_keeps_rx_fifo":
+                self.abort_source &= ~(I.TX_FLUSH_CNT_MASK << I.TX_FLUSH_CNT_SHIFT)
+                self.abort_source |= reason | (self._tx_fifo.item_count << I.TX_FLUSH_CNT_SHIFT)
+                self._tx_fifo.reset()
+                self._set_interrupts(I.R_TX_ABRT)
+                return
             if name == "abort_keeps_tx_fifo":
                 self.abort_source &= ~(I.TX_FLUSH_CNT_MASK << I.TX_FLUSH_CNT_SHIFT)
                 self.abort_source |= reason | (self._tx_fifo.item_count << I.TX_FLUSH_CNT_SHIFT)
@@ -475,6 +504,18 @@ def mutant_rig(name: str) -> Rig:
         def read_uint32(self, offset: int) -> int:
             if offset == I.IC_DATA_CMD and name == "data_rx_under_missing" and self._rx_fifo.empty:
                 return 0
+            if (
+                offset == I.IC_DATA_CMD and name == "rx_full_cleared_by_any_read"
+            ):  # the old rule: any read clears RX_FULL, whatever the level
+                if self._rx_fifo.empty:
+                    self._set_interrupts(I.R_RX_UNDER)
+                    return 0
+                self._clear_interrupts(I.R_RX_FULL)
+                return self._rx_fifo.pull()
+            if offset == I.IC_CLR_ACTIVITY and name == "clr_activity_always":
+                return self._clear_interrupts(I.R_ACTIVITY)
+            if offset == I.IC_SDA_HOLD and name == "sda_hold_constant":
+                return 1
             if offset == I.IC_DATA_CMD and name == "data_read_keeps_rx_full":
                 if self._rx_fifo.empty:
                     self._set_interrupts(I.R_RX_UNDER)
@@ -513,6 +554,80 @@ def mutant_rig(name: str) -> Rig:
             return super().read_uint32(offset)
 
         def write_uint32(self, offset: int, value: int) -> None:
+            gate_missing = {
+                "con_write_while_enabled": (I.IC_CON, "control", 0x3FF),
+                "tar_write_while_enabled": (I.IC_TAR, "target_address", 0xFFF),
+                "sar_write_while_enabled": (I.IC_SAR, "slave_address", 0x3FF),
+                "sda_hold_write_while_enabled": (I.IC_SDA_HOLD, "sda_hold", 0xFFFFFF),
+                "ss_hcnt_write_while_enabled": (I.IC_SS_SCL_HCNT, "ss_clock_high_period", 0xFFFF),
+            }.get(name)
+            if gate_missing and offset == gate_missing[0] and self.enable & I.ENABLE:
+                setattr(self, gate_missing[1], value & gate_missing[2])
+                return
+            if offset == I.IC_CON and name == "con_unmasked":
+                super().write_uint32(offset, value)
+                self.control = value if self._config_open else self.control
+                return
+            if offset == I.IC_TAR and name == "tar_masked_10":
+                if self._config_open:
+                    self.target_address = value & 0x3FF
+                return
+            if offset == I.IC_DATA_CMD and name == "data_cmd_unmasked":
+                if self._tx_fifo.full:
+                    self._set_interrupts(I.R_TX_OVER)
+                else:
+                    self._tx_fifo.push(value)
+                    self._clear_interrupts(I.R_TX_EMPTY)
+                    self._next_command()
+                return
+            if offset == I.IC_DATA_CMD and name == "tx_empty_cleared_always":  # the old rule: any write clears TX_EMPTY
+                if self._tx_fifo.full:
+                    self._set_interrupts(I.R_TX_OVER)
+                else:
+                    self._tx_fifo.push(value & I.DATA_CMD_MASK)
+                    self._clear_interrupts(I.R_TX_EMPTY)
+                    self._next_command()
+                return
+            if name in ("ss_hcnt_no_minimum", "fs_lcnt_no_minimum") and offset in (I.IC_SS_SCL_HCNT, I.IC_FS_SCL_LCNT):
+                if self._config_open:
+                    setattr(
+                        self,
+                        "ss_clock_high_period" if offset == I.IC_SS_SCL_HCNT else "fs_clock_low_period",
+                        value & 0xFFFF,
+                    )
+                return
+            if offset == I.IC_SDA_HOLD and name == "sda_hold_not_stored":
+                return
+            if offset == I.IC_SDA_SETUP and name == "sda_setup_masked_wrong":
+                if self._config_open:
+                    self.sda_setup = value & 0x7F
+                return
+            if offset == I.IC_DMA_CR and name == "dma_cr_unmasked":
+                self.dma_control = value
+                return
+            if offset == I.IC_ENABLE and name == "enable_unmasked":
+                value |= 0  # stored whole, including the reserved bits
+                keep = value & ~I.ENABLE_MASK
+                super().write_uint32(offset, value)
+                self.enable |= keep
+                return
+            if offset == I.IC_RX_TL and name == "rx_tl_no_level_update":
+                self.rx_threshold = min(value & 0xFF, self._rx_fifo.size)
+                return
+            if offset == I.IC_ENABLE and name == "disable_keeps_rx_full":
+                had = self.int_raw & I.R_RX_FULL
+                super().write_uint32(offset, value)
+                if had and not (value & I.ENABLE):
+                    self.int_raw |= I.R_RX_FULL
+                    self.check_interrupts()
+                return
+            if offset == I.IC_ENABLE and name == "disable_keeps_activity":
+                had = self.int_raw & I.R_ACTIVITY
+                super().write_uint32(offset, value)
+                if had and not (value & I.ENABLE):
+                    self.int_raw |= I.R_ACTIVITY
+                    self.check_interrupts()
+                return
             if offset == I.IC_CON and name == "speed_fix_missing":
                 self.control = value
                 return
@@ -673,6 +788,10 @@ MUTANTS = (
     "enable_abort_not_sticky", "enable_no_next_command", "spklen_always", "master_bits_wrong", "scl_period_speed_wrong", "reset_keeps_target", "reset_keeps_fifos",
     "reset_clears_callbacks", "intr_mask_not_writable", "intr_mask_unmasked", "intr_mask_no_line_update", "intr_mask_reset_zero",
     "abort_wipes_reasons", "abort_keeps_old_count", "spklen_stored_whole", "spklen_old_condition", "spklen_zero_field_accepted",
+    "first_data_byte_bit10", "abort_keeps_rx_fifo", "rx_full_cleared_by_any_read", "clr_activity_always", "sda_hold_constant", "con_write_while_enabled",
+    "tar_write_while_enabled", "sar_write_while_enabled", "sda_hold_write_while_enabled", "ss_hcnt_write_while_enabled", "con_unmasked", "tar_masked_10", "data_cmd_unmasked",
+    "tx_empty_cleared_always", "ss_hcnt_no_minimum", "fs_lcnt_no_minimum", "sda_hold_not_stored", "sda_setup_masked_wrong", "dma_cr_unmasked", "enable_unmasked",
+    "rx_tl_no_level_update", "disable_keeps_rx_full", "disable_keeps_activity", "activity_never_set",
 )  # fmt: skip
 
 
@@ -698,6 +817,8 @@ def _value(r: random.Random, offset: int) -> int:
         return r.choice((0, 1, 4, 8, 15, 16, 17, 0xFF, 0x1FF, r.getrandbits(32)))
     if offset == I.IC_SDA_HOLD:
         return r.choice((0, 1, 2, 3, r.getrandbits(32)))
+    if offset in (I.IC_SS_SCL_HCNT, I.IC_SS_SCL_LCNT, I.IC_FS_SCL_HCNT, I.IC_FS_SCL_LCNT):
+        return r.choice((0, 5, 6, 7, 8, 9, 0x28, 0xFFFF, r.getrandbits(16), r.getrandbits(32)))
     if offset == I.IC_FS_SPKLEN:
         return r.choice((0, 1, 2, 4, 7, 0x100, r.getrandbits(32)))
     if offset == I.IC_INTR_MASK:
@@ -719,9 +840,14 @@ def generate(seed: int, steps: int) -> list[tuple]:
                     {name: r.choice(("auto", "auto", "auto", "defer", "silent", "default")) for name in CALLBACKS},
                 )
             )
-        elif roll < 0.22:  # a driver bringing the block up
+        elif (
+            roll < 0.22
+        ):  # a driver bringing the block up as pico-sdk does: disable, configure (writable only while disabled), enable
+            ops.append(("write", I.IC_ENABLE, 0, ALIASES[0]))
+            for offset in r.sample(CONFIG, r.choice((1, 2, 4))):
+                ops.append(("write", offset, _value(r, offset), ALIASES[0]))
+            ops.append(("write", I.IC_TAR, r.choice((0x50, 0x3C, 0x68, 0x3FF, 0x800 | 0x50, 0x400 | 0x50)), ALIASES[0]))
             ops.append(("write", I.IC_ENABLE, 1, ALIASES[0]))
-            ops.append(("write", I.IC_TAR, r.choice((0x50, 0x3C, 0x68, 0x3FF)), ALIASES[0]))
         elif roll < 0.50:
             offset = r.choice(WRITABLE + (I.IC_DATA_CMD, I.IC_DATA_CMD, I.IC_DATA_CMD, I.IC_ENABLE))
             alias = ALIASES[0] if r.random() < 0.8 else r.choice(ALIASES[1:])

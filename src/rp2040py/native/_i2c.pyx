@@ -114,8 +114,6 @@ cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t va
             i2c.warn(f"Unimplemented peripheral read from 0x{offset:x}")
         elif kind == kI2cWarnReadAtomicArea:
             i2c.warn("Unimplemented read from peripheral in the atomic operation region")
-        elif kind == kI2cWarnSdaHold:
-            i2c.warn("Unimplemented write to IC_SDA_HOLD")
         else:
             i2c.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
     except BaseException as error:
@@ -434,6 +432,62 @@ cdef class RPI2C:
     @_spikelen.setter
     def _spikelen(self, value):
         self._block.spikelen = <uint32_t> (<int64_t> value)
+
+    @property
+    def sda_hold(self):
+        return self._block.sda_hold
+
+    @sda_hold.setter
+    def sda_hold(self, value):
+        self._block.sda_hold = <uint32_t> (<int64_t> value)
+
+    @property
+    def sda_setup(self):
+        return self._block.sda_setup
+
+    @sda_setup.setter
+    def sda_setup(self, value):
+        self._block.sda_setup = <uint32_t> (<int64_t> value)
+
+    @property
+    def ack_general_call(self):
+        return self._block.ack_general_call
+
+    @ack_general_call.setter
+    def ack_general_call(self, value):
+        self._block.ack_general_call = <uint32_t> (<int64_t> value)
+
+    @property
+    def slv_data_nack_only(self):
+        return self._block.slv_data_nack_only
+
+    @slv_data_nack_only.setter
+    def slv_data_nack_only(self, value):
+        self._block.slv_data_nack_only = <uint32_t> (<int64_t> value)
+
+    @property
+    def dma_control(self):
+        return self._block.dma_control
+
+    @dma_control.setter
+    def dma_control(self, value):
+        self._block.dma_control = <uint32_t> (<int64_t> value)
+
+    @property
+    def dma_tdlr(self):
+        return self._block.dma_tdlr
+
+    @dma_tdlr.setter
+    def dma_tdlr(self, value):
+        self._block.dma_tdlr = <uint32_t> (<int64_t> value)
+
+    @property
+    def dma_rdlr(self):
+        return self._block.dma_rdlr
+
+    @dma_rdlr.setter
+    def dma_rdlr(self, value):
+        self._block.dma_rdlr = <uint32_t> (<int64_t> value)
 
     @property
     def int_status(self):

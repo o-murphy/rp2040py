@@ -22,7 +22,6 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
     cdef const uint32_t kI2cWarnRead
     cdef const uint32_t kI2cWarnReadAtomicArea
     cdef const uint32_t kI2cWarnWrite
-    cdef const uint32_t kI2cWarnSdaHold
 
     ctypedef cppbool (*I2cIrqFn)(void* ctx, cppbool level)
     ctypedef cppbool (*I2cStartFn)(void* ctx, cppbool repeated)
@@ -64,6 +63,13 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
         uint32_t int_raw
         uint32_t int_enable
         uint32_t spikelen
+        uint32_t sda_hold
+        uint32_t sda_setup
+        uint32_t ack_general_call
+        uint32_t slv_data_nack_only
+        uint32_t dma_control
+        uint32_t dma_tdlr
+        uint32_t dma_rdlr
         Fifo16 rx
         Fifo16 tx
         I2cBlock() noexcept

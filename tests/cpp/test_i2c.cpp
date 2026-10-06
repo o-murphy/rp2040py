@@ -150,10 +150,10 @@ static void test_masks_and_the_invalid_speed_field() {
     wr(CON, 0x61);                                               // speed field 0: rewritten to high speed (3)
     CHECK(rd(CON) == (0x61 | (3 << 1)));
     wr(CON, 0xFFFFFFFFu);
-    CHECK(rd(CON) == 0xFFFFFFFFu);                               // otherwise stored whole
+    CHECK(rd(CON) == 0x3FF);                                     // IC_CON 9:0 (bit 10 is read only, the rest reserved)
     wr(TAR, 0xFFFFFFFFu);
     wr(SAR, 0xFFFFFFFFu);
-    CHECK(rd(TAR) == 0x3FF && rd(SAR) == 0x3FF);
+    CHECK(rd(TAR) == 0xFFF && rd(SAR) == 0x3FF);                 // IC_TAR 11:0, IC_SAR 9:0
     wr(SS_SCL_HCNT, 0x12345);
     wr(SS_SCL_LCNT, 0x23456);
     wr(FS_SCL_HCNT, 0x34567);
@@ -162,6 +162,18 @@ static void test_masks_and_the_invalid_speed_field() {
     wr(RX_TL, 0x1FF);
     wr(TX_TL, 0x105);
     CHECK(rd(RX_TL) == 16 && rd(TX_TL) == 5);                    // 8 bits, then clamped to the FIFO size
+    wr(SS_SCL_HCNT, 5);
+    wr(SS_SCL_LCNT, 7);
+    wr(FS_SCL_HCNT, 0);
+    wr(FS_SCL_LCNT, 1);
+    CHECK(rd(SS_SCL_HCNT) == 6 && rd(SS_SCL_LCNT) == 8 && rd(FS_SCL_HCNT) == 6 && rd(FS_SCL_LCNT) == 8);   // the minimum valid values: 6, 8, 6, 8
+    wr(ENABLE, 1);
+    wr(CON, 0x61);
+    wr(TAR, 0x7);
+    wr(SAR, 0x7);
+    wr(SS_SCL_HCNT, 0x77);
+    CHECK(rd(CON) == 0x3FF && rd(TAR) == 0xFFF && rd(SAR) == 0x3FF && rd(SS_SCL_HCNT) == 6);   // enabled: none of them is writable
+    wr(ENABLE, 0);
     wr(RX_TL, 0xFF);
     CHECK(rd(RX_TL) == 16);
     wr(RX_TL, 0x105);
@@ -239,16 +251,16 @@ static void test_a_restart_asks_the_device_for_a_repeated_start() {
 static void test_addresses_in_7_and_10_bit_mode_and_the_reasons_for_a_nack() {
     fresh(kAuto);
     env.nack_connect = true;
-    wr(ENABLE, 1);
     wr(TAR, 0x2AA);
+    wr(ENABLE, 1);
     wr(DATA_CMD, 1);
     CHECK(is(1, kConnect, 0xAA, MODE_WRITE));                    // 7-bit mode masks the address to 8 bits (the reference's own mask)
     CHECK((rd(TX_ABRT_SOURCE) & 0x1FF) == ABRT_7B_ADDR_NOACK);
     fresh(kAuto);
     env.nack_connect = true;
     wr(CON, 0x65 | CON_10BIT_MASTER);
-    wr(ENABLE, 1);
     wr(TAR, 0x2AA);
+    wr(ENABLE, 1);
     wr(DATA_CMD, 1);
     CHECK(is(1, kConnect, 0x2AA, MODE_WRITE) && i2c.master_bits() == 10);
     CHECK((i2c.abort_source & 0x1FF) == ABRT_10ADDR1_NOACK);     // the nack_byte of an "auto" connect is 0
@@ -256,8 +268,8 @@ static void test_addresses_in_7_and_10_bit_mode_and_the_reasons_for_a_nack() {
     wr(DATA_CMD, 2);                                             // the device is asked again; answer by hand with nack_byte 1
     fresh(kDefer);
     wr(CON, 0x65 | CON_10BIT_MASTER);
-    wr(ENABLE, 1);
     wr(TAR, 0x155);
+    wr(ENABLE, 1);
     wr(DATA_CMD, 1);
     CHECK(i2c.complete_start());
     CHECK(i2c.complete_connect(false, 1));
@@ -345,7 +357,15 @@ static void test_tx_overflow_rx_overflow_and_the_thresholds() {
     CHECK(rd(RXFLR) == 16 && (rd(STATUS) & ST_RFF) != 0);
     (void)i2c.complete_read(99);
     CHECK((rd(RAW_INTR_STAT) & R_RX_OVER) != 0 && rd(RXFLR) == 16);
-    CHECK(rd(DATA_CMD) != 0);                                    // a read below the threshold clears RX_FULL
+    CHECK(rd(DATA_CMD) != 0);                                    // 15 entries left, above the threshold of 2: RX_FULL is a level and stays
+    CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) != 0);
+    for (int i = 0; i < 12; ++i) (void)rd(DATA_CMD);             // 3 left
+    CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) != 0);
+    (void)rd(DATA_CMD);                                          // 2 left: not above the threshold any more
+    CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) == 0);
+    wr(RX_TL, 0);                                                // a change of the threshold re-evaluates the level
+    CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) != 0);
+    wr(RX_TL, 5);
     CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) == 0);
 }
 
@@ -417,33 +437,106 @@ static void test_status_composition() {
     CHECK(rd(TXFLR) == 16 && rd(RXFLR) == 16);
 }
 
-static void test_sda_hold_and_spike_length_follow_the_references_own_conditions() {
+static void test_sda_hold_and_spike_length_are_written_only_while_disabled_with_their_minimum() {
     fresh();
-    wr(SDA_HOLD, 0x1);
-    CHECK(env.warns == 0);
-    wr(SDA_HOLD, 0x3);                                           // bit 0 set: quiet
-    CHECK(env.warns == 0);
-    wr(SDA_HOLD, 0x2);                                           // bit 0 clear and not 1: warns
-    CHECK(env.warns == 1 && env.warn_kind[0] == kI2cWarnSdaHold && env.warn_offset[0] == SDA_HOLD && env.warn_value[0] == 2);
-    wr(SDA_HOLD, 0);
-    CHECK(env.warns == 2);
-    CHECK(rd(SDA_HOLD) == 1);
+    CHECK(rd(SDA_HOLD) == 1);                                    // reset: IC_SDA_TX_HOLD = 1
+    wr(SDA_HOLD, 0xFFFFFFFFu);
+    CHECK(rd(SDA_HOLD) == 0xFFFFFF && env.warns == 0);           // 24 bits, stored
+    wr(SDA_HOLD, 0x2);
+    CHECK(rd(SDA_HOLD) == 2);
     wr(FS_SPKLEN, 4);
     CHECK(rd(FS_SPKLEN) == 4);
     wr(FS_SPKLEN, 5);                                            // bit 0 of the VALUE does not matter: only the I2C being disabled does
     CHECK(rd(FS_SPKLEN) == 5);
-    wr(FS_SPKLEN, 0);                                            // the field's minimum is 1: ignored
-    CHECK(rd(FS_SPKLEN) == 5);
-    wr(FS_SPKLEN, 0x100);                                        // the 8-bit field is 0 here: ignored
-    CHECK(rd(FS_SPKLEN) == 5 && i2c.spikelen == 5);
+    wr(FS_SPKLEN, 0);                                            // the field's minimum is 1: "if attempted results in 1 being set"
+    CHECK(rd(FS_SPKLEN) == 1 && i2c.spikelen == 1);
+    wr(FS_SPKLEN, 0x100);                                        // the 8-bit field is 0 here: 1 as well
+    CHECK(rd(FS_SPKLEN) == 1);
     wr(FS_SPKLEN, 0x1FE);
     CHECK(rd(FS_SPKLEN) == 0xFE && i2c.spikelen == 0xFE);        // 8 bits held
     wr(ENABLE, 1);
     wr(FS_SPKLEN, 3);                                            // enabled: not writable
-    CHECK(rd(FS_SPKLEN) == 0xFE);
+    wr(SDA_HOLD, 7);
+    CHECK(rd(FS_SPKLEN) == 0xFE && rd(SDA_HOLD) == 2);
     wr(ENABLE, 0);
     wr(FS_SPKLEN, 3);
     CHECK(rd(FS_SPKLEN) == 3);
+}
+
+static void test_datasheet_audit_flags_flush_activity_and_the_stored_registers() {
+    // FIRST_DATA_BYTE is bit 11 of IC_DATA_CMD (datasheet Table 456), not bit 10 (that is RESTART, of a write)
+    CHECK(FIRST_DATA_BYTE == 0x800 && RESTART == 0x400);
+    // ACTIVITY: set when the master starts, stays set until cleared by IC_CLR_ACTIVITY / IC_CLR_INTR - and only once the I2C is idle
+    fresh(kSilent);
+    wr(ENABLE, 1);
+    wr(DATA_CMD, 1);
+    CHECK((rd(RAW_INTR_STAT) & R_ACTIVITY) != 0 && i2c.state != STATE_IDLE);
+    CHECK(rd(CLR_ACTIVITY) == 0 && (rd(RAW_INTR_STAT) & R_ACTIVITY) != 0);   // still active: stays set
+    (void)rd(CLR_INTR);
+    CHECK((rd(RAW_INTR_STAT) & R_ACTIVITY) != 0);
+    i2c.state = STATE_IDLE;
+    CHECK(rd(CLR_ACTIVITY) == 1 && (rd(RAW_INTR_STAT) & R_ACTIVITY) == 0);
+    i2c.int_raw |= R_ACTIVITY;
+    wr(ENABLE, 0);                                               // "Disabling the DW_apb_i2c" clears it as well
+    CHECK((rd(RAW_INTR_STAT) & R_ACTIVITY) == 0);
+    // a transmit abort flushes the RX FIFO too, and RX_FULL (a level) goes with it
+    fresh(kSilent);
+    wr(RX_TL, 0);
+    i2c.first_byte = false;
+    (void)i2c.complete_read(1);
+    (void)i2c.complete_read(2);
+    CHECK(rd(RXFLR) == 2 && (rd(RAW_INTR_STAT) & R_RX_FULL) != 0);
+    CHECK(i2c.arbitration_lost());
+    CHECK(rd(RXFLR) == 0 && (rd(RAW_INTR_STAT) & R_RX_FULL) == 0 && (rd(RAW_INTR_STAT) & R_TX_ABRT) != 0);
+    // disabling flushes the RX FIFO and so clears RX_FULL
+    fresh(kSilent);
+    wr(RX_TL, 0);
+    (void)i2c.complete_read(1);
+    CHECK((rd(RAW_INTR_STAT) & R_RX_FULL) != 0);
+    wr(ENABLE, 0);
+    CHECK(rd(RXFLR) == 0 && (rd(RAW_INTR_STAT) & R_RX_FULL) == 0);
+    // IC_ENABLE keeps bits 2:0 (ABORT is dropped at once when the bus is idle)
+    wr(ENABLE, 0xFFFFFFFFu);
+    CHECK(rd(ENABLE) == 0x5);
+    wr(ENABLE, 0);
+    // TX_EMPTY is cleared by a write only if the level goes above the threshold
+    fresh(kSilent);
+    wr(ENABLE, 1);
+    wr(TX_TL, 4);
+    i2c.int_raw |= R_TX_EMPTY;
+    wr(DATA_CMD, 1);                                             // starts the bus; the command stays queued: level 1 <= 4
+    CHECK((rd(RAW_INTR_STAT) & R_TX_EMPTY) != 0);
+    for (int i = 0; i < 4; ++i) wr(DATA_CMD, 2);                 // level 5 > 4
+    CHECK((rd(RAW_INTR_STAT) & R_TX_EMPTY) == 0);
+    // IC_DATA_CMD keeps 11 bits of a write
+    fresh(kSilent);
+    wr(ENABLE, 1);
+    wr(DATA_CMD, 0xFFFFFFFFu);
+    CHECK(i2c.tx.at(0) == 0x7FF);
+    // the registers that are stored and not acted on, with their reset values and masks
+    fresh();
+    CHECK(rd(SLV_DATA_NACK_ONLY) == 0 && rd(DMA_CR) == 0 && rd(DMA_TDLR) == 0 && rd(DMA_RDLR) == 0 && rd(SDA_SETUP) == 0x64 && rd(ACK_GENERAL_CALL) == 1 && rd(SDA_HOLD) == 1);
+    wr(SLV_DATA_NACK_ONLY, 0xFFFFFFFFu);
+    wr(DMA_CR, 0xFFFFFFFFu);
+    wr(DMA_TDLR, 0xFFFFFFFFu);
+    wr(DMA_RDLR, 0xFFFFFFFFu);
+    wr(SDA_SETUP, 0xFFFFFFFFu);
+    wr(ACK_GENERAL_CALL, 0xFFFFFFFFu);
+    CHECK(rd(SLV_DATA_NACK_ONLY) == 1 && rd(DMA_CR) == 3 && rd(DMA_TDLR) == 0xF && rd(DMA_RDLR) == 0xF && rd(SDA_SETUP) == 0xFF && rd(ACK_GENERAL_CALL) == 1);
+    wr(ENABLE, 1);                                               // IC_SDA_SETUP and IC_SLV_DATA_NACK_ONLY need the block disabled; IC_DMA_*, IC_ACK_GENERAL_CALL do not
+    wr(SDA_SETUP, 5);
+    wr(SLV_DATA_NACK_ONLY, 0);
+    wr(DMA_CR, 1);
+    wr(ACK_GENERAL_CALL, 0);
+    CHECK(rd(SDA_SETUP) == 0xFF && rd(SLV_DATA_NACK_ONLY) == 1 && rd(DMA_CR) == 1 && rd(ACK_GENERAL_CALL) == 0);
+    wr(ENABLE, 0);
+    // IC_CLR_RESTART_DET clears RESTART_DET (nothing in this master raises it)
+    i2c.int_raw |= R_RESTART_DET;
+    CHECK(rd(CLR_RESTART_DET) == 1 && (rd(RAW_INTR_STAT) & R_RESTART_DET) == 0 && rd(CLR_RESTART_DET) == 0);
+    CHECK(env.warns == 0);
+    // the reset restores them
+    CHECK(i2c.reset());
+    CHECK(rd(SDA_SETUP) == 0x64 && rd(ACK_GENERAL_CALL) == 1 && rd(DMA_CR) == 0 && rd(SLV_DATA_NACK_ONLY) == 0);
 }
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
@@ -456,7 +549,7 @@ static void test_unimplemented_offsets_warn_and_read_all_ones() {
     env.warns = 0;
     CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1);
     env.warns = 0;
-    CHECK(rd(0x88) == 0xFFFFFFFFu && env.warns == 1);            // IC_DMA_CR: not implemented
+    CHECK(rd(0xAC) == 0xFFFFFFFFu && env.warns == 1);            // not a register
     env.warns = 0;
     CHECK(wr(0x28, 0x77) && env.warns == 1 && env.warn_kind[0] == kI2cWarnWrite && env.warn_offset[0] == 0x28 && env.warn_value[0] == 0x77);
     env.warns = 0;
@@ -813,7 +906,7 @@ int main() {
     test_the_clear_registers_return_whether_they_cleared_and_clear_the_abort_source();
     test_the_interrupt_mask_register_gates_the_line();
     test_status_composition();
-    test_sda_hold_and_spike_length_follow_the_references_own_conditions();
+    test_sda_hold_and_spike_length_are_written_only_while_disabled_with_their_minimum();
     test_unimplemented_offsets_warn_and_read_all_ones();
     test_alias_writes_decode_against_a_read_with_its_side_effects();
     test_arbitration_loss_aborts_and_goes_idle();
@@ -823,6 +916,7 @@ int main() {
     test_the_window_handler_is_the_bus_entry_point();
     test_more_corners_of_the_state_machine();
     test_registers_with_side_effects_and_masks_in_detail();
+    test_datasheet_audit_flags_flush_activity_and_the_stored_registers();
     if (failures == 0) std::printf("test_i2c: ok\n");
     return failures == 0 ? 0 : 1;
 }
