@@ -26,7 +26,9 @@ import os
 import re
 import sys
 
-os.environ["RP2040PY_SKIP_CYTHON"] = "1"  # the reference is what is judged; the native blocks are held to it by the lockstep oracles
+os.environ["RP2040PY_SKIP_CYTHON"] = (
+    "1"  # the reference is what is judged; the native blocks are held to it by the lockstep oracles
+)
 
 BASES = {
     "SYSINFO": 0x40000000,
@@ -85,7 +87,12 @@ def parse(path: str) -> list[dict]:
             for j in range(i + 1, min(i + 8, len(text))):
                 offset = OFFSET.match(text[j])
                 if offset:
-                    current = {"block": header.group(1), "name": header.group(2), "offset": offset.group(1), "fields": []}
+                    current = {
+                        "block": header.group(1),
+                        "name": header.group(2),
+                        "offset": offset.group(1),
+                        "fields": [],
+                    }
                     registers.append(current)
                     i = j
                     break
@@ -154,10 +161,14 @@ def check(register: dict) -> dict:
         return row
     if (before ^ m["known_value"]) & m["known_mask"]:
         differing = (before ^ m["known_value"]) & m["known_mask"]
-        row["issues"].append(f"reset: read 0x{before:08x}, datasheet 0x{m['known_value']:08x}, differing writable bits 0x{differing:08x}")
+        row["issues"].append(
+            f"reset: read 0x{before:08x}, datasheet 0x{m['known_value']:08x}, differing writable bits 0x{differing:08x}"
+        )
         row["cats"].append("reset")
     if (before ^ m["ro_value"]) & m["ro_mask"]:
-        row["issues"].append(f"note (read-only bits, the datasheet's reset may be a placeholder): read 0x{before:08x}, datasheet 0x{m['ro_value']:08x}")
+        row["issues"].append(
+            f"note (read-only bits, the datasheet's reset may be a placeholder): read 0x{before:08x}, datasheet 0x{m['ro_value']:08x}"
+        )
     try:
         chip.write_uint32(address, 0xFFFFFFFF)
         after = chip.read_uint32(address) & 0xFFFFFFFF
@@ -167,7 +178,9 @@ def check(register: dict) -> dict:
         return row
     stuck = (before ^ after) & ~m["writable"] & 0xFFFFFFFF
     if stuck:
-        row["issues"].append(f"reserved or read-only bits changed by a write of ones: 0x{stuck:08x} (read 0x{before:08x} -> 0x{after:08x}; datasheet writable mask 0x{m['writable']:08x})")
+        row["issues"].append(
+            f"reserved or read-only bits changed by a write of ones: 0x{stuck:08x} (read 0x{before:08x} -> 0x{after:08x}; datasheet writable mask 0x{m['writable']:08x})"
+        )
         row["cats"].append("reserved-or-ro-sticks")
     lost = m["plain"] & ~after & 0xFFFFFFFF
     if lost:

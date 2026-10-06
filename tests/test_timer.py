@@ -75,3 +75,64 @@ def test_alarm_registers_hold_32_bits(rp2040_factory):
 
     rp2040.write_uint32(ALARM0, 0x1234)
     assert rp2040.read_uint32(ALARM0) == 0x1234
+
+
+TIMEHW = 0x40054000
+TIMELW = 0x40054004
+TIMERAWH = 0x40054024
+TIMERAWL = 0x40054028
+DBGPAUSE = 0x4005402C
+PAUSE = 0x40054030
+
+
+def test_pause_freezes_the_count_and_holds_back_the_alarms(rp2040_factory):
+    """RP2040 datasheet, TIMER PAUSE: "Set high to pause the timer". The count stops, no alarm comes due, and clearing it resumes from the frozen count."""
+    clock = MockClock()
+    rp2040 = rp2040_factory(clock)
+    rp2040.write_uint32(ALARM3, 500)
+    clock.advance(100)  # 100 us
+    rp2040.write_uint32(PAUSE, 1)
+    assert rp2040.read_uint32(PAUSE) == 1
+    clock.advance(5_000)  # 5 ms: nothing moves
+    assert rp2040.read_uint32(TIMERAWL) == 100
+    assert rp2040.read_uint32(INTR) == 0 and rp2040.read_uint32(ARMED) == 0x8
+    rp2040.write_uint32(PAUSE, 0)
+    clock.advance(
+        399
+    )  # 399 us after the resume: one microsecond short of the alarm (500 - 100 = 400 us of count to go)
+    assert rp2040.read_uint32(INTR) == 0
+    clock.advance(1)
+    assert rp2040.read_uint32(INTR) == 0x8
+
+
+def test_timelw_is_a_latch_and_timehw_sets_the_time(rp2040_factory):
+    """RP2040 datasheet, TIMER TIMEHW/TIMELW: "always write timelw before timehw"; the writes "do not get copied to time until timehw is written"."""
+    clock = MockClock()
+    rp2040 = rp2040_factory(clock)
+    rp2040.write_uint32(TIMELW, 0x80000000)
+    assert rp2040.read_uint32(TIMERAWL) == 0
+    rp2040.write_uint32(TIMEHW, 7)
+    assert rp2040.read_uint32(TIMERAWL) == 0x80000000 and rp2040.read_uint32(TIMERAWH) == 7
+    clock.advance(10)
+    assert rp2040.read_uint32(TIMERAWL) == 0x80000000 + 10
+
+
+def test_an_armed_alarm_follows_the_time_when_it_is_set(rp2040_factory):
+    clock = MockClock()
+    rp2040 = rp2040_factory(clock)
+    rp2040.write_uint32(ALARM1, 1000)
+    rp2040.write_uint32(TIMELW, 900)
+    rp2040.write_uint32(TIMEHW, 0)
+    clock.advance(99)
+    assert rp2040.read_uint32(INTR) == 0
+    clock.advance(1)
+    assert rp2040.read_uint32(INTR) == 0x2
+
+
+def test_dbgpause_is_a_two_bit_register_that_resets_to_both_bits_set(rp2040_factory):
+    rp2040 = rp2040_factory(MockClock())
+    assert rp2040.read_uint32(DBGPAUSE) == 0x6
+    rp2040.write_uint32(DBGPAUSE, 0xFFFFFFFF)
+    assert rp2040.read_uint32(DBGPAUSE) == 0x6
+    rp2040.write_uint32(DBGPAUSE, 0x2)
+    assert rp2040.read_uint32(DBGPAUSE) == 0x2

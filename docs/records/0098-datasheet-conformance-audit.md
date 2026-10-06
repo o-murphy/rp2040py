@@ -300,8 +300,20 @@ No register-level findings.
 
 ## Triage and the behavioural audit
 
-*(to be filled in block by block - see the progress log)*
+Per block, in the order of the 0096 ports. Each section says what the datasheet says, what the reference did, what was changed (reference and C++ together) and what is left.
+
+### TIMER (datasheet 4.6)
+
+Read: 4.6.1-4.6.4 and the register tables. The reference implemented the counter, the latch (`TIMELR`/`TIMEHR`), `TIMERAWL/H`, the four alarms with `ARMED`, `INTR/INTE/INTF/INTS`, and stored `PAUSE`.
+
+- **`PAUSE` did nothing but store its bit and warn "Unimplemented Timer Pause".** The datasheet: "Set high to pause the timer". Now the count freezes, no alarm can come due, an alarm written while paused is armed and waits, and clearing `PAUSE` resumes from the frozen count with the armed alarms re-timed.
+- **`TIMEHW`/`TIMELW` (write the time) were unimplemented** (a write warned and was dropped). The datasheet: "always write timelw before timehw"; "writes do not get copied to time until timehw is written". `TIMELW` is now a latch and the `TIMEHW` write sets the 64-bit time; the armed alarms are re-timed against the new count (an alarm matches the counter, not a moment of simulated time).
+- **`DBGPAUSE` was unimplemented.** A 2-bit RW register (DBG1, DBG0), 1 at reset (`0x6`). Stored; no debugger is ever attached, so it changes nothing.
+- **The 64-bit count was not bounded:** with the time now settable, `TIMERAWH`/`TIMEHR` could exceed 32 bits (the bus raised) and the C++ `to_uint32(double)` was undefined beyond int64. The high word is now masked to 32 bits (the counter wraps, as a 64-bit one does) and `to_uint32` is Python's `int(x) & 0xFFFFFFFF` exactly, read from the double's bits. The parity test found it the first time the new registers were in its stream.
+- **Left, deliberately:** the timer counts whether or not the watchdog's 1 us tick is running (the datasheet: "The Watchdog tick must be running for the timer to start counting"). The tick belongs to the WATCHDOG, which is not ported yet; it is on that block's list. Reading `TIMEHW`/`TIMELW` (write-only) warns as an unimplemented read.
+- Tests: `tests/test_timer.py` (the four behaviours), `tests/test_timer_parity.py` (the new offsets are in the random stream, 60 seeds), `tests/cpp/test_timer.cpp`.
 
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
+- 2026-10-06: **TIMER read against the datasheet and fixed** (PAUSE, TIMEHW/TIMELW, DBGPAUSE, the 64-bit wrap and the C++ int64 undefined behaviour it exposed). Next: ADC.

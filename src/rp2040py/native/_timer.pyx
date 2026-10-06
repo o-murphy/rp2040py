@@ -47,10 +47,8 @@ cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t va
             timer.warn(f"Unimplemented peripheral read from 0x{offset:x}")
         elif kind == kTimerWarnReadAtomicArea:
             timer.warn("Unimplemented read from peripheral in the atomic operation region")
-        elif kind == kTimerWarnWrite:
-            timer.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
         else:
-            timer.warn("Unimplemented Timer Pause")
+            timer.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
     except BaseException as error:
         park_error(error)
 

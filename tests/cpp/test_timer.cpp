@@ -128,22 +128,65 @@ int main() {
     timer.write_atomic(INTR, 0xF, kAtomicNormal);
     clear(rec);
 
-    // PAUSE is not implemented: it stores the bit and warns when set.
+    // PAUSE freezes the count and no alarm can come due; clearing it resumes from the frozen count (RP2040 datasheet: "Set high to pause the timer").
+    const uint32_t before_pause = rd(timer, TIMERAWL);
+    timer.write_atomic(ALARM3, before_pause + 500, kAtomicNormal);
+    clock.tick(100000);  // 100 us
     timer.write_atomic(PAUSE, 1, kAtomicNormal);
-    CHECK(rd(timer, PAUSE) == 1 && rec.warns == 1 && rec.warn_kind[0] == kTimerWarnPause);
+    CHECK(rd(timer, PAUSE) == 1 && rec.warns == 0 && !clock.has_alarm() && rd(timer, ARMED) == 0x8);
+    CHECK(rd(timer, TIMERAWL) == before_pause + 100);
+    clock.tick(5000000);  // 5 ms: nothing moves
+    CHECK(rd(timer, TIMERAWL) == before_pause + 100 && rd(timer, INTR) == 0 && rd(timer, ARMED) == 0x8);
+    timer.write_atomic(ALARM0, rd(timer, TIMERAWL) + 50, kAtomicNormal);  // armed while paused: it waits
+    CHECK(rd(timer, ARMED) == 0x9 && !clock.has_alarm());
     timer.write_atomic(PAUSE, 0, kAtomicNormal);
-    CHECK(rd(timer, PAUSE) == 0 && rec.warns == 1);
+    CHECK(rd(timer, PAUSE) == 0 && clock.has_alarm() && clock.nanos_to_next_alarm() == 50000.0);
+    clock.tick(50000);
+    CHECK(rd(timer, INTR) == 0x1 && rd(timer, TIMERAWL) == before_pause + 150);
+    clock.tick(350000);  // 350 us more: ALARM3, 400 us after the pause
+    CHECK(rd(timer, INTR) == 0x9);
+    timer.write_atomic(INTR, 0xF, kAtomicNormal);
+    clear(rec);
+
+    // TIMELW is a latch: the time changes when TIMEHW is written, and an armed alarm is re-timed against the new count.
+    timer.write_atomic(ALARM1, rd(timer, TIMERAWL) + 1000, kAtomicNormal);
+    timer.write_atomic(TIMELW, 0x80000000u, kAtomicNormal);
+    CHECK(rd(timer, TIMERAWL) != 0x80000000u);
+    timer.write_atomic(TIMEHW, 0x7, kAtomicNormal);
+    CHECK(rd(timer, TIMERAWL) == 0x80000000u && rd(timer, TIMERAWH) == 7);
+    timer.write_atomic(ALARM1, 0x80000000u + 40, kAtomicNormal);
+    CHECK(clock.nanos_to_next_alarm() == 40000.0);
+    timer.write_atomic(TIMELW, 0x80000000u + 10, kAtomicNormal);
+    timer.write_atomic(TIMEHW, 0x7, kAtomicNormal);
+    CHECK(clock.nanos_to_next_alarm() == 30000.0);  // the alarm matches the counter, so it is 10 us nearer
+    timer.write_atomic(PAUSE, 1, kAtomicNormal);     // a write while paused moves the frozen count
+    timer.write_atomic(TIMELW, 5, kAtomicNormal);
+    timer.write_atomic(TIMEHW, 0, kAtomicNormal);
+    CHECK(rd(timer, TIMERAWL) == 5 && rd(timer, TIMERAWH) == 0);
+    timer.write_atomic(PAUSE, 0, kAtomicNormal);
+    timer.write_atomic(ALARM1, 0, kAtomicNormal);
+    clock.tick(1000000.0);
+    timer.write_atomic(INTR, 0xF, kAtomicNormal);
+    clear(rec);
+
+    // DBGPAUSE: DBG1 and DBG0 (bits 2:1), both 1 at reset; bit 0 is reserved.
+    CHECK(rd(timer, DBGPAUSE) == 0x6);
+    timer.write_atomic(DBGPAUSE, 0xFFFFFFFFu, kAtomicNormal);
+    CHECK(rd(timer, DBGPAUSE) == 0x6);
+    timer.write_atomic(DBGPAUSE, 0x2, kAtomicNormal);
+    CHECK(rd(timer, DBGPAUSE) == 0x2 && rec.warns == 0);
+    timer.write_atomic(DBGPAUSE, 0x6, kAtomicNormal);
     clear(rec);
 
     // Unimplemented registers read as 0xFFFFFFFF and warn - twice in the atomic-alias area - and writes warn too.
-    CHECK(rd(timer, 0x04) == 0xFFFFFFFFu);
-    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnRead && rec.warn_offset[0] == 0x04);
+    CHECK(rd(timer, 0x44) == 0xFFFFFFFFu);
+    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnRead && rec.warn_offset[0] == 0x44);
     clear(rec);
-    CHECK(rd(timer, 0x2004) == 0xFFFFFFFFu);
+    CHECK(rd(timer, 0x2044) == 0xFFFFFFFFu);
     CHECK(rec.warns == 2 && rec.warn_kind[1] == kTimerWarnReadAtomicArea);
     clear(rec);
-    timer.write_atomic(0x00, -2, kAtomicNormal);
-    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnWrite && rec.warn_offset[0] == 0 && rec.warn_value[0] == -2);
+    timer.write_atomic(0x44, -2, kAtomicNormal);
+    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnWrite && rec.warn_offset[0] == 0x44 && rec.warn_value[0] == -2);
     clear(rec);
 
     // An alias write decodes against a read of the register - so a read side effect (TIMELR's latch) happens.

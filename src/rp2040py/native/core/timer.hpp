@@ -18,6 +18,7 @@
 #define RP2040PY_CORE_TIMER_HPP
 
 #include <cstdint>
+#include <cstring>
 
 #include "clock.hpp"
 #include "core_host.hpp"
@@ -31,7 +32,6 @@ using TimerIrqFn = bool (*)(void* ctx, uint32_t line, bool level);
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
 constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
-constexpr uint32_t kTimerWarnPause = 3;  // "Unimplemented Timer Pause" - the one message a block adds to the common three
 using TimerWarnFn = RegWarnFn;
 
 struct TimerHost {
@@ -42,8 +42,9 @@ struct TimerHost {
 };
 
 namespace timer_regs {
-constexpr uint32_t TIMEHR = 0x08, TIMELR = 0x0C, ALARM0 = 0x10, ALARM1 = 0x14, ALARM2 = 0x18, ALARM3 = 0x1C;
-constexpr uint32_t ARMED = 0x20, TIMERAWH = 0x24, TIMERAWL = 0x28, PAUSE = 0x30;
+constexpr uint32_t TIMEHW = 0x00, TIMELW = 0x04, TIMEHR = 0x08, TIMELR = 0x0C, ALARM0 = 0x10, ALARM1 = 0x14, ALARM2 = 0x18, ALARM3 = 0x1C;
+constexpr uint32_t ARMED = 0x20, TIMERAWH = 0x24, TIMERAWL = 0x28, DBGPAUSE = 0x2C, PAUSE = 0x30;
+constexpr uint32_t kDbgPauseMask = 0x6, kDbgPauseReset = 0x6;  // DBG1 (bit 2) and DBG0 (bit 1), both 1 at reset; no debugger is ever attached, so they change nothing
 constexpr uint32_t INTR = 0x34, INTE = 0x38, INTF = 0x3C, INTS = 0x40;
 }  // namespace timer_regs
 
@@ -94,6 +95,7 @@ public:
                 *out = target_[(offset - ALARM0) / 4];
                 return true;
             case PAUSE: *out = paused_ ? 1u : 0u; return true;
+            case DBGPAUSE: *out = dbgpause_; return true;
             case INTR: *out = int_raw_; return true;
             case INTE: *out = int_enable_; return true;
             case INTF: *out = int_force_; return true;
@@ -126,7 +128,7 @@ public:
                 const uint32_t delta_micros = to_uint32(static_cast<double>(value) - micros());
                 armed_[index] = true;
                 target_[index] = static_cast<uint32_t>(value);
-                clock_->schedule(&alarms_[index], static_cast<double>(delta_micros) * 1000.0);
+                if (!paused_) clock_->schedule(&alarms_[index], static_cast<double>(delta_micros) * 1000.0);  // a frozen count: armed, and waiting for PAUSE to clear
                 return kWriteHandled;
             }
             case ARMED:
@@ -135,8 +137,16 @@ public:
                 }
                 return kWriteHandled;
             case PAUSE:
-                paused_ = (value & 1) != 0;
-                if (paused_ && host_.warn) host_.warn(host_.ctx, kTimerWarnPause, offset, value);
+                set_paused((value & 1) != 0);
+                return kWriteHandled;
+            case DBGPAUSE:
+                dbgpause_ = static_cast<uint32_t>(value) & kDbgPauseMask;
+                return kWriteHandled;
+            case TIMELW:
+                time_latch_low_ = static_cast<uint32_t>(value);
+                return kWriteHandled;
+            case TIMEHW:  // "always write timelw before timehw": this write sets the whole 64-bit time
+                set_time(static_cast<double>(static_cast<uint32_t>(value)) * 4294967296.0 + static_cast<double>(time_latch_low_));
                 return kWriteHandled;
             case INTR:
                 int_raw_ &= ~static_cast<uint32_t>(raw);
@@ -158,6 +168,9 @@ public:
         latched_high_ = 0;
         int_raw_ = int_enable_ = int_force_ = 0;
         paused_ = false;
+        paused_micros_ = 0.0;
+        time_latch_low_ = 0;
+        dbgpause_ = timer_regs::kDbgPauseReset;
         for (int i = 0; i < kAlarms; ++i) {
             disarm(i);
             target_[i] = 0;
@@ -206,9 +219,57 @@ private:
 
     // This block's own count in microseconds since its epoch - not the simulation's clock. Every read and every
     // alarm arming goes through here, so the two cannot disagree about what "now" is.
-    double micros() const noexcept { return (clock_->nanos() - epoch_nanos_) / 1000.0; }
+    double micros() const noexcept { return paused_ ? paused_micros_ : (clock_->nanos() - epoch_nanos_) / 1000.0; }  // frozen while PAUSE is set
     static int64_t high_word(double time) noexcept { return static_cast<int64_t>(time / 4294967296.0); }  // time >= 0
-    static uint32_t to_uint32(double value) noexcept { return static_cast<uint32_t>(static_cast<int64_t>(value)); }
+    // Python's `int(value) & 0xFFFFFFFF` for any finite double - truncate toward zero, then the low 32 bits of the two's-complement integer - read from the bits of the double, so that
+    // a count beyond int64 (a TIMEHW write can put the 64-bit time anywhere) has no undefined behaviour and no libm is needed.
+    static uint32_t to_uint32(double value) noexcept {
+        uint64_t bits;
+        std::memcpy(&bits, &value, sizeof bits);
+        const bool negative = (bits >> 63) != 0;
+        const int exponent = static_cast<int>((bits >> 52) & 0x7FF);
+        if (exponent == 0 || exponent == 0x7FF) return 0;  // zero and denormals truncate to 0; inf/NaN are never reached
+        const uint64_t mantissa = (bits & ((uint64_t{1} << 52) - 1)) | (uint64_t{1} << 52);
+        const int shift = exponent - 1075;  // value = mantissa * 2^shift
+        uint64_t magnitude = 0;
+        if (shift >= 0) {
+            if (shift < 64) magnitude = mantissa << shift;  // from shift 32 up the low 32 bits are 0 anyway
+        } else if (-shift < 64) {
+            magnitude = mantissa >> -shift;
+        }
+        const uint32_t low = static_cast<uint32_t>(magnitude);
+        return negative ? 0u - low : low;
+    }
+
+    // PAUSE: the count freezes and no alarm can come due; clearing it resumes from the frozen count.
+    void set_paused(bool paused) noexcept {
+        if (paused == paused_) return;
+        if (paused) {
+            paused_micros_ = micros();
+            paused_ = true;
+            for (int i = 0; i < kAlarms; ++i) clock_->cancel(&alarms_[i]);
+        } else {
+            paused_ = false;
+            epoch_nanos_ = clock_->nanos() - paused_micros_ * 1000.0;
+            reschedule_armed_alarms();
+        }
+    }
+
+    // The count is now `micros_value`; every armed alarm is re-timed against it (an alarm matches the counter, not a moment of simulated time).
+    void set_time(double micros_value) noexcept {
+        if (paused_) {
+            paused_micros_ = micros_value;
+            return;
+        }
+        epoch_nanos_ = clock_->nanos() - micros_value * 1000.0;
+        reschedule_armed_alarms();
+    }
+
+    void reschedule_armed_alarms() noexcept {
+        for (int i = 0; i < kAlarms; ++i) {
+            if (armed_[i]) clock_->schedule(&alarms_[i], static_cast<double>(to_uint32(static_cast<double>(target_[i]) - micros())) * 1000.0);
+        }
+    }
 
     void disarm(int index) noexcept {
         clock_->cancel(&alarms_[index]);
@@ -238,6 +299,8 @@ private:
     int64_t latched_high_ = 0;
     uint32_t int_raw_ = 0, int_enable_ = 0, int_force_ = 0;
     bool paused_ = false;
+    double paused_micros_ = 0.0;
+    uint32_t time_latch_low_ = 0, dbgpause_ = timer_regs::kDbgPauseReset;
     int64_t raw_write_value_ = 0;
     bool armed_[kAlarms] = {false, false, false, false};
     uint32_t target_[kAlarms] = {0, 0, 0, 0};

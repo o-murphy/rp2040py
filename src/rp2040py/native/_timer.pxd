@@ -14,7 +14,6 @@ cdef extern from "timer.hpp" namespace "rp2040core":
     cdef const uint32_t kTimerWarnRead
     cdef const uint32_t kTimerWarnReadAtomicArea
     cdef const uint32_t kTimerWarnWrite
-    cdef const uint32_t kTimerWarnPause
 
     cdef cppclass TimerHost:
         TimerIrqFn irq

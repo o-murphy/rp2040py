@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
 __all__ = ("RPTimer",)
 
+TIMEHW = 0x00
+TIMELW = 0x04
 TIMEHR = 0x08
 TIMELR = 0x0C
 TIMERAWH = 0x24
@@ -19,6 +21,7 @@ ALARM1 = 0x14
 ALARM2 = 0x18
 ALARM3 = 0x1C
 ARMED = 0x20
+DBGPAUSE = 0x2C
 PAUSE = 0x30
 INTR = 0x34
 INTE = 0x38
@@ -34,6 +37,8 @@ TIMER_INTERRUPTS = [IRQ.TIMER_0, IRQ.TIMER_1, IRQ.TIMER_2, IRQ.TIMER_3]
 
 ALARM_REGS = (ALARM0, ALARM1, ALARM2, ALARM3)
 SCRATCH_LIKE_MASK = 0xFFFFFFFF
+DBGPAUSE_MASK = 0x6  # DBG1 (bit 2) and DBG0 (bit 1); bit 0 is reserved
+DBGPAUSE_RESET = 0x6  # both reset to 1 (RP2040 datasheet, TIMER DBGPAUSE). No debugger is ever attached here, so they change nothing.
 
 
 def _to_uint32(value: float) -> int:
@@ -57,6 +62,9 @@ class RPTimer(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._paused = False
+        self._paused_micros = 0.0  # the count, frozen, while PAUSE is set
+        self._time_latch_low = 0  # TIMELW's latch: "writes do not get copied to time until timehw is written"
+        self._dbgpause = DBGPAUSE_RESET
         # Simulated-time origin for this block's own count, so `reset()` can restart it from zero
         # the way real silicon does - `clock.nanos` is the *simulation's* time base and is never
         # reset (USB SOF, every other peripheral's alarms and the engine room all share it).
@@ -87,6 +95,9 @@ class RPTimer(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._paused = False
+        self._paused_micros = 0.0
+        self._time_latch_low = 0
+        self._dbgpause = DBGPAUSE_RESET
         for alarm in self.alarms:
             alarm.clock_alarm.cancel()
             alarm.armed = False
@@ -101,7 +112,9 @@ class RPTimer(BasePeripheral):
     def _micros(self) -> float:
         """This block's own count, in microseconds since its epoch - not the simulation's clock.
         Every read *and* every alarm arming goes through here, so the two cannot disagree about
-        what "now" is (an alarm is armed as `target - now`, relative)."""
+        what "now" is (an alarm is armed as `target - now`, relative). Frozen while PAUSE is set."""
+        if self._paused:
+            return self._paused_micros
         return (self.clock.nanos - self._epoch_nanos) / 1000
 
     def read_uint32(self, offset: int) -> int:
@@ -111,11 +124,11 @@ class RPTimer(BasePeripheral):
             return self._latched_time_high
 
         if offset == TIMELR:
-            self._latched_time_high = math.floor(time / 2**32)
+            self._latched_time_high = math.floor(time / 2**32) & 0xFFFFFFFF  # the 64-bit counter wraps
             return _to_uint32(time)
 
         if offset == TIMERAWH:
-            return math.floor(time / 2**32)
+            return math.floor(time / 2**32) & 0xFFFFFFFF
 
         if offset == TIMERAWL:
             return _to_uint32(time)
@@ -131,6 +144,9 @@ class RPTimer(BasePeripheral):
 
         if offset == PAUSE:
             return 1 if self._paused else 0
+
+        if offset == DBGPAUSE:
+            return self._dbgpause
 
         if offset == INTR:
             return self._int_raw
@@ -159,7 +175,8 @@ class RPTimer(BasePeripheral):
             # ALARMn is a 32-bit register: keep what a read of it would return, not the raw Python int the caller passed
             # (a negative or wider one made the bus's 32-bit read-back raise OverflowError).
             alarm.target_micros = value & 0xFFFFFFFF
-            alarm.clock_alarm.schedule(delta_micros * 1000)
+            if not self._paused:  # the count is frozen: the alarm is armed and waits for PAUSE to be cleared
+                alarm.clock_alarm.schedule(delta_micros * 1000)
 
         elif offset == ARMED:
             for alarm in self.alarms:
@@ -167,10 +184,17 @@ class RPTimer(BasePeripheral):
                     self._disarm_alarm(alarm)
 
         elif offset == PAUSE:
-            self._paused = bool(value & 1)
-            if self._paused:
-                self.warn("Unimplemented Timer Pause")
-            # TODO actually pause the timer
+            self._set_paused(bool(value & 1))
+
+        elif offset == DBGPAUSE:
+            self._dbgpause = value & DBGPAUSE_MASK
+
+        elif offset == TIMELW:
+            self._time_latch_low = value & 0xFFFFFFFF
+
+        elif offset == TIMEHW:
+            # "always write timelw before timehw": the write of TIMEHW sets the whole 64-bit time (RP2040 datasheet, TIMER TIMEHW/TIMELW)
+            self._set_time(float(value & 0xFFFFFFFF) * 4294967296.0 + float(self._time_latch_low))
 
         elif offset == INTR:
             self._int_raw &= ~self.raw_write_value
@@ -186,6 +210,33 @@ class RPTimer(BasePeripheral):
 
         else:
             super().write_uint32(offset, value)
+
+    def _set_paused(self, paused: bool) -> None:
+        """PAUSE: "Set high to pause the timer" (RP2040 datasheet). The count freezes and no alarm can come due; clearing it resumes from the frozen count."""
+        if paused == self._paused:
+            return
+        if paused:
+            self._paused_micros = self._micros()
+            self._paused = True
+            for alarm in self.alarms:
+                alarm.clock_alarm.cancel()
+        else:
+            self._paused = False
+            self._epoch_nanos = self.clock.nanos - self._paused_micros * 1000.0
+            self._reschedule_armed_alarms()
+
+    def _set_time(self, micros: float) -> None:
+        """The count is now `micros`; every armed alarm is re-timed against it (an alarm matches the counter, not a moment of simulated time)."""
+        if self._paused:
+            self._paused_micros = micros
+            return
+        self._epoch_nanos = self.clock.nanos - micros * 1000.0
+        self._reschedule_armed_alarms()
+
+    def _reschedule_armed_alarms(self) -> None:
+        for alarm in self.alarms:
+            if alarm.armed:
+                alarm.clock_alarm.schedule(_to_uint32(alarm.target_micros - self._micros()) * 1000)
 
     def _fire_alarm(self, index: int) -> None:
         alarm = self.alarms[index]
