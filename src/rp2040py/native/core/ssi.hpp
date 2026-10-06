@@ -184,7 +184,10 @@ public:
             case TXFLR: case RXFLR: case ISR: case RISR: case TXOICR: case RXOICR: case RXUICR: case MSTICR: case ICR: return;  // read-only status: a write is a no-op
             case CTRLR0: ctrlr0_ = word & CTRLR0_MASK; return;
             case CTRLR1: ctrlr1_ = word & CTRLR1_MASK; return;
-            case SSIENR: ssienr_ = word & SSIENR_MASK; return;
+            case SSIENR:
+                ssienr_ = word & SSIENR_MASK;
+                if (ssienr_ == 0) rx_head_ = rx_count_ = 0;  // "The transmit and receive FIFO buffers are cleared when the DW_apb_ssi is disabled (SSI_EN = 0)" (datasheet 4.10.5)
+                return;
             case BAUDR: baudr_ = word & BAUDR_MASK; return;
             case RX_SAMPLE_DLY: rxsampdly_ = word & 0xFFu; return;
             case TXD_DRIVE_EDGE: txddriveedge_ = word & 0xFFu; return;

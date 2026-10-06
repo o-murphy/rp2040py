@@ -214,6 +214,8 @@ class RPSSI(BasePeripheral):
             self._crtlr1 = value & CTRLR1_MASK
         elif offset == SSI_SSIENR:
             self._ssienr = value & SSIENR_MASK
+            if not self._ssienr:
+                self._rx_queue.clear()  # "The transmit and receive FIFO buffers are cleared when the DW_apb_ssi is disabled (SSI_EN = 0)" (datasheet 4.10.5)
         elif offset == SSI_BAUDR:
             self._baudr = value & BAUDR_MASK
         elif offset == SSI_RX_SAMPLE_DLY:

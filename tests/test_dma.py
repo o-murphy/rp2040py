@@ -227,3 +227,20 @@ def test_a_channel_triggered_with_a_zero_count_does_nothing(rp2040_factory):
     clock.advance(10)
     assert cpu.read_uint32(0x20002000) == 0xCAFEBABE
     assert cpu.read_uint32(INTR) == 1
+
+
+def test_an_abort_clears_the_transfer_counter_and_the_busy_flag(rp2040_factory):
+    """Datasheet 2.5.5.3: "[CHAN_ABORT] terminates that channel. This clears the transfer counter and forces the channel into an inactive state"."""
+    cpu = rp2040_factory(MockClock())
+    cpu.write_uint32(CH0_READ_ADDR, 0x2001_0000)
+    cpu.write_uint32(CH0_WRITE_ADDR, 0x2002_0000)
+    cpu.write_uint32(CH0_TRANS_COUNT, 100)
+    cpu.write_uint32(
+        CH0_AL1_CTRL, EN | INCR_READ | INCR_WRITE | (DREQChannel.DREQ_SPI0_TX << TREQ_SEL_SHIFT)
+    )  # paced by a DREQ that is never up
+    cpu.write_uint32(MULTI_CHAN_TRIGGER, bit(0))
+    assert cpu.dma.channels[0].active and cpu.read_uint32(CH0_TRANS_COUNT) == 100
+    cpu.write_uint32(DMA_BASE + 0x444, bit(0))  # CHAN_ABORT
+    assert not cpu.dma.channels[0].active
+    assert cpu.read_uint32(CH0_TRANS_COUNT) == 0
+    assert cpu.read_uint32(DMA_BASE + 0x444) == 0

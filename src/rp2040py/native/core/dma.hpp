@@ -323,7 +323,9 @@ inline bool DmaChannel::schedule_transfer() noexcept {
 }
 
 inline void DmaChannel::abort() noexcept {
+    // "This clears the transfer counter and forces the channel into an inactive state" (datasheet 2.5.5.3)
     ctrl &= ~dma_regs::BUSY;
+    trans_count = 0;
     dma_->clock_->cancel(&alarm);
 }
 

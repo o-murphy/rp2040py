@@ -290,3 +290,17 @@ def test_register_widths_and_reset_values_follow_the_datasheet(rp2040_factory):
         assert chip.read_uint32(base + offset) == kept, hex(offset)
     chip.write_uint32(base + 0x20, 0x55)  # TXFLR: read only
     assert chip.read_uint32(base + 0x20) == 0
+
+
+def test_disabling_the_ssi_clears_the_receive_fifo(rp2040_factory):
+    """Datasheet 4.10.5: "The transmit and receive FIFO buffers are cleared when the DW_apb_ssi is disabled (SSI_EN = 0)"."""
+    chip = rp2040_factory()
+    base = 0x18000000
+    chip.write_uint32(base + 0x08, 1)  # SSIENR
+    chip.write_uint32(
+        base + 0x60, 0xAB
+    )  # DR0: a byte shifted, its answer queued (whether or not a flash command is framed)
+    assert chip.read_uint32(base + 0x24) >= 1  # RXFLR
+    chip.write_uint32(base + 0x08, 0)
+    assert chip.read_uint32(base + 0x24) == 0
+    assert not chip.read_uint32(base + 0x28) & 0x8  # SR.RFNE

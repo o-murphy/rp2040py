@@ -754,7 +754,10 @@ static void test_more_corners_of_the_state_machine() {
     // next_command: not enabled, a restart that is already pending, the restart and pending flags
     fresh(kDefer);
     wr(DATA_CMD, 1);
-    CHECK(env.events_n == 0 && i2c.tx.count() == 1);            // not enabled: the command waits
+    CHECK(env.events_n == 0 && i2c.tx.count() == 0);            // not enabled: the command is lost (the buffers are kept cleared while disabled)
+    wr(ENABLE, 0);
+    i2c.tx.push(1);
+    CHECK(wr(ENABLE, 0) && i2c.tx.count() == 0);                  // and disabling again flushes anything that is there
     fresh(kSilent);
     i2c.state = STATE_CONNECTED;
     i2c.pending_restart = true;

@@ -327,6 +327,7 @@ public:
                 if (config_open()) slave_address = word & 0x3FFu;
                 return true;
             case DATA_CMD:
+                if (!(enable & EN_ENABLE)) return true;  // "the data and commands are lost as the buffers are kept cleared" while disabled (datasheet 4.3.10.2.1)
                 if (tx.full()) return set_interrupts(R_TX_OVER);
                 tx.push(word & DATA_CMD_MASK);
                 if (tx.count() > tx_threshold) {  // "automatically cleared by hardware when the buffer level goes above the threshold"

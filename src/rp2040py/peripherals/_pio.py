@@ -338,17 +338,22 @@ class RPPIO(BasePeripheral):
         else:
             super().write_uint32(offset, value)
 
+    @staticmethod
+    def _pin_write(old: int, value: int, first_pin: int, count: int) -> int:
+        """The result of a write of `count` bits at `first_pin`: "the least-significant bit of OUT data is mapped to PINCTRL_OUT_BASE, and this mapping continues for PINCTRL_OUT_COUNT
+        bits, wrapping after GPIO31" (datasheet 3.5.6), so the data and the mask are rotated left by `first_pin` within 32 bits, not shifted."""
+        value &= 0xFFFFFFFF
+        mask = 0xFFFFFFFF if count > 31 else (1 << count) - 1
+        if first_pin:
+            value = ((value << first_pin) | (value >> (32 - first_pin))) & 0xFFFFFFFF
+            mask = ((mask << first_pin) | (mask >> (32 - first_pin))) & 0xFFFFFFFF
+        return ((old & ~mask) | (value & mask)) & 0x3FFFFFFF
+
     def pin_values_changed(self, value: int, first_pin: int, count: int) -> None:
-        # TODO: wrapping after pin 31
-        mask = 0xFFFFFFFF if count > 31 else ((1 << count) - 1) << first_pin
-        new_value = ((self.pin_values & ~mask) | ((value << first_pin) & mask)) & 0x3FFFFFFF
-        self.pin_values = new_value
+        self.pin_values = self._pin_write(self.pin_values, value, first_pin, count)
 
     def pin_directions_changed(self, value: int, first_pin: int, count: int) -> None:
-        # TODO: wrapping after pin 31
-        mask = 0xFFFFFFFF if count > 31 else ((1 << count) - 1) << first_pin
-        new_value = ((self.pin_directions & ~mask) | ((value << first_pin) & mask)) & 0x3FFFFFFF
-        self.pin_directions = new_value
+        self.pin_directions = self._pin_write(self.pin_directions, value, first_pin, count)
 
     def reset(self) -> None:
         """The whole block back to power-on (0089 Phase 5): instruction memory, the four state

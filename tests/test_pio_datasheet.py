@@ -86,3 +86,19 @@ def test_execctrl_and_shiftctrl_reserved_bits_are_not_stored(kind):
     machine.write_uint32(0x08, 0xFFFFFFFF)  # SMx_SHIFTCTRL
     assert machine.exec_ctrl == 0x7FFFFF9F
     assert machine.shift_ctrl == 0xFFFF0000
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_pin_mappings_wrap_after_gpio31(kind):
+    """Datasheet 3.5.6: an OUT or SET mapping "continues for COUNT bits, wrapping after GPIO31"."""
+    pio = _machine(kind).pio
+    pio.pin_values = 0
+    pio.pin_values_changed(
+        0xF0, 28, 8
+    )  # 8 bits at pin 28: the low 4 data bits are pins 28-31 (30 and 31 do not exist), the high 4 wrap to pins 0-3
+    assert pio.pin_values == 0xF
+    pio.pin_directions = 0
+    pio.pin_directions_changed(
+        0xFFFFFFFF, 4, 32
+    )  # a full-width mapping starting at pin 4 still reaches every pin (a rotation, not a shift)
+    assert pio.pin_directions == 0x3FFFFFFF

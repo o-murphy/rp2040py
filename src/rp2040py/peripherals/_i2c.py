@@ -539,6 +539,8 @@ class RPI2C(BasePeripheral):
                 self.slave_address = value & 0x3FF
 
         elif offset == IC_DATA_CMD:
+            if not (self.enable & ENABLE):
+                return  # "If the IC_DATA_CMD register is written before the DW_apb_i2c is enabled, the data and commands are lost as the buffers are kept cleared" (datasheet 4.3.10.2.1)
             if self._tx_fifo.full:
                 self._set_interrupts(R_TX_OVER)
             else:

@@ -249,7 +249,9 @@ class RPDMAChannel:
                 self.transfer_alarm.schedule(delay * 1000)
 
     def abort(self) -> None:
+        # "This clears the transfer counter and forces the channel into an inactive state" (datasheet 2.5.5.3)
         self._ctrl &= ~BUSY
+        self._trans_count = 0
         self.transfer_alarm.cancel()
 
     def read_uint32(self, offset: int) -> int:

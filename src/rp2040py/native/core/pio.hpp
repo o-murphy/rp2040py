@@ -274,14 +274,18 @@ public:
         return true;
     }
 
-    void pin_values_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept {
-        const uint32_t mask = count > 31 ? 0xFFFFFFFFu : (((1u << count) - 1u) << first_pin);
-        pin_values = ((pin_values & ~mask) | ((value << first_pin) & mask)) & 0x3FFFFFFFu;
+    // "The least-significant bit of OUT data is mapped to PINCTRL_OUT_BASE, and this mapping continues for PINCTRL_OUT_COUNT bits, wrapping after GPIO31" (datasheet 3.5.6): the data and
+    // the mask are rotated left by `first_pin` within 32 bits, not shifted.
+    static uint32_t pin_write(uint32_t old, uint32_t value, uint32_t first_pin, uint32_t count) noexcept {
+        uint32_t mask = count > 31 ? 0xFFFFFFFFu : ((1u << count) - 1u);
+        if (first_pin != 0) {
+            value = (value << first_pin) | (value >> (32 - first_pin));
+            mask = (mask << first_pin) | (mask >> (32 - first_pin));
+        }
+        return ((old & ~mask) | (value & mask)) & 0x3FFFFFFFu;
     }
-    void pin_directions_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept {
-        const uint32_t mask = count > 31 ? 0xFFFFFFFFu : (((1u << count) - 1u) << first_pin);
-        pin_directions = ((pin_directions & ~mask) | ((value << first_pin) & mask)) & 0x3FFFFFFFu;
-    }
+    void pin_values_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept { pin_values = pin_write(pin_values, value, first_pin, count); }
+    void pin_directions_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept { pin_directions = pin_write(pin_directions, value, first_pin, count); }
 
     // The set bits of what changed since the last call, each pin told to re-announce itself.
     bool check_changed_pins() noexcept {

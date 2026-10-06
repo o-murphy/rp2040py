@@ -124,3 +124,14 @@ def test_rx_full_is_a_level_and_the_abort_flushes_the_rx_fifo():
     i2c.arbitration_lost()  # a transmit abort flushes both FIFOs
     assert chip.read_uint32(I2C0_BASE + 0x78) == 0
     assert not chip.read_uint32(I2C0_BASE + IC_RAW_INTR_STAT) & (1 << 2)
+
+
+def test_a_command_written_while_the_i2c_is_disabled_is_lost():
+    """Datasheet 4.3.10.2.1: "If the IC_DATA_CMD register is written before the DW_apb_i2c is enabled, the data and commands are lost as the buffers are kept cleared"."""
+    chip, _ = _chip()
+    chip.i2c[0].on_start = lambda repeated: None  # a device that never answers: an accepted command stays in the FIFO
+    chip.write_uint32(I2C0_BASE + 0x10, 0x155)  # IC_DATA_CMD
+    assert chip.read_uint32(I2C0_BASE + 0x74) == 0  # IC_TXFLR
+    chip.write_uint32(I2C0_BASE + IC_ENABLE, 1)
+    chip.write_uint32(I2C0_BASE + 0x10, 0x155)
+    assert chip.read_uint32(I2C0_BASE + 0x74) == 1  # accepted now
