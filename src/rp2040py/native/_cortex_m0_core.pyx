@@ -164,6 +164,11 @@ cdef class CortexM0Core:
     def enabled_interrupts(self, value):
         self._cpu.enabled_interrupts = <uint32_t> (value & 0xFFFFFFFFU)
 
+    def _native_cpu_address(self):
+        """The address of this core's C++ `Cpu`, for a native block that works on its state directly (the PPB: the pending/enabled
+        words, the priorities, VTOR). The core owns the `Cpu` and must outlive the block: the block keeps a reference to this object."""
+        return <size_t> &self._cpu
+
     @property
     def vtor(self):
         return self._cpu.vtor

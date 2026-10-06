@@ -39,7 +39,7 @@ from rp2040py.peripherals.pads import RPPADS
 from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.pll import RPPLL
-from rp2040py.peripherals.ppb import RPPPB
+from rp2040py.peripherals._ppb import RPPPB  # the pure chip's own PPB: the native one is the native chip's
 from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.peripherals.reset import (
     RESET_ADC,
