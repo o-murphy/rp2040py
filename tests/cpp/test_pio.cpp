@@ -273,6 +273,49 @@ static void test_push_pull_and_mov() {
     CHECK(m.sm().input_shift_reg == 0xF0000000u && m.sm().input_shift_count == 0);
 }
 
+static void test_the_conditional_push_pull_and_the_osr_follow_the_datasheet() {
+    // PUSH IFFULL and PULL IFEMPTY test the threshold whether or not autopush / autopull is on (datasheet 3.4.6, 3.4.7)
+    Rig r;
+    r.sm().shift_ctrl = 8u << 20;  // no autopush, PUSH_THRESH 8
+    r.sm().input_shift_count = 3;
+    r.sm().input_shift_reg = 0x55;
+    r.exec(op(PUSHPULL, 1 << 6));  // PUSH iffull: 3 < 8, nothing
+    CHECK(r.sm().rx.used == 0 && r.sm().input_shift_reg == 0x55);
+    r.sm().input_shift_count = 8;
+    r.exec(op(PUSHPULL, 1 << 6));  // 8 >= 8: pushes
+    CHECK(r.sm().rx.used == 1 && r.sm().input_shift_reg == 0 && r.sm().input_shift_count == 0);
+    Rig p;
+    p.sm().shift_ctrl = 16u << 25;  // no autopull, PULL_THRESH 16
+    p.sm().tx.push(0xAB);
+    p.sm().output_shift_count = 8;
+    p.exec(op(PUSHPULL, 0x80 | (1 << 6)));  // PULL ifempty: 8 < 16, nothing
+    CHECK(p.sm().tx.used == 1 && p.sm().output_shift_count == 8);
+    p.sm().output_shift_count = 16;
+    p.exec(op(PUSHPULL, 0x80 | (1 << 6)));
+    CHECK(p.sm().tx.used == 0 && p.sm().output_shift_reg == 0xAB && p.sm().output_shift_count == 0);
+    // with autopull on, a PULL is a no-op while the OSR is full (shift count 0): a barrier behind the autopull
+    Rig b;
+    b.sm().shift_ctrl = (1u << 17) | (8u << 25);
+    b.sm().tx.push(0x11);
+    b.sm().output_shift_count = 0;
+    b.sm().output_shift_reg = 0x77;
+    b.exec(op(PUSHPULL, 0x80));
+    CHECK(b.sm().tx.used == 1 && b.sm().output_shift_reg == 0x77);
+    b.sm().output_shift_count = 3;  // partly shifted out: an ordinary PULL
+    b.exec(op(PUSHPULL, 0x80));
+    CHECK(b.sm().tx.used == 0 && b.sm().output_shift_reg == 0x11);
+    // OUT NULL, 32 shifts all 32 bits out and the OSR shifts in zeroes; reset and restart leave the OSR empty (count 32), restart clears EXEC_STALLED
+    Rig o;
+    o.sm().output_shift_reg = 0xDEADBEEF;
+    o.sm().output_shift_count = 0;
+    o.exec(op(OUT, 3 << 5));
+    CHECK(o.sm().output_shift_reg == 0 && o.sm().output_shift_count == 32);
+    CHECK(Rig().sm().output_shift_count == 32);
+    o.sm().exec_ctrl |= 1u << 31;
+    CHECK(o.sm().restart());
+    CHECK(!(o.sm().exec_ctrl & (1u << 31)));
+}
+
 static void test_exec_runs_the_data_as_an_instruction_and_a_wide_opcode_matches_nothing() {
     Rig r;
     r.sm().x = op(SET, (2 << 5) | 9);  // an instruction word held in X
@@ -419,10 +462,12 @@ static void test_registers_aliases_and_warnings() {
     CHECK(r.sm(2).div_fp == (65536 << 8));  // CLKDIV_INT 0 divides by 65536
     r.sm().exec_ctrl = 1u << 31;
     CHECK(r.pio.write_atomic(SM0_EXECCTRL, 0xFFFFFFFF, kAtomicNormal));
-    CHECK(r.sm().exec_ctrl == 0xFFFFFFFFu);  // EXEC_STALLED is read-only: kept as it was
+    CHECK(r.sm().exec_ctrl == 0xFFFFFF9Fu);  // EXEC_STALLED is read-only: kept as it was; 6:5 are reserved
     r.sm().exec_ctrl = 0;
     CHECK(r.pio.write_atomic(SM0_EXECCTRL, 0xFFFFFFFF, kAtomicNormal));
-    CHECK(r.sm().exec_ctrl == 0x7FFFFFFFu);
+    CHECK(r.sm().exec_ctrl == 0x7FFFFF9Fu);
+    CHECK(r.pio.write_atomic(SM0_SHIFTCTRL, 0xFFFFFFFF, kAtomicNormal));
+    CHECK(r.sm().shift_ctrl == 0xFFFF0000u);  // 15:0 are reserved
     // SM_INSTR executes now and marks a stalled machine
     CHECK(r.pio.write_atomic(SM0_INSTR, op(WAIT, 0x80 | 9), kAtomicNormal));
     CHECK(r.sm().waiting && (r.sm().exec_ctrl & (1u << 31)));
@@ -499,6 +544,7 @@ int main() {
     test_jmp_conditions();
     test_in_out_shifting_and_autopush_autopull();
     test_push_pull_and_mov();
+    test_the_conditional_push_pull_and_the_osr_follow_the_datasheet();
     test_exec_runs_the_data_as_an_instruction_and_a_wide_opcode_matches_nothing();
     test_wait_gpio_pin_and_irq_and_the_irq_instruction();
     test_pacing_enable_restart_arrears();

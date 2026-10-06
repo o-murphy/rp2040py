@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 
 __all__ = ("StateMachine",)
 
+EXECCTRL_WRITE_MASK = 0x7FFFFF9F
+SHIFTCTRL_WRITE_MASK = 0xFFFF0000
+
 
 class StateMachine:
     def __init__(self, rp2040: "RP2040", pio: "RPPIO", index: int):
@@ -59,7 +62,7 @@ class StateMachine:
         self.input_shift_reg = 0
         self.input_shift_count = 0
         self.output_shift_reg = 0
-        self.output_shift_count = 0
+        self.output_shift_count = 32  # "At reset ... ISR shift counter is set to 0 (nothing shifted in), and OSR to 32 (nothing left to be shifted out)" (datasheet 3.5.4)
         self.cycles = 0
 
         self.exec_opcode = 0
@@ -337,6 +340,7 @@ class StateMachine:
 
         if bit_count == 0:
             self.write_out_value(destination, self.output_shift_reg, 32)
+            self.output_shift_reg = 0  # all 32 bits were shifted out, and the OSR shifts in zeroes
             self.output_shift_count = 32
         else:
             if self.shift_ctrl & SHIFTCTRL_OUT_SHIFTDIR:
@@ -431,10 +435,10 @@ class StateMachine:
                 pass
             elif arg & 0x80:
                 # PULL
-                if (
-                    if_full_or_empty
-                    and self.shift_ctrl & SHIFTCTRL_AUTOPULL
-                    and self.output_shift_count < self.pull_threshold
+                # IfEmpty: "do nothing unless the total output shift count has reached its threshold" - whether or not autopull is on; and "When autopull is enabled, any PULL
+                # instruction is a no-op when the OSR is full" (the shift count is 0), so that it acts as a barrier behind the autopull (datasheet 3.4.7 and 3.5.4.2)
+                if (if_full_or_empty and self.output_shift_count < self.pull_threshold) or (
+                    self.shift_ctrl & SHIFTCTRL_AUTOPULL and self.output_shift_count == 0
                 ):
                     pass
                 else:
@@ -452,11 +456,8 @@ class StateMachine:
                     self.output_shift_count = 0
             else:
                 # PUSH
-                if (
-                    if_full_or_empty
-                    and self.shift_ctrl & SHIFTCTRL_AUTOPUSH
-                    and self.input_shift_count < self.push_threshold
-                ):
+                # IfFull: "do nothing unless the total input shift count has reached its threshold" - whether or not autopush is on (datasheet 3.4.6)
+                if if_full_or_empty and self.input_shift_count < self.push_threshold:
                     pass
                 else:
                     if not self.rx_fifo.full:
@@ -655,9 +656,10 @@ class StateMachine:
             self.div_fp = ((self.clock_div_int or 65536) << 8) | self.clock_div_frac
             self.pio.recompute_due()
         elif absolute_offset == SM0_EXECCTRL:
-            self.exec_ctrl = ((value & 0x7FFFFFFF) | (self.exec_ctrl & 0x80000000)) & 0xFFFFFFFF
+            # bits 6:5 are reserved and 31 (EXEC_STALLED) is read only
+            self.exec_ctrl = ((value & EXECCTRL_WRITE_MASK) | (self.exec_ctrl & 0x80000000)) & 0xFFFFFFFF
         elif absolute_offset == SM0_SHIFTCTRL:
-            self.shift_ctrl = value
+            self.shift_ctrl = value & SHIFTCTRL_WRITE_MASK  # 15:0 are reserved
         elif absolute_offset == SM0_ADDR:
             pass  # read-only
         elif absolute_offset == SM0_INSTR:
@@ -699,7 +701,7 @@ class StateMachine:
         self.input_shift_reg = 0
         self.input_shift_count = 0
         self.output_shift_reg = 0
-        self.output_shift_count = 0
+        self.output_shift_count = 32
         self.cycles = 0
         self.exec_opcode = 0
         self.exec_valid = False
@@ -731,6 +733,9 @@ class StateMachine:
         self.output_shift_count = 32
         self.input_shift_reg = 0
         self.waiting = False
+        self.exec_ctrl &= (
+            ~EXECCTRL_EXEC_STALLED
+        )  # "any stalled instruction written to SMx_INSTR or run by OUT/MOV EXEC" is cleared too
         # TODO any pin write left asserted due to OUT_STICKY.
 
     def clk_div_restart(self) -> None:

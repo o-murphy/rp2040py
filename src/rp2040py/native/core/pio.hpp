@@ -110,7 +110,7 @@ struct PioMachine {
     bool enabled = false;
 
     uint32_t x = 0, y = 0, pc = 0;
-    uint32_t input_shift_reg = 0, input_shift_count = 0, output_shift_reg = 0, output_shift_count = 0;
+    uint32_t input_shift_reg = 0, input_shift_count = 0, output_shift_reg = 0, output_shift_count = 32;  // reset: the OSR is empty (datasheet 3.5.4)
     int64_t cycles = 0;  // signed: check_wait() can add a still-unresolved wait_delay of -1
     uint32_t exec_opcode = 0;
     bool exec_valid = false;
@@ -631,6 +631,7 @@ inline bool PioMachine::out_instruction(uint32_t arg) noexcept {
     const uint32_t destination = arg >> 5;
     if (bit_count == 0) {
         RP2040_PIO_TRY(write_out_value(destination, output_shift_reg, 32));
+        output_shift_reg = 0;  // all 32 bits were shifted out, and the OSR shifts in zeroes
         output_shift_count = 32;
         return true;
     }
@@ -778,7 +779,9 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
             const bool if_full_or_empty = (arg & (1u << 6)) != 0;
             if (arg & 0x1F) break;  // unknown instruction
             if (arg & 0x80) {       // PULL
-                if (if_full_or_empty && (shift_ctrl & (1u << 17)) && output_shift_count < pull_threshold()) break;
+                // IfEmpty: "do nothing unless the total output shift count has reached its threshold" - whether or not autopull is on; and "When autopull is enabled, any PULL
+                // instruction is a no-op when the OSR is full" (the shift count is 0), so that it acts as a barrier behind the autopull (datasheet 3.4.7 and 3.5.4.2)
+                if ((if_full_or_empty && output_shift_count < pull_threshold()) || ((shift_ctrl & (1u << 17)) && output_shift_count == 0)) break;
                 if (!tx.empty()) {
                     output_shift_reg = tx.pull();
                     RP2040_PIO_TRY(update_dma_tx());
@@ -791,7 +794,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
                 }
                 output_shift_count = 0;
             } else {  // PUSH
-                if (if_full_or_empty && (shift_ctrl & (1u << 16)) && input_shift_count < push_threshold()) break;
+                if (if_full_or_empty && input_shift_count < push_threshold()) break;  // IfFull: "do nothing unless the total input shift count has reached its threshold"; autopush or not
                 if (!rx.full()) {
                     rx.push(input_shift_reg);
                     RP2040_PIO_TRY(update_dma_rx());
@@ -956,6 +959,7 @@ inline bool PioMachine::restart() noexcept {
     output_shift_count = 32;
     input_shift_reg = 0;
     waiting = false;
+    exec_ctrl &= ~0x80000000u;  // EXEC_STALLED: "any stalled instruction written to SMx_INSTR or run by OUT/MOV EXEC" is cleared too
     return true;
 }
 
@@ -964,7 +968,8 @@ inline void PioMachine::clk_div_restart() noexcept { next_due_fp = block->cycle_
 inline bool PioMachine::reset() noexcept {
     enabled = false;
     x = y = pc = 0;
-    input_shift_reg = input_shift_count = output_shift_reg = output_shift_count = 0;
+    input_shift_reg = input_shift_count = output_shift_reg = 0;
+    output_shift_count = 32;
     cycles = 0;
     exec_opcode = 0;
     exec_valid = false;
@@ -1015,8 +1020,8 @@ inline bool PioMachine::write32(uint32_t offset, uint32_t value) noexcept {
             div_fp = (static_cast<int64_t>(clock_div_int ? clock_div_int : 65536u) << 8) | clock_div_frac;
             block->recompute_due();
             return true;
-        case SM0_EXECCTRL: exec_ctrl = (value & 0x7FFFFFFFu) | (exec_ctrl & 0x80000000u); return true;
-        case SM0_SHIFTCTRL: shift_ctrl = value; return true;
+        case SM0_EXECCTRL: exec_ctrl = (value & 0x7FFFFF9Fu) | (exec_ctrl & 0x80000000u); return true;  // 6:5 reserved, 31 read only
+        case SM0_SHIFTCTRL: shift_ctrl = value & 0xFFFF0000u; return true;  // 15:0 reserved
         case SM0_ADDR: return true;  // read-only
         case SM0_INSTR:
             RP2040_PIO_TRY(execute_instruction(value & 0xFFFF));
