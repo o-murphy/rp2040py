@@ -129,7 +129,9 @@ SYST_CSR = 0xE000E010
 
 def test_systick_and_the_pwm_counters_are_retuned_when_clk_sys_changes():
     chip = RP2040()
-    chip.write_uint32(SYST_CSR, 1 << 2)  # CLKSOURCE = processor clock; 0 is the 1 MHz reference clock, which clk_sys does not move
+    chip.write_uint32(
+        SYST_CSR, 1 << 2
+    )  # CLKSOURCE = processor clock; 0 is the 1 MHz reference clock, which clk_sys does not move
     _set_sys_clock(chip, **_arduino_pico_200())
     assert chip.ppb.systick_timer.frequency == 200 * MHZ
     assert chip.pwm.channels[0].timer.frequency == 200 * MHZ

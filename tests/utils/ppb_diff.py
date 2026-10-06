@@ -184,16 +184,48 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     # -- SysTick
     "systick_no_count_flag": ("            self.systick_count_flag = True\n", "            pass\n", 1),
     "systick_ignores_int_enable": ("            if self.systick_int_enable:\n", "            if True:\n", 1),
-    "source_ignored": ("frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK", "frequency = self.clk_sys", 1),
-    "source_inverted": ("frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK", "frequency = SYSTICK_REF_CLK if self.systick_clk_source else self.clk_sys", 1),
+    "source_ignored": (
+        "frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK",
+        "frequency = self.clk_sys",
+        1,
+    ),
+    "source_inverted": (
+        "frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK",
+        "frequency = SYSTICK_REF_CLK if self.systick_clk_source else self.clk_sys",
+        1,
+    ),
     "ref_clk_wrong": ("SYSTICK_REF_CLK = 1e6", "SYSTICK_REF_CLK = 2e6", 1),
-    "clk_sys_change_ignored": ("        self.clk_sys = clk_sys\n        self._retune_systick()\n", "        self._retune_systick()\n", 1),
-    "clk_sys_change_not_applied": ("        self.clk_sys = clk_sys\n        self._retune_systick()\n", "        self.clk_sys = clk_sys\n", 1),
-    "csr_write_does_not_retune": ("            self._retune_systick()  # CLKSOURCE 0", "            pass  # CLKSOURCE 0", 1),
+    "clk_sys_change_ignored": (
+        "        self.clk_sys = clk_sys\n        self._retune_systick()\n",
+        "        self._retune_systick()\n",
+        1,
+    ),
+    "clk_sys_change_not_applied": (
+        "        self.clk_sys = clk_sys\n        self._retune_systick()\n",
+        "        self.clk_sys = clk_sys\n",
+        1,
+    ),
+    "csr_write_does_not_retune": (
+        "            self._retune_systick()  # CLKSOURCE 0",
+        "            pass  # CLKSOURCE 0",
+        1,
+    ),
     "rvr_top_not_set": ("            self.systick_timer.top = self.systick_reload\n", "", 1),
-    "rvr_top_off_by_one": ("self.systick_timer.top = self.systick_reload", "self.systick_timer.top = self.systick_reload + 1", 1),
-    "rvr_zero_arms_the_alarm": ("self.systick_alarm.enable = self.systick_reload != 0", "self.systick_alarm.enable = True", 1),
-    "rvr_alarm_stays_off": ("self.systick_alarm.enable = self.systick_reload != 0", "self.systick_alarm.enable = self.systick_alarm.enable and self.systick_reload != 0", 1),
+    "rvr_top_off_by_one": (
+        "self.systick_timer.top = self.systick_reload",
+        "self.systick_timer.top = self.systick_reload + 1",
+        1,
+    ),
+    "rvr_zero_arms_the_alarm": (
+        "self.systick_alarm.enable = self.systick_reload != 0",
+        "self.systick_alarm.enable = True",
+        1,
+    ),
+    "rvr_alarm_stays_off": (
+        "self.systick_alarm.enable = self.systick_reload != 0",
+        "self.systick_alarm.enable = self.systick_alarm.enable and self.systick_reload != 0",
+        1,
+    ),
     "systick_counts_up": (
         "self.systick_timer.mode = TimerMode.DECREMENT",
         "self.systick_timer.mode = TimerMode.INCREMENT",
