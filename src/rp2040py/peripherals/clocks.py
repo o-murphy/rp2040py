@@ -39,6 +39,26 @@ CLK_RTC_DIV = 0x70
 CLK_RTC_SELECTED = 0x74
 CLK_SYS_RESUS_CTRL = 0x78
 CLK_SYS_RESUS_STATUS = 0x7C
+WAKE_EN0 = 0xA0
+WAKE_EN1 = 0xA4
+SLEEP_EN0 = 0xA8
+SLEEP_EN1 = 0xAC
+INTR = 0xB8
+INTE = 0xBC
+INTF = 0xC0
+INTS = 0xC4
+
+# Registers that are stored and not acted on (clock gating in sleep, the resus and its interrupt are not modelled): offset -> (writable mask, reset value). WAKE_EN/SLEEP_EN
+# reset to all ones (every clock runs in sleep); CLK_SYS_RESUS_CTRL is CLEAR 16, FRCE 12, ENABLE 8 and TIMEOUT 7:0 (reset 0xFF); INTE/INTF are the one bit of the resus interrupt.
+STORED_REGISTERS = {
+    CLK_SYS_RESUS_CTRL: (0x111FF, 0xFF),
+    WAKE_EN0: (0xFFFFFFFF, 0xFFFFFFFF),
+    WAKE_EN1: (0x7FFF, 0x7FFF),
+    SLEEP_EN0: (0xFFFFFFFF, 0xFFFFFFFF),
+    SLEEP_EN1: (0x7FFF, 0x7FFF),
+    INTE: (0x1, 0),
+    INTF: (0x1, 0),
+}
 
 # CLK_REF_CTRL
 CLK_REF_CTRL_SRC_MASK = 0x3
@@ -72,6 +92,9 @@ CLK_PERI_CTRL_AUXSRC_PLL_SYS = 0x1
 CLK_PERI_CTRL_AUXSRC_PLL_USB = 0x2
 CLK_PERI_CTRL_AUXSRC_ROSC = 0x3
 CLK_PERI_CTRL_AUXSRC_XOSC = 0x4
+
+# CLK_REF_DIV, CLK_USB_DIV and CLK_ADC_DIV have no fractional part: INT is bits 9:8 and the rest is reserved
+CLK_DIV_INT_ONLY_MASK = 0x300
 
 # CLK_x_DIV: 24.8 fixed point (INT bits 31:8, FRAC bits 7:0)
 CLK_DIV_INT_SHIFT = 8
@@ -109,6 +132,7 @@ class RPClocks(BasePeripheral):
         self.adc_div = 0x100
         self.rtc_ctrl = 0
         self.rtc_div = 0x100
+        self._stored = {offset: reset for offset, (_mask, reset) in STORED_REGISTERS.items()}
 
     def reset(self) -> None:
         """Every CLK_*_CTRL/DIV back to its power-on value (0089 Phase 5) - `0x100`, i.e. a
@@ -133,6 +157,7 @@ class RPClocks(BasePeripheral):
         self.adc_div = 0x100
         self.rtc_ctrl = 0
         self.rtc_div = 0x100
+        self._stored = {offset: reset for offset, (_mask, reset) in STORED_REGISTERS.items()}
 
     @property
     def ref_freq(self) -> float:
@@ -222,7 +247,7 @@ class RPClocks(BasePeripheral):
         if offset == CLK_REF_CTRL:
             return self.ref_ctrl & 0b000001100011
         if offset == CLK_REF_DIV:
-            return self.ref_div & 0x30  # b8..9 = int divisor. no frac divisor present
+            return self.ref_div & CLK_DIV_INT_ONLY_MASK  # b9:8 = int divisor. no frac divisor present
         if offset == CLK_REF_SELECTED:
             return 1 << (self.ref_ctrl & 0x03)
         if offset == CLK_SYS_CTRL:
@@ -240,25 +265,29 @@ class RPClocks(BasePeripheral):
         if offset == CLK_USB_CTRL:
             return self.usb_ctrl & 0b100110000110011100000
         if offset == CLK_USB_DIV:
-            return self.usb_div
+            return self.usb_div & CLK_DIV_INT_ONLY_MASK
         if offset == CLK_USB_SELECTED:
             return 1
         if offset == CLK_ADC_CTRL:
             return self.adc_ctrl & 0b100110000110011100000
         if offset == CLK_ADC_DIV:
-            return self.adc_div & 0x30
+            return self.adc_div & CLK_DIV_INT_ONLY_MASK
         if offset == CLK_ADC_SELECTED:
             return 1
         if offset == CLK_RTC_CTRL:
             return self.rtc_ctrl & 0b100110000110011100000
         if offset == CLK_RTC_DIV:
-            return self.rtc_div & 0x30
+            return self.rtc_div
         if offset == CLK_RTC_SELECTED:
             return 1
-        if offset == CLK_SYS_RESUS_CTRL:
-            return 0xFF
+        if offset in STORED_REGISTERS:
+            return self._stored[offset]
         if offset == CLK_SYS_RESUS_STATUS:
             return 0  # clock resus not implemented
+        if offset == INTR:
+            return 0
+        if offset == INTS:
+            return self._stored[INTF]  # INTS = (INTR & INTE) | INTF, and nothing raises INTR
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
@@ -282,7 +311,7 @@ class RPClocks(BasePeripheral):
             self.ref_ctrl = value
             self.rp2040.update_clocks()
         elif offset == CLK_REF_DIV:
-            self.ref_div = value
+            self.ref_div = value & CLK_DIV_INT_ONLY_MASK
             self.rp2040.update_clocks()
         elif offset == CLK_SYS_CTRL:
             self.sys_ctrl = value
@@ -298,17 +327,19 @@ class RPClocks(BasePeripheral):
         elif offset == CLK_USB_CTRL:
             self.usb_ctrl = value
         elif offset == CLK_USB_DIV:
-            self.usb_div = value
+            self.usb_div = value & CLK_DIV_INT_ONLY_MASK
         elif offset == CLK_ADC_CTRL:
             self.adc_ctrl = value
         elif offset == CLK_ADC_DIV:
-            self.adc_div = value
+            self.adc_div = value & CLK_DIV_INT_ONLY_MASK
         elif offset == CLK_RTC_CTRL:
             self.rtc_ctrl = value
         elif offset == CLK_RTC_DIV:
             self.rtc_div = value
-        elif offset == CLK_SYS_RESUS_CTRL:
-            return  # clock resus not implemented
+        elif offset in STORED_REGISTERS:
+            self._stored[offset] = value & STORED_REGISTERS[offset][0]
+        elif offset in (CLK_SYS_RESUS_STATUS, INTR, INTS):
+            return  # read only
         else:
             super().write_uint32(offset, value)
 

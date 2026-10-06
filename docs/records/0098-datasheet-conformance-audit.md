@@ -400,6 +400,29 @@ Read: 2.5.2 (aliases, triggers, chaining, null triggers), 2.5.3.1 (the DREQ tabl
 - **Not implemented, in the backlog:** the sniffer (SNIFF_CTRL, SNIFF_DATA, CTRL.SNIFF_EN), HIGH_PRIORITY and the arbitration, the read/write/AHB error flags, the DBG_CTDREQ counter (never counts), a transfer taking bus cycles (one transfer per alarm).
 - Tests: `tests/test_sio_datasheet.py` (the interpolator examples and the new widths), `tests/cpp/test_sio.cpp`, `tests/cpp/test_dma.cpp` (the timers now follow Y/X), the DMA oracle (`tests/utils/dma_diff.py`: `timer3_shifts_16` became three mutants, `timer3_shifts_4`, `timer_period_inverted` and `timer_rate_uncapped`, plus `abort_read_warns`).
 
+### SSI (datasheet 4.10, the XIP SSI)
+
+Read: every register table of the SSI (CTRLR0 .. TXD_DRIVE_EDGE) and the field lists; **not** read: the operation chapters (the FIFO and interrupt behaviour of the DW_apb_ssi, the XIP streaming and its DREQs, the dual/quad formats). The model is a **flash-command emulation** driven by the bootrom through DR0 (framed by QSPI_SS, not by SER/SSIENR, as the code explains); its register file was never the point, which is why most of the findings are widths.
+
+- **Reserved bits stuck:** CTRLR0 (23 and 31:25), CTRLR1 (31:16), SSIENR (31:1), BAUDR (31:16) and SPI_CTRLR0 (31:24 is XIP_CMD, but 23:19, 10 and 7:6 are reserved) kept whatever was written. Now 0x017FFFFF, 0xFFFF, 0x1, 0xFFFF and 0xFF07FB3F.
+- **`SPI_CTRLR0` reset value** is 0x03000000 (XIP_CMD = 0x03, the READ command); it was 0.
+- **`TXFLR` was writable** (it is read only); a write is ignored now (it always reads 0: there is no TX FIFO to fill).
+- **Unimplemented, now stored and not acted on:** MWCR, SER, TXFTLR, RXFTLR, IMR, DMACR, DMATDLR, DMARDLR (their widths, reset 0). ISR, RISR and the clear-on-read registers (TXOICR, RXOICR, RXUICR, MSTICR, ICR) read 0: nothing is raised.
+- **Checked and consistent:** IDR 0x51535049 and SSI_VERSION_ID 0x3430312A, SR's TFE/TFNF/RFNE composition (the reset column of a status register is a placeholder), RXFLR as the length of the model's RX queue.
+- **Left, deliberately:** the SSI's FIFOs (the RX queue is unbounded, TX is instant, so TFE/TFNF are constant and RFF/BUSY/TXE/DCOL never set), the interrupts, DMA and XIP streaming, the dual/quad formats and the DDR bits (SPI_CTRLR0 is stored only), CTRLR0.DFS/TMOD and the rest of the frame setup (the model shifts 8 bits whatever they say).
+- Tests: `tests/test_ssi.py` (one datasheet case), `tests/cpp/test_ssi.cpp`, the oracle (`tests/utils/ssi_diff.py`: the new registers in the write stream, 10 new mutants for the masks, the reset values, TXFLR and the stored registers).
+
+### CLOCKS and PLL (datasheet 2.15 and 2.18)
+
+Read: the register tables of CLOCKS (CLK_GPOUT0_CTRL .. INTS) and PLL, the AUXSRC/SRC encodings of REF, SYS and PERI against the code (they match); **not** read: the clock-generator chapters (glitchless mux behaviour, the frequency counter's operation, the resus), and the PLL's VCO limits and start-up. Both are plain Python blocks (no C++ twin, no oracle) - the tests are `tests/test_clocks_datasheet.py`.
+
+- **`CLK_REF_DIV`, `CLK_ADC_DIV` read through a mask of bits 5:4** (`& 0x30`) where the INT field is bits 9:8, so they read 0 after reset (the datasheet: 0x100) and lost the written value; `CLK_USB_DIV` was not masked at all and `CLK_RTC_DIV` (a full 24.8 divider) read through the same wrong mask. Now REF/USB/ADC keep bits 9:8 (written and read) and RTC reads whole.
+- **`CLK_SYS_RESUS_CTRL` read a constant 0xFF and ignored writes;** it is CLEAR 16, FRCE 12, ENABLE 8, TIMEOUT 7:0 (reset 0xFF) and is stored now (the resus itself is not modelled).
+- **Unimplemented, now stored and not acted on:** WAKE_EN0/1 and SLEEP_EN0/1 (reset all ones, widths 32 and 15 bits), INTE/INTF (the resus interrupt's one bit); INTR reads 0 and INTS is INTF (nothing raises INTR; the CLOCKS IRQ line is not driven).
+- **PLL registers stored every bit written:** CS keeps BYPASS and REFDIV (LOCK is read only and always set), PWR 0x2D, FBDIV_INT 11:0, PRIM POSTDIV1/POSTDIV2 (0x77000). (The tool's PRIM "reset" finding is its misparse of a later table.)
+- **Checked and consistent:** the SRC/AUXSRC encodings of CLK_REF, CLK_SYS and CLK_PERI, the divider decoding (INT 0 = 2^16), the *_SELECTED one-hot values, the PLL output formula `f_ref / REFDIV x FBDIV / (POSTDIV1 x POSTDIV2)` and the bypass case.
+- **Not sourced / left, deliberately:** `CLK_PERI_DIV` (0x4C) exists in the model and not in the datasheet (clk_peri has no divider; the register is stored and ignored); the PLL is always locked, even with PD or VCOPD set (no start-up time; pico-sdk only waits for LOCK after powering the PLL up); the frequency counter FC0_* (a firmware that measures a clock would wait forever: it is a feature, in the backlog) and ENABLED0/1 stay unimplemented; the clock gating of WAKE_EN/SLEEP_EN is not modelled.
+
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
@@ -410,3 +433,5 @@ Read: 2.5.2 (aliases, triggers, chaining, null triggers), 2.5.3.1 (the DREQ tabl
 - 2026-10-06: **SPI read against the datasheet and fixed** (reserved bits, nothing sent while SSE = 0, the DMA requests gated by SSE and SSPDMACR, loop back, SSPRIS reset). Next: I2C.
 - 2026-10-06: **I2C read against the datasheet's register tables and fixed** (FIRST_DATA_BYTE bit, configuration writable only while disabled, widths and minima, stored registers, RX_FULL as a level, abort flushes RX, ACTIVITY). Next: SIO, DMA, SSI, CLOCKS/PLL, PIO - then the small blocks as they are ported.
 - 2026-10-06: **SIO and DMA read against the datasheet and fixed** (SIO: QSPI GPIO width, divider reset, ACCUM_ADD width, FORCE_MSB per lane; DMA: pacing timer period, TIMER3, reads of CHAN_ABORT/MULTI_CHAN_TRIGGER/FIFO_LEVELS). Next: SSI, CLOCKS/PLL, PIO.
+- 2026-10-06: **SSI read against the datasheet's register tables and fixed** (reserved bits, SPI_CTRLR0 reset, TXFLR read only, the unimplemented registers stored). Next: CLOCKS/PLL, PIO.
+- 2026-10-06: **CLOCKS and PLL read against the datasheet's register tables and fixed** (DIV masks, RESUS_CTRL, WAKE/SLEEP/INT registers stored, PLL widths). Next: PIO.

@@ -20,6 +20,11 @@ PLL_CS_REFDIV_MASK = 0x3F
 
 PLL_FBDIV_INT_MASK = 0xFFF
 
+# Writable bits (datasheet 2.18.4: CS BYPASS and REFDIV, PWR VCOPD/POSTDIVPD/DSMPD/PD, FBDIV_INT 11:0, PRIM POSTDIV1 and POSTDIV2); the rest is reserved
+PLL_CS_WRITE_MASK = PLL_CS_BYPASS | PLL_CS_REFDIV_MASK
+PLL_PWR_WRITE_MASK = 0x2D
+PLL_PRIM_WRITE_MASK = 0x77000
+
 # PLL_PRIM bits
 PLL_PRIM_POSTDIV1_SHIFT = 16
 PLL_PRIM_POSTDIV2_SHIFT = 12
@@ -85,13 +90,13 @@ class RPPLL(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == PLL_CS:
-            self.cs = value
+            self.cs = value & PLL_CS_WRITE_MASK
         elif offset == PLL_PWR:
-            self.pwr = value
+            self.pwr = value & PLL_PWR_WRITE_MASK
         elif offset == PLL_FBDIV_INT:
-            self.fbdiv_int = value
+            self.fbdiv_int = value & PLL_FBDIV_INT_MASK
         elif offset == PLL_PRIM:
-            self.prim = value
+            self.prim = value & PLL_PRIM_WRITE_MASK
         else:
             super().write_uint32(offset, value)
             return
