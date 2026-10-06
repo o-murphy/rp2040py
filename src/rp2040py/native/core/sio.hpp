@@ -60,7 +60,9 @@ constexpr uint32_t I_ACCUM0 = 0x00, I_ACCUM1 = 0x04, I_BASE0 = 0x08, I_BASE1 = 0
 constexpr uint32_t I_POP_LANE0 = 0x14, I_POP_LANE1 = 0x18, I_POP_FULL = 0x1C;
 constexpr uint32_t I_PEEK_LANE0 = 0x20, I_PEEK_LANE1 = 0x24, I_PEEK_FULL = 0x28;
 constexpr uint32_t I_CTRL_LANE0 = 0x2C, I_CTRL_LANE1 = 0x30, I_ACCUM0_ADD = 0x34, I_ACCUM1_ADD = 0x38, I_BASE_1AND0 = 0x3C;
-constexpr uint32_t GPIO_MASK = 0x3FFFFFFF;
+constexpr uint32_t GPIO_MASK = 0x3FFFFFFF;  // GPIO0..29 (datasheet: bits 31:30 reserved)
+constexpr uint32_t QSPI_MASK = 0x3F;       // GPIO_HI_OUT / GPIO_HI_OE: the six QSPI pins, 5:0
+constexpr int64_t INTERP_ADD_MASK = 0xFFFFFF;  // INTERPx_ACCUMy_ADD is 23:0 (datasheet, and SIO_INTERP0_ACCUM0_ADD_BITS 0x00ffffff in pico-sdk's sio.h)
 }  // namespace sio_regs
 
 class SioBlock {
@@ -73,19 +75,19 @@ public:
 
     // The registers the rest of the chip (and tests) read and write directly, as plain attributes of the Python block.
     uint32_t gpio_value = 0, gpio_output_enable = 0, qspi_gpio_value = 0, qspi_gpio_output_enable = 0;
-    int64_t div_dividend = 0, div_divisor = 1, div_remainder = 0;
+    int64_t div_dividend = 0, div_divisor = 0, div_remainder = 0;  // reset: the datasheet's 0
     double div_quotient = 0;
-    uint32_t div_csr = 0, spin_lock = 0;
+    uint32_t div_csr = 1, spin_lock = 0;  // DIV_CSR.READY resets to 1
 
     Interpolator& interp(int index) noexcept { return interp_[index]; }
 
     void reset() noexcept {
         gpio_value = gpio_output_enable = qspi_gpio_value = qspi_gpio_output_enable = 0;
         div_dividend = 0;
-        div_divisor = 1;
+        div_divisor = 0;
         div_quotient = 0;
         div_remainder = 0;
-        div_csr = 0;
+        div_csr = 1;
         spin_lock = 0;
         interp_[0].reset();
         interp_[1].reset();
@@ -197,6 +199,7 @@ public:
         }
         const uint32_t prev_value = gpio_value, prev_oe = gpio_output_enable;
         const uint32_t masked = static_cast<uint32_t>(value) & GPIO_MASK;
+        const uint32_t qspi_masked = static_cast<uint32_t>(value) & QSPI_MASK;
         const uint32_t inverted = static_cast<uint32_t>(~value);
 
         switch (offset) {
@@ -208,14 +211,14 @@ public:
             case GPIO_OE_SET: gpio_output_enable |= masked; break;
             case GPIO_OE_CLR: gpio_output_enable &= inverted; break;
             case GPIO_OE_XOR: gpio_output_enable ^= masked; break;
-            case GPIO_HI_OUT: qspi_gpio_value = masked; break;
-            case GPIO_HI_OUT_SET: qspi_gpio_value |= masked; break;
+            case GPIO_HI_OUT: qspi_gpio_value = qspi_masked; break;
+            case GPIO_HI_OUT_SET: qspi_gpio_value |= qspi_masked; break;
             case GPIO_HI_OUT_CLR: qspi_gpio_value &= inverted; break;
-            case GPIO_HI_OUT_XOR: qspi_gpio_value ^= masked; break;
-            case GPIO_HI_OE: qspi_gpio_output_enable = masked; break;
-            case GPIO_HI_OE_SET: qspi_gpio_output_enable |= masked; break;
+            case GPIO_HI_OUT_XOR: qspi_gpio_value ^= qspi_masked; break;
+            case GPIO_HI_OE: qspi_gpio_output_enable = qspi_masked; break;
+            case GPIO_HI_OE_SET: qspi_gpio_output_enable |= qspi_masked; break;
             case GPIO_HI_OE_CLR: qspi_gpio_output_enable &= inverted; break;
-            case GPIO_HI_OE_XOR: qspi_gpio_output_enable ^= masked; break;
+            case GPIO_HI_OE_XOR: qspi_gpio_output_enable ^= qspi_masked; break;
             case DIV_UDIVIDEND: div_dividend = value; if (!update_hardware_divider(false)) return false; break;
             case DIV_SDIVIDEND: div_dividend = value; if (!update_hardware_divider(true)) return false; break;
             case DIV_UDIVISOR: div_divisor = value; if (!update_hardware_divider(false)) return false; break;
@@ -257,8 +260,8 @@ private:
                 case I_BASE2: ip.base2 = value; break;
                 case I_CTRL_LANE0: ip.ctrl0 = value; break;
                 case I_CTRL_LANE1: ip.ctrl1 = value; break;
-                case I_ACCUM0_ADD: ip.accum0 += value; break;
-                case I_ACCUM1_ADD: ip.accum1 += value; break;
+                case I_ACCUM0_ADD: ip.accum0 += value & INTERP_ADD_MASK; break;
+                case I_ACCUM1_ADD: ip.accum1 += value & INTERP_ADD_MASK; break;
                 case I_BASE_1AND0: ip.set_base01(value); return true;  // updates itself
                 default: return false;  // POP/PEEK are read-only: a write is "invalid", as in the Python block
             }

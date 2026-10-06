@@ -66,6 +66,8 @@ public:
     int64_t accum0 = 0, accum1 = 0, base0 = 0, base1 = 0, base2 = 0;
     int64_t ctrl0 = 0, ctrl1 = 0;  // raw until update() rewrites them in canonical form
     uint32_t result0 = 0, result1 = 0, result2 = 0, smresult0 = 0, smresult1 = 0;
+    // The lane results on the internal 32-bit datapath, i.e. without FORCE_MSB ("No effect on the internal 32-bit datapath"): what a POP writes back.
+    uint32_t lane0 = 0, lane1 = 0;
 
     explicit Interpolator(int index = 0) noexcept : index_(index) { update(); }
 
@@ -78,6 +80,7 @@ public:
         accum0 = accum1 = base0 = base1 = base2 = 0;
         ctrl0 = ctrl1 = 0;
         result0 = result1 = result2 = smresult0 = smresult1 = 0;
+        lane0 = lane1 = 0;
         update();
     }
 
@@ -136,13 +139,17 @@ public:
         const int64_t sblend1 = s32(base0) + s32(floor_div(alpha1 * (s32(base1) - s32(base0)), 256));
         const int64_t blend1 = c1.signed_ ? sblend1 : ublend1;
 
-        const int64_t force = static_cast<int64_t>(c0.force_msb) << 28;
+        // FORCE_MSB is a field of each lane's own CTRL register: "ORed into bits 29:28 of the lane result presented to the processor on the bus"
+        const int64_t force0 = static_cast<int64_t>(c0.force_msb) << 28;
+        const int64_t force1 = static_cast<int64_t>(c1.force_msb) << 28;
         smresult0 = static_cast<uint32_t>(u32(r0));
         smresult1 = static_cast<uint32_t>(u32(r1));
         // `alpha1 if do_blend else (clamp0 if do_clamp else addresult0) | (force_msb << 28)`: the OR binds to the
         // else-branch only, so a blend result carries no forced MSBs.
-        result0 = static_cast<uint32_t>(u32(do_blend ? alpha1 : ((do_clamp ? clamp0 : addresult0) | force)));
-        result1 = static_cast<uint32_t>(u32((do_blend ? blend1 : addresult1) | force));
+        lane0 = static_cast<uint32_t>(u32(do_blend ? alpha1 : (do_clamp ? clamp0 : addresult0)));
+        lane1 = static_cast<uint32_t>(u32(do_blend ? blend1 : addresult1));
+        result0 = static_cast<uint32_t>(u32(do_blend ? alpha1 : ((do_clamp ? clamp0 : addresult0) | force0)));
+        result1 = static_cast<uint32_t>(u32((do_blend ? blend1 : addresult1) | force1));
         result2 = static_cast<uint32_t>(u32(addresult2));
 
         c0.overf0 = overf0;
@@ -156,8 +163,8 @@ public:
     void writeback() noexcept {
         const InterpConfig c0 = InterpConfig::parse(ctrl0);
         const InterpConfig c1 = InterpConfig::parse(ctrl1);
-        accum0 = interp_detail::u32(c0.cross_result ? result1 : result0);
-        accum1 = interp_detail::u32(c1.cross_result ? result0 : result1);
+        accum0 = interp_detail::u32(c0.cross_result ? lane1 : lane0);
+        accum1 = interp_detail::u32(c1.cross_result ? lane0 : lane1);
         update();
     }
 

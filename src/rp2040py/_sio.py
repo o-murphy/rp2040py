@@ -38,7 +38,11 @@ GPIO_HI_OE_SET = 0x044  # QSPI output enable set
 GPIO_HI_OE_CLR = 0x048  # QSPI output enable clear
 GPIO_HI_OE_XOR = 0x04C  # QSPI output enable XOR
 
-GPIO_MASK = 0x3FFFFFFF
+GPIO_MASK = 0x3FFFFFFF  # GPIO0..29 (datasheet: bits 31:30 reserved)
+QSPI_MASK = 0x3F  # the QSPI pins SCLK, SSn, SD0..3: GPIO_HI_OUT / GPIO_HI_OE are 5:0
+INTERP_ADD_MASK = (
+    0xFFFFFF  # INTERPx_ACCUMy_ADD is 23:0 (datasheet, and SIO_INTERP0_ACCUM0_ADD_BITS 0x00ffffff in pico-sdk's sio.h)
+)
 
 # INTER-CORE FIFO - not implemented, see docs/records/0053-core1-and-inter-core-fifo.md
 FIFO_ST = 0x050
@@ -109,12 +113,12 @@ class RPSIO:
         self.qspi_gpio_value = 0
         self.qspi_gpio_output_enable = 0
         self.div_dividend = 0
-        self.div_divisor = 1
+        self.div_divisor = 0  # the datasheet's reset value of DIV_xDIVISOR
         # Genuinely fractional in the signed/unsigned division branches below (matches upstream
         # rp2040js, which never truncates the JS `/` result before storing it).
         self.div_quotient: int | float = 0
         self.div_remainder: int | float = 0
-        self.div_csr = 0
+        self.div_csr = 1  # DIV_CSR.READY resets to 1 (DIRTY to 0)
         self.spin_lock = 0
         self.interp0 = Interpolator(0)
         self.interp1 = Interpolator(1)
@@ -135,10 +139,10 @@ class RPSIO:
         self.qspi_gpio_value = 0
         self.qspi_gpio_output_enable = 0
         self.div_dividend = 0
-        self.div_divisor = 1
+        self.div_divisor = 0  # the datasheet's reset value of DIV_xDIVISOR
         self.div_quotient = 0
         self.div_remainder = 0
-        self.div_csr = 0
+        self.div_csr = 1  # DIV_CSR.READY resets to 1 (DIRTY to 0)
         self.spin_lock = 0
         self.interp0.reset()
         self.interp1.reset()
@@ -327,21 +331,21 @@ class RPSIO:
         elif offset == GPIO_OE_XOR:
             self.gpio_output_enable ^= value & GPIO_MASK
         elif offset == GPIO_HI_OUT:
-            self.qspi_gpio_value = value & GPIO_MASK
+            self.qspi_gpio_value = value & QSPI_MASK
         elif offset == GPIO_HI_OUT_SET:
-            self.qspi_gpio_value |= value & GPIO_MASK
+            self.qspi_gpio_value |= value & QSPI_MASK
         elif offset == GPIO_HI_OUT_CLR:
             self.qspi_gpio_value &= ~value
         elif offset == GPIO_HI_OUT_XOR:
-            self.qspi_gpio_value ^= value & GPIO_MASK
+            self.qspi_gpio_value ^= value & QSPI_MASK
         elif offset == GPIO_HI_OE:
-            self.qspi_gpio_output_enable = value & GPIO_MASK
+            self.qspi_gpio_output_enable = value & QSPI_MASK
         elif offset == GPIO_HI_OE_SET:
-            self.qspi_gpio_output_enable |= value & GPIO_MASK
+            self.qspi_gpio_output_enable |= value & QSPI_MASK
         elif offset == GPIO_HI_OE_CLR:
             self.qspi_gpio_output_enable &= ~value
         elif offset == GPIO_HI_OE_XOR:
-            self.qspi_gpio_output_enable ^= value & GPIO_MASK
+            self.qspi_gpio_output_enable ^= value & QSPI_MASK
         elif offset == DIV_UDIVIDEND:
             self.div_dividend = value
             self.update_hardware_divider(False)
@@ -382,10 +386,10 @@ class RPSIO:
             self.interp0.ctrl1 = value
             self.interp0.update()
         elif offset == INTERP0_ACCUM0_ADD:
-            self.interp0.accum0 += value
+            self.interp0.accum0 += value & INTERP_ADD_MASK
             self.interp0.update()
         elif offset == INTERP0_ACCUM1_ADD:
-            self.interp0.accum1 += value
+            self.interp0.accum1 += value & INTERP_ADD_MASK
             self.interp0.update()
         elif offset == INTERP0_BASE_1AND0:
             self.interp0.set_base01(value)
@@ -411,10 +415,10 @@ class RPSIO:
             self.interp1.ctrl1 = value
             self.interp1.update()
         elif offset == INTERP1_ACCUM0_ADD:
-            self.interp1.accum0 += value
+            self.interp1.accum0 += value & INTERP_ADD_MASK
             self.interp1.update()
         elif offset == INTERP1_ACCUM1_ADD:
-            self.interp1.accum1 += value
+            self.interp1.accum1 += value & INTERP_ADD_MASK
             self.interp1.update()
         elif offset == INTERP1_BASE_1AND0:
             self.interp1.set_base01(value)

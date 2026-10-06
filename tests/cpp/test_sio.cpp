@@ -142,7 +142,27 @@ int main() {
     // reset() puts everything back, including the interpolators.
     sio.reset();
     CHECK(sio.read32(GPIO_OE) == 0 && sio.read32(INTERP0 + I_ACCUM0) == 0 && sio.read32(SPINLOCK_ST) == 0);
-    CHECK(sio.read32(DIV_CSR) == 0 && sio.div_divisor == 1);
+    CHECK(sio.read32(DIV_CSR) == 1 && sio.div_divisor == 0);   // datasheet: DIV_CSR.READY resets to 1, DIV_xDIVISOR to 0
+
+    // Datasheet audit: the QSPI output registers are 6 bits, the interpolators' ACCUMn_ADD 24 bits, FORCE_MSB a field of each lane's own CTRL and not part of what POP writes back.
+    sio.write32(GPIO_HI_OUT, 0xFFFFFFFFu);
+    sio.write32(GPIO_HI_OE, 0xFFFFFFFFu);
+    CHECK(sio.read32(GPIO_HI_OUT) == 0x3F && sio.read32(GPIO_HI_OE) == 0x3F);
+    sio.write32(GPIO_HI_OUT_CLR, 0xFFFFFFFFu);
+    sio.write32(GPIO_HI_OUT_XOR, 0xFFFFFFFFu);
+    CHECK(sio.read32(GPIO_HI_OUT) == 0x3F);
+    sio.reset();
+    sio.write32(INTERP0 + I_ACCUM0_ADD, 0xFF000005u);          // bits 31:24 are reserved: not added
+    CHECK(sio.read32(INTERP0 + I_ACCUM0) == 5u);
+    sio.write32(INTERP0 + I_ACCUM1_ADD, 0x1000003u);
+    CHECK(sio.read32(INTERP0 + I_ACCUM1) == 3u);
+    sio.reset();
+    sio.write32(INTERP0 + I_CTRL_LANE0, 0x1Fu << 10);          // lane 0: mask 0..31, no FORCE_MSB
+    sio.write32(INTERP0 + I_CTRL_LANE1, (0x1Fu << 10) | (3u << 19));   // lane 1: FORCE_MSB = 3
+    sio.write32(INTERP0 + I_ACCUM1, 7);
+    CHECK(sio.read32(INTERP0 + I_PEEK_LANE1) == (7u | (3u << 28)) && sio.read32(INTERP0 + I_PEEK_LANE0) == 0u);   // lane 1's own field, lane 0 unaffected
+    CHECK(sio.read32(INTERP0 + I_POP_LANE1) == (7u | (3u << 28)));
+    CHECK(sio.read32(INTERP0 + I_ACCUM1) == 7u);               // the accumulator took the datapath value, without the forced bits
 
     // A failing pin update is reported and the rest of the write's work (nothing here) is skipped.
     env.fail_updates = true;

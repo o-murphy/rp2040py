@@ -57,6 +57,9 @@ class Interpolator:
         self.result2 = 0
         self.smresult0 = 0
         self.smresult1 = 0
+        # The lane results on the internal 32-bit datapath, i.e. without FORCE_MSB ("No effect on the internal 32-bit datapath"): what a POP writes back.
+        self._lane0 = 0
+        self._lane1 = 0
 
         self.update()
 
@@ -76,6 +79,8 @@ class Interpolator:
         self.result2 = 0
         self.smresult0 = 0
         self.smresult1 = 0
+        self._lane0 = 0
+        self._lane1 = 0
         self.update()
 
     def update(self) -> None:
@@ -137,8 +142,11 @@ class Interpolator:
 
         self.smresult0 = u32(result0)
         self.smresult1 = u32(result1)
+        # FORCE_MSB is a field of each lane's own CTRL register: "ORed into bits 29:28 of the lane result presented to the processor on the bus"
+        self._lane0 = u32(alpha1 if do_blend else (clamp0 if do_clamp else addresult0))
+        self._lane1 = u32(blend1 if do_blend else addresult1)
         self.result0 = u32(alpha1 if do_blend else (clamp0 if do_clamp else addresult0) | (ctrl0.force_msb << 28))
-        self.result1 = u32((blend1 if do_blend else addresult1) | (ctrl0.force_msb << 28))
+        self.result1 = u32((blend1 if do_blend else addresult1) | (ctrl1.force_msb << 28))
         self.result2 = u32(addresult2)
 
         ctrl0.overf0 = overf0
@@ -151,8 +159,8 @@ class Interpolator:
         ctrl0 = InterpolatorConfig(self.ctrl0)
         ctrl1 = InterpolatorConfig(self.ctrl1)
 
-        self.accum0 = u32(self.result1 if ctrl0.cross_result else self.result0)
-        self.accum1 = u32(self.result0 if ctrl1.cross_result else self.result1)
+        self.accum0 = u32(self._lane1 if ctrl0.cross_result else self._lane0)
+        self.accum1 = u32(self._lane0 if ctrl1.cross_result else self._lane1)
 
         self.update()
 
