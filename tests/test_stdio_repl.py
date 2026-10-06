@@ -6,9 +6,12 @@ import time
 from dataclasses import dataclass
 
 import pytest
+from utils.emscripten import needs_pty
 
 from rp2040py.cli.stdio_repl import StdioInteractiveRepl
 from rp2040py.simulator import Simulator
+
+pytestmark = needs_pty
 
 # pty/termios are POSIX-only (see stdio_repl.py's own termios import gating) - importing either
 # unconditionally at module scope would crash *collection* on Windows (not just fail these tests),
