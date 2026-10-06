@@ -439,6 +439,38 @@ Read: the instruction set (3.4.2-3.4.10: every encoding and operation), 3.5.1 (s
 - **Left, deliberately:** autopull is done when the next OUT starts, not right after the OUT that reaches the threshold or "at any point between two OUTs when data arrives" (3.5.4.2), so the TX FIFO drains later than on silicon by up to one OUT; an OUT that finds the OSR exhausted pulls and shifts in the same cycle, where the datasheet stalls that cycle ("it cannot fill an empty OSR and OUT it on the same cycle"). The cycle counts of streaming programs are the same, FIFO levels read slightly high, and a change needs a design of its own (the pacing of `due` times, 0063).
 - Tests: `tests/test_pio_datasheet.py` (five cases on both implementations), `tests/cpp/test_pio.cpp` (one directed test, the register-mask checks updated). The PIO oracle has no logic mutants (it compares the two implementations only), so there are none to add.
 
+### PPB (SysTick, NVIC, SCB)
+
+Audited before this record was opened, as part of the C++ port, and written up in the [0096](0096-cpp-mcu-core.md) progress log (the entry "The PPB is C++"): four reference quirks fixed against the datasheet and the M0PLUS tables (`SYST_RVR` is 24 bits, the SysTick period is RELOAD + 1 with the first period after a CVR write, `CLKSOURCE` = 0 runs from the 1 MHz reference clock, and the fourth listed there), with pico-sdk's `m0plus.h`. The ARM Architecture Reference Manual page was not readable (JavaScript-rendered), so the parts of SysTick that only the ARM manual defines stay marked as the model's own: the step "the next tick after a CVR write loads RELOAD" and the reset values (the datasheet says UNKNOWN; the model resets RVR and the counter to 0xFFFFFF).
+
+## Not audited yet
+
+Everything ported on the 0096 branch has a section above. What has **not** been read against the datasheet:
+
+- **Blocks that are not ported yet**, audited as they are ported, in parallel with the implementation (the maintainer's decision, 2026-10-06): watchdog, RTC, PSM, RESETS, VREG_AND_CHIP_RESET, SYSCFG, SYSINFO, TBMAN, BUSCTRL, XOSC, USB; and the pure-Python blocks that no C++ port is planned for yet: ROSC (a frequency attribute only), IO_BANK0 and PADS_BANK0 (`peripherals/io.py`, `pads.py`), XIP_CTRL. The tool's register-level pass can be pointed at any of them (`BASES` in the script lists their addresses) but it has not been run on them for this record.
+- **Parts of the audited blocks that were skimmed or skipped**, named in each section above as "not read": the operation chapters of SPI (frame formats), I2C (the protocol sequences), SSI (XIP streaming, the DW_apb_ssi FIFO and interrupt behaviour), DMA (the cycle model, the sniffer), CLOCKS (glitchless muxes, the frequency counter, the resus), PIO (3.5.6 GPIO mapping and output priority, the system-level registers beyond the tool's pass). Reading these is the next pass over the closed blocks.
+- **What the datasheet does not say**, so no source exists to check against: the quotient and remainder of a signed divide by zero, what a read of a SIO `SET`/`CLR`/`XOR` alias returns, the PPB's reset values.
+
+## Open features found by the audit (backlog)
+
+None of these is a correction of the reference; each is missing behaviour, left for its own decision (CLAUDE.md: documenting is not implementing).
+
+| Block | Missing | Why it matters |
+|---|---|---|
+| PIO | `SHIFTCTRL_FJOIN_TX` / `FJOIN_RX` (the bits are stored and ignored) | MicroPython's `PIO.JOIN_TX` / `JOIN_RX`; FSTAT/FLEVEL and the DREQs of the joined FIFO |
+| PIO | `EXECCTRL_OUT_STICKY`, `INLINE_OUT_EN`, `OUT_EN_SEL` (the existing TODO) | programs that rely on a sticky OUT or an inline output enable |
+| PIO | autopull at the OUT that reaches the threshold and between OUTs (3.5.4.2); today it happens when the next OUT starts | TX FIFO levels and DREQ timing read slightly high |
+| DMA | the sniffer (`SNIFF_CTRL`, `SNIFF_DATA`, `CTRL.SNIFF_EN`), `HIGH_PRIORITY` and arbitration, the error flags, the `DBG_CTDREQ` counter | CRC over a transfer; contention timing |
+| DMA | I2C (and SSI) DREQs: the I2C block has no DREQ output | DMA-driven I2C |
+| CLOCKS | the frequency counter `FC0_*`, `ENABLED0/1`, the resus, the clock gating of WAKE_EN/SLEEP_EN | firmware that measures a clock waits forever |
+| SIO | the inter-core FIFO and core 1 (record 0053) | `_thread`, multicore |
+| I2C | slave mode, the general call and START byte, `TX_EMPTY_CTRL`, `RX_FIFO_FULL_HLD_CTRL`, the "FIFOs stay flushed until IC_CLR_TX_ABRT" rule | slave devices |
+| SSI / SPI | the SSI's own FIFOs, interrupts and DMA; SPI slave mode, the receive timeout, TI and Microwire frames | XIP streaming, SPI slaves |
+
+## What was checked against pico-sdk rather than the datasheet
+
+Each of these is a statement about what real firmware does, read from the SDK source (`raspberrypi/pico-sdk`, master) and not from memory: `spi_init` sets both SSPDMACR enables then SSE (`hardware_spi/spi.c`); `uart_init` writes DMACR with both enables unless `PICO_UART_NO_DMACR_ENABLE` (`hardware_uart/uart.c`); `i2c_init`, `i2c_set_baudrate` and `i2c_write_blocking` clear `enable` before writing `con`, `tar` and the counts (`hardware_i2c/i2c.c`); `SIO_INTERP0_ACCUM0_ADD_BITS` is 0x00ffffff and `interp_add_accumulator` stores a `uint32_t` (`hardware_regs/sio.h`, `hardware_interp/interp.h`); `dma_channel_abort` polls `CHAN_ABORT` until it reads 0 (cited from the datasheet's own text of the register, the SDK source for it was not opened). Anything in the sections above that cites the SDK without being in this list was cited from the datasheet's embedded SDK excerpts.
+
 ## Progress log
 
 - 2026-10-06: opened. Tool and the first-pass register-level findings above; nothing fixed yet.
