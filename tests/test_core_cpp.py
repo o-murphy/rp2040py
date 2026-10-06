@@ -18,7 +18,7 @@ pytestmark = needs_processes  # the checks compile and run C++ in a subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "src" / "rp2040py" / "native" / "core"
-FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror"]
+FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror"]  # no fused multiply-add: see setup.py
 if platform.machine().lower() in ("i386", "i686"):
     # Same reason as setup.py: a 32-bit x86 compiler defaults to the x87 FPU, whose 80-bit intermediates break exact double comparisons.
     FLAGS += ["-msse2", "-mfpmath=sse"]

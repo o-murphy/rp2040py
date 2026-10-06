@@ -109,7 +109,10 @@ _DISABLE_STRIP = environ.get("RP2040PY_DISABLE_STRIP") == "1"
 # translation units are held to the same rule as the core's own headers (a stray `try`/`throw`/`dynamic_cast`, in our
 # code or in what Cython emits, is then a compile error here rather than a surprise on the wasm build). Cython only
 # emits C++ exception handling for calls declared `except +`; nothing here does.
-_NO_EXCEPTIONS_GNU = ["-fno-exceptions", "-fno-rtti"]
+# -ffp-contract=off: the blocks' double arithmetic must round exactly as the pure-Python reference does, operation by operation. Clang on arm64 (and GCC with -ffp-contract=fast, its
+# default for GNU C++) fuses `a - b * c` into one fused multiply-add, which rounds once instead of twice - a different double once the operands are large (the TIMER parity test saw it
+# on macOS arm64 the first time a 64-bit time could be written). x86-64 has no FMA in the baseline ISA, which is why only an arm64 runner showed it.
+_NO_EXCEPTIONS_GNU = ["-fno-exceptions", "-fno-rtti", "-ffp-contract=off"]
 _NO_EXCEPTIONS_MSVC = ["/EHs-c-", "/GR-"]
 
 # Platform-specific compiler flags
