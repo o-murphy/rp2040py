@@ -3,7 +3,7 @@ from typing import cast
 
 import pytest
 
-from rp2040py.device.raw_repl import CTRL_A, CTRL_C, CTRL_D, RawReplError, RawReplRunner
+from rp2040py.device.raw_repl import CTRL_A, CTRL_C, CTRL_D, ENTER_RETRY_NANOS, RawReplError, RawReplRunner
 from rp2040py.usb.cdc import USBCDC
 
 RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
@@ -27,6 +27,41 @@ class _FakeCdc:
     def send_serial_byte(self, byte: int) -> None:
         self.sent.append(byte)
         self.tx_fifo.item_count += 1
+
+
+class _FakeAlarm:
+    def __init__(self, callback) -> None:
+        self.callback = callback
+        self.delay: float | None = None
+
+    def schedule(self, delay_nanos: float) -> None:
+        self.delay = delay_nanos
+
+    def cancel(self) -> None:
+        self.delay = None
+
+    def fire(self) -> None:
+        assert self.delay is not None
+        self.delay = None
+        self.callback()
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.alarms: list[_FakeAlarm] = []
+
+    def create_alarm(self, callback) -> _FakeAlarm:
+        self.alarms.append(_FakeAlarm(callback))
+        return self.alarms[-1]
+
+
+class _ClockedCdc(_FakeCdc):
+    """A `_FakeCdc` on a controller with a simulated clock, like the real `USBCDC.usb.rp2040.clock`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.clock = _FakeClock()
+        self.usb = type("Usb", (), {"rp2040": type("Chip", (), {"clock": self.clock})()})()
 
 
 def _runner(source: bytes = b"print(1)", **kwargs) -> "tuple[RawReplRunner, _FakeCdc]":
@@ -173,3 +208,38 @@ def test_pump_paces_uploads_larger_than_the_send_buffer():
         cdc.tx_fifo.item_count = 0  # the "device" finishes consuming what's in flight between attempts
 
     assert bytes(cdc.sent) == source + bytes([CTRL_D])
+
+
+def test_the_entry_sequence_is_sent_again_until_the_banner_arrives():
+    """A guest that was not listening (CircuitPython still running `code.py` discards what was typed meanwhile) never answers the first attempt: the host has to ask again."""
+    cdc = _ClockedCdc()
+    runner = RawReplRunner(cast(USBCDC, cdc), b"print(1)")
+    asyncio.run(runner.start())
+    (alarm,) = cdc.clock.alarms
+    assert alarm.delay == ENTER_RETRY_NANOS
+    assert bytes(cdc.sent) == bytes([CTRL_C, CTRL_C, CTRL_A])
+
+    for attempt in range(1, 4):  # no banner however often it goes out: it keeps asking, with no limit
+        alarm.fire()
+        assert bytes(cdc.sent) == bytes([CTRL_C, CTRL_C, CTRL_A]) * (attempt + 1)
+        assert alarm.delay == ENTER_RETRY_NANOS
+
+
+def test_the_banner_ends_the_retries():
+    cdc = _ClockedCdc()
+    runner = RawReplRunner(cast(USBCDC, cdc), b"print(1)")
+    asyncio.run(runner.start())
+    (alarm,) = cdc.clock.alarms
+    runner.feed(RAW_REPL_BANNER)
+    assert alarm.delay is None  # cancelled: nothing more goes out behind the pasted source
+    sent = bytes(cdc.sent)
+    assert sent.endswith(b"print(1)" + bytes([CTRL_D]))
+
+
+def test_stopping_the_runner_cancels_the_retries():
+    cdc = _ClockedCdc()
+    runner = RawReplRunner(cast(USBCDC, cdc), b"print(1)")
+    asyncio.run(runner.start())
+    (alarm,) = cdc.clock.alarms
+    asyncio.run(runner.stop())
+    assert alarm.delay is None

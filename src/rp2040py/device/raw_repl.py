@@ -4,6 +4,7 @@ script on the device over USB CDC and capture its result - the same protocol `mp
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from rp2040py.device.repl_runner import BaseReplRunner
 from rp2040py.usb.cdc import USBCDC
@@ -27,6 +28,12 @@ CTRL_D = 4  # execute pasted code; also the end-of-stdout/end-of-stderr marker i
 # also contains ">" and can otherwise be mistaken for raw-REPL readiness - e.g. if a Ctrl-A arrives
 # while the device is still flushing its normal boot banner.
 _RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
+
+# How long, in *simulated* time, the entry sequence waits for the banner before it is sent again. `mpremote`/`pyboard.py` send it once and fail after 10 s, which is right for a
+# board whose `code.py` finished long ago; a simulated host attaches while the guest may still be running it (CircuitPython 10.2.1 on the Waveshare RP2040-LCD-0.96 is, for
+# ~0.4 s of simulated time after enumeration), and that firmware drops what was typed in the meantime - the interrupt ends `code.py`, the Ctrl-A behind it is discarded, and the
+# guest then waits at "Press any key" for ever. Nothing here looks at what the guest prints: only the raw-REPL banner, which is the protocol itself.
+ENTER_RETRY_NANOS = 500_000_000
 
 
 class RawReplError(RuntimeError):
@@ -68,14 +75,37 @@ class RawReplRunner(BaseReplRunner):
         self._stdout = bytearray()
         self._stderr = bytearray()
         self.result: tuple[bytes, bytes] | None = None
+        self._retry_alarm: Any = None
 
     async def _on_start(self) -> None:
+        self._send_enter_sequence()
+        clock = getattr(getattr(getattr(self._cdc, "usb", None), "rp2040", None), "clock", None)
+        if clock is not None:  # a bare test double of the controller has no clock: it gets the one attempt
+            self._retry_alarm = clock.create_alarm(self._retry_enter)
+            self._retry_alarm.schedule(ENTER_RETRY_NANOS)
+
+    async def _on_stop(self) -> None:
+        self._cancel_retry()
+
+    def _send_enter_sequence(self) -> None:
         # Ctrl-C twice first, interrupting any program already running (e.g. an auto-run main.py
         # from a littlefs image) before entering raw REPL - the same sequence
         # tools/pyboard.py's enter_raw_repl() uses, for the same reason.
         self._cdc.send_serial_byte(CTRL_C)
         self._cdc.send_serial_byte(CTRL_C)
         self._cdc.send_serial_byte(CTRL_A)
+
+    def _retry_enter(self) -> None:
+        """Runs on the simulator's own clock: no banner yet, so the guest was not listening when the sequence went out - send it again."""
+        if self._stage != "await_prompt":
+            return
+        self._send_enter_sequence()
+        self._retry_alarm.schedule(ENTER_RETRY_NANOS)
+
+    def _cancel_retry(self) -> None:
+        if self._retry_alarm is not None:
+            self._retry_alarm.cancel()
+            self._retry_alarm = None
 
     def feed(self, data: bytes | bytearray) -> None:
         for byte in data:
@@ -84,6 +114,7 @@ class RawReplRunner(BaseReplRunner):
                 del self._banner_tail[: -len(_RAW_REPL_BANNER)]
                 if self._banner_tail == _RAW_REPL_BANNER:
                     self._stage = "await_ok"
+                    self._cancel_retry()
                     self._queue(bytes(self._source) + bytes([CTRL_D]))
                     self.pump()
             elif self._stage == "await_ok":
