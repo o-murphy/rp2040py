@@ -54,6 +54,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0098] the ported blocks against the RP2040 datasheet | in progress - `scripts/audit/datasheet_conformance.py` and the register-level first pass done (282 registers, 114 with findings); behaviour and the fixes block by block
 - [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phased plan (phases 0-7) - Phases 0-3 done the SSI and the DMA of Phase 4 (clock/alarms, TIMER, SIO, the bus, the CPU, the batch loop, the pins, the CYW43 gSPI shifter, the PIO, the SSI flash path and the DMA are C++; the CDC host no longer ping-pongs; the PPB stays a Python window by decision; synthetic loop 14 -> ~110 Minstr/s, CircuitPython boot 12.4 -> 1.1 s, Pico W scan 9.8 -> 1.7 s), the UART, the SPI, the I2C, the ADC and the PWM (with its `Timer32`) are C++ too (record 0096); a real-world pacing fix keeps simulated time from outrunning the wall clock while the NAT waits on a reply; **the C++ port was paused on 2026-10-05 while the engine-room thread was removed (`Simulator.pump()`, thread-free by default, see the record) and resumed the same day with the PWM**; order now: the rest of Phase 4 (the small blocks, the USB controller; the PWM's reference bugs and the clock tree - PLLs, clk_sys/clk_peri, listeners - are done, with rp2040js 1.4.0 copied in full; seven ADC and three I2C reference bugs fixed, DMA with the I2C is in the backlog) -> QSPI pads/shared pin banks with WASM; USB has no speed case but is still owed to C++ (Phase 4 exit, WASM), CYW43 is a board peripheral and leaves this record (a native CYW43 may follow separately); CI green on Linux/macOS/Windows; Python API unchanged
 - [ ] [0094] a Zephyr guest boots here - MicroPython's `ports/zephyr` on `rpi_pico` | measured, nothing built - the RP2040 model needed no changes; its console is USB CDC, so the `micropython` subcommand sees silence
 - [ ] [0093] CircuitPython 8.0.2 never comes back after a chip reset | open, not root-caused - red on 8.x, green on 9.2.9/10.2.1; five hypotheses killed by measurement
@@ -277,3 +278,4 @@ record is added.
 [0094]: records/0094-zephyr-guest-boots-on-the-emulator.md
 [0095]: records/0095-github-action-at-repo-root.md
 [0096]: records/0096-cpp-mcu-core.md
+[0098]: records/0098-datasheet-conformance-audit.md
