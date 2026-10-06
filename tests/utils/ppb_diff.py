@@ -242,8 +242,8 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "reset_counter_zero": ("self.systick_timer.set(0xFFFFFF)", "self.systick_timer.set(0)", 1),
     "reset_csr_enabled": ("self.write_uint32(SYST_CSR, 0)", "self.write_uint32(SYST_CSR, 1)", 1),
     "csr_read_keeps_count_flag": (
-        "            self.systick_count_flag = False\n            return",
-        "            return",
+        "            self.systick_count_flag = False\n            return count",
+        "            return count",
         1,
     ),
     "csr_count_flag_bit": ("count_flag_value = (1 << 16) if", "count_flag_value = (1 << 15) if", 1),
@@ -269,7 +269,16 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         "            pass\n",
         1,
     ),
-    "cvr_write_keeps_counter": ("            self.systick_timer.set(0)\n            return", "            return", 1),
+    "cvr_write_keeps_counter": (
+        "            self.systick_timer.set(0)\n            self.systick_count_flag = False\n",
+        "            self.systick_count_flag = False\n",
+        1,
+    ),
+    "cvr_write_keeps_count_flag": (
+        "            self.systick_timer.set(0)\n            self.systick_count_flag = False\n",
+        "            self.systick_timer.set(0)\n",
+        1,
+    ),
     "cvr_read_16_bit": ("return self.systick_timer.counter\n", "return self.systick_timer.counter & 0xFFFF\n", 1),
     "rvr_unmasked": ("self.systick_reload = value & 0xFFFFFF\n", "self.systick_reload = value\n", 1),
     "calib_value": ("return 0x0000270F", "return 0x0000270E", 1),

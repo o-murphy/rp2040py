@@ -4,7 +4,7 @@
 // What it is: the registers the processor itself owns, at 0xE000E000 + offset - SysTick (SYST_CSR / RVR / CVR / CALIB), the NVIC (set/clear enable and pending words, the eight
 // priority words), and the SCB registers the RP2040 firmware touches (CPUID, ICSR, VTOR, SHPR2/3). Almost all of it is a *view of the CPU's own state*: the pending and enabled
 // words, the priority bitmaps, the exception flags and VTOR live in `Cpu` (core/cpu.hpp), which already reads them to take an exception - the block reads and writes those fields,
-// it owns none of them. What it does own is SysTick: a 24-bit down-counter on a `Timer32` (core/timer32.hpp) clocked from clk_sys whose TOP is RELOAD (a cycle of RELOAD + 1 ticks, which is also
+// it owns none of them. What it does own is SysTick: a 24-bit down-counter on a `Timer32` (core/timer32.hpp) clocked from clk_sys whose TOP is RELOAD (a cycle of RELOAD + 1 ticks - the datasheet's "RELOAD = N-1" - which is also
 // how the counter comes round to RELOAD), and one compare alarm at 0 that sets COUNTFLAG and pends the SysTick exception when TICKINT is set.
 //
 // So a core that is embedded without a Python host needs nothing else for its private bus: the only thing a host tells this block is the logger (`warn`), through the same
@@ -56,7 +56,7 @@ constexpr uint32_t kCpuId = 0x410CC601, kSystCalib = 0x0000270F;
 constexpr uint32_t NMIPENDSET = 1u << 31, PENDSVSET = 1u << 28, PENDSVCLR = 1u << 27, PENDSTSET = 1u << 26, PENDSTCLR = 1u << 25, ISRPENDING = 1u << 22;
 constexpr uint32_t VECTPENDING_SHIFT = 12, VECTACTIVE_MASK = 0x1FF;
 constexpr int64_t kSysTickTop = 0xFFFFFF;
-// SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): 1 MHz, inferred from SYST_CALIB.TENMS = 0x270F (10000 ticks in 10 ms; pico-sdk hardware/regs/m0plus.h). See the reference.
+// SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): the watchdog block's 1 us tick, 1 MHz (RP2040 datasheet, 2.4.5.1.1 SysTick timer).
 constexpr double kSysTickRefClk = 1e6;
 }  // namespace ppb_regs
 
@@ -189,7 +189,10 @@ public:
                 retune();  // CLKSOURCE 0 is the 1 MHz reference clock, 1 the processor clock
                 timer.set_enable((word & 1u) != 0);
                 return true;
-            case SYST_CVR: timer.set(0); return true;
+            case SYST_CVR:  // clears the counter to 0 and COUNTFLAG (RP2040 datasheet, SYST_CVR)
+                timer.set(0);
+                count_flag = false;
+                return true;
             case SYST_RVR:
                 // The counter is a cycle RELOAD, RELOAD-1 ... 0, RELOAD ...: a TOP of RELOAD on the timer, a period of RELOAD + 1 ticks (and the first period after a CVR write the
                 // same: the counter sits at 0 and the next tick loads RELOAD). A RELOAD of 0 never fires.

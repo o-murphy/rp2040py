@@ -172,6 +172,20 @@ static void check_the_clock_source() {
     CHECK(r.ppb.timer.frequency() == kSysTickRefClk && !r.ppb.clk_source);
 }
 
+// A write to SYST_CVR clears the counter and COUNTFLAG (the datasheet: "Clearing this register also clears the COUNTFLAG bit").
+static void check_a_cvr_write_clears_countflag() {
+    Rig r;
+    r.ppb.write(SYST_RVR, 3);
+    r.ppb.write(SYST_CVR, 0);
+    r.ppb.write(SYST_CSR, 1);
+    r.us(4);
+    CHECK(r.ppb.count_flag);
+    r.ppb.write(SYST_CVR, 0x1234);
+    CHECK(!r.ppb.count_flag);
+    CHECK((r.ppb.read(SYST_CSR) & (1u << 16)) == 0);
+    CHECK(r.ppb.read(SYST_CVR) == 0);
+}
+
 static void check_csr_bits_and_readback() {
     Rig r;
     r.ppb.write(SYST_CSR, 7);
@@ -298,6 +312,7 @@ int main() {
     check_a_reload_of_zero_never_fires();
     check_stopping_and_frequency();
     check_the_clock_source();
+    check_a_cvr_write_clears_countflag();
     check_csr_bits_and_readback();
     check_icsr();
     check_nvic_words();

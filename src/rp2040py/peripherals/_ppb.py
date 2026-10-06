@@ -66,9 +66,8 @@ VECTACTIVE_MASK = 0x1FF
 VECTACTIVE_SHIFT = 0
 
 
-# SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0; the SYST_CALIB read below says the chip provides one - NOREF is 0): 1 MHz. Inferred, not quoted: SYST_CALIB.TENMS
-# is 0x270F = 9999, "an optional reload value to be used for 10ms timing" (pico-sdk hardware/regs/m0plus.h), i.e. 10000 reference ticks in 10 ms, i.e. 1 MHz - the
-# microsecond tick the watchdog block generates for the chip. The datasheet's own sentence was not reachable from this repository's egress (docs/records/0096, the PPB fixes).
+# SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): "The SysTick timer uses a 1μs pulse as a clock enable. This is generated in the watchdog block as timer_tick"
+# (RP2040 datasheet, 2.4.5.1.1 SysTick timer) - 1 MHz. (CLKSOURCE = 1 is "Processor clock"; SYST_CALIB.NOREF is 0, the reference is provided.)
 SYSTICK_REF_CLK = 1e6
 
 
@@ -253,15 +252,18 @@ class RPPPB(BasePeripheral):
             self.systick_timer.enable = bool(value & (1 << 0))
             return
         if offset == SYST_CVR:
+            # "Writing to it with any value clears the register to 0. Clearing this register also clears the COUNTFLAG bit" (RP2040 datasheet, SYST_CVR)
             self.systick_timer.set(0)
+            self.systick_count_flag = False
             return
         if offset == SYST_RVR:
             # RELOAD is bits 23:0 (pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR); the rest does not exist
             self.systick_reload = value & 0xFFFFFF
-            # Sourced (pico-sdk m0plus.h): RELOAD is "the value to load into the SysTick Current Value Register when the counter reaches 0", and a write of CVR "clears the
-            # register to 0". Modelled as a cycle RELOAD, RELOAD-1 ... 0, RELOAD ... - a TOP of RELOAD on the timer, a period of RELOAD + 1 ticks, and the first period after a
-            # CVR write the same (the counter sits at 0 and the next tick loads RELOAD). From the ARM architecture manual's SysTick section, which this repository's egress
-            # could not reach to quote (docs/records/0096, the PPB fixes): the period of N ticks is RELOAD = N - 1, and a RELOAD of 0 never fires.
+            # RP2040 datasheet, SYST_RVR: RELOAD is the "value to load into the SysTick Current Value Register when the counter reaches 0"; "To generate a multi-shot timer with
+            # a period of N processor clock cycles, use a RELOAD value of N-1"; "a start value of 0 is possible, but has no effect because the SysTick interrupt and COUNTFLAG are
+            # activated when counting from 1 to 0". So: a cycle RELOAD, RELOAD-1 ... 0, RELOAD ... - a TOP of RELOAD on the timer, a period of RELOAD + 1 ticks - and a RELOAD of
+            # 0 never fires. A write of CVR clears the counter to 0 and the first period after it is modelled the same (the counter sits at 0 and the next tick loads RELOAD):
+            # that last step is this model's, the datasheet defers to the ARMv6-M ARM, which could not be read (docs/records/0096, the PPB fixes).
             self.systick_timer.top = self.systick_reload
             self.systick_alarm.enable = self.systick_reload != 0
             return
