@@ -10,6 +10,8 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 `tests/cpp/test_*.cpp` with `-fno-exceptions -fno-rtti -Wall -Wextra -Werror`, and macOS CI uses clang - run the headers through
 `clang++` too (`-Wunused-const-variable` is the usual surprise: mark a constant only a shell reads `[[maybe_unused]]`).
 
+**Never name a constant after a macro a platform header defines.** Python's `pyconfig.h` on Windows defines `PLATFORM` as the string `"win32"`, so `constexpr uint32_t PLATFORM = 4;` compiles on Linux and macOS and breaks only under MSVC (found by CI on SYSINFO/TBMAN: the register is `REG_PLATFORM` in C++). The same goes for anything `<windows.h>` drags in (`min`, `max`, `ERROR`, `IN`, `OUT`, `NEAR`...). A Linux compile does not see it: the standalone checks can be run once with `-DPLATFORM='"win32"'` to emulate the clash.
+
 ## 1. The reference and the facade (before any C++)
 
 - `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle) and a new `peripherals/X.py`

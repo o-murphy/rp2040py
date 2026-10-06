@@ -57,3 +57,12 @@ def test_every_core_header_is_self_contained_under_the_core_flags(header):
     cmd = [_cxx(), *FLAGS, f"-I{CORE}", "-fsyntax-only", "-x", "c++", str(CORE / header)]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(_cxx() is None, reason="no C++ compiler on PATH")
+@pytest.mark.parametrize("header", sorted(p.name for p in CORE.glob("*.hpp")))
+def test_no_core_header_names_a_constant_after_a_windows_python_macro(header):
+    """Python's pyconfig.h on Windows defines `PLATFORM` as "win32"; a constant of that name compiles everywhere but MSVC (found by CI on SYSINFO/TBMAN). Emulated here with the macro."""
+    cmd = [_cxx(), *FLAGS, f"-I{CORE}", '-DPLATFORM="win32"', "-fsyntax-only", "-x", "c++", str(CORE / header)]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
+    assert result.returncode == 0, result.stderr

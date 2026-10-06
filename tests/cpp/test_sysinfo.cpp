@@ -73,7 +73,7 @@ static void test_chip_id_follows_the_bootrom_version() {
 
 static void test_the_other_registers_are_constants() {
     fresh();
-    CHECK(block.read(PLATFORM) == 0x2u);
+    CHECK(block.read(REG_PLATFORM) == 0x2u);
     CHECK(block.read(GITREF_RP2040) == 0xE0C912E8u);
     CHECK(env.rom_calls == 0 && env.warns == 0);
 }
@@ -82,10 +82,10 @@ static void test_writes_to_the_registers_are_ignored_silently() {
     fresh();
     env.rom_version = 3;
     CHECK(block.write(CHIP_ID, 0xFFFFFFFFu));
-    CHECK(block.write(PLATFORM, 0xFFFFFFFFu));
+    CHECK(block.write(REG_PLATFORM, 0xFFFFFFFFu));
     CHECK(block.write(GITREF_RP2040, 0xFFFFFFFFu));
     CHECK(env.warns == 0);
-    CHECK(block.read(CHIP_ID) == 0x20002927u && block.read(PLATFORM) == 2u && block.read(GITREF_RP2040) == 0xE0C912E8u);
+    CHECK(block.read(CHIP_ID) == 0x20002927u && block.read(REG_PLATFORM) == 2u && block.read(GITREF_RP2040) == 0xE0C912E8u);
 }
 
 static void test_unimplemented_offsets_warn() {
@@ -105,7 +105,7 @@ static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value()
     CHECK(env.rom_calls == 1 && env.warns == 0);  // the decode read CHIP_ID; the write was ignored
     CHECK(block.write_atomic(0x8, 0x1, kAtomicXor));
     CHECK(env.warns == 2 && env.warn_kind[0] == kSysInfoWarnRead && env.warn_kind[1] == kSysInfoWarnWrite);  // read, then write, of an unimplemented offset
-    CHECK(block.write_atomic(PLATFORM, 0x5, kAtomicNormal) && block.raw_write_value() == 0x5);
+    CHECK(block.write_atomic(REG_PLATFORM, 0x5, kAtomicNormal) && block.raw_write_value() == 0x5);
 }
 
 static void test_a_failing_rom_version_read_stops_the_atomic_write() {
@@ -130,8 +130,8 @@ static void test_the_window_handler_is_the_bus_entry_point() {
     env.rom_version = 3;
     WindowHandler handler = block.window_handler();
     CHECK(handler.read32(handler.ctx, CHIP_ID) == 0x20002927u);
-    handler.write32(handler.ctx, PLATFORM, 7, kAtomicNormal);
-    CHECK(handler.read32(handler.ctx, PLATFORM) == 2u && env.warns == 0);
+    handler.write32(handler.ctx, REG_PLATFORM, 7, kAtomicNormal);
+    CHECK(handler.read32(handler.ctx, REG_PLATFORM) == 2u && env.warns == 0);
 }
 
 int main() {

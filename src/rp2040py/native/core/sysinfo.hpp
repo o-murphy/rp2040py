@@ -29,7 +29,8 @@ struct SysInfoHost {
 };
 
 namespace sysinfo_regs {
-constexpr uint32_t CHIP_ID = 0x0, PLATFORM = 0x4, GITREF_RP2040 = 0x40;
+// (`REG_PLATFORM`, not `PLATFORM`: on Windows Python's pyconfig.h defines the macro PLATFORM as "win32", and MSVC then reads the constant as a string literal.)
+constexpr uint32_t CHIP_ID = 0x0, REG_PLATFORM = 0x4, GITREF_RP2040 = 0x40;
 constexpr uint32_t MANUFACTURER = 0x927, PART = 0x0002, ROM_VERSION_B2 = 3;
 }  // namespace sysinfo_regs
 
@@ -57,7 +58,7 @@ public:
                 const uint32_t revision = version == ROM_VERSION_B2 ? 2u : 1u;
                 return (revision << 28) | (PART << 12) | MANUFACTURER;
             }
-            case PLATFORM: return 0x00000002u;
+            case REG_PLATFORM: return 0x00000002u;
             case GITREF_RP2040: return 0xE0C912E8u;
             default: break;
         }
@@ -70,7 +71,7 @@ public:
 
     bool write(uint32_t offset, int64_t value) noexcept {
         using namespace sysinfo_regs;
-        if (offset == CHIP_ID || offset == PLATFORM || offset == GITREF_RP2040) return true;  // read-only: no effect
+        if (offset == CHIP_ID || offset == REG_PLATFORM || offset == GITREF_RP2040) return true;  // read-only: no effect
         if (host_.warn) host_.warn(host_.ctx, kSysInfoWarnWrite, offset, value);
         return true;
     }

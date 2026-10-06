@@ -46,13 +46,13 @@ static void fresh() {
 
 static void test_platform_reads_asic() {
     fresh();
-    CHECK(block.read(PLATFORM) == 1u);  // datasheet 2.22: ASIC (bit 0) resets to 1, FPGA (bit 1) to 0
+    CHECK(block.read(REG_PLATFORM) == 1u);  // datasheet 2.22: ASIC (bit 0) resets to 1, FPGA (bit 1) to 0
     CHECK(env.warns == 0);
 }
 
 static void test_a_write_to_platform_is_ignored_silently() {
     fresh();
-    CHECK(block.write(PLATFORM, 0xFFFFFFFFu) && block.read(PLATFORM) == 1u && env.warns == 0);
+    CHECK(block.write(REG_PLATFORM, 0xFFFFFFFFu) && block.read(REG_PLATFORM) == 1u && env.warns == 0);
 }
 
 static void test_unimplemented_offsets_warn() {
@@ -67,19 +67,19 @@ static void test_unimplemented_offsets_warn() {
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {
     fresh();
-    CHECK(block.write_atomic(PLATFORM, 0x2, kAtomicSet) && block.raw_write_value() == 2 && env.warns == 0);
+    CHECK(block.write_atomic(REG_PLATFORM, 0x2, kAtomicSet) && block.raw_write_value() == 2 && env.warns == 0);
     CHECK(block.write_atomic(0x4, 0x1, kAtomicClear));
     CHECK(env.warns == 2 && env.warn_kind[0] == kTbmanWarnRead && env.warn_kind[1] == kTbmanWarnWrite);
-    CHECK(block.read(PLATFORM) == 1u);
+    CHECK(block.read(REG_PLATFORM) == 1u);
 }
 
 static void test_reset_and_the_window_handler() {
     fresh();
     CHECK(block.reset());
     WindowHandler handler = block.window_handler();
-    CHECK(handler.read32(handler.ctx, PLATFORM) == 1u);
-    handler.write32(handler.ctx, PLATFORM, 0, kAtomicNormal);
-    CHECK(handler.read32(handler.ctx, PLATFORM) == 1u && env.warns == 0);
+    CHECK(handler.read32(handler.ctx, REG_PLATFORM) == 1u);
+    handler.write32(handler.ctx, REG_PLATFORM, 0, kAtomicNormal);
+    CHECK(handler.read32(handler.ctx, REG_PLATFORM) == 1u && env.warns == 0);
 }
 
 int main() {

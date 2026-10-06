@@ -23,7 +23,8 @@ struct TbmanHost {
 };
 
 namespace tbman_regs {
-constexpr uint32_t PLATFORM = 0x0;
+// (`REG_PLATFORM`, not `PLATFORM`: on Windows Python's pyconfig.h defines the macro PLATFORM as "win32", and MSVC then reads the constant as a string literal.)
+constexpr uint32_t REG_PLATFORM = 0x0;
 constexpr uint32_t ASIC = 1;
 }  // namespace tbman_regs
 
@@ -42,7 +43,7 @@ public:
     bool reset() noexcept { return true; }
 
     uint32_t read(uint32_t offset) noexcept {
-        if (offset == tbman_regs::PLATFORM) return tbman_regs::ASIC;
+        if (offset == tbman_regs::REG_PLATFORM) return tbman_regs::ASIC;
         if (host_.warn) {
             host_.warn(host_.ctx, kTbmanWarnRead, offset, 0);
             if (offset > 0x1000) host_.warn(host_.ctx, kTbmanWarnReadAtomicArea, offset, 0);
@@ -51,7 +52,7 @@ public:
     }
 
     bool write(uint32_t offset, int64_t value) noexcept {
-        if (offset == tbman_regs::PLATFORM) return true;  // read-only: no effect
+        if (offset == tbman_regs::REG_PLATFORM) return true;  // read-only: no effect
         if (host_.warn) host_.warn(host_.ctx, kTbmanWarnWrite, offset, value);
         return true;
     }
