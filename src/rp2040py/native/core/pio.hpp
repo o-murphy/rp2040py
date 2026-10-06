@@ -70,7 +70,7 @@ struct PioHost {
     void* ctx = nullptr;
 };
 
-#define RP2040_PIO_TRY(expr) \
+#define RP2040PY_PIO_TRY(expr) \
     do {                     \
         if (!(expr)) return false; \
     } while (0)
@@ -197,8 +197,8 @@ public:
             m.index = i;
             m.dreq_tx = index * 8 + i;
             m.dreq_rx = index * 8 + 4 + i;
-            RP2040_PIO_TRY(m.update_dma_rx());
-            RP2040_PIO_TRY(m.update_dma_tx());
+            RP2040PY_PIO_TRY(m.update_dma_rx());
+            RP2040PY_PIO_TRY(m.update_dma_tx());
         }
         for (uint32_t i = 0; i < 32; ++i) instructions[i] = 0;
         return true;
@@ -239,12 +239,12 @@ public:
     uint32_t irq1_int_status() const noexcept { return (int_raw() & irq1_int_enable) | irq1_int_force; }
 
     bool check_interrupts() noexcept {
-        RP2040_PIO_TRY(host_.set_irq == nullptr || host_.set_irq(host_.ctx, first_irq_, irq0_int_status() != 0));
+        RP2040PY_PIO_TRY(host_.set_irq == nullptr || host_.set_irq(host_.ctx, first_irq_, irq0_int_status() != 0));
         return host_.set_irq == nullptr || host_.set_irq(host_.ctx, first_irq_ + 1, irq1_int_status() != 0);
     }
 
     bool irq_updated() noexcept {
-        for (uint32_t i = 0; i < kPioMachines; ++i) RP2040_PIO_TRY(machines[i].check_wait());
+        for (uint32_t i = 0; i < kPioMachines; ++i) RP2040PY_PIO_TRY(machines[i].check_wait());
         return check_interrupts();
     }
 
@@ -267,7 +267,7 @@ public:
         uint32_t result = 0;
         for (uint32_t i = 0; i < kPioGpio; ++i) {
             bool level = false;
-            RP2040_PIO_TRY(read_pin(i, &level));
+            RP2040PY_PIO_TRY(read_pin(i, &level));
             if (level) result |= 1u << i;
         }
         *out = result;
@@ -299,9 +299,9 @@ public:
             while (((remaining >> gpio) & 1u) == 0) ++gpio;
             if (gpio < kPioGpio) {
                 if (pins_[gpio] != nullptr) {
-                    RP2040_PIO_TRY(pins_[gpio]->check_for_updates(0));
+                    RP2040PY_PIO_TRY(pins_[gpio]->check_for_updates(0));
                 } else if (host_.pin_update != nullptr) {
-                    RP2040_PIO_TRY(host_.pin_update(host_.ctx, gpio));
+                    RP2040PY_PIO_TRY(host_.pin_update(host_.ctx, gpio));
                 }
             }
             remaining &= remaining - 1;
@@ -339,7 +339,7 @@ public:
                     ++backlog_drops;
                     m.next_due_fp = now;
                 }
-                RP2040_PIO_TRY(m.step());
+                RP2040PY_PIO_TRY(m.step());
             }
         }
         recompute_due();
@@ -447,7 +447,7 @@ public:
         uint32_t value = static_cast<uint32_t>(raw);
         if (atomic_type != kAtomicNormal) {
             uint32_t current = 0;
-            RP2040_PIO_TRY(read32(offset, &current));
+            RP2040PY_PIO_TRY(read32(offset, &current));
             value = static_cast<uint32_t>(decode_atomic(atomic_type, static_cast<int64_t>(current), static_cast<int64_t>(static_cast<uint32_t>(raw))));
         }
         return write32(offset, value);
@@ -455,7 +455,7 @@ public:
 
     // The whole block back to power-on (0089 Phase 5): instruction memory, the four machines, the IRQ flags, the pacing state. `raw_write_value` is not state.
     bool reset() noexcept {
-        for (uint32_t i = 0; i < kPioMachines; ++i) RP2040_PIO_TRY(machines[i].reset());
+        for (uint32_t i = 0; i < kPioMachines; ++i) RP2040PY_PIO_TRY(machines[i].reset());
         for (uint32_t i = 0; i < 32; ++i) instructions[i] = 0;
         stopped = 1;
         cycle_fp = 0;
@@ -492,14 +492,14 @@ private:
             // Starts running now, not at a due time left behind when it was disabled.
             if (enable && !machine.enabled) machine.next_due_fp = cycle_fp;
             machine.enabled = enable;
-            if (value & (1u << (4 + m))) RP2040_PIO_TRY(machine.restart());
+            if (value & (1u << (4 + m))) RP2040PY_PIO_TRY(machine.restart());
             if (value & (1u << (8 + m))) machine.clk_div_restart();
         }
         recompute_due();
         const uint32_t should_run = value & 0xF;
         if (stopped != 0 && should_run != 0) {
             stopped = 0;
-            RP2040_PIO_TRY(host_.started == nullptr || host_.started(host_.ctx));
+            RP2040PY_PIO_TRY(host_.started == nullptr || host_.started(host_.ctx));
         }
         if (should_run == 0) stopped = 1;
         return true;
@@ -530,9 +530,9 @@ inline bool PioMachine::write_fifo(uint32_t value) noexcept {
     }
     tx.push(value);
     block->tx_stall &= ~((1u << 24) << index);
-    RP2040_PIO_TRY(update_dma_tx());
-    RP2040_PIO_TRY(check_wait());
-    if (tx.full()) RP2040_PIO_TRY(block->check_interrupts());
+    RP2040PY_PIO_TRY(update_dma_tx());
+    RP2040PY_PIO_TRY(check_wait());
+    if (tx.full()) RP2040PY_PIO_TRY(block->check_interrupts());
     return true;
 }
 
@@ -544,9 +544,9 @@ inline bool PioMachine::read_fifo(uint32_t* out) noexcept {
     }
     const uint32_t result = rx.pull();
     block->rx_stall &= ~(1u << index);
-    RP2040_PIO_TRY(update_dma_rx());
-    RP2040_PIO_TRY(check_wait());
-    if (rx.empty()) RP2040_PIO_TRY(block->check_interrupts());
+    RP2040PY_PIO_TRY(update_dma_rx());
+    RP2040PY_PIO_TRY(check_wait());
+    if (rx.empty()) RP2040PY_PIO_TRY(block->check_interrupts());
     *out = result;
     return true;
 }
@@ -571,7 +571,7 @@ inline bool PioMachine::jmp_condition(uint32_t condition, bool* out) noexcept {
         case 0b101: *out = x != y; return true;
         case 0b110: {  // PIN
             bool level = false;
-            RP2040_PIO_TRY(block->read_pin(jmp_pin(), &level));
+            RP2040PY_PIO_TRY(block->read_pin(jmp_pin(), &level));
             *out = level;
             return true;
         }
@@ -581,7 +581,7 @@ inline bool PioMachine::jmp_condition(uint32_t condition, bool* out) noexcept {
 
 inline bool PioMachine::in_pins(uint32_t* out) noexcept {
     uint32_t values = 0;
-    RP2040_PIO_TRY(block->gpio_values(&values));
+    RP2040PY_PIO_TRY(block->gpio_values(&values));
     const uint32_t base = in_base();
     // A 32-bit rotate-right by in_base (real hardware reads GPIOs starting at in_base).
     *out = base != 0 ? ((values << (32 - base)) | (values >> base)) : values;
@@ -634,7 +634,7 @@ inline bool PioMachine::out_instruction(uint32_t arg) noexcept {
     const uint32_t bit_count = arg & 0x1F;
     const uint32_t destination = arg >> 5;
     if (bit_count == 0) {
-        RP2040_PIO_TRY(write_out_value(destination, output_shift_reg, 32));
+        RP2040PY_PIO_TRY(write_out_value(destination, output_shift_reg, 32));
         output_shift_reg = 0;  // all 32 bits were shifted out, and the OSR shifts in zeroes
         output_shift_count = 32;
         return true;
@@ -647,7 +647,7 @@ inline bool PioMachine::out_instruction(uint32_t arg) noexcept {
         value = output_shift_reg >> (32 - bit_count);
         output_shift_reg = output_shift_reg << bit_count;
     }
-    RP2040_PIO_TRY(write_out_value(destination, value, bit_count));
+    RP2040PY_PIO_TRY(write_out_value(destination, value, bit_count));
     output_shift_count += bit_count;
     if (output_shift_count > 32) output_shift_count = 32;
     return true;
@@ -709,7 +709,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
     switch (instruction) {
         case 0b000: {  // JMP
             bool taken = false;
-            RP2040_PIO_TRY(jmp_condition(arg >> 5, &taken));
+            RP2040PY_PIO_TRY(jmp_condition(arg >> 5, &taken));
             if (taken) {
                 pc = arg & 0x1F;
                 update_pc = false;
@@ -731,7 +731,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
         case 0b010: {  // IN
             const uint32_t bit_count = arg & 0x1F;
             uint32_t source_value = 0;
-            RP2040_PIO_TRY(in_source_value(arg >> 5, &source_value));
+            RP2040PY_PIO_TRY(in_source_value(arg >> 5, &source_value));
             if (bit_count == 0) {
                 input_shift_reg = source_value;
                 input_shift_count = 32;
@@ -750,8 +750,8 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
             if ((shift_ctrl & (1u << 16)) && input_shift_count >= push_threshold()) {  // AUTOPUSH
                 if (!rx.full()) {
                     rx.push(input_shift_reg);
-                    RP2040_PIO_TRY(update_dma_rx());
-                    RP2040_PIO_TRY(pio.check_interrupts());
+                    RP2040PY_PIO_TRY(update_dma_rx());
+                    RP2040PY_PIO_TRY(pio.check_interrupts());
                 } else {
                     pio.rx_stall |= 1u << index;
                     pio.fdebug |= pio.rx_stall;
@@ -767,15 +767,15 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
                 output_shift_count = 0;
                 if (!tx.empty()) {
                     output_shift_reg = tx.pull();
-                    RP2040_PIO_TRY(update_dma_tx());
-                    RP2040_PIO_TRY(pio.check_interrupts());
+                    RP2040PY_PIO_TRY(update_dma_tx());
+                    RP2040PY_PIO_TRY(pio.check_interrupts());
                 } else {
                     pio.tx_stall |= (1u << 24) << index;
                     pio.fdebug |= pio.tx_stall;
                     wait(kPioWaitOut, false, arg);
                 }
             }
-            if (!waiting) RP2040_PIO_TRY(out_instruction(arg));
+            if (!waiting) RP2040PY_PIO_TRY(out_instruction(arg));
             break;
         }
         case 0b100: {  // PUSH / PULL
@@ -788,8 +788,8 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
                 if ((if_full_or_empty && output_shift_count < pull_threshold()) || ((shift_ctrl & (1u << 17)) && output_shift_count == 0)) break;
                 if (!tx.empty()) {
                     output_shift_reg = tx.pull();
-                    RP2040_PIO_TRY(update_dma_tx());
-                    RP2040_PIO_TRY(pio.check_interrupts());
+                    RP2040PY_PIO_TRY(update_dma_tx());
+                    RP2040PY_PIO_TRY(pio.check_interrupts());
                 } else {
                     pio.tx_stall |= (1u << 24) << index;
                     pio.fdebug |= pio.tx_stall;
@@ -801,8 +801,8 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
                 if (if_full_or_empty && input_shift_count < push_threshold()) break;  // IfFull: "do nothing unless the total input shift count has reached its threshold"; autopush or not
                 if (!rx.full()) {
                     rx.push(input_shift_reg);
-                    RP2040_PIO_TRY(update_dma_rx());
-                    RP2040_PIO_TRY(pio.check_interrupts());
+                    RP2040PY_PIO_TRY(update_dma_rx());
+                    RP2040PY_PIO_TRY(pio.check_interrupts());
                 } else {
                     pio.rx_stall |= 1u << index;
                     pio.fdebug |= pio.rx_stall;
@@ -818,7 +818,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
             const uint32_t op = (arg >> 3) & 0x3;
             const uint32_t destination = (arg >> 5) & 0x7;
             uint32_t value = 0;
-            RP2040_PIO_TRY(in_source_value(source, &value));
+            RP2040PY_PIO_TRY(in_source_value(source, &value));
             uint32_t transformed = value;
             if (op == 0b01) {
                 transformed = ~value;
@@ -830,7 +830,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
                 v = ((v & 0x00FF00FFu) << 8) | ((v & 0xFF00FF00u) >> 8);
                 transformed = (v << 16) | (v >> 16);
             }
-            RP2040_PIO_TRY(set_mov_destination(destination, transformed));
+            RP2040PY_PIO_TRY(set_mov_destination(destination, transformed));
             break;
         }
         case 0b110: {  // IRQ
@@ -841,10 +841,10 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
             const uint32_t irq_idx = (idx & 0x10) ? ((idx & 0x4) | (((idx & 0x3) + index) & 0x3)) : (idx & 0x7);
             if (clear) {
                 pio.irq &= ~(1u << irq_idx);
-                RP2040_PIO_TRY(pio.irq_updated());
+                RP2040PY_PIO_TRY(pio.irq_updated());
             } else {
                 pio.irq |= 1u << irq_idx;
-                RP2040_PIO_TRY(pio.irq_updated());
+                RP2040PY_PIO_TRY(pio.irq_updated());
                 if (wait_flag) wait(kPioWaitIrq, false, irq_idx);
             }
             break;
@@ -865,7 +865,7 @@ inline bool PioMachine::execute_one(uint32_t opcode) noexcept {
 
 inline bool PioMachine::execute_instruction(uint32_t opcode) noexcept {
     for (uint32_t chain = 0;; ++chain) {
-        RP2040_PIO_TRY(execute_one(opcode));
+        RP2040PY_PIO_TRY(execute_one(opcode));
         ++cycles;
         uint32_t sideset_n = sideset_count();
         if (sideset_n > 5) sideset_n = 5;  // not a hardware configuration; defined here (see the header comment)
@@ -874,7 +874,7 @@ inline bool PioMachine::execute_instruction(uint32_t opcode) noexcept {
         const uint32_t delay = delay_sideset & ((1u << (5 - sideset_n)) - 1u);
         if (sideset_n != 0 && (!side_en || (delay_sideset & 0x10))) {
             const uint32_t sideset = delay_sideset >> (5 - sideset_n);
-            RP2040_PIO_TRY(set_sideset(sideset, side_en ? sideset_n - 1 : sideset_n));
+            RP2040PY_PIO_TRY(set_sideset(sideset, side_en ? sideset_n - 1 : sideset_n));
         }
         if (exec_valid) {
             exec_valid = false;
@@ -893,13 +893,13 @@ inline bool PioMachine::execute_instruction(uint32_t opcode) noexcept {
 
 inline bool PioMachine::step() noexcept {
     if (waiting) {
-        RP2040_PIO_TRY(check_wait());
+        RP2040PY_PIO_TRY(check_wait());
         if (waiting) return true;
     }
     const int64_t before = cycles;
     due_rearmed = false;
     update_pc = true;
-    RP2040_PIO_TRY(execute_instruction(block->instructions[pc]));
+    RP2040PY_PIO_TRY(execute_instruction(block->instructions[pc]));
     if (update_pc) next_pc();
     if (!due_rearmed) next_due_fp += (cycles - before) * div_fp;
     return true;
@@ -917,30 +917,30 @@ inline bool PioMachine::check_wait() noexcept {
     } else if (wait_type == kPioWaitPin) {
         if (wait_index < kPioGpio) {
             bool level = false;
-            RP2040_PIO_TRY(pio.read_pin(wait_index, &level));
+            RP2040PY_PIO_TRY(pio.read_pin(wait_index, &level));
             if (level == wait_polarity) waiting = false;
         }
     } else if (wait_type == kPioWaitRxFifo) {
         if (!rx.full()) {
             rx.push(wait_index);
             waiting = false;
-            RP2040_PIO_TRY(update_dma_rx());
-            RP2040_PIO_TRY(pio.check_interrupts());
+            RP2040PY_PIO_TRY(update_dma_rx());
+            RP2040PY_PIO_TRY(pio.check_interrupts());
         }
     } else if (wait_type == kPioWaitTxFifo) {
         if (!tx.empty()) {
             output_shift_reg = tx.pull();
             waiting = false;
-            RP2040_PIO_TRY(update_dma_tx());
-            RP2040_PIO_TRY(pio.check_interrupts());
+            RP2040PY_PIO_TRY(update_dma_tx());
+            RP2040PY_PIO_TRY(pio.check_interrupts());
         }
     } else if (wait_type == kPioWaitOut) {
         if (!tx.empty()) {
             output_shift_reg = tx.pull();
-            RP2040_PIO_TRY(out_instruction(wait_index));
+            RP2040PY_PIO_TRY(out_instruction(wait_index));
             waiting = false;
-            RP2040_PIO_TRY(update_dma_tx());
-            RP2040_PIO_TRY(pio.check_interrupts());
+            RP2040PY_PIO_TRY(update_dma_tx());
+            RP2040PY_PIO_TRY(pio.check_interrupts());
         }
     }
     if (!waiting) {
@@ -993,8 +993,8 @@ inline bool PioMachine::reset() noexcept {
     wait_index = 0;
     wait_polarity = false;
     wait_delay = -1;
-    RP2040_PIO_TRY(update_dma_rx());
-    RP2040_PIO_TRY(update_dma_tx());
+    RP2040PY_PIO_TRY(update_dma_rx());
+    RP2040PY_PIO_TRY(update_dma_tx());
     wait_type = kPioWaitNone;
     return true;
 }
@@ -1028,7 +1028,7 @@ inline bool PioMachine::write32(uint32_t offset, uint32_t value) noexcept {
         case SM0_SHIFTCTRL: shift_ctrl = value & 0xFFFF0000u; return true;  // 15:0 reserved
         case SM0_ADDR: return true;  // read-only
         case SM0_INSTR:
-            RP2040_PIO_TRY(execute_instruction(value & 0xFFFF));
+            RP2040PY_PIO_TRY(execute_instruction(value & 0xFFFF));
             if (waiting) exec_ctrl |= 1u << 31;
             block->recompute_due();
             return true;
@@ -1039,7 +1039,7 @@ inline bool PioMachine::write32(uint32_t offset, uint32_t value) noexcept {
     return true;
 }
 
-#undef RP2040_PIO_TRY
+#undef RP2040PY_PIO_TRY
 
 }  // namespace rp2040core
 

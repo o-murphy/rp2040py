@@ -66,3 +66,16 @@ def test_no_core_header_names_a_constant_after_a_windows_python_macro(header):
     cmd = [_cxx(), *FLAGS, f"-I{CORE}", '-DPLATFORM="win32"', "-fsyntax-only", "-x", "c++", str(CORE / header)]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
     assert result.returncode == 0, result.stderr
+
+
+def test_every_macro_of_the_core_headers_carries_the_project_prefix():
+    """A macro is global to every file that includes the header (Python.h, <windows.h>, a host's own code): `R`, `OP` or `PLATFORM` would collide silently. Include guards and helper macros are all `RP2040PY_*`."""
+    import re
+
+    bad = []
+    for header in sorted(CORE.glob("*.hpp")):
+        for number, line in enumerate(header.read_text(encoding="utf-8").splitlines(), 1):
+            match = re.match(r"\s*#\s*(?:define|undef)\s+(\w+)", line)
+            if match and not match.group(1).startswith("RP2040PY_"):
+                bad.append(f"{header.name}:{number}: {match.group(1)}")
+    assert not bad, bad

@@ -12,6 +12,8 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 
 **Never name a constant after a macro a platform header defines.** Python's `pyconfig.h` on Windows defines `PLATFORM` as the string `"win32"`, so `constexpr uint32_t PLATFORM = 4;` compiles on Linux and macOS and breaks only under MSVC (found by CI on SYSINFO/TBMAN: the register is `REG_PLATFORM` in C++). The same goes for anything `<windows.h>` drags in (`min`, `max`, `ERROR`, `IN`, `OUT`, `NEAR`...). A Linux compile does not see it: the standalone checks can be run once with `-DPLATFORM='"win32"'` to emulate the clash.
 
+**Every macro starts with `RP2040PY_`** - include guards (`RP2040PY_CORE_X_HPP`) and helper macros alike (`RP2040PY_OP`, `RP2040PY_R`, `RP2040PY_PIO_TRY`...), and a helper macro is `#undef`-ed at the end of its header. A macro has no namespace: an unprefixed `R` or `OP` is global to everything that includes the header. `tests/test_core_cpp.py` fails on any `#define`/`#undef` in `core/*.hpp` without the prefix.
+
 ## 1. The reference and the facade (before any C++)
 
 - `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle) and a new `peripherals/X.py`
