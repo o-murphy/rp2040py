@@ -289,6 +289,18 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 6. Measure (Section 1/3 tooling) and append the numbers to this record's progress log.
 7. Leave the Python block in place: it stays as the oracle until Phase 7.
 
+### The small blocks: no second recipe, no register-table framework (decided 2026-10-06, after reading the code)
+
+The blocks that are still Python-only and nearly stateless (`sysinfo`, `tbman`, `syscfg`, `psm`, `busctrl`, `reset`, `vreg_and_chip_reset`; then `watchdog`, `rtc`, `xosc`, `ppb`) follow **the same recipe above**, not a lighter parallel one. What the code actually looks like today:
+
+- The alias handling is already shared - `BasePeripheral.write_uint32_atomic()` / `atomic_update()` in `peripherals/peripheral.py` (XOR/SET/CLEAR over the block's own read) - but **only in Python**. In C++ the window handler is handed `(offset, raw_value, atomic_type)` (`core/window_map.hpp`) and the block decodes it itself.
+- Every block hand-writes an `if offset == X` chain; masks (`value & PSM_BITS_MASK`) and reset values are inline. There is no register table anywhere. The tiny blocks really are tiny (`sysinfo` 19 lines, `tbman` 13, `syscfg` 19, `psm` 77, `busctrl` 87, `reset` 71, `vreg_and_chip_reset` 81); `watchdog` 161, `rtc` 138, `xosc` 141, `ppb` 244 have real behaviour.
+- So the one thing the standalone core needs is **a small header in `core/` (e.g. `core/regs.hpp`) with the alias decode (`atomic_update`) and a masked-register helper**, so every C++ block does not re-implement it and no host wrapper has to. It lives in `core/`, never in a Cython shell. Not a table-driven framework: that would be a design for blocks that do not need it.
+- Each block is still a `core/X.hpp` + a thin shell + an oracle, but the oracle for the trivial blocks can be one shared parametrised register-access differential rather than one file per block.
+- Order: PPB first (SysTick/NVIC/SCB, it has behaviour and the core needs it to run alone), then the trivial blocks, then USB, then Phase 6.
+
+(An earlier version of this idea in the session - a "register-file layer" with a table per block - was dropped after the code showed the duplication it would remove is small.)
+
 ## Core host contract: time and errors (design note, 2026-10-05)
 
 Written down before the rest of Phase 4 multiplies the glue, and for the wasm host (Phase 6) and later FFI hosts: what the header-only core promises its embedder, so that a Cython shell, a wasm module and a Rust or Dart binding are three implementations of one small contract. Requirements restated by the user and kept: the core stays header-only bare C++17 (no exceptions, RTTI, STL or allocation), its host interface stays *plain function pointers plus one `void* ctx`*, and FFI is a separate, later piece of work. The shared pieces are in `core/core_host.hpp`; the recipe for a new block is `docs/reference/core-block-recipe.md`.
@@ -336,6 +348,7 @@ Written down before the rest of Phase 4 multiplies the glue, and for the wasm ho
 
 ## Progress log
 
+- 2026-10-06: **CI closed; plan for the small blocks decided (no PR yet, the record is still in progress).** Run #99 on 45856ef is green on every job (Pyodide, Windows x64/x86/ARM64, Linux x64/i686/ARMv7, macOS x2, Android, sdist). The small Python-only blocks keep the one per-block recipe, with a shared alias/mask header in `core/` - see "The small blocks" above. Next: PPB.
 - 2026-10-05: **The C++ port resumes: PWM 1 - read, split, plan.** The thread-free engine, `bench` and the README are settled, so the port goes on in the order the tracker names (PWM -> the small blocks -> the USB controller). `peripherals/pwm.py` is split into the pure reference `_pwm.py` (the pure chip imports it) and a facade `pwm.py` (native when built), exactly as for the other blocks; nothing behaves differently yet. What reading the 348 lines turned up:
   - **It is not a self-contained block.** The 8 channels run on `utils/timer32.py` (`Timer32` + `Timer32PeriodicAlarm`, also used by the watchdog and the PPB's SysTick), so the C++ `Timer32` (counter arithmetic, `zigzag`/`decrement` modes, prescaler, the periodic alarm on the C++ `Clock`) comes first as `core/timer32.hpp`; the PWM, the watchdog and SysTick then all sit on it. Its quirks are numerous and deliberate (`_js_round`, the `top_modulo == 0` guard, the zero-delta reschedule that once froze the chip) and are covered by `tests/test_timer32.py`, which the C++ test will transcribe.
   - **Couplings, all to be host function pointers:** the GPIO side (`gpio_value`/`gpio_direction` read by the pin on every level evaluation - today through the `_gpio_pin.pyx` trampoline `rp.pwm.gpio_value`; `gpio[i].check_for_updates()` on a change; `gpio_on_input()` called by the pin for a PWM-function input), the DMA DREQ (`DREQ_PWM_WRAP0 + n`), the `PWM_WRAP` IRQ.
