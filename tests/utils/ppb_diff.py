@@ -68,7 +68,6 @@ UNIMPLEMENTED = (
     0xFFC,
 )
 TICKS = (0, 1, 7, 8, 9, 50, 300, 1000, 5000, 20_000, 200_000)
-BIG_TICKS = (5_000_000, 200_000_000)
 RELOADS = (0, 1, 2, 5, 10, 100, 1000, 0xFFFFFF, 0x1000000, 0xFFFFFFFF)
 # (no 0.0: a chip never runs at clk_sys == 0 - `update_clocks` ignores it - and the reference raises ZeroDivisionError when it schedules an alarm on such a timer, where the C++ computes an infinite delay)
 FREQUENCIES = (125e6, 48e6, 133e6, 1e6, 12e6, 250e6)
@@ -183,20 +182,20 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     # -- SysTick
     "systick_no_count_flag": ("            self.systick_count_flag = True\n", "            pass\n", 1),
     "systick_ignores_int_enable": ("            if self.systick_int_enable:\n", "            if True:\n", 1),
-    "systick_no_reload": ("            self.systick_timer.set(self.systick_reload)\n", "            pass\n", 1),
-    "systick_reload_zero": ("self.systick_timer.set(self.systick_reload)", "self.systick_timer.set(0)", 1),
-    "systick_top_24_bit": ("self.systick_timer.top = 0xFFFFFF", "self.systick_timer.top = 0xFFFFFFFF", 1),
+    "rvr_top_not_set": ("            self.systick_timer.top = self.systick_reload\n", "", 1),
+    "rvr_top_off_by_one": ("self.systick_timer.top = self.systick_reload", "self.systick_timer.top = self.systick_reload + 1", 1),
+    "rvr_zero_arms_the_alarm": ("self.systick_alarm.enable = self.systick_reload != 0", "self.systick_alarm.enable = True", 1),
+    "rvr_alarm_stays_off": ("self.systick_alarm.enable = self.systick_reload != 0", "self.systick_alarm.enable = self.systick_alarm.enable and self.systick_reload != 0", 1),
     "systick_counts_up": (
         "self.systick_timer.mode = TimerMode.DECREMENT",
         "self.systick_timer.mode = TimerMode.INCREMENT",
         1,
     ),
     "systick_target_one": ("self.systick_alarm.target = 0", "self.systick_alarm.target = 1", 1),
-    "systick_alarm_off": ("self.systick_alarm.enable = True", "self.systick_alarm.enable = False", 1),
     "systick_pends_wrong": ("self.rp2040.core.pending_systick = True", "self.rp2040.core.pending_pend_sv = True", 1),
     "systick_no_interrupts_updated": (
-        "                self.rp2040.core.interrupts_updated = True\n            self.systick_timer.set",
-        "            self.systick_timer.set",
+        "                self.rp2040.core.pending_systick = True\n                self.rp2040.core.interrupts_updated = True\n",
+        "                self.rp2040.core.pending_systick = True\n",
         1,
     ),
     "reset_reload_zero": ("self.write_uint32(SYST_RVR, 0xFFFFFF)", "self.write_uint32(SYST_RVR, 0)", 1),
@@ -384,7 +383,7 @@ def _systick_scenario(r: random.Random) -> list[tuple]:
     csr = r.choice((0, 1, 3, 5, 7, 2, 4, 6)) | (r.getrandbits(32) & 0xFFFFFFF8 if r.random() < 0.1 else 0)
     ops.append(("write", P.SYST_CSR, csr | (1 if r.random() < 0.8 else 0)))
     for _ in range(r.choice((2, 3, 4, 6))):
-        ops.append(("tick", r.choice(TICKS) if r.random() < 0.97 else r.choice(BIG_TICKS)))
+        ops.append(("tick", r.choice(TICKS)))
         if r.random() < 0.6:
             ops.append(("read", r.choice((P.SYST_CSR, P.SYST_CSR, P.SYST_CVR, P.SYST_RVR, P.ICSR))))
         if r.random() < 0.15:
@@ -397,8 +396,8 @@ def _systick_scenario(r: random.Random) -> list[tuple]:
 
 
 def _systick_fires_scenario(r: random.Random) -> list[tuple]:
-    """SysTick running for long enough to fire: after a write to SYST_CVR the first period is a whole 2^24 ticks (the reference's counter sits on its target), so the time is
-    hundreds of milliseconds, with a reload large enough that the periods after it are not millions of alarms."""
+    """SysTick running with a large reload for a long time (a hundred milliseconds): many periods and the counter read mid-period, without the millions of alarms a small reload would
+    make of that much time."""
     ops: list[tuple] = []
     ops.append(("write", P.SYST_RVR, r.choice((400_000, 1_000_000, 0xFFFFFF))))
     ops.append(("write", P.SYST_CVR, 0))

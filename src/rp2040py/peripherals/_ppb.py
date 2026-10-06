@@ -85,11 +85,11 @@ class RPPPB(BasePeripheral):
         self.systick_timer = Timer32(self.rp2040.clock, self.rp2040.clk_sys)
 
         def _on_systick_alarm() -> None:
+            # The counter is a cycle RELOAD .. 1, 0 - the timer's TOP is RELOAD - so it comes round to RELOAD by itself
             self.systick_count_flag = True
             if self.systick_int_enable:
                 self.rp2040.core.pending_systick = True
                 self.rp2040.core.interrupts_updated = True
-            self.systick_timer.set(self.systick_reload)
 
         self.systick_alarm = Timer32PeriodicAlarm(self.systick_timer, _on_systick_alarm)
 
@@ -240,6 +240,12 @@ class RPPPB(BasePeripheral):
         if offset == SYST_RVR:
             # RELOAD is bits 23:0 (pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR); the rest does not exist
             self.systick_reload = value & 0xFFFFFF
+            # Sourced (pico-sdk m0plus.h): RELOAD is "the value to load into the SysTick Current Value Register when the counter reaches 0", and a write of CVR "clears the
+            # register to 0". Modelled as a cycle RELOAD, RELOAD-1 ... 0, RELOAD ... - a TOP of RELOAD on the timer, a period of RELOAD + 1 ticks, and the first period after a
+            # CVR write the same (the counter sits at 0 and the next tick loads RELOAD). From the ARM architecture manual's SysTick section, which this repository's egress
+            # could not reach to quote (docs/records/0096, the PPB fixes): the period of N ticks is RELOAD = N - 1, and a RELOAD of 0 never fires.
+            self.systick_timer.top = self.systick_reload
+            self.systick_alarm.enable = self.systick_reload != 0
             return
 
         super().write_uint32(offset, value)

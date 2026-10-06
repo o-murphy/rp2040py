@@ -4,8 +4,8 @@
 // What it is: the registers the processor itself owns, at 0xE000E000 + offset - SysTick (SYST_CSR / RVR / CVR / CALIB), the NVIC (set/clear enable and pending words, the eight
 // priority words), and the SCB registers the RP2040 firmware touches (CPUID, ICSR, VTOR, SHPR2/3). Almost all of it is a *view of the CPU's own state*: the pending and enabled
 // words, the priority bitmaps, the exception flags and VTOR live in `Cpu` (core/cpu.hpp), which already reads them to take an exception - the block reads and writes those fields,
-// it owns none of them. What it does own is SysTick: a 24-bit down-counter on a `Timer32` (core/timer32.hpp) clocked from clk_sys, one compare alarm at 0 that sets COUNTFLAG, pends
-// the SysTick exception when TICKINT is set, and reloads the counter.
+// it owns none of them. What it does own is SysTick: a 24-bit down-counter on a `Timer32` (core/timer32.hpp) clocked from clk_sys whose TOP is RELOAD (a cycle of RELOAD + 1 ticks, which is also
+// how the counter comes round to RELOAD), and one compare alarm at 0 that sets COUNTFLAG and pends the SysTick exception when TICKINT is set.
 //
 // So a core that is embedded without a Python host needs nothing else for its private bus: the only thing a host tells this block is the logger (`warn`), through the same
 // `RegWarnFn` data-not-strings convention as every other block (core_host.hpp). The chip's clk_sys is told to the block by `set_frequency()` (the C++ clock tree, or the Python
@@ -14,7 +14,7 @@
 // Quirks of the reference that are kept (pinned by tests/test_ppb_diff.py and the C++ checks):
 //   - SysTick's `clk_source` bit is stored and read back but changes nothing: the counter always runs from clk_sys;
 //   - SYST_CALIB reads 0x0000270F (measured on the silicon) whatever the clock;
-//   - SYST_RVR is 24 bits wide (RELOAD, bits 23:0 - pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR): a write keeps the low 24 bits, a read returns them;
+//   - SYST_RVR is 24 bits wide (RELOAD, bits 23:0 - pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR): a write keeps the low 24 bits and sets the timer's TOP; a RELOAD of 0 disarms the alarm;
 //   - a read of SYST_CSR returns COUNTFLAG and clears it - the one register read with a side effect;
 //   - ISPR/ICPR read the pending word and ISER/ICER the enabled word (the hardware does too); ICPR cannot clear a hardware line (bits 0..MAX_HW_IRQ-1 stay: the peripheral owns them);
 //   - the priority registers are views of the CPU's four priority *bitmaps* (bit n of bitmap p = "interrupt n has priority p"): a write rebuilds the interrupt's bit in all four, a
@@ -182,7 +182,13 @@ public:
                 timer.set_enable((word & 1u) != 0);
                 return true;
             case SYST_CVR: timer.set(0); return true;
-            case SYST_RVR: reload = word & 0xFFFFFFu; return true;
+            case SYST_RVR:
+                // The counter is a cycle RELOAD, RELOAD-1 ... 0, RELOAD ...: a TOP of RELOAD on the timer, a period of RELOAD + 1 ticks (and the first period after a CVR write the
+                // same: the counter sits at 0 and the next tick loads RELOAD). A RELOAD of 0 never fires.
+                reload = word & 0xFFFFFFu;
+                timer.set_top(reload);
+                alarm.set_enable(reload != 0);
+                return true;
             default: break;
         }
         if (offset >= NVIC_IPR0 && offset < NVIC_IPR_END && (offset & 3) == 0) {
@@ -225,8 +231,7 @@ private:
             self->cpu_->pending_systick = true;
             self->cpu_->interrupts_updated = true;
         }
-        self->timer.set(self->reload);
-        return true;
+        return true;  // the counter is a cycle RELOAD..0 (TOP = RELOAD), so it comes round to RELOAD by itself
     }
 
     Cpu* cpu_ = nullptr;

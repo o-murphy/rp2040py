@@ -63,10 +63,8 @@ static void check_reset_state() {
     CHECK(r.warns.n == 0);
 }
 
-// A quirk of the reference, kept: a write to SYST_CVR sets the counter to 0, where the alarm *is* (target 0) - and a counter sitting on its target is reached one full wrap later, so
-// the first period after CVR is written is 2^24 ticks whatever the reload; the periods after that are `reload` ticks (the reload is copied into the counter by the alarm).
-static const double kFirstPeriodUs = 16777216.0;
-
+// The counter is a cycle RELOAD, RELOAD-1 ... 0, RELOAD ...: a period of RELOAD + 1 ticks, and the first period after a write to SYST_CVR (which clears the counter to 0; the next
+// tick loads RELOAD) is the same. COUNTFLAG is set - and the exception pended - when the counter reaches 0.
 static void check_systick_counts_down_and_fires() {
     Rig r;
     r.ppb.write(SYST_RVR, 9);
@@ -74,22 +72,23 @@ static void check_systick_counts_down_and_fires() {
     CHECK(r.ppb.read(SYST_CVR) == 0);
     r.ppb.write(SYST_CSR, 1);  // enable only: no interrupt
     CHECK(r.clk.has_alarm());
-    CHECK(r.clk.nanos_to_next_alarm() == kFirstPeriodUs * 1000.0);
+    CHECK(r.clk.nanos_to_next_alarm() == 10000.0);  // RELOAD + 1 ticks
+    r.us(1);
+    CHECK(r.ppb.read(SYST_CVR) == 9);  // the next tick loaded RELOAD
     r.us(4);
-    CHECK(r.ppb.read(SYST_CVR) == 0x1000000u - 4);  // a down counter that started from 0 = TOP + 1
-    r.us(kFirstPeriodUs - 4 - 1);
+    CHECK(r.ppb.read(SYST_CVR) == 5);
+    r.us(4);
+    CHECK(r.ppb.read(SYST_CVR) == 1);
     CHECK(!r.ppb.count_flag);
-    r.us(1);  // the alarm at 0
+    r.us(1);  // reached 0
+    CHECK(r.ppb.read(SYST_CVR) == 0);
     CHECK(r.cpu.pending_systick == false);  // TICKINT was not set
-    CHECK(r.ppb.read(SYST_CVR) == 9);       // reloaded
-    CHECK(r.clk.nanos_to_next_alarm() == 9000.0);
     const uint32_t csr = r.ppb.read(SYST_CSR);
     CHECK((csr & (1u << 16)) != 0);  // COUNTFLAG
     CHECK((csr & 1u) == 1u);
     CHECK((r.ppb.read(SYST_CSR) & (1u << 16)) == 0);  // the read cleared it
-    r.us(5);
-    CHECK(r.ppb.read(SYST_CVR) == 4);
-    r.us(4);  // the second period is the reload
+    CHECK(r.clk.nanos_to_next_alarm() == 10000.0);     // the next period is RELOAD + 1 as well
+    r.us(10);
     CHECK((r.ppb.read(SYST_CSR) & (1u << 16)) != 0);
 }
 
@@ -99,7 +98,7 @@ static void check_tickint_pends_the_exception() {
     r.ppb.write(SYST_CVR, 0);
     r.ppb.write(SYST_CSR, 3);  // enable + TICKINT
     r.cpu.interrupts_updated = false;
-    r.us(kFirstPeriodUs - 1);
+    r.us(4);
     CHECK(!r.cpu.pending_systick && !r.cpu.interrupts_updated);
     r.us(1);
     CHECK(r.cpu.pending_systick);
@@ -115,9 +114,25 @@ static void check_no_tickint_no_exception() {
     r.ppb.write(SYST_RVR, 4);
     r.ppb.write(SYST_CVR, 0);
     r.ppb.write(SYST_CSR, 1);
-    r.us(kFirstPeriodUs + 30);
+    r.us(30);
     CHECK(!r.cpu.pending_systick);
     CHECK((r.ppb.read(SYST_CSR) & (1u << 16)) != 0);
+}
+
+static void check_a_reload_of_zero_never_fires() {
+    Rig r;
+    r.ppb.write(SYST_RVR, 0);
+    r.ppb.write(SYST_CVR, 0);
+    r.ppb.write(SYST_CSR, 3);
+    CHECK(!r.clk.has_alarm());
+    r.us(1000);
+    CHECK(!r.cpu.pending_systick && (r.ppb.read(SYST_CSR) & (1u << 16)) == 0);
+    r.ppb.write(SYST_RVR, 3);  // a reload written later arms it again
+    CHECK(r.clk.has_alarm());
+    r.us(5);
+    CHECK(r.cpu.pending_systick);
+    r.ppb.write(SYST_RVR, 0x1000000u);  // bit 24 is not RELOAD: the low 24 bits are 0
+    CHECK(!r.clk.has_alarm());
 }
 
 static void check_stopping_and_frequency() {
@@ -260,6 +275,7 @@ int main() {
     check_systick_counts_down_and_fires();
     check_tickint_pends_the_exception();
     check_no_tickint_no_exception();
+    check_a_reload_of_zero_never_fires();
     check_stopping_and_frequency();
     check_csr_bits_and_readback();
     check_icsr();
