@@ -32,7 +32,7 @@ cdef extern from "ppb.hpp" namespace "rp2040core":
         void detach() noexcept
         void reset() noexcept
         double clk_sys() noexcept
-        void set_frequency(double hz) noexcept
+        void clk_sys_changed(double hz) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

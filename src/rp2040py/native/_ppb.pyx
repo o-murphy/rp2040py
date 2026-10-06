@@ -209,6 +209,14 @@ cdef class RPPPB:
 
     # --- the reference's methods ------------------------------------------------------------------
 
+    def clk_sys_changed(self, clk_sys):
+        """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""
+        self._block.clk_sys_changed(<double> clk_sys)
+
+    @property
+    def clk_sys(self):
+        return self._block.clk_sys()
+
     def reset(self):
         """SysTick back to stopped, reload and counter 0xFFFFFF (0089 Phase 5)."""
         self._block.reset()

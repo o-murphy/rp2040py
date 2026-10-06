@@ -316,7 +316,7 @@ class RPClocks(BasePeripheral):
 def _set_clk_sys(rp2040: "RP2040", clk_sys: float) -> None:
     old_clk_sys = rp2040.clk_sys
     rp2040.clk_sys = clk_sys
-    rp2040.ppb.systick_timer.frequency = clk_sys
+    rp2040.ppb.clk_sys_changed(clk_sys)
     pwm = rp2040.pwm
     for channel in pwm.channels:
         channel.timer.frequency = pwm.clock_freq

@@ -117,8 +117,9 @@ class Rig:
             chip.clock.tick(op[1])
         elif kind == "irq":
             chip.set_interrupt(op[1], bool(op[2]))
-        elif kind == "freq":  # what update_clocks() does to SysTick when clk_sys changes
-            chip.ppb.systick_timer.frequency = op[1]
+        elif kind == "freq":  # what update_clocks() does when clk_sys changes
+            chip.clk_sys = op[1]
+            chip.ppb.clk_sys_changed(op[1])
         elif kind == "lines_off":  # every interrupt line low: nothing hardware is pending
             for line in range(IRQ_COUNT):
                 chip.set_interrupt(line, False)
@@ -143,6 +144,7 @@ class Rig:
                 int(ppb.systick_reload),
                 bool(timer.enable),
                 int(timer.mode),
+                float(ppb.clk_sys),
                 float(timer.frequency),
                 float(timer.prescaler),
                 int(timer.top),
@@ -182,6 +184,12 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     # -- SysTick
     "systick_no_count_flag": ("            self.systick_count_flag = True\n", "            pass\n", 1),
     "systick_ignores_int_enable": ("            if self.systick_int_enable:\n", "            if True:\n", 1),
+    "source_ignored": ("frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK", "frequency = self.clk_sys", 1),
+    "source_inverted": ("frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK", "frequency = SYSTICK_REF_CLK if self.systick_clk_source else self.clk_sys", 1),
+    "ref_clk_wrong": ("SYSTICK_REF_CLK = 1e6", "SYSTICK_REF_CLK = 2e6", 1),
+    "clk_sys_change_ignored": ("        self.clk_sys = clk_sys\n        self._retune_systick()\n", "        self._retune_systick()\n", 1),
+    "clk_sys_change_not_applied": ("        self.clk_sys = clk_sys\n        self._retune_systick()\n", "        self.clk_sys = clk_sys\n", 1),
+    "csr_write_does_not_retune": ("            self._retune_systick()  # CLKSOURCE 0", "            pass  # CLKSOURCE 0", 1),
     "rvr_top_not_set": ("            self.systick_timer.top = self.systick_reload\n", "", 1),
     "rvr_top_off_by_one": ("self.systick_timer.top = self.systick_reload", "self.systick_timer.top = self.systick_reload + 1", 1),
     "rvr_zero_arms_the_alarm": ("self.systick_alarm.enable = self.systick_reload != 0", "self.systick_alarm.enable = True", 1),
@@ -401,7 +409,7 @@ def _systick_fires_scenario(r: random.Random) -> list[tuple]:
     ops: list[tuple] = []
     ops.append(("write", P.SYST_RVR, r.choice((400_000, 1_000_000, 0xFFFFFF))))
     ops.append(("write", P.SYST_CVR, 0))
-    ops.append(("write", P.SYST_CSR, r.choice((1, 3, 5, 7))))
+    ops.append(("write", P.SYST_CSR, r.choice((5, 7, 7, 1, 3))))
     for _ in range(r.choice((1, 2, 3))):
         ops.append(("tick", r.choice((140_000_000, 150_000_000))))
         ops.append(("read", r.choice((P.SYST_CSR, P.SYST_CVR, P.ICSR))))

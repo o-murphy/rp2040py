@@ -8,11 +8,11 @@
 // how the counter comes round to RELOAD), and one compare alarm at 0 that sets COUNTFLAG and pends the SysTick exception when TICKINT is set.
 //
 // So a core that is embedded without a Python host needs nothing else for its private bus: the only thing a host tells this block is the logger (`warn`), through the same
-// `RegWarnFn` data-not-strings convention as every other block (core_host.hpp). The chip's clk_sys is told to the block by `set_frequency()` (the C++ clock tree, or the Python
+// `RegWarnFn` data-not-strings convention as every other block (core_host.hpp). The chip's clk_sys is told to the block by `clk_sys_changed()` (the C++ clock tree, or the Python
 // one today, calls it when clk_sys changes - what `update_clocks` does to `systick_timer.frequency`).
 //
 // Quirks of the reference that are kept (pinned by tests/test_ppb_diff.py and the C++ checks):
-//   - SysTick's `clk_source` bit is stored and read back but changes nothing: the counter always runs from clk_sys;
+//   - SysTick's `clk_source` selects the counter's clock: 0 the 1 MHz reference clock (the reset state), 1 clk_sys; the block retunes the timer on a CSR write and when told clk_sys changed;
 //   - SYST_CALIB reads 0x0000270F (measured on the silicon) whatever the clock;
 //   - SYST_RVR is 24 bits wide (RELOAD, bits 23:0 - pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR): a write keeps the low 24 bits and sets the timer's TOP; a RELOAD of 0 disarms the alarm;
 //   - a read of SYST_CSR returns COUNTFLAG and clears it - the one register read with a side effect;
@@ -56,6 +56,8 @@ constexpr uint32_t kCpuId = 0x410CC601, kSystCalib = 0x0000270F;
 constexpr uint32_t NMIPENDSET = 1u << 31, PENDSVSET = 1u << 28, PENDSVCLR = 1u << 27, PENDSTSET = 1u << 26, PENDSTCLR = 1u << 25, ISRPENDING = 1u << 22;
 constexpr uint32_t VECTPENDING_SHIFT = 12, VECTACTIVE_MASK = 0x1FF;
 constexpr int64_t kSysTickTop = 0xFFFFFF;
+// SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): 1 MHz, inferred from SYST_CALIB.TENMS = 0x270F (10000 ticks in 10 ms; pico-sdk hardware/regs/m0plus.h). See the reference.
+constexpr double kSysTickRefClk = 1e6;
 }  // namespace ppb_regs
 
 class PpbBlock {
@@ -76,6 +78,7 @@ public:
         cpu_ = cpu;
         host_ = host;
         hardware_interrupt_mask_ = max_hardware_irq >= 32 ? 0xFFFFFFFFu : (1u << max_hardware_irq) - 1u;
+        clk_sys_ = clk_sys;
         timer.init(clock, clk_sys);
         alarm.init(&timer, &PpbBlock::on_systick_alarm, this);
         timer.set_top(ppb_regs::kSysTickTop);
@@ -96,8 +99,12 @@ public:
         timer.set(kSysTickTop);
     }
 
-    double clk_sys() const noexcept { return timer.frequency(); }
-    void set_frequency(double hz) noexcept { timer.set_frequency(hz); }
+    // clk_sys is now `hz` (the clock tree tells the block): SysTick follows it when CLKSOURCE says processor clock.
+    double clk_sys() const noexcept { return clk_sys_; }
+    void clk_sys_changed(double hz) noexcept {
+        clk_sys_ = hz;
+        retune();
+    }
 
     uint32_t read(uint32_t offset) noexcept {
         using namespace ppb_regs;
@@ -179,6 +186,7 @@ public:
             case SYST_CSR:
                 clk_source = (word & (1u << 2)) != 0;
                 int_enable = (word & (1u << 1)) != 0;
+                retune();  // CLKSOURCE 0 is the 1 MHz reference clock, 1 the processor clock
                 timer.set_enable((word & 1u) != 0);
                 return true;
             case SYST_CVR: timer.set(0); return true;
@@ -234,7 +242,13 @@ private:
         return true;  // the counter is a cycle RELOAD..0 (TOP = RELOAD), so it comes round to RELOAD by itself
     }
 
+    void retune() noexcept {
+        const double frequency = clk_source ? clk_sys_ : ppb_regs::kSysTickRefClk;
+        if (timer.frequency() != frequency) timer.set_frequency(frequency);
+    }
+
     Cpu* cpu_ = nullptr;
+    double clk_sys_ = 0.0;
     PpbHost host_;
     uint32_t hardware_interrupt_mask_ = 0;
     int64_t raw_write_value_ = 0;

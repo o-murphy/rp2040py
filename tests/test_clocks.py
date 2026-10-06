@@ -124,8 +124,12 @@ def test_a_clock_listener_that_unsubscribed_is_not_told():
     assert calls == []
 
 
+SYST_CSR = 0xE000E010
+
+
 def test_systick_and_the_pwm_counters_are_retuned_when_clk_sys_changes():
     chip = RP2040()
+    chip.write_uint32(SYST_CSR, 1 << 2)  # CLKSOURCE = processor clock; 0 is the 1 MHz reference clock, which clk_sys does not move
     _set_sys_clock(chip, **_arduino_pico_200())
     assert chip.ppb.systick_timer.frequency == 200 * MHZ
     assert chip.pwm.channels[0].timer.frequency == 200 * MHZ
@@ -196,12 +200,14 @@ def test_a_bypassed_pll_outputs_the_reference_divided_by_refdiv_alone():
 
 def test_a_chip_reset_puts_the_clock_tree_back_to_its_defaults_and_retunes_what_ran_from_it():
     chip = RP2040()
+    chip.write_uint32(SYST_CSR, 1 << 2)
     _set_sys_clock(chip, **_arduino_pico_200())
     seen: list[tuple[float, float]] = []
     chip.add_clock_listener(lambda clk_sys, old: seen.append((clk_sys, old)))
     chip.reset(**WATCHDOG_RESET_ALL)
     assert chip.clk_sys == 125 * MHZ and chip.clk_peri == 125 * MHZ
     assert seen == [(125 * MHZ, 200 * MHZ)]
-    assert chip.ppb.systick_timer.frequency == 125 * MHZ
+    assert chip.ppb.clk_sys == 125 * MHZ
+    assert chip.ppb.systick_timer.frequency == 1 * MHZ  # SysTick's CLKSOURCE is back to 0: the 1 MHz reference clock
     assert chip.read_uint32(PLL_SYS_BASE + PLL_PRIM) == 0x77000
     assert chip.read_uint32(CLK_SYS_CTRL) == 0

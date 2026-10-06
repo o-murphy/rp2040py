@@ -66,6 +66,12 @@ VECTACTIVE_MASK = 0x1FF
 VECTACTIVE_SHIFT = 0
 
 
+# SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0; the SYST_CALIB read below says the chip provides one - NOREF is 0): 1 MHz. Inferred, not quoted: SYST_CALIB.TENMS
+# is 0x270F = 9999, "an optional reload value to be used for 10ms timing" (pico-sdk hardware/regs/m0plus.h), i.e. 10000 reference ticks in 10 ms, i.e. 1 MHz - the
+# microsecond tick the watchdog block generates for the chip. The datasheet's own sentence was not reachable from this repository's egress (docs/records/0096, the PPB fixes).
+SYSTICK_REF_CLK = 1e6
+
+
 class RPPPB(BasePeripheral):
     """PPB stands for Private Peripheral Bus.
 
@@ -82,7 +88,8 @@ class RPPPB(BasePeripheral):
         self.systick_clk_source = False
         self.systick_int_enable = False
         self.systick_reload = 0
-        self.systick_timer = Timer32(self.rp2040.clock, self.rp2040.clk_sys)
+        self.clk_sys = self.rp2040.clk_sys
+        self.systick_timer = Timer32(self.rp2040.clock, self.clk_sys)
 
         def _on_systick_alarm() -> None:
             # The counter is a cycle RELOAD .. 1, 0 - the timer's TOP is RELOAD - so it comes round to RELOAD by itself
@@ -98,6 +105,16 @@ class RPPPB(BasePeripheral):
         self.systick_alarm.target = 0
         self.systick_alarm.enable = True
         self.reset()
+
+    def clk_sys_changed(self, clk_sys: float) -> None:
+        """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""
+        self.clk_sys = clk_sys
+        self._retune_systick()
+
+    def _retune_systick(self) -> None:
+        frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK
+        if self.systick_timer.frequency != frequency:
+            self.systick_timer.frequency = frequency
 
     def reset(self) -> None:
         self.write_uint32(SYST_CSR, 0)
@@ -232,6 +249,7 @@ class RPPPB(BasePeripheral):
         if offset == SYST_CSR:
             self.systick_clk_source = bool(value & (1 << 2))
             self.systick_int_enable = bool(value & (1 << 1))
+            self._retune_systick()  # CLKSOURCE 0 is the 1 MHz reference clock, 1 the processor clock (pico-sdk m0plus.h, SYST_CSR.CLKSOURCE)
             self.systick_timer.enable = bool(value & (1 << 0))
             return
         if offset == SYST_CVR:

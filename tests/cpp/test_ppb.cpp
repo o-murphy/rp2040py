@@ -147,9 +147,29 @@ static void check_stopping_and_frequency() {
     CHECK(r.ppb.read(SYST_CVR) == frozen);
     r.ppb.write(SYST_CSR, 1);
     CHECK(r.clk.has_alarm());
-    r.ppb.set_frequency(2 * kHz);
-    CHECK(r.ppb.clk_sys() == 2 * kHz);
-    CHECK(r.clk.has_alarm());
+}
+
+// CLKSOURCE 0 (the reset state) is the 1 MHz reference clock whatever clk_sys is; CLKSOURCE 1 is clk_sys, and follows it.
+static void check_the_clock_source() {
+    Rig r;  // clk_sys = 1 MHz here
+    r.ppb.clk_sys_changed(125e6);
+    CHECK(r.ppb.clk_sys() == 125e6);
+    CHECK(r.ppb.timer.frequency() == kSysTickRefClk);  // CLKSOURCE 0: not clk_sys
+    r.ppb.write(SYST_RVR, 9);
+    r.ppb.write(SYST_CVR, 0);
+    r.ppb.write(SYST_CSR, 1);
+    CHECK(r.clk.nanos_to_next_alarm() == 10000.0);  // 10 reference ticks of 1 us
+    r.ppb.write(SYST_CSR, 5);                       // the processor clock
+    CHECK(r.ppb.timer.frequency() == 125e6);
+    CHECK(r.clk.nanos_to_next_alarm() > 0.0 && r.clk.nanos_to_next_alarm() <= 80.0);
+    r.ppb.clk_sys_changed(2 * kHz);
+    CHECK(r.ppb.timer.frequency() == 2 * kHz);
+    r.ppb.write(SYST_CSR, 1);  // back to the reference clock
+    CHECK(r.ppb.timer.frequency() == kSysTickRefClk);
+    r.ppb.clk_sys_changed(48e6);  // clk_sys moves, the reference does not
+    CHECK(r.ppb.timer.frequency() == kSysTickRefClk);
+    r.ppb.reset();
+    CHECK(r.ppb.timer.frequency() == kSysTickRefClk && !r.ppb.clk_source);
 }
 
 static void check_csr_bits_and_readback() {
@@ -277,6 +297,7 @@ int main() {
     check_no_tickint_no_exception();
     check_a_reload_of_zero_never_fires();
     check_stopping_and_frequency();
+    check_the_clock_source();
     check_csr_bits_and_readback();
     check_icsr();
     check_nvic_words();
