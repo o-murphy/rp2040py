@@ -19,3 +19,4 @@ needs_blocking_loop = pytest.mark.skipif(
 needs_fine_clock = pytest.mark.skipif(
     IS_EMSCRIPTEN, reason="Emscripten's timer is too coarse for a wall-clock assertion"
 )
+needs_pty = pytest.mark.skipif(IS_EMSCRIPTEN, reason="Emscripten has no pseudo-terminals (pty.openpty finds no device)")

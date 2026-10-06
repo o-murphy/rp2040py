@@ -6,9 +6,12 @@ import sys
 import time
 
 import pytest
+from utils.emscripten import needs_pty
 
 from rp2040py.cli.pty_repl import PtyInteractiveRepl
 from rp2040py.simulator import Simulator
+
+pytestmark = needs_pty
 
 # pty is POSIX-only (see pty_repl.py's own import gating) - importing it unconditionally at module
 # scope would crash *collection* on Windows (not just fail these tests), taking every other test
