@@ -118,12 +118,26 @@ int main() {
     wr(SPI_CTRL_R0, 0x1F0F0F0F);
     wr(RX_SAMPLE_DLY, 0x1FF);
     wr(TXD_DRIVE_EDGE, 0x2A5);
-    CHECK(rd(CTRLR0) == 0xDEADBEEFu && rd(CTRLR1) == 0x1234 && rd(BAUDR) == 6 && rd(TXFLR) == 77 && rd(SPI_CTRL_R0) == 0x1F0F0F0Fu);
+    // datasheet widths: CTRLR0 24 and 22:0, SPI_CTRLR0 31:24, 18:11, 9:8 and 5:0; TXFLR is read only
+    CHECK(rd(CTRLR0) == (0xDEADBEEFu & CTRLR0_MASK) && rd(CTRLR1) == 0x1234 && rd(BAUDR) == 6 && rd(TXFLR) == 0 && rd(SPI_CTRL_R0) == (0x1F0F0F0Fu & SPI_CTRLR0_MASK));
     CHECK(rd(RX_SAMPLE_DLY) == 0xFF && rd(TXD_DRIVE_EDGE) == 0xA5);  // 8 bits each
     wr(RXFLR, 9);
     CHECK(rd(RXFLR) == 0);  // read-only
     CHECK(env.warns == 0);
-    CHECK(rd(0x10) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSsiWarnRead && env.warn_offset[0] == 0x10);
+    wr(CTRLR1, 0xFFFFFFFFu);
+    wr(BAUDR, 0xFFFFFFFFu);
+    wr(SSIENR, 0xFFFFFFFFu);
+    CHECK(rd(CTRLR1) == 0xFFFF && rd(BAUDR) == 0xFFFF && rd(SSIENR) == 1);
+    wr(SSIENR, 0);
+    // the stored, not-acted-on registers: widths, and the reset value of SPI_CTRLR0 (XIP_CMD = 0x03)
+    wr(MWCR, 0xFFFFFFFFu); wr(SER, 0xFFFFFFFFu); wr(TXFTLR, 0xFFFFFFFFu); wr(RXFTLR, 0xFFFFFFFFu); wr(IMR, 0xFFFFFFFFu); wr(DMACR, 0xFFFFFFFFu); wr(DMATDLR, 0xFFFFFFFFu); wr(DMARDLR, 0xFFFFFFFFu);
+    CHECK(rd(MWCR) == 7 && rd(SER) == 1 && rd(TXFTLR) == 0xFF && rd(RXFTLR) == 0xFF && rd(IMR) == 0x3F && rd(DMACR) == 3 && rd(DMATDLR) == 0xFF && rd(DMARDLR) == 0xFF);
+    wr(ISR, 0xFFFFFFFFu); wr(ICR, 0xFFFFFFFFu);
+    CHECK(rd(ISR) == 0 && rd(RISR) == 0 && rd(ICR) == 0 && rd(TXOICR) == 0 && rd(RXOICR) == 0 && rd(RXUICR) == 0 && rd(MSTICR) == 0);   // read-only, nothing is raised
+    CHECK(ssi.reset());
+    CHECK(rd(SPI_CTRL_R0) == 0x03000000u && rd(IMR) == 0 && rd(SER) == 0 && rd(CTRLR0) == 0);
+    fresh();
+    CHECK(rd(0x64) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSsiWarnRead && env.warn_offset[0] == 0x64);
     env.warns = 0;
     CHECK(rd(0x1064) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kSsiWarnRead && env.warn_kind[1] == kSsiWarnReadAtomicArea);
     env.warns = 0;

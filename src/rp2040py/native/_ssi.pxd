@@ -30,6 +30,7 @@ cdef extern from "ssi.hpp" namespace "rp2040core":
         cppbool reset() noexcept
         uint32_t ssienr() noexcept
         uint32_t txflr() noexcept
+        uint32_t stored(uint32_t index) noexcept
         cppbool write_enabled() noexcept
         cppbool cs_asserted() noexcept
         uint32_t rx_count() noexcept

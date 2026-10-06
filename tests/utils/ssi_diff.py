@@ -46,9 +46,10 @@ REGISTERS = (
     S.SSI_RX_SAMPLE_DLY, S.SSI_SPI_CTRL_R0, S.SSI_TXD_DRIVE_EDGE,
 )  # fmt: skip
 WRITABLE = (
-    S.SSI_CTRLR0, S.SSI_CTRLR1, S.SSI_BAUDR, S.SSI_TXFLR, S.SSI_RXFLR, S.SSI_RX_SAMPLE_DLY, S.SSI_SPI_CTRL_R0, S.SSI_TXD_DRIVE_EDGE,
+    S.SSI_CTRLR0, S.SSI_CTRLR1, S.SSI_BAUDR, S.SSI_TXFLR, S.SSI_RXFLR, S.SSI_RX_SAMPLE_DLY, S.SSI_SPI_CTRL_R0, S.SSI_TXD_DRIVE_EDGE, S.SSI_SSIENR, S.SSI_MWCR, S.SSI_SER,
+    S.SSI_TXFTLR, S.SSI_RXFTLR, S.SSI_IMR, S.SSI_DMACR, S.SSI_DMATDLR, S.SSI_DMARDLR, S.SSI_ISR, S.SSI_ICR,
 )  # fmt: skip
-UNIMPLEMENTED = (S.SSI_MWCR, S.SSI_SER, S.SSI_IMR, S.SSI_DMACR, 0x64, 0x68, 0xA0, 0xEC, 0x100, 0x200)
+UNIMPLEMENTED = (0x64, 0x68, 0xA0, 0xEC, 0x100, 0x200)
 OPCODES = (
     S.CMD_WRITE_ENABLE, S.CMD_WRITE_DISABLE, S.CMD_READ_STATUS_1, S.CMD_READ_STATUS_2, S.CMD_WRITE_STATUS, S.CMD_PAGE_PROGRAM, S.CMD_SECTOR_ERASE, S.CMD_BLOCK_ERASE,
     S.CMD_READ_DATA, S.CMD_READ_JEDEC_ID,
@@ -227,6 +228,29 @@ def mutant_rig(name: str) -> Rig:
         def write_uint32(self, offset: int, value: int) -> None:
             if name == "deasserted_pushes_nothing" and offset == S.SSI_DR0 and self._ssienr and not self._cs_asserted:
                 return
+            if name == "ctrlr0_unmasked" and offset == S.SSI_CTRLR0:
+                self._crtlr0 = value
+                return
+            if name == "ctrlr1_unmasked" and offset == S.SSI_CTRLR1:
+                self._crtlr1 = value
+                return
+            if name == "baudr_unmasked" and offset == S.SSI_BAUDR:
+                self._baudr = value
+                return
+            if name == "spi_ctrlr0_unmasked" and offset == S.SSI_SPI_CTRL_R0:
+                self._spictlr0 = value
+                return
+            if name == "ssienr_unmasked" and offset == S.SSI_SSIENR:
+                self._ssienr = value
+                return
+            if name == "txflr_writable" and offset == S.SSI_TXFLR:
+                self._txflr = value
+                return
+            if name == "imr_unmasked" and offset == S.SSI_IMR:
+                self._stored[offset] = value
+                return
+            if name == "stored_not_stored" and offset in S.STORED_REGISTERS:
+                return
             if name == "ssienr_ignored" and offset == S.SSI_DR0 and not self._ssienr:
                 self._rx_queue.append(self._shift_byte(value & 0xFF))
                 return
@@ -238,6 +262,10 @@ def mutant_rig(name: str) -> Rig:
                 self._cs_asserted = False
             if name == "reset_keeps_wel":
                 self._write_enabled = True
+            if name == "spi_ctrlr0_reset_zero":
+                self._spictlr0 = 0
+            if name == "reset_keeps_stored":
+                self._stored[S.SSI_IMR] = 1
 
     rig = Rig("pure")
     rig._replace_the_ssi(Mutant)
@@ -247,6 +275,8 @@ def mutant_rig(name: str) -> Rig:
 MUTANTS = (
     "status2_zero", "jedec_wrong", "read_data_offset", "unknown_reads_zero", "erase_ignores_wel", "erase_not_aligned", "program_overwrites", "program_keeps_wel",
     "program_page_257", "rx_kept_on_assert", "deasserted_pushes_nothing", "ssienr_ignored", "reset_cs_false", "reset_keeps_wel",
+    "ctrlr0_unmasked", "ctrlr1_unmasked", "baudr_unmasked", "spi_ctrlr0_unmasked", "ssienr_unmasked", "txflr_writable", "imr_unmasked", "stored_not_stored", "spi_ctrlr0_reset_zero",
+    "reset_keeps_stored",
 )  # fmt: skip
 
 

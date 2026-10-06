@@ -43,6 +43,27 @@ SSI_RX_SAMPLE_DLY = 0x000000F0
 SSI_SPI_CTRL_R0 = 0x000000F4
 SSI_TXD_DRIVE_EDGE = 0x000000F8
 
+# Writable bits (datasheet 4.10.13: CTRLR0 24 and 22:0, CTRLR1 15:0, SSIENR 0, BAUDR 15:0, SPI_CTRLR0 31:24, 18:11, 9:8 and 5:0) and the reset value of SPI_CTRLR0 (XIP_CMD = 0x03)
+CTRLR0_MASK = 0x017FFFFF
+CTRLR1_MASK = 0xFFFF
+SSIENR_MASK = 0x1
+BAUDR_MASK = 0xFFFF
+SPI_CTRLR0_MASK = 0xFF07FB3F
+SPI_CTRLR0_RESET = 0x03000000
+# Registers that are stored and not acted on (the SSI is a flash-command model, with no FIFOs of its own, no interrupts and no DMA): offset -> writable mask. Every reset value is 0.
+STORED_REGISTERS = {
+    SSI_MWCR: 0x7,
+    SSI_SER: 0x1,
+    SSI_TXFTLR: 0xFF,
+    SSI_RXFTLR: 0xFF,
+    SSI_IMR: 0x3F,
+    SSI_DMACR: 0x3,
+    SSI_DMATDLR: 0xFF,
+    SSI_DMARDLR: 0xFF,
+}
+# Read-only status that is always 0 here: the raw and masked interrupt status and the clear-on-read registers (nothing is ever raised).
+ZERO_REGISTERS = (SSI_ISR, SSI_RISR, SSI_TXOICR, SSI_RXOICR, SSI_RXUICR, SSI_MSTICR, SSI_ICR)
+
 # JEDEC-standard SPI NOR flash commands - the subset the RP2040 bootrom's ROM_FUNC_FLASH_*
 # helpers (called by the Pico SDK's flash_range_erase()/flash_range_program(), themselves called
 # by MicroPython's rp2.Flash) actually issue over this peripheral. XIP reads never reach here -
@@ -84,9 +105,10 @@ class RPSSI(BasePeripheral):
         self._crtlr0 = 0
         self._crtlr1 = 0
         self._ssienr = 0
-        self._spictlr0 = 0
+        self._spictlr0 = SPI_CTRLR0_RESET
         self._rxsampldly = 0
         self._txddriveedge = 0
+        self._stored = dict.fromkeys(STORED_REGISTERS, 0)
 
         # Software-driven SPI NOR flash command state (see the module docstring above): `_tx_buffer`
         # accumulates the bytes shifted out via DR0 since chip-select was last asserted - real
@@ -138,9 +160,10 @@ class RPSSI(BasePeripheral):
         self._crtlr0 = 0
         self._crtlr1 = 0
         self._ssienr = 0
-        self._spictlr0 = 0
+        self._spictlr0 = SPI_CTRLR0_RESET
         self._rxsampldly = 0
         self._txddriveedge = 0
+        self._stored = dict.fromkeys(STORED_REGISTERS, 0)
         self._write_enabled = False
         self._cs_asserted = self.rp2040.qspi[1].value == GPIOPinState.LOW
         self._tx_buffer = bytearray()
@@ -151,8 +174,12 @@ class RPSSI(BasePeripheral):
             return self._txflr
         if offset == SSI_RXFLR:
             return len(self._rx_queue)
+        if offset in STORED_REGISTERS:
+            return self._stored[offset]
+        if offset in ZERO_REGISTERS:
+            return 0
         if offset == SSI_CTRLR0:
-            return self._crtlr0  # & 0x017FFFFF = b23,b25..31 reserved
+            return self._crtlr0
         if offset == SSI_CTRLR1:
             return self._crtlr1
         if offset == SSI_SSIENR:
@@ -171,30 +198,30 @@ class RPSSI(BasePeripheral):
         if offset == SSI_TXD_DRIVE_EDGE:
             return self._txddriveedge
         if offset == SSI_SPI_CTRL_R0:
-            return self._spictlr0  # b6,7,10,19..23 reserved
+            return self._spictlr0
         if offset == SSI_DR0:
             return self._rx_queue.popleft() if self._rx_queue else 0
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
-        if offset == SSI_TXFLR:
-            self._txflr = value
-        elif offset == SSI_RXFLR:
-            pass  # real hardware: read-only FIFO-level status, write is a no-op
+        if offset in (SSI_TXFLR, SSI_RXFLR) or offset in ZERO_REGISTERS:
+            pass  # read-only status: a write is a no-op
+        elif offset in STORED_REGISTERS:
+            self._stored[offset] = value & STORED_REGISTERS[offset]
         elif offset == SSI_CTRLR0:
-            self._crtlr0 = value  # & 0x017FFFFF = b23,b25..31 reserved
+            self._crtlr0 = value & CTRLR0_MASK
         elif offset == SSI_CTRLR1:
-            self._crtlr1 = value
+            self._crtlr1 = value & CTRLR1_MASK
         elif offset == SSI_SSIENR:
-            self._ssienr = value
+            self._ssienr = value & SSIENR_MASK
         elif offset == SSI_BAUDR:
-            self._baudr = value
+            self._baudr = value & BAUDR_MASK
         elif offset == SSI_RX_SAMPLE_DLY:
             self._rxsampldly = value & 0xFF
         elif offset == SSI_TXD_DRIVE_EDGE:
             self._txddriveedge = value & 0xFF
         elif offset == SSI_SPI_CTRL_R0:
-            self._spictlr0 = value
+            self._spictlr0 = value & SPI_CTRLR0_MASK
         elif offset == SSI_DR0:
             if self._ssienr:
                 if self._cs_asserted:

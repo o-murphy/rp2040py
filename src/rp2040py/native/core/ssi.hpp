@@ -48,6 +48,20 @@ struct SsiHost {
 namespace ssi_regs {
 constexpr uint32_t CTRLR0 = 0x00, CTRLR1 = 0x04, SSIENR = 0x08, BAUDR = 0x14, TXFLR = 0x20, RXFLR = 0x24, SR = 0x28;
 constexpr uint32_t IDR = 0x58, VERSION_ID = 0x5C, DR0 = 0x60, RX_SAMPLE_DLY = 0xF0, SPI_CTRL_R0 = 0xF4, TXD_DRIVE_EDGE = 0xF8;
+constexpr uint32_t MWCR = 0x0C, SER = 0x10, TXFTLR = 0x18, RXFTLR = 0x1C, IMR = 0x2C, ISR = 0x30, RISR = 0x34, TXOICR = 0x38, RXOICR = 0x3C, RXUICR = 0x40, MSTICR = 0x44, ICR = 0x48;
+constexpr uint32_t DMACR = 0x4C, DMATDLR = 0x50, DMARDLR = 0x54;
+// Writable bits (datasheet 4.10.13: CTRLR0 24 and 22:0, CTRLR1 15:0, SSIENR 0, BAUDR 15:0, SPI_CTRLR0 31:24, 18:11, 9:8 and 5:0) and the reset value of SPI_CTRLR0 (XIP_CMD = 0x03)
+constexpr uint32_t CTRLR0_MASK = 0x017FFFFFu, CTRLR1_MASK = 0xFFFFu, SSIENR_MASK = 0x1u, BAUDR_MASK = 0xFFFFu, SPI_CTRLR0_MASK = 0xFF07FB3Fu, SPI_CTRLR0_RESET = 0x03000000u;
+// The stored, not-acted-on registers (the SSI is a flash-command model: no FIFOs of its own, no interrupts, no DMA), in the order of `stored_`: offset and writable mask. Every reset value is 0.
+constexpr uint32_t kStoredCount = 8;
+constexpr uint32_t STORED_OFFSET[kStoredCount] = {MWCR, SER, TXFTLR, RXFTLR, IMR, DMACR, DMATDLR, DMARDLR};
+constexpr uint32_t STORED_MASK[kStoredCount] = {0x7u, 0x1u, 0xFFu, 0xFFu, 0x3Fu, 0x3u, 0xFFu, 0xFFu};
+constexpr int stored_index(uint32_t offset) noexcept {
+    for (uint32_t i = 0; i < kStoredCount; ++i) {
+        if (STORED_OFFSET[i] == offset) return static_cast<int>(i);
+    }
+    return -1;
+}
 constexpr uint32_t SR_TFNF = 0x02, SR_TFE = 0x04, SR_RFNE = 0x08;
 // JEDEC-standard SPI NOR commands the bootrom's flash helpers issue
 constexpr uint8_t CMD_WRITE_ENABLE = 0x06, CMD_WRITE_DISABLE = 0x04, CMD_READ_STATUS_1 = 0x05, CMD_READ_STATUS_2 = 0x35, CMD_WRITE_STATUS = 0x01;
@@ -103,7 +117,9 @@ public:
 
     // Registers and the command back to power-on; the chip-select flag is read from the pin again. False: the level could not be read (the failure is pending).
     bool reset() noexcept {
-        ctrlr0_ = ctrlr1_ = ssienr_ = baudr_ = txflr_ = spictrl0_ = rxsampdly_ = txddriveedge_ = 0;
+        ctrlr0_ = ctrlr1_ = ssienr_ = baudr_ = txflr_ = rxsampdly_ = txddriveedge_ = 0;
+        spictrl0_ = ssi_regs::SPI_CTRLR0_RESET;
+        for (uint32_t i = 0; i < ssi_regs::kStoredCount; ++i) stored_[i] = 0;
         write_enabled_ = false;
         tx_len_ = 0;
         rx_head_ = rx_count_ = 0;
@@ -113,6 +129,7 @@ public:
     // ---- state, for the shell's views --------------------------------------------------------------------------------
     uint32_t ssienr() const noexcept { return ssienr_; }
     uint32_t txflr() const noexcept { return txflr_; }
+    uint32_t stored(uint32_t index) const noexcept { return stored_[index]; }
     bool write_enabled() const noexcept { return write_enabled_; }
     bool cs_asserted() const noexcept { return cs_asserted_; }
     uint32_t rx_count() const noexcept { return rx_count_; }
@@ -130,7 +147,9 @@ public:
     // The offset is the window offset including the alias bits, as the reference sees it. An unimplemented offset warns and reads as all ones.
     uint32_t read(uint32_t offset) noexcept {
         using namespace ssi_regs;
+        if (const int slot = stored_index(offset); slot >= 0) return stored_[slot];
         switch (offset) {
+            case ISR: case RISR: case TXOICR: case RXOICR: case RXUICR: case MSTICR: case ICR: return 0;  // nothing is ever raised
             case TXFLR: return txflr_;
             case RXFLR: return rx_count_;
             case CTRLR0: return ctrlr0_;
@@ -157,16 +176,19 @@ public:
     void write(uint32_t offset, int64_t value) noexcept {
         using namespace ssi_regs;
         const uint32_t word = static_cast<uint32_t>(value);
+        if (const int slot = stored_index(offset); slot >= 0) {
+            stored_[slot] = word & STORED_MASK[slot];
+            return;
+        }
         switch (offset) {
-            case TXFLR: txflr_ = word; return;
-            case RXFLR: return;  // read-only FIFO level: a write is a no-op
-            case CTRLR0: ctrlr0_ = word; return;
-            case CTRLR1: ctrlr1_ = word; return;
-            case SSIENR: ssienr_ = word; return;
-            case BAUDR: baudr_ = word; return;
+            case TXFLR: case RXFLR: case ISR: case RISR: case TXOICR: case RXOICR: case RXUICR: case MSTICR: case ICR: return;  // read-only status: a write is a no-op
+            case CTRLR0: ctrlr0_ = word & CTRLR0_MASK; return;
+            case CTRLR1: ctrlr1_ = word & CTRLR1_MASK; return;
+            case SSIENR: ssienr_ = word & SSIENR_MASK; return;
+            case BAUDR: baudr_ = word & BAUDR_MASK; return;
             case RX_SAMPLE_DLY: rxsampdly_ = word & 0xFFu; return;
             case TXD_DRIVE_EDGE: txddriveedge_ = word & 0xFFu; return;
-            case SPI_CTRL_R0: spictrl0_ = word; return;
+            case SPI_CTRL_R0: spictrl0_ = word & SPI_CTRLR0_MASK; return;
             case DR0:
                 if (ssienr_ != 0) push_rx(cs_asserted_ ? shift_byte(static_cast<uint8_t>(word & 0xFFu)) : static_cast<uint8_t>(0xFF));
                 return;
@@ -298,7 +320,8 @@ private:
     uint32_t flash_size_ = 0;
     SsiHost host_;
     PinBank* bank_ = nullptr;
-    uint32_t ctrlr0_ = 0, ctrlr1_ = 0, ssienr_ = 0, baudr_ = 0, txflr_ = 0, spictrl0_ = 0, rxsampdly_ = 0, txddriveedge_ = 0;
+    uint32_t ctrlr0_ = 0, ctrlr1_ = 0, ssienr_ = 0, baudr_ = 0, txflr_ = 0, spictrl0_ = ssi_regs::SPI_CTRLR0_RESET, rxsampdly_ = 0, txddriveedge_ = 0;
+    uint32_t stored_[ssi_regs::kStoredCount] = {};
     bool write_enabled_ = false;
     bool cs_asserted_ = false;
     uint8_t tx_[kTxKept] = {};

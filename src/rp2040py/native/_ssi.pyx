@@ -180,6 +180,12 @@ cdef class RPSSI:
         return self._block.txflr()
 
     @property
+    def _stored(self):
+        # the not-acted-on registers by offset, as the reference's dict (MWCR, SER, TXFTLR, RXFTLR, IMR, DMACR, DMATDLR, DMARDLR)
+        offsets = (0x0C, 0x10, 0x18, 0x1C, 0x2C, 0x4C, 0x50, 0x54)
+        return {offset: self._block.stored(index) for index, offset in enumerate(offsets)}
+
+    @property
     def _write_enabled(self):
         return self._block.write_enabled()
 

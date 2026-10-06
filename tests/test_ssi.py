@@ -263,3 +263,30 @@ def test_dr0_writes_while_chip_select_deasserted_still_advance_the_fifo(rp2040_f
     assert ssi.read_uint32(ssi_mod.SSI_RXFLR) == 1
     assert ssi.read_uint32(ssi_mod.SSI_DR0) == 0xFF
     assert not (_read_status(rp2040, ssi) & STATUS_WEL_BIT)  # not interpreted as a real command
+
+
+def test_register_widths_and_reset_values_follow_the_datasheet(rp2040_factory):
+    """Datasheet 4.10.13: CTRLR0 24 and 22:0, CTRLR1 15:0, SSIENR 0, BAUDR 15:0, SPI_CTRLR0 31:24, 18:11, 9:8 and 5:0 (reset XIP_CMD = 0x03), TXFLR read only; the registers
+    the model does not act on (MWCR, SER, the FIFO thresholds, IMR, DMACR, the DMA levels) are stored with their widths."""
+    chip = rp2040_factory()
+    base = 0x18000000
+    assert chip.read_uint32(base + 0xF4) == 0x03000000
+    for offset, kept in (
+        (0x00, 0x017FFFFF),
+        (0x04, 0xFFFF),
+        (0x08, 0x1),
+        (0x14, 0xFFFF),
+        (0xF4, 0xFF07FB3F),
+        (0x0C, 0x7),
+        (0x10, 0x1),
+        (0x18, 0xFF),
+        (0x1C, 0xFF),
+        (0x2C, 0x3F),
+        (0x4C, 0x3),
+        (0x50, 0xFF),
+        (0x54, 0xFF),
+    ):
+        chip.write_uint32(base + offset, 0xFFFFFFFF)
+        assert chip.read_uint32(base + offset) == kept, hex(offset)
+    chip.write_uint32(base + 0x20, 0x55)  # TXFLR: read only
+    assert chip.read_uint32(base + 0x20) == 0
