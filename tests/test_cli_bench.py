@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from rp2040py.boards import BOARDS
 from rp2040py.cli import _bench_firmware
 from rp2040py.utils.logging import LogLevel
 
@@ -18,7 +19,9 @@ pytestmark = pytest.mark.skipif(_IMAGE is None, reason="no cached MicroPython im
 
 
 def _bench(capsys, **kwargs):
-    _bench_firmware(_IMAGE, None, None, False, kwargs.pop("timeout", 3.0), None, "pico", LogLevel.ERROR, **kwargs)
+    _bench_firmware(
+        _IMAGE, None, None, False, kwargs.pop("timeout", 3.0), None, BOARDS["pico"], LogLevel.ERROR, **kwargs
+    )
     return capsys.readouterr().out
 
 

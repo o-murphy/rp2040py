@@ -65,7 +65,6 @@ from rp2040py.boards import (
     BoardSpec,
     FlashLayout,
     UnknownFirmwareFamilyError,
-    build_rp2040,
     build_rp2040_from_spec,
     resolve_firmware,
     resolve_layout,
@@ -776,8 +775,8 @@ def _interpreter_label() -> str:
     return f"{impl} {'.'.join(str(part) for part in sys.version_info[:3])}"
 
 
-def _bench_synthetic(instruction_count: int, block_size: int, board: str, log_level: LogLevel) -> None:
-    rp2040 = build_rp2040(board)
+def _bench_synthetic(instruction_count: int, block_size: int, board: BoardSpec, log_level: LogLevel) -> None:
+    rp2040 = build_rp2040_from_spec(board)
 
     from rp2040py.device.bootrom import BOOTROM_B1
 
@@ -818,7 +817,7 @@ def _bench_firmware(
     expect_regex: bool,
     timeout: float,
     bootrom: str | None,
-    board: str,
+    board: BoardSpec,
     log_level: LogLevel,
     stepwise: bool = False,
 ) -> None:
@@ -826,7 +825,7 @@ def _bench_firmware(
     # timer-based busy-waits during boot (e.g. hardware_timer's timer_busy_wait_until()), and those
     # spin forever if TIMERAWL/TIMERAWH never move - core.execute_instruction() alone does not tick
     # the clock, only Simulator.execute() (and this hand-rolled equivalent below) does.
-    simulator = Simulator(rp2040=build_rp2040(board))
+    simulator = Simulator(rp2040=build_rp2040_from_spec(board))
     rp2040 = simulator.rp2040
     clock = simulator.clock
 
@@ -837,8 +836,10 @@ def _bench_firmware(
 
     if littlefs:
         try:
-            micropython_layout = resolve_layout(BOARDS[board], "micropython")
-            assert micropython_layout is not None  # every built-in board declares one
+            micropython_layout = resolve_layout(board, "micropython")
+            if micropython_layout is None:
+                _logger.error("this board declares no MicroPython flash layout, so --littlefs cannot be placed")
+                sys.exit(1)
             load_micropython_flash_image(littlefs, rp2040, micropython_layout)
         except ValueError as exc:
             _logger.error("%s", exc)
@@ -989,6 +990,10 @@ def _cmd_bench(args: argparse.Namespace) -> None:
     # so only `--bootrom` (if a version tag) is ever fetched here, in either synthetic or firmware
     # mode.
     _maybe_exit_after_fetch(args, bootrom_source=args.bootrom)
+    source = _board_source(args)  # --board / --board-spec / RP2040PY_BOARD_SPEC, like the other subcommands
+    if source is None:
+        sys.exit(1)
+    board = source[0]
     if args.image:
         _bench_firmware(
             args.image,
@@ -997,12 +1002,12 @@ def _cmd_bench(args: argparse.Namespace) -> None:
             args.expect_regex,
             args.timeout,
             args.bootrom,
-            args.board,
+            board,
             log_level,
             args.stepwise,
         )
     else:
-        _bench_synthetic(args.instructions, args.block_size, args.board, log_level)
+        _bench_synthetic(args.instructions, args.block_size, board, log_level)
 
 
 def _patch_mpremote_console_waitchar() -> None:
@@ -1448,9 +1453,12 @@ def main(argv: "list[str] | None" = None) -> None:
 
     bench_parser = subparsers.add_parser(
         "bench",
-        parents=[_shared_arg_parser("board", "bootrom", "expect-text", "expect-regex", "littlefs", "fetch-fw-only")],
+        parents=[_shared_arg_parser("bootrom", "expect-text", "expect-regex", "littlefs", "fetch-fw-only")],
         help="benchmark: synthetic instruction dispatch, or (--image) a firmware through the real engine",
     )
+    # --board's default is applied inside _board_source() (not here), for the same reason as `micropython`'s: --board-spec's mutual exclusion needs to know it was never given.
+    bench_parser.add_argument("--board", choices=tuple(BOARDS), default=None, help=_BOARD_HELP)
+    bench_parser.add_argument("--board-spec", default=None, metavar="target:attr", help=_BOARD_SPEC_HELP)
     bench_parser.add_argument("--instructions", type=int, default=5_000_000, help="synthetic mode: instruction count")
     bench_parser.add_argument("--block-size", type=int, default=1000, help="synthetic mode: instructions per block")
     bench_parser.add_argument("--image", help=f"firmware mode: {_IMAGE_PATH_HELP}")
