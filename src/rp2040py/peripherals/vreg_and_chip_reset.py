@@ -11,6 +11,12 @@ docs/records/0050-vreg-chip-reset-bootrom-loop.md.
 
 Nothing here models real regulator behavior (voltage selection has no meaning in an emulator); the
 registers exist so their *values* are right.
+
+Not independently sourced: `VREG.ROK` (bit 12, read-only "in regulation") reads 0, the datasheet's
+reset value (table 189). Section 2.10.4 describes it only qualitatively (high once the output
+reaches the assertion threshold, low again in high-impedance mode or after a step to a higher
+voltage), and there is no regulator model to derive it from; no firmware in this repo reads it.
+Left as it was rather than invented (docs/records/0098-datasheet-conformance-audit.md).
 """
 
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -24,6 +30,11 @@ CHIP_RESET = 0x08
 # Datasheet reset values (RP2040 §2.10.7). VREG: EN=1, VSEL=0b1011 (1.10V). BOD: EN=1, VSEL=0b1001.
 _VREG_RESET = 0x000000B1
 _BOD_RESET = 0x00000091
+
+# The writable bits (datasheet 2.10.6, tables 189 and 190): VREG is VSEL 7:4, HIZ 1 and EN 0 (ROK, bit 12, is
+# read-only); BOD is VSEL 7:4 and EN 0. Every other bit is reserved or read-only and a write leaves it alone.
+_VREG_WRITABLE = 0x000000F3
+_BOD_WRITABLE = 0x000000F1
 
 # CHIP_RESET's read-only "how did we get here" flags. HAD_POR is what a real power-on reset leaves
 # set, and a fresh emulated chip is precisely that case.
@@ -67,10 +78,10 @@ class RPVREGAndChipReset(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == VREG:
-            self.vreg = value & 0xFFFFFFFF
+            self.vreg = (self.vreg & ~_VREG_WRITABLE) | (value & _VREG_WRITABLE)
             return
         if offset == BOD:
-            self.bod = value & 0xFFFFFFFF
+            self.bod = (self.bod & ~_BOD_WRITABLE) | (value & _BOD_WRITABLE)
             return
         if offset == CHIP_RESET:
             # Write-1-to-clear, and only for PSM_RESTART_FLAG - the other three flags are read-only

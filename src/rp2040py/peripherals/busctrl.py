@@ -7,6 +7,11 @@ if TYPE_CHECKING:
 
 __all__ = ("RPBUSCTRL",)
 
+# Set the priority of each master for bus arbitration (datasheet 2.1.5): PROC0 bit 0, PROC1 bit 4,
+# DMA_R bit 8, DMA_W bit 12, each 0 = low, 1 = high; every other bit is reserved.
+BUS_PRIORITY = 0x000
+BUS_PRIORITY_MASK = 0x00001111
+
 # Bus priority acknowledge
 BUS_PRIORITY_ACK = 0x004
 
@@ -35,6 +40,7 @@ class RPBUSCTRL(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str):
         super().__init__(rp2040, name)
         self.voltage_select = 0
+        self.bus_priority = 0
         self.perf_ctr = [0, 0, 0, 0]
         self.perf_sel = [0x1F, 0x1F, 0x1F, 0x1F]
 
@@ -42,11 +48,16 @@ class RPBUSCTRL(BasePeripheral):
         """`RESETS_RESET_BUSCTRL` (0089 Phase 5). The four performance counters and their selectors
         are the block's whole state; `0x1F` is each selector's own reset value, not a placeholder."""
         self.voltage_select = 0
+        self.bus_priority = 0
         self.perf_ctr = [0, 0, 0, 0]
         self.perf_sel = [0x1F, 0x1F, 0x1F, 0x1F]
 
     def read_uint32(self, offset: int) -> int:
+        if offset == BUS_PRIORITY:
+            return self.bus_priority
         if offset == BUS_PRIORITY_ACK:
+            # "Goes to 1 once all arbiters have registered the new global priority levels ... In normal
+            # circumstances this will happen almost immediately" - and the model has no arbiters to wait for.
             return 1
         if offset == PERFCTR0:
             return self.perf_ctr[0]
@@ -67,7 +78,11 @@ class RPBUSCTRL(BasePeripheral):
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:
-        if offset == PERFCTR0:
+        if offset == BUS_PRIORITY:
+            self.bus_priority = value & BUS_PRIORITY_MASK
+        elif offset == BUS_PRIORITY_ACK:
+            return  # read-only: the write has no effect
+        elif offset == PERFCTR0:
             self.perf_ctr[0] = 0
         elif offset == PERFSEL0:
             self.perf_sel[0] = value & 0x1F

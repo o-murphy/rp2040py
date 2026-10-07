@@ -59,6 +59,7 @@ from rp2040py.peripherals.reset import (
     RESET_RTC,
     RESET_SPI0,
     RESET_SPI1,
+    RESET_SYSCFG,
     RESET_TIMER,
     RESET_UART0,
     RESET_UART1,
@@ -215,6 +216,7 @@ class RP2040:
         self.timer = RPTimer(self, "TIMER_BASE")
         self.rtc = RP2040RTC(self, "RTC_BASE")
         self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
+        self.syscfg = RP2040SysCfg(self, "SYSCFG")
         self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
         self.ssi = RPSSI(self, "SSI")
         self.xosc = RPXOSC(self, "XOSC_BASE")
@@ -223,7 +225,7 @@ class RP2040:
             0x14000: self.xip_ctrl,
             0x18000: self.ssi,
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
-            0x40004: RP2040SysCfg(self, "SYSCFG"),
+            0x40004: self.syscfg,
             0x40008: self.clocks,
             0x4000C: self.resets,
             0x40010: self.psm,
@@ -421,7 +423,7 @@ class RP2040:
           instead, so the count does restart; what is not modelled is anything else reading that
           clock noticing.
 
-        `SYSCFG`/`SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at
+        `SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at
         all, so `BasePeripheral`'s default no-op is their correct implementation.
         """
         if from_watchdog:
@@ -501,9 +503,10 @@ class RP2040:
             self.rtc.reset()
         if resets_wdsel & RESET_BUSCTRL:
             self.busctrl.reset()
-        # SYSCFG/SYSINFO/TBMAN have RESETS bits too and are deliberately not called: they hold no
-        # instance state at all (read-only chip identity), so `BasePeripheral`'s default no-op is
-        # the correct implementation rather than a gap. Checked, not assumed.
+        if resets_wdsel & RESET_SYSCFG:
+            self.syscfg.reset()
+        # SYSINFO/TBMAN have RESETS bits too and are deliberately not called: they hold no instance state at
+        # all (read-only chip identity), so `BasePeripheral`'s default no-op is the correct implementation.
         if psm_wdsel & WDSEL_XOSC:
             # Only ever selected on a RUN-pin/power-on reset: `watchdog_reboot()` clears this bit
             # deliberately, because the oscillators clock the reset itself. `rosc` has no
