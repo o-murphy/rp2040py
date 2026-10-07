@@ -4,6 +4,30 @@ The checklist every block of `src/rp2040py/native/core/` follows (record
 [0096](../records/0096-cpp-mcu-core.md), "Core host contract" and the per-block recipe). The shared pieces are in
 `core/core_host.hpp`; `core/uart.hpp` + `native/_uart.pyx` is the smallest complete example.
 
+## A. Before any code: what the block must do (the datasheet, then the SDK)
+
+The steps below make the C++ equal to the Python reference; they say nothing about whether the reference is *right*. That is settled first, from real sources, by the method of record
+[0098](../records/0098-datasheet-conformance-audit.md) ("Method") - the same "3g rule" as for devices: every hardware fact is cited to an upstream source, never taken from memory or from
+what looks plausible. The order that worked for SYSINFO/TBMAN (0098, "SYSINFO and TBMAN"):
+
+1. **Get the datasheet as text** (not in the repo): `pdftotext -layout rp2040-datasheet.pdf rp2040.txt` from
+   <https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf>. Run the mechanical pass on the block:
+   `python scripts/audit/datasheet_conformance.py rp2040.txt BLOCK`. It reads the register tables and checks the reference's resets, reserved bits, read-only bits and missing registers. Every
+   finding is a question for the datasheet, not yet a bug (a reset of `-` or a `0x0` placeholder on a read-only field is the usual false alarm).
+2. **Read the chapters, not only the tables**: the block's "Overview" and "Operation" sections say what the registers *do* (enable gating, what a write while disabled does, FIFO levels, DREQ
+   conditions, interrupts). The tool cannot see any of that. Write each rule down with its section number; the ones the reference does not follow are the findings.
+3. **Cross-check against pico-sdk** (`raw.githubusercontent.com/raspberrypi/pico-sdk/master/...`): `src/rp2040/hardware_regs/include/hardware/regs/*.h` (bit layout), `hardware_structs`, and the
+   driver `.c` of the block (how real firmware drives it, what it polls). The generated `*_RESET` values in the register headers are not always what the silicon or the SDK's own code expects
+   (`sysinfo.h` says manufacturer `0x926`, `platform.c` asserts `0x927`; `tbman.h` says reset `0x5` for a register with two defined bits) - when they disagree, the SDK *code* and the field table win,
+   and the note says which source was followed and which was not.
+4. **Where the sources are silent, say so and do not invent**: keep the existing behaviour, mark it "not independently sourced" in the reference's docstring and in 0098's "Left, unsourced"
+   list (SYSINFO `PLATFORM`/`GITREF` are the example). A feature the datasheet describes and the reference lacks is *documented* in 0098's backlog table, not implemented (CLAUDE.md:
+   documenting is not implementing) - it needs its own go-ahead.
+5. **Fix the reference first**, in its own commit (and ask, per section 3 below), with a Python test that cites the datasheet section or SDK file and runs on both builds
+   (`tests/test_X_datasheet.py`, `RP2040PY_SKIP_CYTHON=1` as well). Only then port: the oracle keeps the C++ equal to the corrected reference, and a logic mutant of every new rule proves the
+   oracle would notice it being dropped.
+6. **Record it** in 0098 (a section for the block: what was wrong, which source, which test and mutant; what was left, unsourced) in the same commit as the port.
+
 ## 0. Constraints (compiled in, not promised)
 
 Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tests/test_core_cpp.py` builds every header and every
@@ -40,7 +64,7 @@ a hole in the generator - widen it.
   exactly the state the reference's exception would have left.
 - `WindowHandler window_handler() { return BlockWindow<XBlock>::handler(this); }`.
 - Keep the reference's quirks and say so in the header comment, each one pinned by the oracle or the C++ checks. A real bug of the
-  reference is *not* fixed in the port: fix it in its own commit first (and ask), then port.
+  reference is *not* fixed in the port: fix it in its own commit first (and ask), then port (section A, step 5).
 
 ## 4. C++ checks and mutation testing
 
