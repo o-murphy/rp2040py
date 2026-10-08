@@ -60,6 +60,7 @@ class RPWatchdog(BasePeripheral):
 
         self._enable = False
         self._tick_enable = True
+        self._tick_cycles = 0  # TICK.CYCLES: the clk_tick cycles per tick (reset 0, table 550)
         self._reason = 0
         self._pause_dbg0 = True
         self._pause_dbg1 = True
@@ -128,8 +129,8 @@ class RPWatchdog(BasePeripheral):
             return self.scratch_data[(offset - SCRATCH0) >> 2]
 
         if offset == TICK:
-            # TODO COUNT bits
-            return (RUNNING | TICK_ENABLE) if self._tick_enable else 0
+            # COUNT (19:11, the cycles left before the next tick) reads 0: no model behind it, not independently sourced.
+            return self._tick_cycles | ((RUNNING | TICK_ENABLE) if self._tick_enable else 0)
 
         return super().read_uint32(offset)
 
@@ -153,9 +154,11 @@ class RPWatchdog(BasePeripheral):
 
         elif offset == TICK:
             self._tick_enable = bool(value & TICK_ENABLE)
+            self._tick_cycles = (value >> CYCLES_SHIFT) & CYCLES_MASK
             self.timer.enable = self._enable and self._tick_enable
             self.alarm.enable = self._enable and self._tick_enable
-            # TODO - handle CYCLES (tick also affectes timer)
+            # CYCLES is stored and read back but does not retune the counter (the model's tick is the nominal 1 MHz of
+            # TICK_FREQUENCY) - and the TIMER does not wait for this tick either; both are written up in 0098.
 
         else:
             super().write_uint32(offset, value)
