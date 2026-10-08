@@ -15,3 +15,16 @@ def start_tick(chip: Any, cycles: int = XOSC_MHZ) -> None:
     """clk_ref = XOSC, then the tick generator at ``cycles`` of it per tick (12: 1 us)."""
     chip.write_uint32(CLK_REF_CTRL, CLK_REF_SRC_XOSC)
     chip.write_uint32(WATCHDOG_TICK, cycles | TICK_ENABLE)
+
+
+CLK_RTC_CTRL = CLOCKS_BASE + 0x6C
+CLK_RTC_DIV = CLOCKS_BASE + 0x70
+CLK_RTC_ENABLE = 1 << 11
+CLK_RTC_AUXSRC_XOSC = 3 << 5
+
+
+def start_rtc_clock(chip: Any) -> None:
+    """What pico-sdk's ``clocks_init`` does for clk_rtc: XOSC / 256 = 46875 Hz (``rtc_init()`` then divides it down to 1 Hz with CLKDIV_M1 = 46874). A bare chip's RTC does not count until
+    this has run, as on silicon (the CLOCKS generator is stopped at reset)."""
+    chip.write_uint32(CLK_RTC_DIV, 256 << 8)
+    chip.write_uint32(CLK_RTC_CTRL, CLK_RTC_ENABLE | CLK_RTC_AUXSRC_XOSC)

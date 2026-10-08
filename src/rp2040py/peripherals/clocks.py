@@ -93,6 +93,15 @@ CLK_PERI_CTRL_AUXSRC_PLL_USB = 0x2
 CLK_PERI_CTRL_AUXSRC_ROSC = 0x3
 CLK_PERI_CTRL_AUXSRC_XOSC = 0x4
 
+CLK_RTC_CTRL_ENABLE = 1 << 11
+CLK_RTC_CTRL_KILL = 1 << 10
+CLK_RTC_CTRL_AUXSRC_SHIFT = 5
+CLK_RTC_CTRL_AUXSRC_MASK = 0x7
+CLK_RTC_CTRL_AUXSRC_PLL_USB = 0x0  # datasheet table 234 (clk_peri's list starts with clk_sys; this one with PLL_USB)
+CLK_RTC_CTRL_AUXSRC_PLL_SYS = 0x1
+CLK_RTC_CTRL_AUXSRC_ROSC = 0x2
+CLK_RTC_CTRL_AUXSRC_XOSC = 0x3
+
 # CLK_REF_DIV, CLK_USB_DIV and CLK_ADC_DIV have no fractional part: INT is bits 9:8 and the rest is reserved
 CLK_DIV_INT_ONLY_MASK = 0x300
 
@@ -189,6 +198,27 @@ class RPClocks(BasePeripheral):
         if source == CLK_PERI_CTRL_AUXSRC_XOSC:
             return rp2040.xosc_freq
         return 0
+
+    @property
+    def rtc_freq(self) -> float:
+        """clk_rtc in Hz (datasheet 2.15, table 234/235): the RTC's reference, the aux source divided by CLK_RTC_DIV (24.8, INT = 0 divides by 2^16). 0 while the generator is stopped
+        (ENABLE clear, which is the reset state, or KILL) and for the GPIN0/GPIN1 sources, which are not modelled - the RTC does not count then."""
+        rp2040 = self.rp2040
+        ctrl = self.rtc_ctrl
+        if not (ctrl & CLK_RTC_CTRL_ENABLE) or ctrl & CLK_RTC_CTRL_KILL:
+            return 0
+        source = (ctrl >> CLK_RTC_CTRL_AUXSRC_SHIFT) & CLK_RTC_CTRL_AUXSRC_MASK
+        if source == CLK_RTC_CTRL_AUXSRC_PLL_USB:
+            frequency = rp2040.pll_usb.frequency
+        elif source == CLK_RTC_CTRL_AUXSRC_PLL_SYS:
+            frequency = rp2040.pll_sys.frequency
+        elif source == CLK_RTC_CTRL_AUXSRC_ROSC:
+            frequency = rp2040.rosc_freq
+        elif source == CLK_RTC_CTRL_AUXSRC_XOSC:
+            frequency = rp2040.xosc_freq
+        else:
+            return 0
+        return frequency / clock_divisor(self.rtc_div)
 
     @property
     def _ref_source_freq(self) -> float:
@@ -334,8 +364,10 @@ class RPClocks(BasePeripheral):
             self.adc_div = value & CLK_DIV_INT_ONLY_MASK
         elif offset == CLK_RTC_CTRL:
             self.rtc_ctrl = value
+            self.rp2040.update_clocks()  # clk_rtc is the RTC's reference
         elif offset == CLK_RTC_DIV:
             self.rtc_div = value
+            self.rp2040.update_clocks()
         elif offset in STORED_REGISTERS:
             self._stored[offset] = value & STORED_REGISTERS[offset][0]
         elif offset in (CLK_SYS_RESUS_STATUS, INTR, INTS):
@@ -380,6 +412,7 @@ def update_clocks(rp2040: "RP2040") -> None:
     rp2040.watchdog.clk_ref_changed(
         rp2040.clocks.ref_freq
     )  # the watchdog's tick (the TIMER's and SysTick's reference) is derived from clk_ref
+    rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)  # the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
 
 
 def reset_clock_tree(rp2040: "RP2040") -> None:
@@ -393,3 +426,4 @@ def reset_clock_tree(rp2040: "RP2040") -> None:
     if rp2040.clk_peri != DEFAULT_CLK:
         _set_clk_peri(rp2040, DEFAULT_CLK)
     rp2040.watchdog.clk_ref_changed(rp2040.clocks.ref_freq)
+    rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)

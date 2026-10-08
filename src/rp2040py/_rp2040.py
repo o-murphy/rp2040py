@@ -48,6 +48,7 @@ from rp2040py.peripherals._reset import (
     RESETS_BITS_MASK,
     RPReset,
 )
+from rp2040py.peripherals._rtc import RP2040RTC
 from rp2040py.peripherals._spi import (
     RPSPI,
     ISPIDMAChannels,
@@ -71,7 +72,6 @@ from rp2040py.peripherals.pads import RPPADS
 from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
 from rp2040py.peripherals.pio import RPPIO
 from rp2040py.peripherals.pll import RPPLL
-from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.timer import RPTimer
 from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
