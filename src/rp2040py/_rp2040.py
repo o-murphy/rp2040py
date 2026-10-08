@@ -63,6 +63,7 @@ from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native
     IUARTDMAChannels,
 )
 from rp2040py.peripherals._vreg_and_chip_reset import RPVREGAndChipReset
+from rp2040py.peripherals._watchdog import RPWatchdog
 from rp2040py.peripherals._xosc import RPXOSC
 from rp2040py.peripherals.clocks import RPClocks, reset_clock_tree, update_clocks
 from rp2040py.peripherals.io import RPIO
@@ -73,7 +74,6 @@ from rp2040py.peripherals.pll import RPPLL
 from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.timer import RPTimer
 from rp2040py.peripherals.usb import RPUSBController
-from rp2040py.peripherals.watchdog import RPWatchdog
 from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.sio import RPSIO

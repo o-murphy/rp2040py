@@ -16,7 +16,9 @@ def test_the_tick_register_keeps_cycles_and_reports_running():
     chip.write_uint32(WATCHDOG + TICK, 12 | TICK_ENABLE)  # the SDK's watchdog_start_tick(XOSC_MHZ)
     assert chip.read_uint32(WATCHDOG + TICK) == 12 | RUNNING | TICK_ENABLE
     chip.write_uint32(WATCHDOG + TICK, 0xFFFFFFFF)
-    assert chip.read_uint32(WATCHDOG + TICK) == 0x1FF | RUNNING | TICK_ENABLE  # CYCLES is 8:0; RUNNING and COUNT are read-only
+    assert (
+        chip.read_uint32(WATCHDOG + TICK) == 0x1FF | RUNNING | TICK_ENABLE
+    )  # CYCLES is 8:0; RUNNING and COUNT are read-only
     chip.write_uint32(WATCHDOG + TICK, 0x1FF)  # ENABLE clear: the generator stops
     assert chip.read_uint32(WATCHDOG + TICK) == 0x1FF
 
@@ -38,3 +40,11 @@ def test_the_scratch_registers_hold_32_bits_and_reason_starts_clear():
     assert [chip.read_uint32(WATCHDOG + o) for o in range(SCRATCH0, SCRATCH7 + 1, 4)] == [
         0xA5A5A5A5 ^ o for o in range(SCRATCH0, SCRATCH7 + 1, 4)
     ]
+
+
+def test_a_write_to_the_read_only_reason_register_changes_nothing_and_logs_nothing():
+    chip = RP2040()
+    messages: list[str] = []
+    chip.logger.warning = lambda name, message: messages.append(message)  # type: ignore[method-assign]
+    chip.write_uint32(WATCHDOG + REASON, 0xFFFFFFFF)
+    assert chip.read_uint32(WATCHDOG + REASON) == 0 and messages == []

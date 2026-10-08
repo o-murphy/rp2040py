@@ -149,6 +149,9 @@ class RPWatchdog(BasePeripheral):
         elif offset == LOAD:
             self.timer.set((value >> LOAD_SHIFT) & LOAD_MASK)
 
+        elif offset == REASON:
+            return  # read-only (table 548): the write has no effect
+
         elif offset in SCRATCH_REGS:
             self.scratch_data[(offset - SCRATCH0) >> 2] = value & 0xFFFFFFFF
 
