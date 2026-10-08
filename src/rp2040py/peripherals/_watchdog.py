@@ -51,6 +51,16 @@ CYCLES_SHIFT = 0
 
 # Actually 1 MHz, but due to errata RP2040-E1, the timer is decremented twice per tick
 TICK_FREQUENCY = 2_000_000
+TICKS_PER_COUNT = TICK_FREQUENCY // 1_000_000  # the countdown decrements this many times per tick (errata RP2040-E1)
+
+
+def tick_frequency(enable: bool, cycles: int, clk_ref: float) -> float:
+    """The tick generator's output in Hz (RP2040 datasheet 4.7.2): `clk_tick` (driven from clk_ref) divided by TICK.CYCLES, one tick every CYCLES cycles, while TICK.ENABLE is set; 0 when it is
+    not running. CYCLES = 0 is taken as "not running" - the datasheet does not say what it does, but it is the reset value and the TIMER does not count out of reset ("The Watchdog tick must be
+    running for the timer to start counting", 4.6.4), which matches what bare-metal code finds on silicon. Not independently sourced."""
+    if not enable or cycles == 0 or clk_ref <= 0:
+        return 0.0
+    return clk_ref / cycles
 
 
 class RPWatchdog(BasePeripheral):
@@ -61,6 +71,9 @@ class RPWatchdog(BasePeripheral):
         self._enable = False
         self._tick_enable = True
         self._tick_cycles = 0  # TICK.CYCLES: the clk_tick cycles per tick (reset 0, table 550)
+        self._clk_ref = 0.0  # clk_ref in Hz, pushed by the chip (`clk_ref_changed`): the tick is derived from it
+        self.tick_hz = 0.0  # the tick generator's output; 0 = not running. The TIMER, the countdown and SysTick's reference clock follow it
+        self._tick_listeners: list[Callable[[float], None]] = []
         self._reason = 0
         self._pause_dbg0 = True
         self._pause_dbg1 = True
@@ -81,6 +94,39 @@ class RPWatchdog(BasePeripheral):
         self.alarm.target = 0
         self.alarm.enable = False
 
+    def add_tick_listener(self, listener: "Callable[[float], None]") -> "Callable[[], None]":
+        """Calls `listener(tick_hz)` whenever the tick changes (0: stopped), after the TIMER and SysTick have been told - for anything else that counts on the tick, or watches it (the trace
+        recorder of the tests). Returns the function that unsubscribes it."""
+        self._tick_listeners.append(listener)
+
+        def unsubscribe() -> None:
+            if listener in self._tick_listeners:
+                self._tick_listeners.remove(listener)
+
+        return unsubscribe
+
+    def clk_ref_changed(self, clk_ref: float) -> None:
+        """clk_ref is now `clk_ref` Hz (called by `update_clocks`): the tick follows it."""
+        self._clk_ref = clk_ref
+        self._retick()
+
+    def _retick(self) -> None:
+        """Recompute the tick from TICK and clk_ref; on a change the countdown, the TIMER and SysTick follow it."""
+        hz = tick_frequency(self._tick_enable, self._tick_cycles, self._clk_ref)
+        if hz == self.tick_hz:
+            return
+        self.tick_hz = hz
+        if hz:
+            self.timer.frequency = hz * TICKS_PER_COUNT  # decremented twice per tick (errata RP2040-E1)
+        self.timer.enable = self._enable and hz > 0
+        self.alarm.enable = self._enable and hz > 0
+        for name in ("timer", "ppb"):  # the tick is the TIMER's reference and SysTick's "external reference clock"
+            consumer = getattr(self.rp2040, name, None)
+            if consumer is not None:
+                consumer.tick_changed(hz)
+        for listener in list(self._tick_listeners):
+            listener(hz)
+
     def _default_watchdog_trigger(self) -> None:
         """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this
         hook: reset the chip.
@@ -94,8 +140,9 @@ class RPWatchdog(BasePeripheral):
         self.rp2040.leave_reset()
 
     def reset(self) -> None:
-        """Clear the reset-cause bookkeeping this block carries across a reboot: REASON and the
-        eight scratch registers.
+        """Back to power-on: the reset-cause bookkeeping this block carries across a reboot (REASON and the eight scratch registers), and the rest of it - CTRL (disabled, the three PAUSE bits
+        set, the countdown at 0) and TICK (ENABLE set, CYCLES 0): the watchdog "is reset by rst_n_run" (datasheet 4.7.1), so after a RUN-pin or power-on reset the tick generator is not running and
+        the TIMER does not count until the firmware has started it again.
 
         Deliberately *not* called on the watchdog's own reset path. On real silicon the watchdog
         block is not reset by a watchdog reboot - which is exactly why REASON still reads back the
@@ -106,16 +153,22 @@ class RPWatchdog(BasePeripheral):
         chip_reset clears the watchdog"). See docs/records/0089-one-reset-for-every-trigger.md
         §1.3 for the full per-trigger table.
 
-        Scoped to the reset-*cause* state on purpose: the timer/alarm/tick enables this block also
-        owns are part of 0089's Phase 5 (the fuller `RP2040.reset()`), not of Phase 1.
         """
         self._reason = 0
         self.scratch_data = [0] * 8
+        self._enable = False
+        self._pause_dbg0 = self._pause_dbg1 = self._pause_jtag = True
+        self.timer.enable = False
+        self.alarm.enable = False
+        self.timer.set(0)
+        self._tick_enable = True
+        self._tick_cycles = 0
+        self._retick()
 
     def read_uint32(self, offset: int) -> int:
         if offset == CTRL:
             return (
-                (ENABLE if self.timer.enable else 0)
+                (ENABLE if self._enable else 0)
                 | (PAUSE_DBG0 if self._pause_dbg0 else 0)
                 | (PAUSE_DBG1 if self._pause_dbg1 else 0)
                 | (PAUSE_JTAG if self._pause_jtag else 0)
@@ -130,7 +183,7 @@ class RPWatchdog(BasePeripheral):
 
         if offset == TICK:
             # COUNT (19:11, the cycles left before the next tick) reads 0: no model behind it, not independently sourced.
-            return self._tick_cycles | ((RUNNING | TICK_ENABLE) if self._tick_enable else 0)
+            return self._tick_cycles | (RUNNING if self.tick_hz else 0) | (TICK_ENABLE if self._tick_enable else 0)
 
         return super().read_uint32(offset)
 
@@ -140,8 +193,8 @@ class RPWatchdog(BasePeripheral):
                 self._reason = FORCE
                 self.on_watchdog_trigger()
             self._enable = bool(value & ENABLE)
-            self.timer.enable = self._enable and self._tick_enable
-            self.alarm.enable = self._enable and self._tick_enable
+            self.timer.enable = self._enable and self.tick_hz > 0
+            self.alarm.enable = self._enable and self.tick_hz > 0
             self._pause_dbg0 = bool(value & PAUSE_DBG0)
             self._pause_dbg1 = bool(value & PAUSE_DBG1)
             self._pause_jtag = bool(value & PAUSE_JTAG)
@@ -158,10 +211,7 @@ class RPWatchdog(BasePeripheral):
         elif offset == TICK:
             self._tick_enable = bool(value & TICK_ENABLE)
             self._tick_cycles = (value >> CYCLES_SHIFT) & CYCLES_MASK
-            self.timer.enable = self._enable and self._tick_enable
-            self.alarm.enable = self._enable and self._tick_enable
-            # CYCLES is stored and read back but does not retune the counter (the model's tick is the nominal 1 MHz of
-            # TICK_FREQUENCY) - and the TIMER does not wait for this tick either; both are written up in 0098.
+            self._retick()
 
         else:
             super().write_uint32(offset, value)

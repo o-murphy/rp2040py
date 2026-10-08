@@ -12,7 +12,8 @@
 // one today, calls it when clk_sys changes - what `update_clocks` does to `systick_timer.frequency`).
 //
 // Quirks of the reference that are kept (pinned by tests/test_ppb_diff.py and the C++ checks):
-//   - SysTick's `clk_source` selects the counter's clock: 0 the 1 MHz reference clock (the reset state), 1 clk_sys; the block retunes the timer on a CSR write and when told clk_sys changed;
+//   - SysTick's `clk_source` selects the counter's clock: 0 the reference clock - the watchdog's tick, nominally 1 MHz, which the chip tells the block by `tick_changed()` and which is 0 while the tick
+//     is not running (the reset state), 1 clk_sys; the block retunes the timer on a CSR write and when told the tick or clk_sys changed, and a stopped clock stops the counter (CSR.ENABLE is kept as written);
 //   - SYST_CALIB reads 0x0000270F (measured on the silicon) whatever the clock;
 //   - SYST_RVR is 24 bits wide (RELOAD, bits 23:0 - pico-sdk hardware/regs/m0plus.h, M0PLUS_SYST_RVR): a write keeps the low 24 bits and sets the timer's TOP; a RELOAD of 0 disarms the alarm;
 //   - a read of SYST_CSR returns COUNTFLAG and clears it - the one register read with a side effect;
@@ -56,8 +57,6 @@ constexpr uint32_t kCpuId = 0x410CC601, kSystCalib = 0x0000270F;
 constexpr uint32_t NMIPENDSET = 1u << 31, PENDSVSET = 1u << 28, PENDSVCLR = 1u << 27, PENDSTSET = 1u << 26, PENDSTCLR = 1u << 25, ISRPENDING = 1u << 22;
 constexpr uint32_t VECTPENDING_SHIFT = 12, VECTACTIVE_MASK = 0x1FF;
 constexpr int64_t kSysTickTop = 0xFFFFFF;
-// SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): the watchdog block's 1 us tick, 1 MHz (RP2040 datasheet, 2.4.5.1.1 SysTick timer).
-constexpr double kSysTickRefClk = 1e6;
 }  // namespace ppb_regs
 
 class PpbBlock {
@@ -70,6 +69,7 @@ public:
     Timer32 timer;
     Timer32PeriodicAlarm alarm;
     bool count_flag = false, clk_source = false, int_enable = false;
+    bool systick_enable = false;  // SYST_CSR.ENABLE as written; the counter also needs a running clock (the tick, or clk_sys)
     uint32_t reload = 0;
 
     // Binds the block to the CPU whose private bus it is, the chip's clock and its clk_sys, and runs the reference's constructor: TOP, mode and alarm target, then reset().
@@ -101,6 +101,12 @@ public:
 
     // clk_sys is now `hz` (the clock tree tells the block): SysTick follows it when CLKSOURCE says processor clock.
     double clk_sys() const noexcept { return clk_sys_; }
+    double tick_hz() const noexcept { return tick_hz_; }
+    // The watchdog's tick is now `hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock.
+    void tick_changed(double hz) noexcept {
+        tick_hz_ = hz;
+        retune();
+    }
     void clk_sys_changed(double hz) noexcept {
         clk_sys_ = hz;
         retune();
@@ -124,7 +130,7 @@ public:
             case SHPR2: return core.shpr2;
             case SHPR3: return core.shpr3;
             case SYST_CSR: {
-                const uint32_t value = (count_flag ? 1u << 16 : 0u) | (clk_source ? 1u << 2 : 0u) | (int_enable ? 1u << 1 : 0u) | (timer.enable() ? 1u : 0u);
+                const uint32_t value = (count_flag ? 1u << 16 : 0u) | (clk_source ? 1u << 2 : 0u) | (int_enable ? 1u << 1 : 0u) | (systick_enable ? 1u : 0u);
                 count_flag = false;
                 return value;
             }
@@ -186,8 +192,8 @@ public:
             case SYST_CSR:
                 clk_source = (word & (1u << 2)) != 0;
                 int_enable = (word & (1u << 1)) != 0;
-                retune();  // CLKSOURCE 0 is the 1 MHz reference clock, 1 the processor clock
-                timer.set_enable((word & 1u) != 0);
+                systick_enable = (word & 1u) != 0;
+                retune();  // CLKSOURCE 0 is the reference clock (the watchdog's tick), 1 the processor clock
                 return true;
             case SYST_CVR:  // clears the counter to 0 and COUNTFLAG (RP2040 datasheet, SYST_CVR)
                 timer.set(0);
@@ -246,12 +252,14 @@ private:
     }
 
     void retune() noexcept {
-        const double frequency = clk_source ? clk_sys_ : ppb_regs::kSysTickRefClk;
-        if (timer.frequency() != frequency) timer.set_frequency(frequency);
+        const double frequency = clk_source ? clk_sys_ : tick_hz_;
+        if (frequency != 0.0 && timer.frequency() != frequency) timer.set_frequency(frequency);
+        timer.set_enable(systick_enable && frequency > 0.0);  // a stopped reference clock stops the counter
     }
 
     Cpu* cpu_ = nullptr;
     double clk_sys_ = 0.0;
+    double tick_hz_ = 0.0;  // the watchdog's tick: SysTick's reference clock
     PpbHost host_;
     uint32_t hardware_interrupt_mask_ = 0;
     int64_t raw_write_value_ = 0;

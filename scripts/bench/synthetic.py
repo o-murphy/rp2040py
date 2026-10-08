@@ -82,6 +82,9 @@ def run_once(shift: int, *, mmio: bool) -> "tuple[float, int, int]":
     program, n_setup, n_loop, iterations = build_program(shift, mmio=mmio)
     simulator = Simulator()
     mcu = simulator.rp2040
+    if mmio:  # the TIMER counts on the watchdog's tick: start it as pico-sdk's clocks_init does (clk_ref from the crystal, 12 cycles per tick)
+        mcu.write_uint32(0x40008030, 2)
+        mcu.write_uint32(0x40058000 + 0x2C, 12 | (1 << 9))
     for i, halfword in enumerate(program):
         mcu.write_uint16(SRAM_BASE + 2 * i, halfword)
     mcu.core.pc = SRAM_BASE

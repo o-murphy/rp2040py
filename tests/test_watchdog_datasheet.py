@@ -3,6 +3,8 @@
 Sections: WATCHDOG 4.7.2 (tick generation), 4.7.6 (tables 546-550), errata RP2040-E1 (the counter decrements twice per tick).
 """
 
+from utils.tick import start_tick
+
 from rp2040py.rp2040 import RP2040
 
 WATCHDOG = 0x40058000
@@ -12,8 +14,10 @@ ENABLE, RUNNING, TICK_ENABLE = 1 << 30, 1 << 10, 1 << 9
 
 def test_the_tick_register_keeps_cycles_and_reports_running():
     chip = RP2040()
-    assert chip.read_uint32(WATCHDOG + TICK) == RUNNING | TICK_ENABLE  # ENABLE resets to 1, CYCLES to 0
-    chip.write_uint32(WATCHDOG + TICK, 12 | TICK_ENABLE)  # the SDK's watchdog_start_tick(XOSC_MHZ)
+    assert (
+        chip.read_uint32(WATCHDOG + TICK) == TICK_ENABLE
+    )  # ENABLE resets to 1, CYCLES to 0: the generator is not running (RUNNING is read-only and clear)
+    start_tick(chip)  # clk_ref from the crystal, then the SDK's watchdog_start_tick(XOSC_MHZ)
     assert chip.read_uint32(WATCHDOG + TICK) == 12 | RUNNING | TICK_ENABLE
     chip.write_uint32(WATCHDOG + TICK, 0xFFFFFFFF)
     assert (
@@ -21,15 +25,28 @@ def test_the_tick_register_keeps_cycles_and_reports_running():
     )  # CYCLES is 8:0; RUNNING and COUNT are read-only
     chip.write_uint32(WATCHDOG + TICK, 0x1FF)  # ENABLE clear: the generator stops
     assert chip.read_uint32(WATCHDOG + TICK) == 0x1FF
+    chip.write_uint32(WATCHDOG + TICK, TICK_ENABLE)  # CYCLES 0: not running either
+    assert chip.read_uint32(WATCHDOG + TICK) == TICK_ENABLE
 
 
 def test_ctrl_resets_paused_and_disabled_and_load_counts_two_per_tick():
     chip = RP2040()
     assert chip.read_uint32(WATCHDOG + CTRL) == (1 << 24) | (1 << 25) | (1 << 26)  # PAUSE_* reset to 1, ENABLE to 0
+    start_tick(chip)
     chip.write_uint32(WATCHDOG + LOAD, 0xFFFFFF)
     chip.write_uint32(WATCHDOG + CTRL, ENABLE)
     chip.clock.tick(1_000_000)  # 1 ms: 1000 ticks, decremented twice each (RP2040-E1)
     assert chip.read_uint32(WATCHDOG + CTRL) & 0xFFFFFF == 0xFFFFFF - 2000
+    assert chip.read_uint32(WATCHDOG + CTRL) & ENABLE  # CTRL.ENABLE reads as written
+
+
+def test_ctrl_enable_reads_as_written_whether_or_not_the_tick_runs():
+    chip = RP2040()
+    chip.write_uint32(WATCHDOG + CTRL, ENABLE)  # no tick yet: nothing counts, the bit is still the bit
+    assert chip.read_uint32(WATCHDOG + CTRL) & ENABLE
+    chip.write_uint32(WATCHDOG + LOAD, 100)
+    chip.clock.tick(1_000_000)
+    assert chip.read_uint32(WATCHDOG + CTRL) & 0xFFFFFF == 100  # and the countdown has not moved
 
 
 def test_the_scratch_registers_hold_32_bits_and_reason_starts_clear():

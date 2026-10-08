@@ -16,6 +16,7 @@ a     a bus write: write_uint32_atomic()           offset value  atomic_type (0 
 x     reset() through the bus's dispatch table     0      0      0
 i     interrupt line change the block raised       irq    value  0
 p     pin input levels the block depends on        gpio   qspi   0
+t     the watchdog's tick, in Hz (0: stopped)      hz     0      0
 ====  ===========================================  =====  =====  =====
 
 The bus sends every peripheral write through `write_uint32_atomic()` (a plain write is atomic_type 0), so
@@ -23,7 +24,8 @@ recorded writes are normally kind ``a``; kind ``w`` only appears for a caller th
 
 What this does and does not capture: it records what crosses the bus's dispatch table
 (``RP2040.peripherals`` / ``sio`` / ``ppb``) plus the interrupts the block raises through
-``RP2040.set_interrupt()``, plus - for SIO only, the one block that *reads pins* - the pin input levels
+``RP2040.set_interrupt()``, plus - for the blocks that follow the watchdog's tick (the TIMER, the PPB's SysTick) - the tick itself (kind ``t``: every
+announcement of the watchdog (``add_tick_listener``), which a bare chip's TIMER needs before it counts), plus - for SIO only, the one block that *reads pins* - the pin input levels
 (kind ``p``: the 30 GPIO ``input_value`` bits and the 6 QSPI ones, sampled just before an SIO read of
 ``GPIO_IN``/``GPIO_HI_IN`` whenever they differ from the last sample). A block driven by anything else
 (another block's direct method call) replays as if that input never happened, so replay is exact only for
@@ -144,7 +146,10 @@ def record(mcu: RP2040, block: "int | str", irqs: "Collection[int]" = ()) -> "li
     block at time zero, so the trace must too. `irqs` are the interrupt lines this block owns - only
     those are logged (other blocks raise lines through the same `set_interrupt()`)."""
     events: list[Any] = []
-    recorder = _Recorder(mcu, find_block(mcu, block), events, samples_pins=(block == SIO))
+    target = find_block(mcu, block)
+    recorder = _Recorder(mcu, target, events, samples_pins=(block == SIO))
+    if block != SIO:
+        _tap_tick(mcu, events)
     if block == SIO:
         mcu.sio = recorder  # type: ignore[assignment]
     elif block == PPB:
@@ -154,6 +159,11 @@ def record(mcu: RP2040, block: "int | str", irqs: "Collection[int]" = ()) -> "li
     if irqs:
         _tap_interrupts(mcu, set(irqs), events)
     return events
+
+
+def _tap_tick(mcu: RP2040, events: "list[Any]") -> None:
+    """Logs the tick the watchdog announces (``add_tick_listener``) as an input of the block: the TIMER and SysTick count on it."""
+    mcu.watchdog.add_tick_listener(lambda hz: events.append((mcu.clock.nanos, "t", hz, 0, 0)))
 
 
 def _tap_interrupts(mcu: RP2040, irqs: "set[int]", events: "list[Any]") -> None:
@@ -222,6 +232,10 @@ def replay(
             target.reset()
         elif kind == "p":
             apply_pin_levels(mcu, a, b)
+        elif kind == "t":
+            follows_the_tick = getattr(target, "tick_changed", None)  # only the TIMER and the PPB count on it
+            if follows_the_tick is not None:
+                follows_the_tick(a)
         else:
             raise ValueError(f"unknown event kind {kind!r} at {index}")
 

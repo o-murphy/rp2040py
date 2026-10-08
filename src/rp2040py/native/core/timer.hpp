@@ -1,12 +1,16 @@
 // The RP2040 TIMER block in C++ (docs/records/0096-cpp-mcu-core.md, Phase 2): a faithful translation of
 // peripherals/timer.py, which stays as the pure-Python reference and the oracle.
 //
-// What it owns: the microsecond counter's epoch, the latched high word, INTR/INTE/INTF, PAUSE, and four alarms
+// What it owns: the counter's epoch, the latched high word, INTR/INTE/INTF, PAUSE, and four alarms
 // whose due times are scheduled on the C++ `Clock` (core/clock.hpp) - so a firmware's TIMELR poll loop, the
 // hottest register traffic of a boot (52% of the accesses of a MicroPython boot, 97.6% of CircuitPython's), never
 // leaves C++. What it does not own: logging, and the interrupt line - both are reached through a `TimerHost` of
 // plain function pointers (a Python trampoline today, the C++ NVIC/logger later), which also keeps this header free
 // of anything Python.
+//
+// The count advances once per tick of the watchdog's tick generator (datasheet 4.6.4, 4.7.2): `tick_changed(hz)` is how the chip tells the block the tick's rate - nominally 1 MHz, a count per
+// microsecond - and 0 means the tick is not running, which freezes the count exactly as PAUSE does (a bare chip does not count until firmware has started the tick, as on silicon). The count
+// is continuous across a change of rate, and the armed alarms are re-timed.
 //
 // Every observable is kept, because replay of a recorded firmware session is the acceptance test: the number and
 // order of interrupt-line calls (every INTR/INTE/INTF change and every alarm fire re-announces ALL FOUR lines, in
@@ -128,7 +132,7 @@ public:
                 const uint32_t delta_micros = to_uint32(static_cast<double>(value) - micros());
                 armed_[index] = true;
                 target_[index] = static_cast<uint32_t>(value);
-                if (!paused_) clock_->schedule(&alarms_[index], static_cast<double>(delta_micros) * 1000.0);  // a frozen count: armed, and waiting for PAUSE to clear
+                if (!frozen()) clock_->schedule(&alarms_[index], nanos_for(static_cast<double>(delta_micros)));  // a frozen count: armed, and waiting for PAUSE to clear / the tick to run
                 return kWriteHandled;
             }
             case ARMED:
@@ -168,7 +172,7 @@ public:
         latched_high_ = 0;
         int_raw_ = int_enable_ = int_force_ = 0;
         paused_ = false;
-        paused_micros_ = 0.0;
+        frozen_micros_ = 0.0;  // the tick is not part of the block's registers: it keeps running (or not) through a reset
         time_latch_low_ = 0;
         dbgpause_ = timer_regs::kDbgPauseReset;
         for (int i = 0; i < kAlarms; ++i) {
@@ -207,6 +211,15 @@ public:
         }
     }
 
+    // ---- the watchdog's tick --------------------------------------------------------------------------------------
+
+    // The tick is now `tick_hz` (0: stopped): the count continues from where it is at the new rate, or freezes, and the armed alarms are re-timed.
+    void tick_changed(double tick_hz) noexcept {
+        if (tick_hz != tick_hz_) apply(paused_, tick_hz);
+    }
+    double tick_hz() const noexcept { return tick_hz_; }
+    bool paused() const noexcept { return paused_; }
+
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
     WindowHandler window_handler() noexcept { return BlockWindow<TimerBlock>::handler(this); }
@@ -217,9 +230,15 @@ private:
         int index = 0;
     };
 
-    // This block's own count in microseconds since its epoch - not the simulation's clock. Every read and every
-    // alarm arming goes through here, so the two cannot disagree about what "now" is.
-    double micros() const noexcept { return paused_ ? paused_micros_ : (clock_->nanos() - epoch_nanos_) / 1000.0; }  // frozen while PAUSE is set
+    // The count does not advance: PAUSE is set, or the watchdog's tick is not running.
+    bool frozen() const noexcept { return paused_ || tick_hz_ == 0.0; }
+    // Counts per microsecond of simulated time: the tick is nominally 1 MHz (one count per microsecond).
+    double scale() const noexcept { return tick_hz_ / 1e6; }
+    // Simulated nanoseconds until the count has advanced by `counts` (at the current tick).
+    double nanos_for(double counts) const noexcept { return counts * 1000.0 / scale(); }
+    // This block's own count - one per tick - since its epoch, not the simulation's clock. Every read and every
+    // alarm arming goes through here, so the two cannot disagree about what "now" is. Frozen while PAUSE is set or the tick is stopped.
+    double micros() const noexcept { return frozen() ? frozen_micros_ : (clock_->nanos() - epoch_nanos_) / 1000.0 * scale(); }
     static int64_t high_word(double time) noexcept { return static_cast<int64_t>(time / 4294967296.0); }  // time >= 0
     // Python's `int(value) & 0xFFFFFFFF` for any finite double - truncate toward zero, then the low 32 bits of the two's-complement integer - read from the bits of the double, so that
     // a count beyond int64 (a TIMEHW write can put the 64-bit time anywhere) has no undefined behaviour and no libm is needed.
@@ -243,31 +262,39 @@ private:
 
     // PAUSE: the count freezes and no alarm can come due; clearing it resumes from the frozen count.
     void set_paused(bool paused) noexcept {
-        if (paused == paused_) return;
-        if (paused) {
-            paused_micros_ = micros();
-            paused_ = true;
-            for (int i = 0; i < kAlarms; ++i) clock_->cancel(&alarms_[i]);
+        if (paused != paused_) apply(paused, tick_hz_);
+    }
+
+    // Switch to a new PAUSE / tick state with the count continuous across it.
+    void apply(bool paused, double tick_hz) noexcept {
+        const bool was_frozen = frozen();
+        const double now_micros = micros();
+        paused_ = paused;
+        tick_hz_ = tick_hz;
+        if (frozen()) {
+            frozen_micros_ = now_micros;
+            if (!was_frozen) {
+                for (int i = 0; i < kAlarms; ++i) clock_->cancel(&alarms_[i]);
+            }
         } else {
-            paused_ = false;
-            epoch_nanos_ = clock_->nanos() - paused_micros_ * 1000.0;
+            epoch_nanos_ = clock_->nanos() - nanos_for(now_micros);
             reschedule_armed_alarms();
         }
     }
 
     // The count is now `micros_value`; every armed alarm is re-timed against it (an alarm matches the counter, not a moment of simulated time).
     void set_time(double micros_value) noexcept {
-        if (paused_) {
-            paused_micros_ = micros_value;
+        if (frozen()) {
+            frozen_micros_ = micros_value;
             return;
         }
-        epoch_nanos_ = clock_->nanos() - micros_value * 1000.0;
+        epoch_nanos_ = clock_->nanos() - nanos_for(micros_value);
         reschedule_armed_alarms();
     }
 
     void reschedule_armed_alarms() noexcept {
         for (int i = 0; i < kAlarms; ++i) {
-            if (armed_[i]) clock_->schedule(&alarms_[i], static_cast<double>(to_uint32(static_cast<double>(target_[i]) - micros())) * 1000.0);
+            if (armed_[i]) clock_->schedule(&alarms_[i], nanos_for(static_cast<double>(to_uint32(static_cast<double>(target_[i]) - micros()))));
         }
     }
 
@@ -299,7 +326,8 @@ private:
     int64_t latched_high_ = 0;
     uint32_t int_raw_ = 0, int_enable_ = 0, int_force_ = 0;
     bool paused_ = false;
-    double paused_micros_ = 0.0;
+    double tick_hz_ = 0.0;        // the watchdog's tick; 0 = not running, the count is frozen
+    double frozen_micros_ = 0.0;  // the count, frozen, while PAUSE is set or the tick is not running
     uint32_t time_latch_low_ = 0, dbgpause_ = timer_regs::kDbgPauseReset;
     int64_t raw_write_value_ = 0;
     bool armed_[kAlarms] = {false, false, false, false};

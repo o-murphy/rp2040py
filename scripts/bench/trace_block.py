@@ -46,7 +46,9 @@ def _chip_with_timer(kind: str):
 
     chip = RP2040()
     if kind == "pure":
-        chip.peripherals[0x40054] = PureTimer(chip, "TIMER_BASE")
+        chip.timer = chip.peripherals[0x40054] = PureTimer(
+            chip, "TIMER_BASE"
+        )  # `chip.timer` too: the watchdog tells it the tick
     return chip
 
 
@@ -76,7 +78,9 @@ async def record_workload(
     if block == 0x40054 and timer == "pure":  # record the pure-Python TIMER instead of the native one
         from rp2040py.peripherals._timer import RPTimer as PureTimer
 
-        device.mcu.peripherals[0x40054] = PureTimer(device.mcu, "TIMER_BASE")
+        device.mcu.timer = device.mcu.peripherals[0x40054] = PureTimer(
+            device.mcu, "TIMER_BASE"
+        )  # `mcu.timer` too: the watchdog tells it the tick
     events = record(device.mcu, block, irqs)  # before anything runs: replay starts a fresh block at t=0
     try:
         await device.astart()

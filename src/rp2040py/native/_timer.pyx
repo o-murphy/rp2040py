@@ -103,6 +103,14 @@ cdef class RPTimer:
         self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type)
         raise_if_pending()
 
+    def tick_changed(self, tick_hz):
+        """The watchdog's tick is now `tick_hz` (0: stopped): the count continues at the new rate, or freezes (see core/timer.hpp)."""
+        self._block.tick_changed(<double> tick_hz)
+
+    @property
+    def tick_hz(self):
+        return self._block.tick_hz()
+
     def reset(self):
         if not self._block.reset():
             raise_if_pending()

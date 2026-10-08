@@ -80,6 +80,8 @@ class Probe:
                 self.timer.write_uint32_atomic(op[1], op[2], op[3])
             elif kind == "reset":
                 self.timer.reset()
+            elif kind == "tick_hz":
+                self.timer.tick_changed(op[1])  # the watchdog's tick, as the chip announces it
             elif kind == "fail_next_irq_call":
                 self.fail_at = op[1]
         except Boom:
@@ -87,7 +89,7 @@ class Probe:
         return None
 
     def observe(self):
-        return (self.timer.int_status, self.timer.raw_write_value, self.chip.clock.nanos)
+        return (self.timer.int_status, self.timer.raw_write_value, self.chip.clock.nanos, self.timer.tick_hz)
 
 
 def _value(rng, now_us):
@@ -101,15 +103,31 @@ def _value(rng, now_us):
     )  # fmt: skip
 
 
+TICKS = [
+    0.0,
+    1e6,
+    1e6,
+    1e6,
+    2e6,
+    5e5,
+    6.5e6 / 12,
+    12e6,
+    1.5e6,
+    3e5,
+]  # Hz: stopped, the nominal tick, and the rates clk_ref / CYCLES can give
+
+
 def _script(seed, length=400):
     rng = random.Random(seed)
     now_us = 0.0
-    ops = []
+    ops = [("tick_hz", 1e6)]  # the SDK starts the watchdog tick before anything uses the TIMER
     for _ in range(length):
         offset = rng.choice(REGISTERS) if rng.random() < 0.8 else rng.randrange(0, 0x1000) & ~3
         offset |= rng.choice(ALIASES) if rng.random() < 0.4 else 0
         value = _value(rng, now_us)
         roll = rng.random()
+        if rng.random() < 0.04:
+            ops.append(("tick_hz", rng.choice(TICKS)))
         if roll < 0.22:
             step = rng.choice(
                 [0, 500, 1000, 5000, 50_000, 400_000, 3_000_000, 1e9, 4294967296.0 * 1000 * rng.randrange(1, 3)]
@@ -173,6 +191,7 @@ def test_an_interrupt_line_that_raises_surfaces_from_the_register_write_that_cau
 def test_an_interrupt_line_that_raises_surfaces_from_a_clock_tick_and_the_clock_stays_usable():
     for pure in (True, False):
         probe = Probe(pure=pure)
+        probe.timer.tick_changed(1e6)
         clock = probe.chip.clock
         probe.chip.write_uint32(TIMER_BASE + 0x38, 0xF)
         probe.chip.write_uint32(TIMER_BASE + 0x10, 100)  # ALARM0 at t = 100 us
@@ -193,6 +212,7 @@ def test_a_dropped_chip_with_an_armed_alarm_is_collected_and_the_clock_survives(
 
     chip = make_chip(Native)
     chip.peripherals[TIMER_KEY] = NativeTimer(chip, "TIMER_BASE")
+    chip.peripherals[TIMER_KEY].tick_changed(1e6)
     clock = chip.clock
     chip.write_uint32(TIMER_BASE + 0x10, 50)  # armed, due at 50 us
     assert clock.has_scheduled_alarm

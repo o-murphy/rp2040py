@@ -377,6 +377,9 @@ def update_clocks(rp2040: "RP2040") -> None:
     clk_peri = rp2040.clocks.peri_freq
     if clk_peri and clk_peri != rp2040.clk_peri:
         _set_clk_peri(rp2040, clk_peri)
+    rp2040.watchdog.clk_ref_changed(
+        rp2040.clocks.ref_freq
+    )  # the watchdog's tick (the TIMER's and SysTick's reference) is derived from clk_ref
 
 
 def reset_clock_tree(rp2040: "RP2040") -> None:
@@ -389,3 +392,4 @@ def reset_clock_tree(rp2040: "RP2040") -> None:
         _set_clk_sys(rp2040, DEFAULT_CLK)
     if rp2040.clk_peri != DEFAULT_CLK:
         _set_clk_peri(rp2040, DEFAULT_CLK)
+    rp2040.watchdog.clk_ref_changed(rp2040.clocks.ref_freq)

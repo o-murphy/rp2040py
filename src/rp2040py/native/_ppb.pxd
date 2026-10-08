@@ -26,12 +26,15 @@ cdef extern from "ppb.hpp" namespace "rp2040core":
         cppbool count_flag
         cppbool clk_source
         cppbool int_enable
+        cppbool systick_enable
         uint32_t reload
         PpbBlock() noexcept
         void init(Cpu* cpu, Clock* clock, const PpbHost& host, double clk_sys, uint32_t max_hardware_irq) noexcept
         void detach() noexcept
         void reset() noexcept
         double clk_sys() noexcept
+        double tick_hz() noexcept
+        void tick_changed(double hz) noexcept
         void clk_sys_changed(double hz) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept

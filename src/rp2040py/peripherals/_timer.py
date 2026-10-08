@@ -62,7 +62,8 @@ class RPTimer(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._paused = False
-        self._paused_micros = 0.0  # the count, frozen, while PAUSE is set
+        self._tick_hz = 0.0  # the watchdog's tick (RP2040 datasheet 4.6.4, 4.7.2): the count advances once per tick; 0 = the tick is not running, the count is frozen
+        self._frozen_micros = 0.0  # the count, frozen, while PAUSE is set or the tick is not running
         self._time_latch_low = 0  # TIMELW's latch: "writes do not get copied to time until timehw is written"
         self._dbgpause = DBGPAUSE_RESET
         # Simulated-time origin for this block's own count, so `reset()` can restart it from zero
@@ -95,7 +96,9 @@ class RPTimer(BasePeripheral):
         self._int_enable = 0
         self._int_force = 0
         self._paused = False
-        self._paused_micros = 0.0
+        self._frozen_micros = (
+            0.0  # the tick is not part of the block's registers: it keeps running (or not) through a reset
+        )
         self._time_latch_low = 0
         self._dbgpause = DBGPAUSE_RESET
         for alarm in self.alarms:
@@ -109,13 +112,30 @@ class RPTimer(BasePeripheral):
     def int_status(self) -> int:
         return (self._int_raw & self._int_enable) | self._int_force
 
+    @property
+    def tick_hz(self) -> float:
+        """The watchdog's tick as this block was last told (0: not running)."""
+        return self._tick_hz
+
+    def _frozen(self) -> bool:
+        """The count does not advance: PAUSE is set, or the watchdog's tick is not running ("The Watchdog tick must be running for the timer to start counting", datasheet 4.6.4)."""
+        return self._paused or self._tick_hz == 0.0
+
+    def _scale(self) -> float:
+        """Counts per microsecond of simulated time: the tick is nominally 1 MHz (one count per microsecond) and `tick_hz` is what clk_ref / CYCLES really gives."""
+        return self._tick_hz / 1e6
+
     def _micros(self) -> float:
-        """This block's own count, in microseconds since its epoch - not the simulation's clock.
+        """This block's own count - one per tick, a microsecond each at the nominal tick - since its epoch, not the simulation's clock.
         Every read *and* every alarm arming goes through here, so the two cannot disagree about
-        what "now" is (an alarm is armed as `target - now`, relative). Frozen while PAUSE is set."""
-        if self._paused:
-            return self._paused_micros
-        return (self.clock.nanos - self._epoch_nanos) / 1000
+        what "now" is (an alarm is armed as `target - now`, relative). Frozen while PAUSE is set or the tick is stopped."""
+        if self._frozen():
+            return self._frozen_micros
+        return (self.clock.nanos - self._epoch_nanos) / 1000 * self._scale()
+
+    def _nanos_for(self, counts: float) -> float:
+        """Simulated nanoseconds until the count has advanced by `counts` (at the current tick)."""
+        return counts * 1000.0 / self._scale()
 
     def read_uint32(self, offset: int) -> int:
         time = self._micros()
@@ -175,8 +195,10 @@ class RPTimer(BasePeripheral):
             # ALARMn is a 32-bit register: keep what a read of it would return, not the raw Python int the caller passed
             # (a negative or wider one made the bus's 32-bit read-back raise OverflowError).
             alarm.target_micros = value & 0xFFFFFFFF
-            if not self._paused:  # the count is frozen: the alarm is armed and waits for PAUSE to be cleared
-                alarm.clock_alarm.schedule(delta_micros * 1000)
+            if (
+                not self._frozen()
+            ):  # the count is frozen: the alarm is armed and waits for PAUSE to be cleared / the tick to run
+                alarm.clock_alarm.schedule(self._nanos_for(delta_micros))
 
         elif offset == ARMED:
             for alarm in self.alarms:
@@ -213,30 +235,40 @@ class RPTimer(BasePeripheral):
 
     def _set_paused(self, paused: bool) -> None:
         """PAUSE: "Set high to pause the timer" (RP2040 datasheet). The count freezes and no alarm can come due; clearing it resumes from the frozen count."""
-        if paused == self._paused:
-            return
-        if paused:
-            self._paused_micros = self._micros()
-            self._paused = True
-            for alarm in self.alarms:
-                alarm.clock_alarm.cancel()
+        if paused != self._paused:
+            self._apply(paused, self._tick_hz)
+
+    def tick_changed(self, tick_hz: float) -> None:
+        """The watchdog's tick is now `tick_hz` (0: stopped): the count continues from where it is at the new rate, or freezes - and the armed alarms are re-timed."""
+        if tick_hz != self._tick_hz:
+            self._apply(self._paused, tick_hz)
+
+    def _apply(self, paused: bool, tick_hz: float) -> None:
+        """Switch to a new PAUSE / tick state with the count continuous across it."""
+        was_frozen = self._frozen()
+        micros = self._micros()
+        self._paused, self._tick_hz = paused, tick_hz
+        if self._frozen():
+            self._frozen_micros = micros
+            if not was_frozen:
+                for alarm in self.alarms:
+                    alarm.clock_alarm.cancel()
         else:
-            self._paused = False
-            self._epoch_nanos = self.clock.nanos - self._paused_micros * 1000.0
+            self._epoch_nanos = self.clock.nanos - self._nanos_for(micros)
             self._reschedule_armed_alarms()
 
     def _set_time(self, micros: float) -> None:
         """The count is now `micros`; every armed alarm is re-timed against it (an alarm matches the counter, not a moment of simulated time)."""
-        if self._paused:
-            self._paused_micros = micros
+        if self._frozen():
+            self._frozen_micros = micros
             return
-        self._epoch_nanos = self.clock.nanos - micros * 1000.0
+        self._epoch_nanos = self.clock.nanos - self._nanos_for(micros)
         self._reschedule_armed_alarms()
 
     def _reschedule_armed_alarms(self) -> None:
         for alarm in self.alarms:
             if alarm.armed:
-                alarm.clock_alarm.schedule(_to_uint32(alarm.target_micros - self._micros()) * 1000)
+                alarm.clock_alarm.schedule(self._nanos_for(_to_uint32(alarm.target_micros - self._micros())))
 
     def _fire_alarm(self, index: int) -> None:
         alarm = self.alarms[index]

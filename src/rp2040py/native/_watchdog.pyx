@@ -46,6 +46,22 @@ cdef cppbool _trigger_trampoline(void* ctx) noexcept:
     return True
 
 
+cdef cppbool _tick_trampoline(void* ctx, double tick_hz) noexcept:
+    """The tick changed: the TIMER and SysTick count on it, so they are told (the reference's `_retick`). False: one of them raised, and the error is parked."""
+    cdef RPWatchdog block = <RPWatchdog> ctx
+    try:
+        for name in ("timer", "ppb"):
+            consumer = getattr(block.rp2040, name, None)
+            if consumer is not None:
+                consumer.tick_changed(tick_hz)
+        for listener in list(block._tick_listeners):
+            listener(tick_hz)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
 cdef class _Words:
     """The reference's `scratch_data` list as a view of the C++ array: indexable, assignable (the tests poke `scratch_data[4] = MAGIC`) and equal to a list of the same values."""
 
@@ -187,8 +203,10 @@ cdef class RPWatchdog:
         self.name = name
         self.clock = clock
         self.on_watchdog_trigger = self._default_watchdog_trigger
+        self._tick_listeners = []
         host.warn = _warn_trampoline
         host.trigger = _trigger_trampoline
+        host.tick_changed = _tick_trampoline
         host.ctx = <void*> self
         host.failed = pending_flag()
         self._block.init(&(<SimulationClock> clock)._clock, host)
@@ -221,6 +239,25 @@ cdef class RPWatchdog:
     @property
     def raw_write_value(self):
         return self._block.raw_write_value()
+
+    def add_tick_listener(self, listener):
+        """Calls `listener(tick_hz)` whenever the tick changes (0: stopped), after the TIMER and SysTick have been told. Returns the function that unsubscribes it."""
+        self._tick_listeners.append(listener)
+
+        def unsubscribe():
+            if listener in self._tick_listeners:
+                self._tick_listeners.remove(listener)
+
+        return unsubscribe
+
+    def clk_ref_changed(self, clk_ref):
+        """clk_ref is now `clk_ref` Hz (called by `update_clocks`): the tick follows it, and so do the countdown, the TIMER and SysTick."""
+        if not self._block.clk_ref_changed(<double> clk_ref):
+            raise_if_pending()
+
+    @property
+    def tick_hz(self):
+        return self._block.tick_hz
 
     @property
     def _reason(self):
@@ -279,8 +316,9 @@ cdef class RPWatchdog:
         self._block.pause_jtag = bool(value)
 
     def reset(self):
-        """Clear the reset-cause bookkeeping this block carries across a reboot: REASON and the eight scratch registers (see the reference, and 0089 section 1.3)."""
-        self._block.reset()
+        """Back to power-on (a RUN-pin/power-on reset): the reset-cause bookkeeping, CTRL and TICK (see the reference, and 0089 section 1.3)."""
+        if not self._block.reset():
+            raise_if_pending()
 
     def read_uint32(self, offset):
         cdef uint32_t value = self._block.read(<uint32_t> offset)

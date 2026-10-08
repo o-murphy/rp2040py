@@ -5,11 +5,14 @@
 //     TICK.ENABLE together run it (`timer.enable` and `alarm.enable` follow `enable && tick_enable`); CTRL reads ENABLE from the timer, the three PAUSE bits (reset 1, stored) and TIME (the counter);
 //   - the alarm reaching 0 sets REASON = TIMER and calls the host's `trigger` (the reference's `on_watchdog_trigger`: the chip's reset, installed by the device); CTRL.TRIGGER sets REASON = FORCE
 //     and calls the same, before the enables are updated - a failing trigger leaves them as they were;
-//   - TICK keeps CYCLES (8:0, reset 0) and ENABLE (reset 1) and reads RUNNING (10) with ENABLE; COUNT (19:11) reads 0. The tick does not retune the counter, and the TIMER does not wait for it
-//     (both written up in 0098);
+//   - TICK keeps CYCLES (8:0, reset 0) and ENABLE (9, reset 1); COUNT (19:11) reads 0. The tick generator divides clk_ref (the chip tells the block by `clk_ref_changed()`) by CYCLES while ENABLE is set:
+//     `tick_hz` = clk_ref / CYCLES, and 0 - not running, RUNNING (10) reads 0 - when ENABLE is clear or CYCLES is 0 (the reset state: a bare chip's TIMER does not count until firmware has started the
+//     tick). The tick is the countdown's clock (twice per tick: RP2040-E1: the timer's frequency follows it, and it runs only while the tick does), and the host's `tick_changed` tells the TIMER and
+//     SysTick, which count on it too (datasheet 4.6.4, 4.7.2, 2.4.5.1.1);
 //   - REASON is read-only: a write to it is ignored, silently. LOAD is write-only in the datasheet (type WF) and a read of it warns "unimplemented", as the reference's does (the value a read
 //     should return is not stated);
-//   - `reset()` clears REASON and the scratch registers only (a RUN-pin/power-on reset; a watchdog reset must not call it - 0089); an unimplemented offset warns on a read (and reads 0xFFFFFFFF) and on a
+//   - `reset()` is the RUN-pin/power-on reset ("reset by rst_n_run", 4.7.1; a watchdog reset must not call it - 0089): REASON, the scratch registers, CTRL (disabled, PAUSE set, the countdown at 0) and TICK
+//     (ENABLE set, CYCLES 0 - the tick stops until firmware starts it again); an unimplemented offset warns on a read (and reads 0xFFFFFFFF) and on a
 //     write; an alias write decodes against a *read* of the register, as the reference's `BasePeripheral.write_uint32_atomic` does.
 //
 // Header-only, C++17, no exceptions/RTTI/STL, no allocation. An alarm is a node the block holds, so the block must not move after `init()`, and `detach()` must run before it goes.
@@ -27,10 +30,12 @@ namespace rp2040core {
 constexpr uint32_t kWatchdogWarnRead = kRegWarnRead, kWatchdogWarnReadAtomicArea = kRegWarnReadAtomicArea, kWatchdogWarnWrite = kRegWarnWrite;
 
 using WatchdogTriggerFn = bool (*)(void* ctx);  // the chip's reset; false: the failure is parked with the host
+using WatchdogTickFn = bool (*)(void* ctx, double tick_hz);  // the tick changed (0: stopped): the TIMER and SysTick follow it; false: the failure is parked with the host
 
 struct WatchdogHost {
     RegWarnFn warn = nullptr;
     WatchdogTriggerFn trigger = nullptr;
+    WatchdogTickFn tick_changed = nullptr;
     void* ctx = nullptr;
     const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
@@ -41,7 +46,14 @@ constexpr uint32_t TRIGGER = 1u << 31, ENABLE = 1u << 30, PAUSE_DBG1 = 1u << 26,
 constexpr uint32_t LOAD_MASK = 0xFFFFFFu;
 constexpr uint32_t REASON_FORCE = 1u << 1, REASON_TIMER = 1u << 0;
 constexpr uint32_t TICK_RUNNING = 1u << 10, TICK_ENABLE = 1u << 9, CYCLES_MASK = 0x1FFu;
-constexpr double TICK_FREQUENCY = 2000000.0;  // 1 MHz, decremented twice per tick (RP2040-E1)
+constexpr double TICK_FREQUENCY = 2000000.0;  // the nominal 1 MHz tick, decremented twice per tick (RP2040-E1)
+constexpr double TICKS_PER_COUNT = 2.0;       // the countdown decrements this many times per tick (RP2040-E1)
+
+// The tick generator's output in Hz: clk_ref divided by CYCLES while ENABLE is set; 0 when it is not running (see the reference, `tick_frequency`).
+inline double tick_frequency(bool enable, uint32_t cycles, double clk_ref) noexcept {
+    if (!enable || cycles == 0 || clk_ref <= 0.0) return 0.0;
+    return clk_ref / static_cast<double>(cycles);
+}
 }  // namespace watchdog_regs
 
 class WatchdogBlock {
@@ -55,6 +67,7 @@ public:
     uint32_t scratch[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     uint32_t reason = 0;
     uint32_t tick_cycles = 0;
+    double tick_hz = 0.0;  // the tick generator's output; 0 = not running
     bool enable = false;
     bool tick_enable = true;
     bool pause_dbg0 = true, pause_dbg1 = true, pause_jtag = true;
@@ -76,6 +89,13 @@ public:
     bool failed() const noexcept { return host_failed(host_.failed); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
+    // clk_ref is now `hz` (called by the chip's clock tree): the tick follows it. False: the host's tick listener failed.
+    bool clk_ref_changed(double hz) noexcept {
+        clk_ref_ = hz;
+        return retick();
+    }
+    double clk_ref() const noexcept { return clk_ref_; }
+
     // What the timeout does: REASON = TIMER, then the chip's reset. The alarm calls it; the shell exposes it as `alarm.callback` (the tests call it by hand).
     bool fire_timeout() noexcept {
         reason = watchdog_regs::REASON_TIMER;
@@ -85,17 +105,24 @@ public:
     bool reset() noexcept {
         reason = 0;
         for (uint32_t& word : scratch) word = 0;
-        return true;
+        enable = false;
+        pause_dbg0 = pause_dbg1 = pause_jtag = true;
+        timer.set_enable(false);
+        alarm.set_enable(false);
+        timer.set(0);
+        tick_enable = true;
+        tick_cycles = 0;
+        return retick();
     }
 
     uint32_t read(uint32_t offset) noexcept {
         using namespace watchdog_regs;
         if (offset == REG_CTRL) {
-            return (timer.enable() ? ENABLE : 0u) | (pause_dbg0 ? PAUSE_DBG0 : 0u) | (pause_dbg1 ? PAUSE_DBG1 : 0u) | (pause_jtag ? PAUSE_JTAG : 0u) | (timer.counter() & TIME_MASK);
+            return (enable ? ENABLE : 0u) | (pause_dbg0 ? PAUSE_DBG0 : 0u) | (pause_dbg1 ? PAUSE_DBG1 : 0u) | (pause_jtag ? PAUSE_JTAG : 0u) | (timer.counter() & TIME_MASK);
         }
         if (offset == REG_REASON) return reason;
         if (offset >= SCRATCH0 && offset <= SCRATCH7 && (offset & 3) == 0) return scratch[(offset - SCRATCH0) >> 2];
-        if (offset == REG_TICK) return tick_cycles | (tick_enable ? (TICK_RUNNING | TICK_ENABLE) : 0u);
+        if (offset == REG_TICK) return tick_cycles | (tick_hz != 0.0 ? TICK_RUNNING : 0u) | (tick_enable ? TICK_ENABLE : 0u);
         if (host_.warn) {
             host_.warn(host_.ctx, kWatchdogWarnRead, offset, 0);
             if (offset > 0x1000) host_.warn(host_.ctx, kWatchdogWarnReadAtomicArea, offset, 0);
@@ -112,8 +139,8 @@ public:
                 if (!trigger()) return false;
             }
             enable = (v & ENABLE) != 0;
-            timer.set_enable(enable && tick_enable);
-            alarm.set_enable(enable && tick_enable);
+            timer.set_enable(enable && tick_hz > 0.0);
+            alarm.set_enable(enable && tick_hz > 0.0);
             pause_dbg0 = (v & PAUSE_DBG0) != 0;
             pause_dbg1 = (v & PAUSE_DBG1) != 0;
             pause_jtag = (v & PAUSE_JTAG) != 0;
@@ -126,8 +153,7 @@ public:
         } else if (offset == REG_TICK) {
             tick_enable = (v & TICK_ENABLE) != 0;
             tick_cycles = v & CYCLES_MASK;
-            timer.set_enable(enable && tick_enable);
-            alarm.set_enable(enable && tick_enable);
+            if (!retick()) return false;
         } else if (host_.warn) {
             host_.warn(host_.ctx, kWatchdogWarnWrite, offset, value);
         }
@@ -150,7 +176,20 @@ private:
 
     bool trigger() noexcept { return host_.trigger == nullptr || host_.trigger(host_.ctx); }
 
+    // Recompute the tick from TICK and clk_ref; on a change the countdown follows it and the host tells the TIMER and SysTick.
+    bool retick() noexcept {
+        using namespace watchdog_regs;
+        const double hz = tick_frequency(tick_enable, tick_cycles, clk_ref_);
+        if (hz == tick_hz) return true;
+        tick_hz = hz;
+        if (hz != 0.0) timer.set_frequency(hz * TICKS_PER_COUNT);  // decremented twice per tick (errata RP2040-E1)
+        timer.set_enable(enable && hz > 0.0);
+        alarm.set_enable(enable && hz > 0.0);
+        return host_.tick_changed == nullptr || host_.tick_changed(host_.ctx, hz);
+    }
+
     WatchdogHost host_;
+    double clk_ref_ = 0.0;  // clk_ref in Hz, pushed by the chip: the tick is derived from it
     int64_t raw_write_value_ = 0;
 };
 

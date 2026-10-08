@@ -10,6 +10,8 @@ for its own timeout/ordering tests.
 import dataclasses
 import struct
 
+from utils.tick import start_tick
+
 from rp2040py.boards import BOARDS
 from rp2040py.device.base_device import ResetCause
 from rp2040py.device.mp_device import MicroPythonDevice
@@ -27,8 +29,6 @@ from rp2040py.peripherals.watchdog import (
     LOAD,
     REASON,
     SCRATCH4,
-    TICK,
-    TICK_ENABLE,
     TIMER,
     TRIGGER,
 )
@@ -319,7 +319,7 @@ def test_a_watchdog_timeout_fires_once_and_lets_the_clock_move_on():
     fired: list[float] = []
     mcu.watchdog.on_watchdog_trigger = lambda: fired.append(mcu.clock.micros)
 
-    mcu.watchdog.write_uint32(TICK, 12 | TICK_ENABLE)
+    start_tick(mcu)  # clk_ref from the crystal, then the SDK's watchdog_start_tick(XOSC_MHZ): one tick per microsecond
     mcu.watchdog.write_uint32(LOAD, 50 * 1000 * 2)  # the SDK's 50 ms, counted at 2 MHz
     mcu.watchdog.write_uint32(CTRL, ENABLE)  # ...and deliberately no TRIGGER
 

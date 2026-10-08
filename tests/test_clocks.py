@@ -4,6 +4,8 @@ The sixteen cases of rp2040js 1.4.0's `clocks.spec.ts` are ported one to one, wi
 reset). Each runs on the chip the facade gives, so it holds for the pure-Python and the native chip alike.
 """
 
+from utils.tick import start_tick
+
 from rp2040py.rp2040 import RP2040
 
 MHZ = 1_000_000
@@ -202,6 +204,7 @@ def test_a_bypassed_pll_outputs_the_reference_divided_by_refdiv_alone():
 
 def test_a_chip_reset_puts_the_clock_tree_back_to_its_defaults_and_retunes_what_ran_from_it():
     chip = RP2040()
+    start_tick(chip)  # clk_ref from the crystal, the watchdog tick at 1 us
     chip.write_uint32(SYST_CSR, 1 << 2)
     _set_sys_clock(chip, **_arduino_pico_200())
     seen: list[tuple[float, float]] = []
@@ -210,6 +213,8 @@ def test_a_chip_reset_puts_the_clock_tree_back_to_its_defaults_and_retunes_what_
     assert chip.clk_sys == 125 * MHZ and chip.clk_peri == 125 * MHZ
     assert seen == [(125 * MHZ, 200 * MHZ)]
     assert chip.ppb.clk_sys == 125 * MHZ
-    assert chip.ppb.systick_timer.frequency == 1 * MHZ  # SysTick's CLKSOURCE is back to 0: the 1 MHz reference clock
+    # SysTick's CLKSOURCE is back to 0: the reference clock, the watchdog's tick. The reset put CLK_REF back on the ring oscillator (6.5 MHz) while the watchdog - which a
+    # watchdog reset does not reset - still divides by the 12 cycles the firmware set, so the tick is no longer 1 MHz: the same as on silicon until the firmware reconfigures it.
+    assert chip.ppb.systick_timer.frequency == 6.5 * MHZ / 12
     assert chip.read_uint32(PLL_SYS_BASE + PLL_PRIM) == 0x77000
     assert chip.read_uint32(CLK_SYS_CTRL) == 0

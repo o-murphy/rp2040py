@@ -67,8 +67,8 @@ VECTACTIVE_SHIFT = 0
 
 
 # SysTick's external reference clock (SYST_CSR.CLKSOURCE = 0): "The SysTick timer uses a 1μs pulse as a clock enable. This is generated in the watchdog block as timer_tick"
-# (RP2040 datasheet, 2.4.5.1.1 SysTick timer) - 1 MHz. (CLKSOURCE = 1 is "Processor clock"; SYST_CALIB.NOREF is 0, the reference is provided.)
-SYSTICK_REF_CLK = 1e6
+# (RP2040 datasheet, 2.4.5.1.1 SysTick timer) - the watchdog's tick, nominally 1 MHz; it is what `tick_changed()` is told, and 0 while the tick is not running.
+# (CLKSOURCE = 1 is "Processor clock"; SYST_CALIB.NOREF is 0, the reference is provided.)
 
 
 class RPPPB(BasePeripheral):
@@ -86,7 +86,11 @@ class RPPPB(BasePeripheral):
         self.systick_count_flag = False
         self.systick_clk_source = False
         self.systick_int_enable = False
+        self.systick_enable = (
+            False  # SYST_CSR.ENABLE as written; the counter also needs a running clock (the tick, or clk_sys)
+        )
         self.systick_reload = 0
+        self.tick_hz = 0.0  # the watchdog's tick: SysTick's reference clock
         self.clk_sys = self.rp2040.clk_sys
         self.systick_timer = Timer32(self.rp2040.clock, self.clk_sys)
 
@@ -110,10 +114,16 @@ class RPPPB(BasePeripheral):
         self.clk_sys = clk_sys
         self._retune_systick()
 
+    def tick_changed(self, tick_hz: float) -> None:
+        """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""
+        self.tick_hz = tick_hz
+        self._retune_systick()
+
     def _retune_systick(self) -> None:
-        frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK
-        if self.systick_timer.frequency != frequency:
+        frequency = self.clk_sys if self.systick_clk_source else self.tick_hz
+        if frequency and self.systick_timer.frequency != frequency:
             self.systick_timer.frequency = frequency
+        self.systick_timer.enable = self.systick_enable and frequency > 0  # a stopped reference clock stops the counter
 
     def reset(self) -> None:
         self.write_uint32(SYST_CSR, 0)
@@ -173,7 +183,7 @@ class RPPPB(BasePeripheral):
             count_flag_value = (1 << 16) if self.systick_count_flag else 0
             clk_source_value = (1 << 2) if self.systick_clk_source else 0
             tick_int_value = (1 << 1) if self.systick_int_enable else 0
-            enable_flag_value = (1 << 0) if self.systick_timer.enable else 0
+            enable_flag_value = (1 << 0) if self.systick_enable else 0
             self.systick_count_flag = False
             return count_flag_value | clk_source_value | tick_int_value | enable_flag_value
         if offset == SYST_CVR:
@@ -248,8 +258,8 @@ class RPPPB(BasePeripheral):
         if offset == SYST_CSR:
             self.systick_clk_source = bool(value & (1 << 2))
             self.systick_int_enable = bool(value & (1 << 1))
-            self._retune_systick()  # CLKSOURCE 0 is the 1 MHz reference clock, 1 the processor clock (pico-sdk m0plus.h, SYST_CSR.CLKSOURCE)
-            self.systick_timer.enable = bool(value & (1 << 0))
+            self.systick_enable = bool(value & (1 << 0))
+            self._retune_systick()  # CLKSOURCE 0 is the reference clock (the watchdog's tick), 1 the processor clock (pico-sdk m0plus.h, SYST_CSR.CLKSOURCE)
             return
         if offset == SYST_CVR:
             # "Writing to it with any value clears the register to 0. Clearing this register also clears the COUNTFLAG bit" (RP2040 datasheet, SYST_CVR)

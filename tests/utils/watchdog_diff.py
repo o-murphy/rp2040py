@@ -21,11 +21,16 @@ ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x40058000
 REGISTERS = (W.CTRL, W.LOAD, W.REASON, *W.SCRATCH_REGS, W.TICK)
 UNIMPLEMENTED = (0x30, 0x34, 0x40, 0xFFC)
+CLK_REF_CTRL = (
+    0x40008000 + 0x30
+)  # CLOCKS: SRC 0 ROSC (6.5 MHz), 1 the aux source (PLL_USB: not running here), 2 XOSC (12 MHz)
+TIMER_RAWL = 0x40054000 + 0x28
 ATTRS = (
     "_reason",
     "_enable",
     "_tick_enable",
     "_tick_cycles",
+    "tick_hz",
     "_pause_dbg0",
     "_pause_dbg1",
     "_pause_jtag",
@@ -56,9 +61,12 @@ class Rig:
             self._replace_the_block(factory)
         self._tap()
         self.peripheral.on_watchdog_trigger = self._handler
+        self.peripheral.add_tick_listener(lambda hz: self.log.append(("tick", float(self.chip.clock.nanos), float(hz))))
 
     def _replace_the_block(self, factory: Callable[..., Any]) -> None:
-        self.chip.peripherals[BASE >> 12] = factory(self.chip, "WATCHDOG_BASE")
+        block = factory(self.chip, "WATCHDOG_BASE")
+        self.chip.peripherals[BASE >> 12] = block
+        self.chip.watchdog = block  # the clock tree tells clk_ref to `chip.watchdog`, and the block tells the TIMER and SysTick through the chip
 
     def _tap(self) -> None:
         log, chip = self.log, self.chip
@@ -89,6 +97,8 @@ class Rig:
             return int(chip.read_uint32(BASE + op[2] + op[1]))
         elif kind == "tick":
             chip.clock.tick(op[1])
+        elif kind == "clkref":
+            chip.write_uint32(CLK_REF_CTRL, op[1])  # the clock tree tells the watchdog (update_clocks)
         elif kind == "reset":
             self.peripheral.reset()
         elif kind == "raising":
@@ -107,7 +117,18 @@ class Rig:
             "raw": int(peripheral.raw_write_value),
             "alarm": (bool(clock.has_scheduled_alarm), float(clock.nanos_to_next_alarm)),
             "time": float(clock.nanos),
-            "timer": (bool(peripheral.timer.enable), bool(peripheral.alarm.enable), int(peripheral.alarm.target)),
+            "timer": (
+                bool(peripheral.timer.enable),
+                bool(peripheral.alarm.enable),
+                int(peripheral.alarm.target),
+                float(peripheral.timer.frequency),
+            ),
+            # what counts on the tick: the TIMER's count and rate, and SysTick's rate
+            "followers": (
+                int(self.chip.read_uint32(TIMER_RAWL)),
+                float(self.chip.timer.tick_hz),
+                float(self.chip.ppb.tick_hz),
+            ),
         }
 
 
@@ -117,6 +138,16 @@ MUTANTS = (
     "load_mask_20_bits",
     "load_ignored",
     "countdown_once_per_tick",
+    "tick_ignores_clk_ref",
+    "tick_fixed_clk_ref",
+    "tick_divides_by_cycles_plus_one",
+    "cycles_zero_runs",
+    "tick_enable_ignored",
+    "timer_not_told",
+    "ppb_not_told",
+    "listener_not_called",
+    "running_bit_follows_enable",
+    "ctrl_enable_gated_by_tick",
     "alarm_target_one",
     "timeout_reason_force",
     "trigger_reason_timer",
@@ -135,6 +166,9 @@ MUTANTS = (
     "scratch_index_wrong",
     "reset_keeps_scratch",
     "reset_keeps_reason",
+    "reset_keeps_tick",
+    "reset_keeps_ctrl_enable",
+    "reset_keeps_countdown",
     "load_read_zero",
     "reason_write_warns",
     "unimplemented_read_zero",
@@ -148,9 +182,7 @@ def mutant_rig(name: str) -> Rig:
     class Mutant(base):  # type: ignore[valid-type, misc]
         def __init__(self, rp2040: Any, nm: str) -> None:
             super().__init__(rp2040, nm)
-            if name == "countdown_once_per_tick":
-                self.timer.frequency = W.TICK_FREQUENCY / 2
-            elif name == "alarm_target_one":
+            if name == "alarm_target_one":
                 self.alarm.target = 1
             elif name == "pause_reset_0":
                 self._pause_dbg0 = False
@@ -162,7 +194,43 @@ def mutant_rig(name: str) -> Rig:
                 return 0
             if name == "tick_running_always" and offset == W.TICK:
                 return super().read_uint32(offset) | W.RUNNING
+            if name == "running_bit_follows_enable" and offset == W.TICK:
+                return self._tick_cycles | (W.RUNNING | W.TICK_ENABLE if self._tick_enable else 0)
+            if name == "ctrl_enable_gated_by_tick" and offset == W.CTRL:
+                return super().read_uint32(offset) & ~(W.ENABLE if not self.tick_hz else 0)
             return super().read_uint32(offset)
+
+        def clk_ref_changed(self, clk_ref: float) -> None:
+            if name == "tick_ignores_clk_ref":
+                return
+            super().clk_ref_changed(12e6 if name == "tick_fixed_clk_ref" else clk_ref)
+
+        def _retick(self) -> None:
+            enable, cycles, ref = self._tick_enable, self._tick_cycles, self._clk_ref
+            if name == "cycles_zero_runs" and enable and cycles == 0 and ref > 0:
+                hz = ref
+            elif name == "tick_enable_ignored":
+                hz = W.tick_frequency(True, cycles, ref)
+            elif name == "tick_divides_by_cycles_plus_one" and enable and cycles and ref > 0:
+                hz = ref / (cycles + 1)
+            else:
+                hz = W.tick_frequency(enable, cycles, ref)
+            if hz == self.tick_hz:
+                return
+            self.tick_hz = hz
+            if hz:
+                self.timer.frequency = hz * (1 if name == "countdown_once_per_tick" else W.TICKS_PER_COUNT)
+            self.timer.enable = self._enable and hz > 0
+            self.alarm.enable = self._enable and hz > 0
+            for consumer_name in ("timer", "ppb"):
+                if (name == "timer_not_told" and consumer_name == "timer") or (
+                    name == "ppb_not_told" and consumer_name == "ppb"
+                ):
+                    continue
+                getattr(self.rp2040, consumer_name).tick_changed(hz)
+            if name != "listener_not_called":
+                for listener in list(self._tick_listeners):
+                    listener(hz)
 
         def write_uint32(self, offset: int, value: int) -> None:
             value &= 0xFFFFFFFF
@@ -227,8 +295,8 @@ def mutant_rig(name: str) -> Rig:
 
         def _finish_ctrl(self, value: int) -> None:
             self._enable = bool(value & W.ENABLE)
-            self.timer.enable = self._enable and self._tick_enable
-            self.alarm.enable = self._enable and self._tick_enable
+            self.timer.enable = self._enable and self.tick_hz > 0
+            self.alarm.enable = self._enable and self.tick_hz > 0
             self._pause_dbg0 = bool(value & W.PAUSE_DBG0)
             self._pause_dbg1 = bool(value & W.PAUSE_DBG1)
             self._pause_jtag = bool(value & W.PAUSE_JTAG)
@@ -239,11 +307,23 @@ def mutant_rig(name: str) -> Rig:
             elif name == "alarm_ignores_tick":
                 self.alarm.enable = self._enable
             elif name == "alarm_ignores_enable":
-                self.alarm.enable = self._tick_enable
+                self.alarm.enable = self.tick_hz > 0
 
         def reset(self) -> None:
             kept_scratch, kept_reason = list(self.scratch_data), self._reason
+            kept_tick, kept_enable, kept_counter = (
+                (self._tick_enable, self._tick_cycles),
+                self._enable,
+                self.timer.raw_counter,
+            )
             super().reset()
+            if name == "reset_keeps_tick":
+                self._tick_enable, self._tick_cycles = kept_tick
+                self._retick()
+            elif name == "reset_keeps_ctrl_enable":
+                self._enable = kept_enable
+            elif name == "reset_keeps_countdown":
+                self.timer.set(kept_counter)
             if name == "reset_keeps_scratch":
                 self.scratch_data = kept_scratch
             elif name == "reset_keeps_reason":
@@ -269,12 +349,14 @@ def mutant_rig(name: str) -> Rig:
 
 def _value(r: random.Random, offset: int) -> int:
     if offset == W.CTRL:
-        enable = W.ENABLE if r.random() < 0.6 else 0
+        enable = W.ENABLE if r.random() < 0.75 else 0
         pauses = r.choice((0, W.PAUSE_DBG0, W.PAUSE_DBG1, W.PAUSE_JTAG, W.PAUSE_DBG0 | W.PAUSE_DBG1 | W.PAUSE_JTAG))
-        trigger = W.TRIGGER if r.random() < 0.2 else 0
+        trigger = W.TRIGGER if r.random() < 0.12 else 0
         return enable | pauses | trigger | (r.getrandbits(24) if r.random() < 0.2 else 0)
     if offset == W.LOAD:
-        return r.choice((0, 1, 200, 2000, 20_000, 0xFFFFFF, 0x1000000, 0xFFFFFFFF, r.randrange(1, 100_000)))
+        if r.random() < 0.6:
+            return r.choice((100, 200, 1000, 2000, 20_000))  # counts at 2 MHz: 50 us .. 10 ms
+        return r.choice((0, 1, 0xFFFFFF, 0x1000000, 0xFFFFFFFF, r.randrange(1, 100_000)))
     if offset == W.TICK:
         return r.choice(
             (0, W.TICK_ENABLE, 12 | W.TICK_ENABLE, 12, 0x1FF | W.TICK_ENABLE, 0xFFFFFFFF, r.getrandbits(32))
@@ -284,7 +366,10 @@ def _value(r: random.Random, offset: int) -> int:
 
 def generate(seed: int, steps: int) -> list[tuple]:
     r = random.Random(seed)
-    ops: list[tuple] = [("write", W.TICK, 12 | W.TICK_ENABLE, 0)]  # the SDK's watchdog_start_tick()
+    ops: list[tuple] = [
+        ("clkref", 2),
+        ("write", W.TICK, 12 | W.TICK_ENABLE, 0),
+    ]  # the SDK's clocks_init(): clk_ref from the crystal, then watchdog_start_tick()
     while len(ops) < steps:
         roll = r.random()
         alias = 0 if r.random() < 0.6 else r.choice(ALIAS_BASES[1:])
@@ -297,10 +382,14 @@ def generate(seed: int, steps: int) -> list[tuple]:
             ops.append(("write", offset, _value(r, offset), alias))
         elif roll < 0.60:
             ops.append(("write", r.choice(UNIMPLEMENTED), r.getrandbits(32), alias if r.random() < 0.5 else 0))
-        elif roll < 0.85:
+        elif roll < 0.82:
             ops.append(("tick", r.choice(TIMES)))
+        elif roll < 0.84:
+            ops.append(("clkref", r.choice((0, 1, 2, 2, 2, 2))))
         elif roll < 0.92:
             ops.append(("reset",))
+            if r.random() < 0.7:  # the firmware boots again and starts the tick
+                ops.extend([("clkref", 2), ("write", W.TICK, 12 | W.TICK_ENABLE, 0)])
         else:
             ops.append(("raising", r.random() < 0.55))
     return ops[:steps]
@@ -384,4 +473,9 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
             count("exception")
         if rig.peripheral.alarm.enable:
             count("state.armed")
+        if rig.peripheral.timer.enable:
+            count("state.counting")
+        for entry in rig.log[before_log:]:
+            if entry[0] == "tick":
+                count("tick.changes.running" if entry[2] else "tick.changes.stopped")
     return counts

@@ -55,7 +55,100 @@ static void clear(Recorder& r) {
 
 static uint32_t rd(TimerBlock& t, uint32_t offset) { return t.read(offset); }
 
+// The tick: the count advances once per tick at whatever rate the tick has, continuously across a change of rate, and freezes - with its alarms - while the tick is stopped.
+static void check_the_tick() {
+    Clock clock;
+    Recorder rec;
+    TimerBlock timer;
+    TimerHost host;
+    host.irq = on_irq;
+    host.warn = on_warn;
+    host.ctx = &rec;
+    timer.init(&clock, host);
+
+    timer.tick_changed(1e6);
+    clock.tick(10000);  // 10 us
+    CHECK(rd(timer, TIMERAWL) == 10);
+
+    // A slower tick: 500 kHz - half a count per microsecond; the count continues from 10.
+    timer.tick_changed(5e5);
+    CHECK(rd(timer, TIMERAWL) == 10 && timer.tick_hz() == 5e5);
+    clock.tick(1000000);  // 1 ms: 500 more counts
+    CHECK(rd(timer, TIMERAWL) == 10 + 500);
+    // An alarm is armed in counts: 100 counts from now at that rate is 200 us.
+    const uint32_t now = rd(timer, TIMERAWL);
+    timer.write_atomic(ALARM0, now + 100, kAtomicNormal);
+    CHECK(clock.has_alarm() && clock.nanos_to_next_alarm() == 200.0 * 1000.0);
+    // ...and re-timed when the rate changes: a faster tick brings it nearer. The 100 counts had not started yet, so all 100 are left.
+    timer.tick_changed(2e6);
+    CHECK(clock.has_alarm() && clock.nanos_to_next_alarm() == 100.0 * 1000.0 / 2.0);
+    clock.tick(49999);
+    CHECK(rd(timer, INTR) == 0);
+    clock.tick(1);
+    CHECK(rd(timer, INTR) == 0x1 && rd(timer, TIMERAWL) == now + 100);
+
+    // The tick stops: the count freezes and an armed alarm waits; it does not fire however long the clock runs.
+    clear(rec);
+    timer.write_atomic(ALARM1, now + 150, kAtomicNormal);
+    CHECK(clock.has_alarm());
+    timer.tick_changed(0.0);
+    CHECK(!clock.has_alarm() && rd(timer, ARMED) == 0x2);
+    const uint32_t frozen = rd(timer, TIMERAWL);
+    clock.tick(1e9);
+    CHECK(rd(timer, TIMERAWL) == frozen && (rd(timer, INTR) & 0x2) == 0);
+    // It starts again at the nominal rate: 50 counts to the alarm (it is at now + 100, the alarm at now + 150).
+    timer.tick_changed(1e6);
+    CHECK(rd(timer, TIMERAWL) == frozen && clock.has_alarm() && clock.nanos_to_next_alarm() == 50.0 * 1000.0);
+    clock.tick(50000);
+    CHECK((rd(timer, INTR) & 0x2) != 0);
+
+    // Every armed alarm is taken off the clock when the tick stops, and put back when it runs again.
+    timer.tick_changed(1e6);
+    for (uint32_t i = 0; i < 4; ++i) timer.write_atomic(ALARM0 + 4 * i, rd(timer, TIMERAWL) + 1000 + 100 * i, kAtomicNormal);
+    CHECK(rd(timer, ARMED) == 0xF && clock.has_alarm());
+    timer.tick_changed(0.0);
+    CHECK(!clock.has_alarm() && rd(timer, ARMED) == 0xF);
+    timer.tick_changed(1e6);
+    CHECK(clock.has_alarm() && clock.nanos_to_next_alarm() == 1000.0 * 1000.0);
+    clock.tick(1400000);
+    CHECK(rd(timer, ARMED) == 0 && (rd(timer, INTR) & 0xF) == 0xF);
+    timer.write_atomic(INTR, 0xF, kAtomicNormal);
+    clear(rec);
+
+    // PAUSE and the tick are two reasons to be frozen: the count moves only when neither holds.
+    timer.write_atomic(PAUSE, 1, kAtomicNormal);
+    timer.tick_changed(0.0);
+    timer.write_atomic(PAUSE, 0, kAtomicNormal);
+    CHECK(rd(timer, PAUSE) == 0);
+    const uint32_t still = rd(timer, TIMERAWL);
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == still);  // the tick is still stopped
+    timer.tick_changed(1e6);
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == still + 1);
+    timer.write_atomic(PAUSE, 1, kAtomicNormal);
+    timer.tick_changed(2e6);  // a change of rate while paused does not start the count
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == still + 1);
+    timer.write_atomic(PAUSE, 0, kAtomicNormal);
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == still + 3);  // 1 us at 2 MHz = 2 counts
+
+    // A reset restarts the count from zero and keeps the tick: the tick is not one of the block's registers.
+    CHECK(timer.reset());
+    CHECK(rd(timer, TIMERAWL) == 0 && timer.tick_hz() == 2e6);
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == 2);
+    // A reset while the tick is stopped leaves the count at zero until it runs.
+    timer.tick_changed(0.0);
+    CHECK(timer.reset());
+    clock.tick(1000);
+    CHECK(rd(timer, TIMERAWL) == 0);
+    timer.detach();
+}
+
 int main() {
+    check_the_tick();
     Clock clock;
     Recorder rec;
     TimerBlock timer;
@@ -68,6 +161,15 @@ int main() {
     host.lines[2] = 12;
     host.lines[3] = 13;
     timer.init(&clock, host);
+
+    // A bare block does not count: the watchdog's tick is not running ("The Watchdog tick must be running for the timer to start counting", datasheet 4.6.4).
+    clock.tick(5000);
+    CHECK(rd(timer, TIMERAWL) == 0 && timer.tick_hz() == 0.0);
+    timer.write_atomic(ALARM2, 100, kAtomicNormal);  // armed, and waiting for the tick
+    CHECK(rd(timer, ARMED) == 0x4 && !clock.has_alarm());
+    timer.write_atomic(ARMED, 0x4, kAtomicNormal);
+    clear(rec);
+    timer.tick_changed(1e6);  // the nominal tick: one count per microsecond
 
     // The count is microseconds since the epoch; TIMELR latches the high word that TIMEHR then returns.
     CHECK(rd(timer, TIMELR) == 0 && rd(timer, TIMERAWL) == 0);

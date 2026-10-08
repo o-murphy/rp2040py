@@ -4,6 +4,7 @@ tell a faithful replay from a broken one - here with the Python TIMER against it
 
 import pytest
 from utils.mmio_trace import SIO, Mismatch, load, pin_levels, record, replay, save
+from utils.tick import start_tick
 
 from rp2040py.irq import IRQ
 from rp2040py.rp2040 import RP2040
@@ -20,6 +21,7 @@ def _session() -> "list[tuple]":
     mcu = RP2040()
     events = record(mcu, TIMER_KEY, TIMER_IRQS)
     clock = mcu.clock
+    start_tick(mcu)  # the TIMER counts once the watchdog tick runs; the trace carries it as an input (kind "t")
     mcu.write_uint32(TIMER_BASE + INTE + SET_ALIAS, 1)  # an atomic-alias write
     clock.tick(5_000)
     now = mcu.read_uint32(TIMER_BASE + TIMELR)

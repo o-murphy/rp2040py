@@ -28,6 +28,9 @@ struct Env {
     bool handler_fails = false;
     int failed = 0;
     Clock* clock = nullptr;
+    int tick_calls = 0;
+    double tick_values[8] = {};
+    bool tick_fails = false;
 };
 
 static void on_warn(void* ctx, uint32_t kind, uint32_t offset, int64_t value) {
@@ -51,6 +54,17 @@ static bool on_trigger(void* ctx) {
     return true;
 }
 
+static bool on_tick(void* ctx, double hz) {
+    Env* env = static_cast<Env*>(ctx);
+    if (env->tick_calls < 8) env->tick_values[env->tick_calls] = hz;
+    ++env->tick_calls;
+    if (env->tick_fails) {
+        env->failed = 1;
+        return false;
+    }
+    return true;
+}
+
 struct Rig {
     Clock clk;
     WatchdogBlock block;
@@ -60,20 +74,24 @@ struct Rig {
         WatchdogHost host;
         host.warn = on_warn;
         host.trigger = on_trigger;
+        host.tick_changed = on_tick;
         host.ctx = &env;
         host.failed = &env.failed;
         block.init(&clk, host);
+        block.clk_ref_changed(12e6);  // the crystal: clk_ref from XOSC
     }
     ~Rig() { block.detach(); }
+    // What pico-sdk's clocks_init does: the tick generator at 12 cycles of the 12 MHz clk_ref per tick - one microsecond.
+    void start_tick() { CHECK(block.write(REG_TICK, 12 | TICK_ENABLE)); }
     bool us(double n) { return clk.tick(n * 1000.0); }
 };
 
 static void test_reset_values() {
     Rig r;
     CHECK(r.block.read(REG_CTRL) == (PAUSE_DBG0 | PAUSE_DBG1 | PAUSE_JTAG));  // ENABLE resets to 0, the three PAUSE bits to 1
-    CHECK(r.block.read(REG_REASON) == 0 && r.block.read(REG_TICK) == (TICK_RUNNING | TICK_ENABLE));  // TICK.ENABLE resets to 1, CYCLES to 0
+    CHECK(r.block.read(REG_REASON) == 0 && r.block.read(REG_TICK) == TICK_ENABLE);  // TICK.ENABLE resets to 1, CYCLES to 0: the generator is not running
     for (uint32_t offset = SCRATCH0; offset <= SCRATCH7; offset += 4) CHECK(r.block.read(offset) == 0);
-    CHECK(!r.clk.has_alarm() && r.env.warns == 0);
+    CHECK(!r.clk.has_alarm() && r.env.warns == 0 && r.block.tick_hz == 0.0 && r.env.tick_calls == 0);
 }
 
 static void test_tick_keeps_cycles_and_enable() {
@@ -81,10 +99,42 @@ static void test_tick_keeps_cycles_and_enable() {
     CHECK(r.block.write(REG_TICK, 12 | TICK_ENABLE) && r.block.read(REG_TICK) == (12 | TICK_RUNNING | TICK_ENABLE));
     CHECK(r.block.write(REG_TICK, 0xFFFFFFFFu) && r.block.read(REG_TICK) == (0x1FF | TICK_RUNNING | TICK_ENABLE));  // CYCLES is 8:0; RUNNING and COUNT are read-only
     CHECK(r.block.write(REG_TICK, 0x1FF) && r.block.read(REG_TICK) == 0x1FF);  // ENABLE clear: the generator stops
+    CHECK(r.block.write(REG_TICK, TICK_ENABLE) && r.block.read(REG_TICK) == TICK_ENABLE);  // CYCLES 0: not running either
+}
+
+static void test_the_tick_is_clk_ref_divided_by_cycles() {
+    CHECK(tick_frequency(true, 12, 12e6) == 1e6);
+    CHECK(tick_frequency(true, 12, 6.5e6) == 6.5e6 / 12);  // clk_ref still on the ring oscillator: 541.67 kHz, not 1 MHz
+    CHECK(tick_frequency(true, 1, 12e6) == 12e6);
+    CHECK(tick_frequency(false, 12, 12e6) == 0.0 && tick_frequency(true, 0, 12e6) == 0.0 && tick_frequency(true, 12, 0.0) == 0.0);
+    Rig r;
+    r.start_tick();
+    CHECK(r.block.tick_hz == 1e6 && r.env.tick_calls == 1 && r.env.tick_values[0] == 1e6);
+    r.block.write(REG_TICK, 12 | TICK_ENABLE);  // unchanged: nobody is told again
+    CHECK(r.env.tick_calls == 1);
+    r.block.write(REG_TICK, 6 | TICK_ENABLE);
+    CHECK(r.block.tick_hz == 2e6 && r.env.tick_calls == 2 && r.env.tick_values[1] == 2e6);
+    CHECK(r.block.clk_ref_changed(6.5e6));  // firmware switches clk_ref: the tick follows
+    CHECK(r.block.tick_hz == 6.5e6 / 6 && r.env.tick_calls == 3);
+    CHECK(r.block.clk_ref_changed(6.5e6) && r.env.tick_calls == 3);
+    r.block.write(REG_TICK, 6);  // ENABLE clear
+    CHECK(r.block.tick_hz == 0.0 && r.env.tick_calls == 4 && r.env.tick_values[3] == 0.0 && r.block.read(REG_TICK) == 6);
+}
+
+static void test_a_failing_tick_listener_is_a_failure_of_the_write_or_the_clock_change() {
+    Rig r;
+    r.env.tick_fails = true;
+    CHECK(!r.block.write(REG_TICK, 12 | TICK_ENABLE));
+    CHECK(r.block.tick_hz == 1e6 && r.block.read(REG_TICK) == (12 | TICK_RUNNING | TICK_ENABLE));  // the block's own state was already updated
+    r.env.tick_fails = false;
+    r.env.failed = 0;
+    r.env.tick_fails = true;
+    CHECK(!r.block.clk_ref_changed(6e6));
 }
 
 static void test_the_countdown_decrements_twice_per_tick_and_fires_at_zero() {
     Rig r;
+    r.start_tick();
     CHECK(r.block.write(REG_LOAD, 100));  // 100 counts at 2 MHz: 50 us
     CHECK(r.block.write(REG_CTRL, ENABLE | PAUSE_DBG0));
     CHECK(r.block.read(REG_CTRL) == (ENABLE | PAUSE_DBG0 | 100));
@@ -101,15 +151,30 @@ static void test_load_keeps_24_bits() {
     CHECK((r.block.read(REG_CTRL) & TIME_MASK) == 5);
 }
 
+static void test_the_countdown_follows_the_tick_rate() {
+    Rig r;
+    r.block.clk_ref_changed(6e6);  // 6 MHz / 12 = 500 kHz: a count every microsecond (two per tick)
+    r.start_tick();
+    r.block.write(REG_LOAD, 100);
+    r.block.write(REG_CTRL, ENABLE);
+    CHECK(r.clk.nanos_to_next_alarm() == 100000.0);  // 100 counts at 1 MHz (500 kHz * 2)
+    r.block.clk_ref_changed(12e6);  // the crystal: the tick doubles, the countdown with it
+    CHECK(r.clk.nanos_to_next_alarm() == 50000.0);
+    r.block.write(REG_TICK, TICK_ENABLE);  // CYCLES 0: the tick stops, and with it the countdown
+    CHECK(!r.clk.has_alarm() && !r.block.alarm.enable() && !r.block.timer.enable());
+    CHECK(r.block.read(REG_CTRL) & ENABLE);  // CTRL.ENABLE is a register: it reads as written, running or not
+}
+
 static void test_the_counter_runs_only_while_enable_and_tick_enable_are_set() {
     Rig r;
+    r.start_tick();
     r.block.write(REG_LOAD, 1000);
     r.block.write(REG_CTRL, ENABLE);
     CHECK(r.clk.has_alarm());
-    r.block.write(REG_TICK, 0);  // tick stopped: the countdown stops and the alarm goes
-    CHECK(!r.clk.has_alarm() && !(r.block.read(REG_CTRL) & ENABLE) && !r.block.alarm.enable() && !r.block.timer.enable());
+    r.block.write(REG_TICK, 0);  // tick stopped: the countdown stops and the alarm goes (CTRL.ENABLE still reads as written)
+    CHECK(!r.clk.has_alarm() && (r.block.read(REG_CTRL) & ENABLE) && !r.block.alarm.enable() && !r.block.timer.enable());
     CHECK(r.us(1000) && r.env.triggers == 0);
-    r.block.write(REG_TICK, TICK_ENABLE);
+    r.block.write(REG_TICK, 12 | TICK_ENABLE);
     CHECK(r.clk.has_alarm() && (r.block.read(REG_CTRL) & ENABLE));
     r.block.write(REG_CTRL, 0);  // disabled
     CHECK(!r.clk.has_alarm() && !r.block.alarm.enable() && !r.block.timer.enable());
@@ -118,7 +183,7 @@ static void test_the_counter_runs_only_while_enable_and_tick_enable_are_set() {
     r.block.write(REG_CTRL, ENABLE);
     CHECK(!r.clk.has_alarm() && !r.block.alarm.enable() && !r.block.timer.enable());
     r.block.write(REG_CTRL, 0);
-    r.block.write(REG_TICK, TICK_ENABLE);
+    r.block.write(REG_TICK, 12 | TICK_ENABLE);
     CHECK(!r.clk.has_alarm() && !r.block.alarm.enable() && !r.block.timer.enable());
 }
 
@@ -152,6 +217,7 @@ static void test_a_failing_handler_leaves_the_enables_as_they_were() {
 
 static void test_a_failing_timeout_stops_the_clock_at_the_alarm() {
     Rig r;
+    r.start_tick();
     r.block.write(REG_LOAD, 100);
     r.block.write(REG_CTRL, ENABLE);
     r.env.handler_fails = true;
@@ -168,6 +234,24 @@ static void test_scratch_registers_and_reset() {
     CHECK(r.block.reset());
     CHECK(r.block.read(REG_REASON) == 0);
     for (uint32_t i = 0; i < 8; ++i) CHECK(r.block.read(SCRATCH0 + 4 * i) == 0);
+}
+
+static void test_reset_is_a_power_on_reset_of_the_whole_block() {
+    Rig r;
+    r.start_tick();
+    r.block.write(REG_LOAD, 1000);
+    r.block.write(REG_CTRL, ENABLE);  // PAUSE bits cleared too
+    r.block.write(SCRATCH0, 5);
+    CHECK(r.clk.has_alarm() && r.block.tick_hz == 1e6);
+    const int calls = r.env.tick_calls;
+    CHECK(r.block.reset());
+    CHECK(r.block.read(REG_CTRL) == (PAUSE_DBG0 | PAUSE_DBG1 | PAUSE_JTAG));  // disabled, the countdown at 0, PAUSE set again
+    CHECK(r.block.read(REG_TICK) == TICK_ENABLE && r.block.tick_cycles == 0 && r.block.tick_enable);  // ENABLE set, CYCLES 0: not running
+    CHECK(r.block.tick_hz == 0.0 && r.env.tick_calls == calls + 1 && r.env.tick_values[calls] == 0.0);  // the TIMER and SysTick are told it stopped
+    CHECK(!r.clk.has_alarm() && !r.block.timer.enable() && !r.block.alarm.enable() && r.block.read(SCRATCH0) == 0);
+    r.block.write(REG_TICK, 12 | TICK_ENABLE);  // running again
+    r.env.tick_fails = true;
+    CHECK(!r.block.reset());  // the listener is told the tick stopped and fails: reported
 }
 
 static void test_unimplemented_offsets_warn() {
@@ -188,6 +272,7 @@ static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value()
     CHECK(r.block.write_atomic(SCRATCH0, 0x0F, kAtomicSet) && r.block.raw_write_value() == 0x0F && r.block.read(SCRATCH0) == 0x0F);
     CHECK(r.block.write_atomic(SCRATCH0, 0x03, kAtomicClear) && r.block.read(SCRATCH0) == 0x0C);
     CHECK(r.block.write_atomic(SCRATCH0, 0xFF, kAtomicXor) && r.block.read(SCRATCH0) == 0xF3);
+    r.start_tick();
     CHECK(r.block.write_atomic(REG_CTRL, ENABLE, kAtomicSet));  // the SDK's hw_set_bits(CTRL, ENABLE): the read has the PAUSE bits, so they are written back as 1
     CHECK(r.block.read(REG_CTRL) & ENABLE);
 }
@@ -198,6 +283,7 @@ static void test_a_new_block_the_window_handler_and_detach() {
         WindowHandler handler = r.block.window_handler();
         handler.write32(handler.ctx, SCRATCH7, 7, kAtomicNormal);
         CHECK(handler.read32(handler.ctx, SCRATCH7) == 7);
+        r.start_tick();
         r.block.write(REG_LOAD, 100);
         r.block.write(REG_CTRL, ENABLE);
         CHECK(r.clk.has_alarm());
@@ -209,6 +295,9 @@ static void test_a_new_block_the_window_handler_and_detach() {
 int main() {
     test_reset_values();
     test_tick_keeps_cycles_and_enable();
+    test_the_tick_is_clk_ref_divided_by_cycles();
+    test_a_failing_tick_listener_is_a_failure_of_the_write_or_the_clock_change();
+    test_the_countdown_follows_the_tick_rate();
     test_the_countdown_decrements_twice_per_tick_and_fires_at_zero();
     test_load_keeps_24_bits();
     test_the_counter_runs_only_while_enable_and_tick_enable_are_set();
@@ -217,6 +306,7 @@ int main() {
     test_a_failing_handler_leaves_the_enables_as_they_were();
     test_a_failing_timeout_stops_the_clock_at_the_alarm();
     test_scratch_registers_and_reset();
+    test_reset_is_a_power_on_reset_of_the_whole_block();
     test_unimplemented_offsets_warn();
     test_alias_writes_decode_against_a_read_and_remember_the_raw_value();
     test_a_new_block_the_window_handler_and_detach();

@@ -15,11 +15,13 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
 
     ctypedef void (*WatchdogWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
     ctypedef cppbool (*WatchdogTriggerFn)(void* ctx)
+    ctypedef cppbool (*WatchdogTickFn)(void* ctx, double tick_hz)
 
     cdef cppclass WatchdogHost:
         WatchdogHost() noexcept
         WatchdogWarnFn warn
         WatchdogTriggerFn trigger
+        WatchdogTickFn tick_changed
         void* ctx
         const int* failed
 
@@ -29,6 +31,7 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
         uint32_t scratch[8]
         uint32_t reason
         uint32_t tick_cycles
+        double tick_hz
         cppbool enable
         cppbool tick_enable
         cppbool pause_dbg0
@@ -39,6 +42,8 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
         void detach() noexcept
         int64_t raw_write_value() noexcept
         cppbool fire_timeout() noexcept
+        cppbool clk_ref_changed(double hz) noexcept
+        double clk_ref() noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
@@ -54,3 +59,4 @@ cdef class RPWatchdog:
     cdef public object scratch_data
     cdef public object timer
     cdef public object alarm
+    cdef object _tick_listeners

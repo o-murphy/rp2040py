@@ -35,6 +35,7 @@ static void on_warn(void* ctx, uint32_t kind, uint32_t offset, int64_t value) {
 }
 
 static const double kHz = 1e6;  // one tick per microsecond: a reload of N fires every N+1 microseconds
+static const double kSysTickRefClk = 1e6;  // the watchdog's tick as these checks run it: nominal 1 MHz
 static const uint32_t kIrqMax = 25;
 
 struct Rig {
@@ -47,6 +48,7 @@ struct Rig {
         host.warn = on_warn;
         host.ctx = &warns;
         ppb.init(&cpu, &clk, host, kHz, kIrqMax);
+        ppb.tick_changed(kSysTickRefClk);  // the watchdog's tick is running
     }
     ~Rig() { ppb.detach(); }
     void us(double n) { CHECK(clk.tick(n * 1000.0)); }
@@ -147,6 +149,30 @@ static void check_stopping_and_frequency() {
     CHECK(r.ppb.read(SYST_CVR) == frozen);
     r.ppb.write(SYST_CSR, 1);
     CHECK(r.clk.has_alarm());
+}
+
+// CLKSOURCE 0 (the reset state) is the reference clock - the watchdog's tick - whatever clk_sys is. The tick stopped stops the counter (CSR.ENABLE still reads as written), a different rate retunes it, and
+// CLKSOURCE 1 does not care about the tick at all.
+static void check_the_reference_clock_is_the_watchdogs_tick() {
+    Rig r;
+    r.ppb.write(SYST_RVR, 9);
+    r.ppb.write(SYST_CVR, 0);
+    r.ppb.write(SYST_CSR, 1);
+    CHECK(r.clk.has_alarm() && r.clk.nanos_to_next_alarm() == 10000.0);
+    r.ppb.tick_changed(0.0);  // the tick stops
+    CHECK(r.ppb.timer.frequency() == kSysTickRefClk);  // the timer keeps its last rate: a rate of 0 is never applied
+    CHECK(!r.clk.has_alarm() && !r.ppb.timer.enable() && (r.ppb.read(SYST_CSR) & 1u) == 1u && r.ppb.systick_enable);
+    r.ppb.tick_changed(2e6);  // it runs at twice the rate
+    CHECK(r.ppb.timer.frequency() == 2e6 && r.ppb.timer.enable() && r.clk.nanos_to_next_alarm() == 5000.0);
+    r.ppb.write(SYST_CSR, 5);  // processor clock: the tick does not matter
+    r.ppb.tick_changed(0.0);
+    CHECK(r.ppb.timer.enable() && r.ppb.timer.frequency() == kHz && r.clk.has_alarm());
+    r.ppb.write(SYST_CSR, 1);  // back to the reference clock, which is stopped
+    CHECK(!r.ppb.timer.enable() && !r.clk.has_alarm() && r.ppb.tick_hz() == 0.0);
+    r.ppb.tick_changed(kSysTickRefClk);
+    CHECK(r.ppb.timer.enable() && r.clk.has_alarm());
+    r.ppb.reset();  // a reset stops SysTick but not the tick
+    CHECK(!r.ppb.systick_enable && !r.ppb.timer.enable() && r.ppb.tick_hz() == kSysTickRefClk);
 }
 
 // CLKSOURCE 0 (the reset state) is the 1 MHz reference clock whatever clk_sys is; CLKSOURCE 1 is clk_sys, and follows it.
@@ -297,6 +323,7 @@ static void check_detach_and_clock_destroyed_first() {
         Clock clk;
         PpbHost host;
         ppb.init(&cpu, &clk, host, kHz, kIrqMax);
+        ppb.tick_changed(kSysTickRefClk);
         ppb.write(SYST_CSR, 1);
         CHECK(clk.has_alarm());
         // the clock goes first, with the alarm still armed
@@ -312,6 +339,7 @@ int main() {
     check_a_reload_of_zero_never_fires();
     check_stopping_and_frequency();
     check_the_clock_source();
+    check_the_reference_clock_is_the_watchdogs_tick();
     check_a_cvr_write_clears_countflag();
     check_csr_bits_and_readback();
     check_icsr();

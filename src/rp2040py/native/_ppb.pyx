@@ -9,7 +9,7 @@ chip's native core (the pending and enabled words, the priority bitmaps, VTOR ar
 clock, so it needs the native `SimulationClock` as well - a running SysTick costs no Python. The only thing that stays Python is the logger (the warning for an offset that is not a
 register), reached through a trampoline whose failures are parked in the shared slot of `_pending.pyx`.
 
-The API is the reference's: `systick_count_flag`, `systick_clk_source`, `systick_int_enable`, `systick_reload`, `systick_timer` (a view of the C++ `Timer32` with the reference's
+The API is the reference's: `systick_count_flag`, `systick_clk_source`, `systick_int_enable`, `systick_enable`, `systick_reload`, `systick_timer` (a view of the C++ `Timer32` with the reference's
 attributes: `frequency` is what `update_clocks` retunes), `systick_alarm`, `reset`, plus `BasePeripheral`'s surface.
 """
 
@@ -208,6 +208,22 @@ cdef class RPPPB:
         self._block.reload = <uint32_t> (<int64_t> value)
 
     # --- the reference's methods ------------------------------------------------------------------
+
+    @property
+    def systick_enable(self):
+        return bool(self._block.systick_enable)
+
+    @systick_enable.setter
+    def systick_enable(self, value):
+        self._block.systick_enable = bool(value)
+
+    def tick_changed(self, tick_hz):
+        """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""
+        self._block.tick_changed(<double> tick_hz)
+
+    @property
+    def tick_hz(self):
+        return self._block.tick_hz()
 
     def clk_sys_changed(self, clk_sys):
         """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""

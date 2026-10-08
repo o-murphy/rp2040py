@@ -1,3 +1,5 @@
+from utils.tick import start_tick
+
 from rp2040py.clock.mock_clock import MockClock
 
 ALARM1 = 0x40054014
@@ -28,6 +30,7 @@ def test_disarm_alarm2_via_armed_register(rp2040_factory):
 def test_alarm3_fires_irq3(rp2040_factory):
     clock = MockClock()
     rp2040 = rp2040_factory(clock)
+    start_tick(rp2040)  # the TIMER counts once pico-sdk's clocks_init has started the watchdog tick
     # Arm the alarm
     rp2040.write_uint32(ALARM3, 1000)
     assert rp2040.read_uint32(ARMED) == 0x8
@@ -89,6 +92,7 @@ def test_pause_freezes_the_count_and_holds_back_the_alarms(rp2040_factory):
     """RP2040 datasheet, TIMER PAUSE: "Set high to pause the timer". The count stops, no alarm comes due, and clearing it resumes from the frozen count."""
     clock = MockClock()
     rp2040 = rp2040_factory(clock)
+    start_tick(rp2040)  # the TIMER counts once pico-sdk's clocks_init has started the watchdog tick
     rp2040.write_uint32(ALARM3, 500)
     clock.advance(100)  # 100 us
     rp2040.write_uint32(PAUSE, 1)
@@ -109,6 +113,7 @@ def test_timelw_is_a_latch_and_timehw_sets_the_time(rp2040_factory):
     """RP2040 datasheet, TIMER TIMEHW/TIMELW: "always write timelw before timehw"; the writes "do not get copied to time until timehw is written"."""
     clock = MockClock()
     rp2040 = rp2040_factory(clock)
+    start_tick(rp2040)  # the TIMER counts once pico-sdk's clocks_init has started the watchdog tick
     rp2040.write_uint32(TIMELW, 0x80000000)
     assert rp2040.read_uint32(TIMERAWL) == 0
     rp2040.write_uint32(TIMEHW, 7)
@@ -120,6 +125,7 @@ def test_timelw_is_a_latch_and_timehw_sets_the_time(rp2040_factory):
 def test_an_armed_alarm_follows_the_time_when_it_is_set(rp2040_factory):
     clock = MockClock()
     rp2040 = rp2040_factory(clock)
+    start_tick(rp2040)  # the TIMER counts once pico-sdk's clocks_init has started the watchdog tick
     rp2040.write_uint32(ALARM1, 1000)
     rp2040.write_uint32(TIMELW, 900)
     rp2040.write_uint32(TIMEHW, 0)

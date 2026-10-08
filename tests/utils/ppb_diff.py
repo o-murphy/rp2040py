@@ -71,6 +71,8 @@ TICKS = (0, 1, 7, 8, 9, 50, 300, 1000, 5000, 20_000, 200_000)
 RELOADS = (0, 1, 2, 5, 10, 100, 1000, 0xFFFFFF, 0x1000000, 0xFFFFFFFF)
 # (no 0.0: a chip never runs at clk_sys == 0 - `update_clocks` ignores it - and the reference raises ZeroDivisionError when it schedules an alarm on such a timer, where the C++ computes an infinite delay)
 FREQUENCIES = (125e6, 48e6, 133e6, 1e6, 12e6, 250e6)
+# the watchdog's tick as it announces it to SysTick (clk_ref / CYCLES; 0: stopped)
+WATCHDOG_TICKS = (0.0, 1e6, 1e6, 1e6, 2e6, 5e5, 6.5e6 / 12, 12e6, 1.5e6)
 
 
 class Rig:
@@ -117,6 +119,8 @@ class Rig:
             chip.clock.tick(op[1])
         elif kind == "irq":
             chip.set_interrupt(op[1], bool(op[2]))
+        elif kind == "hz":  # what the watchdog does when its tick changes
+            chip.ppb.tick_changed(op[1])
         elif kind == "freq":  # what update_clocks() does when clk_sys changes
             chip.clk_sys = op[1]
             chip.ppb.clk_sys_changed(op[1])
@@ -141,6 +145,8 @@ class Rig:
                 bool(ppb.systick_count_flag),
                 bool(ppb.systick_clk_source),
                 bool(ppb.systick_int_enable),
+                bool(ppb.systick_enable),
+                float(ppb.tick_hz),
                 int(ppb.systick_reload),
                 bool(timer.enable),
                 int(timer.mode),
@@ -185,16 +191,35 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "systick_no_count_flag": ("            self.systick_count_flag = True\n", "            pass\n", 1),
     "systick_ignores_int_enable": ("            if self.systick_int_enable:\n", "            if True:\n", 1),
     "source_ignored": (
-        "frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK",
+        "frequency = self.clk_sys if self.systick_clk_source else self.tick_hz",
         "frequency = self.clk_sys",
         1,
     ),
     "source_inverted": (
-        "frequency = self.clk_sys if self.systick_clk_source else SYSTICK_REF_CLK",
-        "frequency = SYSTICK_REF_CLK if self.systick_clk_source else self.clk_sys",
+        "frequency = self.clk_sys if self.systick_clk_source else self.tick_hz",
+        "frequency = self.tick_hz if self.systick_clk_source else self.clk_sys",
         1,
     ),
-    "ref_clk_wrong": ("SYSTICK_REF_CLK = 1e6", "SYSTICK_REF_CLK = 2e6", 1),
+    "ref_clk_fixed_at_1mhz": (
+        "frequency = self.clk_sys if self.systick_clk_source else self.tick_hz",
+        "frequency = self.clk_sys if self.systick_clk_source else 1e6",
+        1,
+    ),
+    "tick_change_ignored": (
+        "        self.tick_hz = tick_hz\n        self._retune_systick()\n",
+        "        self._retune_systick()\n",
+        1,
+    ),
+    "tick_change_not_applied": (
+        "        self.tick_hz = tick_hz\n        self._retune_systick()\n",
+        "        self.tick_hz = tick_hz\n",
+        1,
+    ),
+    "stopped_clock_keeps_counting": (
+        "self.systick_timer.enable = self.systick_enable and frequency > 0",
+        "self.systick_timer.enable = self.systick_enable",
+        1,
+    ),
     "clk_sys_change_ignored": (
         "        self.clk_sys = clk_sys\n        self._retune_systick()\n",
         "        self._retune_systick()\n",
@@ -250,7 +275,7 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
     "csr_clk_source_bit": ("clk_source_value = (1 << 2) if", "clk_source_value = (1 << 3) if", 1),
     "csr_tickint_bit": ("tick_int_value = (1 << 1) if", "tick_int_value = (1 << 2) if", 1),
     "csr_enable_reads_zero": (
-        "enable_flag_value = (1 << 0) if self.systick_timer.enable else 0",
+        "enable_flag_value = (1 << 0) if self.systick_enable else 0",
         "enable_flag_value = 0",
         1,
     ),
@@ -265,7 +290,7 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         1,
     ),
     "csr_write_enable_ignored": (
-        "            self.systick_timer.enable = bool(value & (1 << 0))\n",
+        "            self.systick_enable = bool(value & (1 << 0))\n",
         "            pass\n",
         1,
     ),
@@ -526,7 +551,7 @@ def _value(r: random.Random, offset: int) -> int:
 
 def generate(seed: int, steps: int) -> list[tuple]:
     r = random.Random(seed)
-    ops: list[tuple] = []
+    ops: list[tuple] = [("hz", 1e6)]  # the SDK starts the watchdog tick before anything counts on it
     while len(ops) < steps:
         roll = r.random()
         if roll < 0.12:
@@ -548,8 +573,10 @@ def generate(seed: int, steps: int) -> list[tuple]:
             ops.append(("irq", r.randrange(IRQ_COUNT), r.random() < 0.5))
         elif roll < 0.88:
             ops.append(("freq", r.choice(FREQUENCIES)))
-        elif roll < 0.95:
+        elif roll < 0.93:
             ops.append(("service",))
+        elif roll < 0.97:
+            ops.append(("hz", r.choice(WATCHDOG_TICKS)))
         else:
             ops.append(("reset",))
     return ops[:steps]

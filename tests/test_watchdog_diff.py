@@ -56,7 +56,7 @@ def test_a_change_of_the_reference_logic_is_caught(mutant):
 
 def test_the_runs_exercise_what_they_claim_to():
     total: dict[str, int] = {}
-    for seed in (1, 2, 3):
+    for seed in (1, 2, 3, 4, 5, 6):
         for name, count in coverage(generate(seed, 3000)).items():
             total[name] = total.get(name, 0) + count
     for name in (
@@ -71,9 +71,12 @@ def test_the_runs_exercise_what_they_claim_to():
         "log.entries",
         "trigger.ok",
         "trigger.raising",
-        "trigger.by_timeout",
         "trigger.by_ctrl",
-        "exception",
         "state.armed",
+        "state.counting",
+        "tick.changes.running",
+        "tick.changes.stopped",
     ):
         assert total.get(name, 0) >= 20, (name, total)
+    assert total.get("exception", 0) >= 10, total  # the handler failing
+    assert total.get("trigger.by_timeout", 0) >= 10, total  # a timeout needs the tick, ENABLE and a LOAD to line up
