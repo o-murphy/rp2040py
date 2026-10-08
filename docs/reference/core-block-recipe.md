@@ -8,7 +8,7 @@ The checklist every block of `src/rp2040py/native/core/` follows (record
 
 The steps below make the C++ equal to the Python reference; they say nothing about whether the reference is *right*. That is settled first, from real sources, by the method of record
 [0098](../records/0098-datasheet-conformance-audit.md) ("Method") - the same "3g rule" as for devices: every hardware fact is cited to an upstream source, never taken from memory or from
-what looks plausible. The order that worked for SYSINFO/TBMAN (0098, "SYSINFO and TBMAN"):
+what looks plausible. This applies to every block that is ported from now on - ROSC, IO_BANK0/PADS_BANK0, XIP_CTRL, USB and the clock tree among them: it is not an audit to do afterwards, it is the first step of the port, followed by the oracle and the rest of this recipe in the same pass (the blocks ported earlier were audited after the fact, record 0098). The order that worked for SYSINFO/TBMAN (0098, "SYSINFO and TBMAN"):
 
 1. **Get the datasheet as text** (not in the repo): `pdftotext -layout rp2040-datasheet.pdf rp2040.txt` from
    <https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf>. Run the mechanical pass on the block:
