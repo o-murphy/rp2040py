@@ -270,6 +270,7 @@ measurement or a test, and says what *stays in Python* afterwards. A phase is no
 - Parity test native<->wasm like bclibc's `tests/wasm_parity/parity.py`: identical register/memory/pin-event traces for the same firmware.
 - Integrate with `wasmhost` as a fallback tier below the Cython extension (the Python peripherals/boards keep working through imports,
   at 4-200 us per call - fine for rare windows, not for hot blocks, which by now are all in the module).
+- **To try once the exit below holds (proposed 2026-10-08, [0099](0099-wasm-drop-in-for-rp2040js.md), nothing designed):** a drop-in TypeScript wrapper over the wasm module that exposes the original rp2040js's public API, dropped into rp2040js itself, with rp2040js's own spec suite as a second acceptance test.
 - Exit: MicroPython boots to the REPL on wasmtime and node from the same wasm blob; per-backend instr/s and the batch-size
   requirement (>=10k instr per call) recorded; Pyodide/Emscripten Cython build (already configured in `setup.py`) re-checked, since that
   path keeps the same-process zero-copy.
