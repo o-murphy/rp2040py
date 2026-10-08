@@ -42,9 +42,11 @@ RESET_ADC = 0x00000001
 class RPReset(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str):
         super().__init__(rp2040, name)
+        # The datasheet resets RESET to 0x1FFFFFF ("every peripheral ... is held in reset at power-up", 2.14.1). The model
+        # does not gate a peripheral on its RESET bit, so it starts with every bit clear (out of reset), which is what the
+        # bootrom and the SDK's unreset leave behind for everything firmware uses. Deliberate, not independently sourced.
         self._reset = 0
         self._wdsel = 0
-        self._reset_done = 0x1FFFFFF
 
     @property
     def wdsel(self) -> int:
@@ -60,7 +62,9 @@ class RPReset(BasePeripheral):
         if offset == WDSEL:
             return self._wdsel
         if offset == RESET_DONE:
-            return self._reset_done
+            # "a bit for each peripheral, that gets set once the peripheral is out of reset" (2.14.2): the model's
+            # peripherals come out of reset at once, so a bit is set exactly when its RESET bit is clear
+            return ~self._reset & RESETS_BITS_MASK
         return super().read_uint32(offset)
 
     def write_uint32(self, offset: int, value: int) -> None:

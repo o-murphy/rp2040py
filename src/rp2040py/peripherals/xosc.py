@@ -14,7 +14,9 @@ XOSC_DORMANT = 0x08
 XOSC_STARTUP = 0x0C
 XOSC_COUNT = 0x1C
 
-# CTRL register bits
+# CTRL register bits (datasheet 2.16.7, table 259: 31:24 reserved)
+CTRL_MASK = 0x00FFFFFF
+CTRL_FREQ_RANGE_1_15MHZ = 0xAA0  # "resets to 0xAA0 and cannot be changed"
 CTRL_ENABLE_LSB = 12
 CTRL_ENABLE_BITS = 0x00FFF000
 CTRL_FREQ_RANGE_BITS = 0x00000FFF
@@ -33,7 +35,8 @@ STATUS_FREQ_RANGE_BITS = 0x00000003
 DORMANT_VALUE = 0x636F6D61  # "coma" in ASCII
 WAKE_VALUE = 0x77616B65  # "wake" in ASCII
 
-# STARTUP register bits
+# STARTUP register bits; the reset delay 0xC4 is "approx 50 000 cycles" (table 262)
+STARTUP_RESET = 0xC4
 STARTUP_X4 = 0x00100000  # bit 20
 STARTUP_DELAY_BITS = 0x00003FFF
 
@@ -41,10 +44,10 @@ STARTUP_DELAY_BITS = 0x00003FFF
 class RPXOSC(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str):
         super().__init__(rp2040, name)
-        self._ctrl = 0
+        self._ctrl = CTRL_FREQ_RANGE_1_15MHZ
         self._status = 0
-        self._dormant = 0
-        self._startup = 0
+        self._dormant = WAKE_VALUE
+        self._startup = STARTUP_RESET
         self._count = 0
         self._enabled = False
         self._stable = False
@@ -62,10 +65,10 @@ class RPXOSC(BasePeripheral):
         Restoring construction state is also exactly the state a cold boot starts from here, which
         is what makes this safe: firmware re-runs `xosc_init()` either way, and this model becomes
         stable the instant it is enabled (see `write_uint32()` below)."""
-        self._ctrl = 0
+        self._ctrl = CTRL_FREQ_RANGE_1_15MHZ
         self._status = 0
-        self._dormant = 0
-        self._startup = 0
+        self._dormant = WAKE_VALUE
+        self._startup = STARTUP_RESET
         self._count = 0
         self._enabled = False
         self._stable = False
@@ -96,7 +99,13 @@ class RPXOSC(BasePeripheral):
 
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == XOSC_CTRL:
-            self._ctrl = value
+            value &= CTRL_MASK
+            if value & CTRL_FREQ_RANGE_BITS != CTRL_FREQ_RANGE_1_15MHZ:
+                # "FREQ_RANGE ... resets to 0xAA0 and cannot be changed"; STATUS.BADWRITE: "An invalid value has been
+                # written to CTRL_ENABLE or CTRL_FREQ_RANGE or DORMANT"
+                self._status |= STATUS_BADWRITE
+                self.warn(f"Invalid FREQ_RANGE value written: 0x{value & CTRL_FREQ_RANGE_BITS:x}")
+            self._ctrl = (value & CTRL_ENABLE_BITS) | CTRL_FREQ_RANGE_1_15MHZ
             enable_value = (value & CTRL_ENABLE_BITS) >> CTRL_ENABLE_LSB
 
             if enable_value == CTRL_ENABLE_ENABLE:
@@ -122,11 +131,16 @@ class RPXOSC(BasePeripheral):
             if value == DORMANT_VALUE:
                 self._is_dormant = True
                 self._stable = False
-            elif value == WAKE_VALUE:
+                self._dormant = value
+            else:
+                if value != WAKE_VALUE:
+                    # "An invalid write will also select WAKE" (table 261), and sets STATUS.BADWRITE
+                    self._status |= STATUS_BADWRITE
+                    self.warn(f"Invalid DORMANT value written: 0x{value:x}")
                 self._is_dormant = False
                 if self._enabled:
                     self._stable = True
-            self._dormant = value
+                self._dormant = WAKE_VALUE
 
         elif offset == XOSC_STARTUP:
             self._startup = value & (STARTUP_X4 | STARTUP_DELAY_BITS)
