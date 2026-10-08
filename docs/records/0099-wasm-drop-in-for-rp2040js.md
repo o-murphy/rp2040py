@@ -16,6 +16,15 @@ What it would buy, in the order it matters:
 2. **A real second host, early.** The 2026-10-06 gate asks that the core run with an *empty* host interface and only the world supplied. A drop-in wrapper is the strictest version of that: a host written in another language, by the API of someone else's project, that cannot reach into the core's internals.
 3. **Speed for the existing rp2040js users** (Wokwi and others), which is the reason the original exists.
 
+## Step zero: measure how far we are from the original (not done)
+
+The maintainer's doubt (2026-10-08): it is not certain how far rp2040py has moved from the original emulator, so a drop-in may not be possible at all. Before anything above is worth designing, make two lists and read their overlap:
+
+1. **The public surface of rp2040js** that real projects use (the exports of its package, the members of `RP2040`, `GPIOPin`, the peripherals and the simulator/clock that Wokwi and other embedders touch), against ours class by class and member by member. Class names were inherited (`RP2040RTC`, `RPWatchdog`...) but the members and the types have not been compared.
+2. **The behavioural differences**, which are known in part: everything [0098](0098-datasheet-conformance-audit.md) corrected against the datasheet (the TIMER and the RTC count only once firmware has configured their clocks, the PWM phase-correct output, the DMA pacing timers, I2C, UART/SPI DREQs, the PIO rules, the interpolator), and what was added that the original does not have (per-block reset cascade with PSM/RESETS WDSEL, the reset of the clock tree, bootrom B0/B1/B2, the USB CDC host, CYW43), plus the architecture (bus window table, the C++ batch loop, the thread-free engine) wherever a user reads internal state.
+
+The overlap says how many of rp2040js's own specs would pass unchanged. A large gap points to fork (b), or to an API of our own and no drop-in; a small one makes wrapper (a) realistic. Until this is done, the rest of this record is only a direction. **This is a lower priority than the C++ port and the audit of [0096](0096-cpp-mcu-core.md) and [0098](0098-datasheet-conformance-audit.md), which are the main work; nothing here is started.**
+
 ## What has to be checked before it is more than a wish (all unknown today)
 
 - **The size of rp2040js's public surface** that projects really use (`RP2040`, `Simulator`/clock, `GPIOPin` and its listeners, `uart[n]`, `spi`/`i2c`/`adc`/`pio`/`usb` hooks, `loadBootrom`, `core` registers and the GDB server) and which of its members are internal state the core does not and will not have. A wrapper can only be a drop-in for the part that is an API and not a data structure.
