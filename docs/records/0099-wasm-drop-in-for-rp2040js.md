@@ -8,6 +8,8 @@
 
 rp2040py began as a port of [wokwi/rp2040js](https://github.com/wokwi/rp2040js) (TypeScript) and still tracks it: the 1.4.0 copy-list of 0096, the `clocks.spec.ts`-derived tests, the `package.json` pin. When the C++ core is built as a WASM reactor (0096, Phase 6), the same module could be wrapped in a **TypeScript layer that exposes rp2040js's own public API** - the classes and members a rp2040js user already writes against - so that it is dropped into rp2040js in place of its hand-written TypeScript peripherals and CPU, or, the other way round, a rp2040js project swaps its import and runs on the C++ core.
 
+**Two ways to land it, to be chosen when it is real:** (a) the wrapper above, which leaves rp2040js untouched and only has to honour its API; or (b) **a fork of rp2040js with patches**, where the TypeScript peripherals and CPU are replaced by calls into the wasm module inside the fork itself, so the API stays whatever the fork's code says and nothing has to be imitated from outside. (b) is less work per member and lets the fork change what (a) could not (a data structure a project reads directly, a callback shape), at the price of a long-lived fork that has to follow upstream (1.x releases, the copy-list of 0096) and may never be accepted back. (a) can later turn into (b) if its list of unimitable members grows; the other direction is harder.
+
 What it would buy, in the order it matters:
 
 1. **A second, independent acceptance test.** rp2040js has its own spec suite. Running those specs, unchanged, against the wrapped core says whether the core still behaves as the code it descends from, from outside our test tree. Where a spec fails, either the core regressed or the spec encodes rp2040js behaviour that [0098](0098-datasheet-conformance-audit.md) found to be wrong against the datasheet - and which of the two it is gets written down, block by block, the way 0098 does.
@@ -24,4 +26,4 @@ What it would buy, in the order it matters:
 
 ## What this does not decide
 
-Whether the wrapper lives in this repository or in a separate one; whether it targets rp2040js 1.x only; and whether it is done at all. Phase 6 first has to boot MicroPython to the REPL on the same wasm blob under wasmtime and node (0096's exit criterion); this note is only the next question once that holds.
+Wrapper (a) or fork (b); whether it lives in this repository or in a separate one; whether it targets rp2040js 1.x only; and whether it is done at all. Phase 6 first has to boot MicroPython to the REPL on the same wasm blob under wasmtime and node (0096's exit criterion); this note is only the next question once that holds.
