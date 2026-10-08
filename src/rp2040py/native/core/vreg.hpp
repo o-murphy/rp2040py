@@ -27,7 +27,8 @@ struct VregHost {
 namespace vreg_regs {
 constexpr uint32_t REG_VREG = 0x0, REG_BOD = 0x4, REG_CHIP_RESET = 0x8;
 constexpr uint32_t VREG_RESET = 0xB1, BOD_RESET = 0x91, VREG_WRITABLE = 0xF3, BOD_WRITABLE = 0xF1;
-constexpr uint32_t HAD_POR = 1u << 8, HAD_RUN = 1u << 16, HAD_PSM_RESTART = 1u << 20, PSM_RESTART_FLAG = 1u << 24;
+constexpr uint32_t HAD_POR = 1u << 8, PSM_RESTART_FLAG = 1u << 24;
+[[maybe_unused]] constexpr uint32_t HAD_RUN = 1u << 16, HAD_PSM_RESTART = 1u << 20;  // the cause flags a caller passes to record_reset_cause()
 }  // namespace vreg_regs
 
 class VregBlock {

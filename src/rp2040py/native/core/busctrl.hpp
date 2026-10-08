@@ -25,7 +25,8 @@ struct BusctrlHost {
 };
 
 namespace busctrl_regs {
-constexpr uint32_t BUS_PRIORITY = 0x00, BUS_PRIORITY_ACK = 0x04, PERFCTR0 = 0x08, PERFSEL0 = 0x0C, PERFSEL3 = 0x24;
+constexpr uint32_t BUS_PRIORITY = 0x00, BUS_PRIORITY_ACK = 0x04, PERFCTR0 = 0x08, PERFSEL3 = 0x24;
+[[maybe_unused]] constexpr uint32_t PERFSEL0 = 0x0C;  // only the C++ checks (and the shell) name it
 constexpr uint32_t BUS_PRIORITY_MASK = 0x1111, PERFSEL_MASK = 0x1F;
 }  // namespace busctrl_regs
 
