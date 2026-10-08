@@ -212,13 +212,16 @@ def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):
 
 
 def test_the_remaining_register_blocks_reset_too(rp2040_factory):
-    """RTC and BUSCTRL were the last two `RESETS` blocks inheriting the no-op default. SYSCFG/
-    SYSINFO/TBMAN still do, and correctly - they hold no instance state at all."""
+    """RTC and BUSCTRL were the last two `RESETS` blocks inheriting the no-op default. SYSCFG joined them when
+    its register file was read against the datasheet (0098); SYSINFO/TBMAN still inherit it, and correctly -
+    they hold no instance state at all."""
     rp2040 = rp2040_factory()
     rp2040.rtc.ctrl = 0xF
     rp2040.rtc.setup0 = 0x1234
     rp2040.busctrl.perf_ctr[1] = 99
     rp2040.busctrl.perf_sel[1] = 0
+    rp2040.syscfg.write_uint32(0x14, 0xFFFFFFFF)  # DBGFORCE
+    rp2040.syscfg.write_uint32(0x00, 0xFF)  # PROC0_NMI_MASK, the core's
 
     rp2040.reset(preserve_flash=True)
 
@@ -226,6 +229,8 @@ def test_the_remaining_register_blocks_reset_too(rp2040_factory):
     assert rp2040.rtc.setup0 == 0
     assert rp2040.busctrl.perf_ctr == [0, 0, 0, 0]
     assert rp2040.busctrl.perf_sel == [0x1F, 0x1F, 0x1F, 0x1F]
+    assert rp2040.syscfg.read_uint32(0x14) == 0x66
+    assert rp2040.syscfg.read_uint32(0x00) == 0
 
 
 def test_xip_and_ssi_are_gated_on_the_psm_xip_domain_not_a_resets_bit(rp2040_factory):
