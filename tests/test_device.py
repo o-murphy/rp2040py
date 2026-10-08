@@ -138,7 +138,8 @@ def _serve_queued_execs(device: MicroPythonDevice, replies: "list[bytes]") -> No
     # answering whichever request currently owns the REPL, one at a time.
     last_handler = None
     for reply in replies:
-        while device.cdc.on_serial_data is last_handler:
+        # `is None` too: between two execs the previous runner's stop() clears on_serial_data before the next start() installs its own, and a reply sent into that gap is dropped.
+        while device.cdc.on_serial_data is None or device.cdc.on_serial_data is last_handler:
             time.sleep(0.001)
         # Capture *before* replying, not after: the final on_serial_data call below can
         # cascade all the way into starting the next queued exec on the engine-room loop (its
@@ -174,7 +175,10 @@ def test_a_queued_exec_erroring_does_not_stall_the_ones_behind_it(garbage_image)
 
         def _next_handler():
             nonlocal last_handler
-            while device.cdc.on_serial_data is last_handler:
+            # Wait for the *next runner's* handler, not merely for a change: between two execs the previous runner's stop() sets
+            # `on_serial_data` to None before the next one's start() installs its own, and a reply sent into that gap is dropped
+            # (the exec behind it then waits for ever). A slow runner (the AddressSanitizer job) makes the gap long enough to hit.
+            while device.cdc.on_serial_data is None or device.cdc.on_serial_data is last_handler:
                 time.sleep(0.001)
             last_handler = device.cdc.on_serial_data
 
