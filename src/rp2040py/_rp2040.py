@@ -22,30 +22,9 @@ from rp2040py.peripherals._dma import (  # the pure chip's own DMA: the native o
 )
 from rp2040py.peripherals._i2c import RPI2C  # the pure chip's own I2C: the native one is the native chip's
 from rp2040py.peripherals._ppb import RPPPB  # the pure chip's own PPB: the native one is the native chip's
+from rp2040py.peripherals._psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.peripherals._pwm import RPPWM  # the pure chip's own PWM: the native one is the native chip's
-from rp2040py.peripherals._spi import (
-    RPSPI,
-    ISPIDMAChannels,
-)  # the pure chip's own SPI: the native one is the native chip's
-from rp2040py.peripherals._ssi import (
-    RPSSI,  # the pure chip's own SSI: the native one works on the native chip's flash buffer
-)
-from rp2040py.peripherals._syscfg import RP2040SysCfg
-from rp2040py.peripherals._sysinfo import RP2040SysInfo
-from rp2040py.peripherals._tbman import RPTBMAN
-from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native one is the native chip's
-    RPUART,
-    IUARTDMAChannels,
-)
-from rp2040py.peripherals._vreg_and_chip_reset import RPVREGAndChipReset
-from rp2040py.peripherals.clocks import RPClocks, reset_clock_tree, update_clocks
-from rp2040py.peripherals.io import RPIO
-from rp2040py.peripherals.pads import RPPADS
-from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
-from rp2040py.peripherals.pio import RPPIO
-from rp2040py.peripherals.pll import RPPLL
-from rp2040py.peripherals.psm import PSM_BITS_MASK, RPPSM, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
-from rp2040py.peripherals.reset import (
+from rp2040py.peripherals._reset import (
     RESET_ADC,
     RESET_BUSCTRL,
     RESET_DMA,
@@ -69,12 +48,33 @@ from rp2040py.peripherals.reset import (
     RESETS_BITS_MASK,
     RPReset,
 )
+from rp2040py.peripherals._spi import (
+    RPSPI,
+    ISPIDMAChannels,
+)  # the pure chip's own SPI: the native one is the native chip's
+from rp2040py.peripherals._ssi import (
+    RPSSI,  # the pure chip's own SSI: the native one works on the native chip's flash buffer
+)
+from rp2040py.peripherals._syscfg import RP2040SysCfg
+from rp2040py.peripherals._sysinfo import RP2040SysInfo
+from rp2040py.peripherals._tbman import RPTBMAN
+from rp2040py.peripherals._uart import (  # the pure chip's own UART: the native one is the native chip's
+    RPUART,
+    IUARTDMAChannels,
+)
+from rp2040py.peripherals._vreg_and_chip_reset import RPVREGAndChipReset
+from rp2040py.peripherals._xosc import RPXOSC
+from rp2040py.peripherals.clocks import RPClocks, reset_clock_tree, update_clocks
+from rp2040py.peripherals.io import RPIO
+from rp2040py.peripherals.pads import RPPADS
+from rp2040py.peripherals.peripheral import Peripheral, UnimplementedPeripheral
+from rp2040py.peripherals.pio import RPPIO
+from rp2040py.peripherals.pll import RPPLL
 from rp2040py.peripherals.rtc import RP2040RTC
 from rp2040py.peripherals.timer import RPTimer
 from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.peripherals.watchdog import RPWatchdog
 from rp2040py.peripherals.xip_ctrl import RPXIPCtrl
-from rp2040py.peripherals.xosc import RPXOSC
 from rp2040py.qspi_pads import QSPI_PAD_RESET_VALUES
 from rp2040py.sio import RPSIO
 from rp2040py.utils.bit import (

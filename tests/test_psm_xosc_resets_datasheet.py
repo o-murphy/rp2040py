@@ -76,3 +76,12 @@ def test_psm_registers_match_the_tables():
     chip.write_uint32(PSM + 0x0, 0)
     assert chip.read_uint32(PSM + 0xC) == 0  # forced off and not forced on
     assert not messages
+
+
+def test_the_done_registers_are_read_only_and_a_write_is_silent():
+    chip = RP2040()
+    messages = _warnings(chip)
+    chip.write_uint32(PSM + 0xC, 0)
+    chip.write_uint32(RESETS + 8, 0)
+    assert chip.read_uint32(PSM + 0xC) == 0x1FFFF and chip.read_uint32(RESETS + 8) == 0x01FFFFFF
+    assert messages == []
