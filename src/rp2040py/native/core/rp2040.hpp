@@ -1,0 +1,52 @@
+// The one header of the C++ core (docs/records/0096-cpp-mcu-core.md): a host that embeds the chip - a C++ program, a wasm module, a test - writes `#include "rp2040.hpp"` and gets
+// `Mcu` (the chip as one object, the thing to build and run), `McuHost` (the world's side of the interface) and every block header behind them, instead of picking headers one by one.
+// Nothing is defined here; the headers stay self-contained and can be included alone (tests/test_core_cpp.py checks both).
+#ifndef RP2040PY_CORE_RP2040_HPP
+#define RP2040PY_CORE_RP2040_HPP
+
+#include "mcu.hpp"
+
+#include "adc.hpp"
+#include "batch.hpp"
+#include "bus.hpp"
+#include "busctrl.hpp"
+#include "clock.hpp"
+#include "clock_sinks.hpp"
+#include "clocks.hpp"
+#include "core_host.hpp"
+#include "cpu.hpp"
+#include "cpu_ops.hpp"
+#include "dma.hpp"
+#include "fifo.hpp"
+#include "gspi.hpp"
+#include "i2c.hpp"
+#include "interpolator.hpp"
+#include "io.hpp"
+#include "memory_map.hpp"
+#include "pads.hpp"
+#include "pin.hpp"
+#include "pio.hpp"
+#include "pll.hpp"
+#include "ppb.hpp"
+#include "psm.hpp"
+#include "pwm.hpp"
+#include "resets.hpp"
+#include "rosc.hpp"
+#include "rtc.hpp"
+#include "sio.hpp"
+#include "spi.hpp"
+#include "ssi.hpp"
+#include "syscfg.hpp"
+#include "sysinfo.hpp"
+#include "tbman.hpp"
+#include "timer.hpp"
+#include "timer32.hpp"
+#include "uart.hpp"
+#include "usb.hpp"
+#include "vreg.hpp"
+#include "watchdog.hpp"
+#include "window_map.hpp"
+#include "xip_ctrl.hpp"
+#include "xosc.hpp"
+
+#endif  // RP2040PY_CORE_RP2040_HPP

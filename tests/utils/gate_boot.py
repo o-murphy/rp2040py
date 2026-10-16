@@ -4,6 +4,7 @@ The harness is a C++ program that builds an `Mcu` from the world's buffers (the 
 bytes; no Python and no Cython is in it. Here are the pieces the gate tests share.
 """
 
+import os
 import platform
 import shutil
 import subprocess
@@ -18,6 +19,16 @@ CORE = ROOT / "src" / "rp2040py" / "native" / "core"
 FLAGS = ["-std=c++17", "-O2", "-fno-exceptions", "-fno-rtti", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror"]
 if platform.machine().lower() in ("i386", "i686"):
     FLAGS += ["-msse2", "-mfpmath=sse"]  # same reason as setup.py
+
+
+# Under AddressSanitizer (the CI job exports these for the extension build) the harness is built with it as well, so the bare core is checked by the sanitizer too.
+if "-fsanitize=address" in os.environ.get("CXXFLAGS", ""):
+    FLAGS += ["-fsanitize=address", "-fno-omit-frame-pointer", "-g"]
+
+
+def required() -> bool:
+    """CI sets RP2040PY_REQUIRE_NATIVE=1: a gate whose prerequisite is missing is then a failure, never a skip (a skipped gate tests nothing and looks green)."""
+    return os.environ.get("RP2040PY_REQUIRE_NATIVE") == "1"
 
 
 def cxx() -> "str | None":

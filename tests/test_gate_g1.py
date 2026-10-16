@@ -16,7 +16,10 @@ from rp2040py.cli.mklittlefs import build_littlefs_image
 from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
 from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
 
-pytestmark = [needs_processes, pytest.mark.skipif(gate_boot.cxx() is None, reason="no C++ compiler on PATH")]
+pytestmark = [
+    needs_processes,
+    pytest.mark.skipif(gate_boot.cxx() is None and not gate_boot.required(), reason="no C++ compiler on PATH"),
+]
 
 MAIN_PY = b"""\
 import machine
@@ -32,9 +35,14 @@ def _images(tmp_path: Path) -> "tuple[Path, Path]":
     try:
         firmware = retrieve(MICROPYTHON, "1.29.0")
     except OSError as error:  # no network, no cache
-        pytest.skip(f"the MicroPython 1.29.0 image is not available ({error})")
+        firmware, why = None, str(error)
+    else:
+        why = "no network, no cache"
     if firmware is None:
-        pytest.skip("the MicroPython 1.29.0 image is not available (no network, no cache)")
+        message = f"the MicroPython 1.29.0 image is not available ({why})"
+        if gate_boot.required():  # CI: the gate must run
+            pytest.fail(message)
+        pytest.skip(message)
     layout = _flash_layout(MICROPYTHON, "pico")
     flash = gate_boot.flash_from_uf2(
         Path(firmware), layout["fs_start"] + layout["fs_blocksize"] * layout["fs_blockcount"]

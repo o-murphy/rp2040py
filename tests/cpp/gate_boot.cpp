@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "mcu.hpp"
+#include "rp2040.hpp"
 
 using namespace rp2040core;
 
