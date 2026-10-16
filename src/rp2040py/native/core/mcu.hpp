@@ -118,7 +118,7 @@ struct McuHost {
 constexpr uint32_t kRtcBase = 0x4005C000;    // RTC_BASE
 constexpr uint32_t kPwmBase = 0x40050000, kIrqPwm = 4, kDreqPwm0 = 24;  // PWM_BASE, PWM_IRQ_WRAP, DREQ_PWM_WRAP0
 constexpr uint32_t kUsbBase = 0x50110000, kIrqUsb = 5;  // USBCTRL_REGS_BASE, USBCTRL_IRQ
-constexpr uint32_t kXipCtrlBase = 0x14000000, kSsiBase = 0x18000000, kXipAuxBase = 0x50400000, kIrqXip = 6, kDreqXipStream = 37, kDreqXipSsiTx = 38, kDreqXipSsiRx = 39;  // XIP_CTRL_BASE, XIP_SSI_BASE, XIP_AUX_BASE, XIP_IRQ, DREQ_XIP_STREAM / _SSITX / _SSIRX
+constexpr uint32_t kXipCtrlBase = 0x14000000, kSsiBase = 0x18000000, kXipAuxBase = 0x50400000, kIrqXip = 6, kDreqXipStream = 37, kDreqXipSsiTx = 38;  // XIP_CTRL_BASE, XIP_SSI_BASE, XIP_AUX_BASE, XIP_IRQ, DREQ_XIP_STREAM / _SSITX (DREQ_XIP_SSIRX, 39, follows it)
 constexpr uint32_t kPio0Base = 0x50200000, kPio1Base = 0x50300000, kIrqPio0 = 7, kIrqPio1 = 9;  // PIO0_BASE, PIO1_BASE, PIO0_IRQ_0, PIO1_IRQ_0
 constexpr uint32_t kIoBank0Base = 0x40014000, kIoQspiBase = 0x40018000, kPadsBank0Base = 0x4001C000, kPadsQspiBase = 0x40020000;
 constexpr uint32_t kIrqIoBank0 = 13;  // IO_IRQ_BANK0
