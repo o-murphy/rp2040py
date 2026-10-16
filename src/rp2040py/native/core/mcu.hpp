@@ -199,6 +199,8 @@ public:
     void build(const McuHost& host) noexcept {
         host_world_ = host;
         ports_.warn = ports_warn;
+        ports_.irq = ports_irq;
+        ports_.dreq = ports_dreq;
         ports_.chip = this;
         ports_.failed = host.failed;
         if (!cpu.initialised()) {  // the core on the bus; a shell that wants the core's break / BL / log notices has initialised it with its own host already
@@ -301,14 +303,10 @@ public:
         // The PWM: its line, its requests and its pins are the chip's own; the pins read its direction and value words by address. Its pin reads and changes go to the GPIO bank (or the host's, for a bank
         // the host holds).
         PwmHost pw;
-        pw.irq = pwm_irq;
-        pw.dreq = pwm_dreq;
         pw.pin_changed = pwm_pin_changed;
         pw.pin_read = pwm_pin_read;
-        pw.warn = block_warn<kMcuBlockPwm>;
         pw.ctx = this;
-        pw.failed = host.failed;
-        pwm_.init(clock_, pw, clocks_.clk_sys());
+        pwm_.init(clock_, &ports_, kMcuBlockPwm, kIrqPwm, kDreqPwm0, pw, clocks_.clk_sys());
         bus.windows.attach(kPwmBase, pwm_.window_handler());
         for (uint32_t b = 0; b < 2; ++b) {
             pins(b).bind_source(kSrcPwmDirection, &pwm_.gpio_direction);
@@ -378,14 +376,10 @@ public:
             bus.windows.attach(kSsiBase, ssi_.window_handler());
             bind_ssi_cs();
             XipHost xh;
-            xh.warn = block_warn<kMcuBlockXip>;
-            xh.dreq = xip_dreq;
-            xh.dreq_ctx = this;
             xh.clk_sys = xip_clk_sys;
             xh.baudr = xip_baudr;
             xh.ctx = this;
-            xh.failed = host.failed;
-            xip_.init(clock_, flash_, flash_size_, xh);
+            xip_.init(clock_, flash_, flash_size_, &ports_, kMcuBlockXip, kDreqXipStream, xh);
             bus.windows.attach(kXipCtrlBase, xip_.window_handler());
             bus.windows.attach(kXipAuxBase, xip_.aux_window_handler());
             bus.mem.set_xip(xip_.hooks());
@@ -406,12 +400,7 @@ public:
             bus.windows.attach(kUsbBase, usb_.window_handler());
         }
 
-        RtcHost h;
-        h.warn = block_warn<kMcuBlockRtc>;
-        h.irq = rtc_irq;
-        h.ctx = this;
-        h.failed = host.failed;
-        rtc_.init(clock_, h);
+        rtc_.init(clock_, &ports_, kMcuBlockRtc, kIrqRtc);
         bus.windows.attach(kRtcBase, rtc_.window_handler());
 
         // The blocks that only report (group 1 of the clean-up): the chip's one `ChipPorts` and their own id, no per-block host.
@@ -448,14 +437,10 @@ public:
         bus.windows.attach(kTimerBase, timer_.window_handler());
 
         AdcHost ad;
-        ad.irq = adc_irq;
-        ad.dreq = adc_dreq;
         ad.read = adc_read;
         ad.channel_value = adc_channel_value;
-        ad.warn = block_warn<kMcuBlockAdc>;
         ad.ctx = this;
-        ad.failed = host.failed;
-        adc_.init(clock_, ad);
+        adc_.init(clock_, &ports_, kMcuBlockAdc, kIrqAdc, kDreqAdc, ad);
         bus.windows.attach(kAdcBase, adc_.window_handler());
 
         for (uint32_t i = 0; i < 2; ++i) {
@@ -801,6 +786,8 @@ private:
         Mcu* mcu = static_cast<Mcu*>(chip);
         if (mcu->host_world_.warn != nullptr) mcu->host_world_.warn(mcu->host_world_.ctx, block, kind, offset, value);
     }
+    static bool ports_irq(void* chip, uint32_t line, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(line, level); }
+    static bool ports_dreq(void* chip, uint32_t number, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(number, asserted); }
     // A block's `warn(ctx, kind, offset, value)` onto the host's `warn(ctx, block, kind, offset, value)`: the block id is the template's, so every block shares this one function.
     template <McuBlock Block>
     static void block_warn(void* chip, uint32_t kind, uint32_t offset, int64_t value) noexcept {
@@ -847,7 +834,6 @@ private:
     // The SSI's and XIP_CTRL's hosts.
     static bool ssi_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqXip, level); }
     static bool ssi_dreq(void* chip, bool tx, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(tx ? kDreqXipSsiTx : kDreqXipSsiRx, asserted); }
-    static bool xip_dreq(void* chip, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(kDreqXipStream, asserted); }
     static bool xip_clk_sys(void* chip, double* hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         const McuHost& w = m->host_world_;
@@ -868,8 +854,6 @@ private:
         if (!ssi_world_) (void)ssi_.bind_cs(&qspi_bank_, 1);
     }
     // The PWM's host: its line and requests, and the pins it drives and reads (the GPIO bank).
-    static bool pwm_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqPwm, level); }
-    static bool pwm_dreq(void* chip, uint32_t channel) noexcept { return static_cast<Mcu*>(chip)->set_dreq(kDreqPwm0 + channel, true); }
     static bool pwm_pin_changed(void* chip, uint32_t pin) noexcept { return sio_update_pins(chip, 1u << pin, false); }
     static bool pwm_pin_read(void* chip, uint32_t pin, bool* level) noexcept {
         *level = (sio_inputs(static_cast<Mcu*>(chip), 0) >> pin & 1u) != 0;
@@ -973,8 +957,6 @@ private:
     }
     // The blocks of group 2 call these; each raises its line / request on the chip, or hands the world the part it answers for. `ctx` is the Mcu (TIMER, ADC) or a `McuInstance`.
     static bool timer_irq(void* chip, uint32_t line, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(line, level); }
-    static bool adc_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqAdc, level); }
-    static bool adc_dreq(void* chip, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(kDreqAdc, asserted); }
     static bool adc_read(void* chip, uint32_t channel) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         if (m->host_world_.adc_read != nullptr) return m->host_world_.adc_read(m->host_world_.ctx, channel);
@@ -1064,7 +1046,6 @@ private:
         const McuHost& w = i->mcu->host_world_;
         return w.i2c_stop != nullptr ? w.i2c_stop(w.ctx, i->index) : i->mcu->i2c_[i->index].complete_stop();
     }
-    static bool rtc_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqRtc, level); }
 
     PioBlock pio_[kPioBlocks];
     ClocksBlock clocks_;

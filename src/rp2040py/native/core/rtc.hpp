@@ -26,15 +26,6 @@ namespace rp2040core {
 
 constexpr uint32_t kRtcWarnRead = kRegWarnRead, kRtcWarnReadAtomicArea = kRegWarnReadAtomicArea, kRtcWarnWrite = kRegWarnWrite;
 
-using RtcIrqFn = bool (*)(void* ctx, bool level);  // the NVIC line (interrupt 25); false: the failure is parked with the host
-
-struct RtcHost {
-    RegWarnFn warn = nullptr;
-    RtcIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
 
 namespace rtc_regs {
 constexpr uint32_t REG_CLKDIV_M1 = 0x00, REG_SETUP_0 = 0x04, REG_SETUP_1 = 0x08, REG_CTRL = 0x0C, REG_IRQ_SETUP_0 = 0x10, REG_IRQ_SETUP_1 = 0x14;
@@ -67,9 +58,9 @@ public:
     uint32_t year = 0, month = 0, day = 0, dotw = 0, hour = 0, minute = 0, second = 0;
     uint32_t latched_date = 0;  // what RTC_1 reads: the date half as of the last read of RTC_0
 
-    void init(Clock* clock, const RtcHost& host) noexcept {
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line) noexcept {
         clock_ = clock;
-        host_ = host;
+        port_.init(ports, block, irq_line);
         alarm_.fire = &RtcBlock::on_second;
         alarm_.ctx = this;
     }
@@ -77,7 +68,7 @@ public:
     // Unlinks the second from the clock; the owner calls it before the block goes away.
     void detach() noexcept { cancel_alarm(&alarm_); }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
     double clk_rtc() const noexcept { return clk_rtc_; }
 
@@ -126,7 +117,7 @@ public:
     // The raw level, masked and forced, to the NVIC line.
     bool check_interrupts() noexcept {
         const uint32_t raw = raw_interrupt() ? 1u : 0u;
-        return host_.irq == nullptr || raise_irq(((((raw & inte) | intf)) & rtc_regs::INT_RTC) != 0);
+        return raise_irq(((((raw & inte) | intf)) & rtc_regs::INT_RTC) != 0);
     }
 
     // RESETS.RESET_RTC: every register 0, the counter 0, the latch 0, the divider stopped; clk_rtc is the CLOCKS block's and is kept.
@@ -156,10 +147,7 @@ public:
             case REG_INTS: return ((raw_interrupt() ? 1u : 0u) & inte) | intf;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kRtcWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kRtcWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -191,7 +179,7 @@ public:
             case REG_INTS: return true;  // read only
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kRtcWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -267,8 +255,8 @@ private:
     }
 
     Clock* clock_ = nullptr;
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
-    RtcHost host_;
+    bool raise_irq(bool level) noexcept { return port_.irq(level); }
+    BlockPort port_;
     Alarm alarm_;
     double clk_rtc_ = 0.0;  // clk_rtc in Hz, pushed by the chip: 0 = stopped
     int64_t raw_write_value_ = 0;

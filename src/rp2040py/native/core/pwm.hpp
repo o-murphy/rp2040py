@@ -30,23 +30,14 @@
 
 namespace rp2040core {
 
-using PwmIrqFn = bool (*)(void* ctx, bool level);                       // false: failure parked
-using PwmDreqFn = bool (*)(void* ctx, uint32_t channel);                // the DMA request of PWM channel `channel` (DREQ_PWM_WRAP0 + channel); false: failure parked
 using PwmPinChangedFn = bool (*)(void* ctx, uint32_t pin);              // the block changed the word bit of `pin`: the host re-evaluates it; false: failure parked
 using PwmPinReadFn = bool (*)(void* ctx, uint32_t pin, bool* level);    // the input level of `pin`; false: failure parked
 constexpr uint32_t kPwmWarnRead = kRegWarnRead, kPwmWarnReadAtomicArea = kRegWarnReadAtomicArea, kPwmWarnWrite = kRegWarnWrite;
-using PwmWarnFn = RegWarnFn;
 
 struct PwmHost {
-    PwmIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    PwmDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
     PwmPinChangedFn pin_changed = nullptr;
     PwmPinReadFn pin_read = nullptr;
-    PwmWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace pwm_regs {
@@ -207,8 +198,9 @@ public:
     uint32_t gpio_value = 0, gpio_direction = 0;
 
     // Binds the block to its clock and host; `clock_freq` is the system clock the counters run on (the reference reads `rp2040.clk_sys` when it builds the channels).
-    void init(Clock* clock, const PwmHost& host, double clock_freq) noexcept {
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const PwmHost& host, double clock_freq) noexcept {
         clock_ = clock;
+        port_.init(ports, block, irq_line, dreq_base);
         host_ = host;
         clock_freq_ = clock_freq;
         for (uint32_t i = 0; i < pwm_regs::kChannels; ++i) channels[i].init(this, clock, i, clock_freq);
@@ -221,7 +213,7 @@ public:
     }
 
     Clock* clock() const noexcept { return clock_; }
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     double clock_freq() const noexcept { return clock_freq_; }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
@@ -303,10 +295,7 @@ public:
             case INTS: return int_status();
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kPwmWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kPwmWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -332,7 +321,7 @@ public:
                 return check_interrupts();
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kPwmWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -347,8 +336,9 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<PwmBlock>::handler(this); }
 
 private:
-    bool raise_dreq(uint32_t channel) noexcept { return host_.dreq(host_.dreq_ctx != nullptr ? host_.dreq_ctx : host_.ctx, channel); }
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
+    bool raise_dreq(uint32_t channel) noexcept { return port_.dreq(channel, true); }
+    bool raise_irq(bool level) noexcept { return port_.irq(level); }
+    BlockPort port_;
     PwmHost host_;
     Clock* clock_ = nullptr;
     double clock_freq_ = 0.0;

@@ -42,14 +42,19 @@ struct ChipPorts {
     void (*warn)(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) = nullptr;
     void* chip = nullptr;
     const int* failed = nullptr;
+    bool (*irq)(void* chip, uint32_t line, bool level) = nullptr;       // an NVIC line (false: a failure is parked)
+    bool (*dreq)(void* chip, uint32_t number, bool asserted) = nullptr;  // a DMA request
 };
 
 // A block's end of `ChipPorts`: the pointer and the block's own id, and the two messages every register-only block sends for an offset it does not implement.
 class BlockPort {
 public:
-    void init(const ChipPorts* ports, uint32_t block) noexcept {
+    // `irq_line` is the block's NVIC line (the first of them, for a block with several), `dreq_base` its first DMA request: data the chip gives the block, not an adapter.
+    void init(const ChipPorts* ports, uint32_t block, uint32_t irq_line = 0, uint32_t dreq_base = 0) noexcept {
         ports_ = ports;
         block_ = block;
+        irq_line_ = irq_line;
+        dreq_base_ = dreq_base;
     }
     bool failed() const noexcept { return ports_ != nullptr && host_failed(ports_->failed); }
     void warn(uint32_t kind, uint32_t offset, int64_t value) const noexcept {
@@ -61,10 +66,13 @@ public:
         if (offset > 0x1000) warn(kRegWarnReadAtomicArea, offset, 0);
     }
     void unimplemented_write(uint32_t offset, int64_t value) const noexcept { warn(kRegWarnWrite, offset, value); }
+    // The block's line (`index` counts from the first) and its DMA request (`index` from the first). True when the chip has no such port: a block on its own raises nothing.
+    bool irq(bool level, uint32_t index = 0) const noexcept { return ports_ == nullptr || ports_->irq == nullptr || ports_->irq(ports_->chip, irq_line_ + index, level); }
+    bool dreq(uint32_t index, bool asserted) const noexcept { return ports_ == nullptr || ports_->dreq == nullptr || ports_->dreq(ports_->chip, dreq_base_ + index, asserted); }
 
 private:
     const ChipPorts* ports_ = nullptr;
-    uint32_t block_ = 0;
+    uint32_t block_ = 0, irq_line_ = 0, dreq_base_ = 0;
 };
 
 // The value an atomic alias write ends up writing: `raw` is what the bus passed, `current` a *read* of the register (with that read's side effects). The reference

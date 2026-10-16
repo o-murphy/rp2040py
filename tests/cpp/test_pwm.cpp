@@ -64,21 +64,23 @@ static Env env;
 static Clock clk;
 static PwmBlock* block = nullptr;  // a fresh block for every scenario: init() attaches a channel's alarms to its timer once
 #define pwm (*block)
+static ChipPorts ports;
+static constexpr uint32_t kTestDreqBase = 24;  // DREQ_PWM_WRAP0
 
 static void add(int code, uint32_t a, uint64_t b, uint64_t c) {
     if (env.n < Env::kMax) env.events[env.n] = Ev{code, clk.nanos(), a, b, c};
     ++env.n;
 }
 
-static bool on_irq(void*, bool level) {
+static bool on_irq(void*, uint32_t, bool level) {
     const int call = env.irq_calls++;
     add(kIrq, level ? 1u : 0u, 0, 0);
     if (call == env.fail_irq_on) { env.failed = 1; env.total_at_failure = env.total(); return false; }
     return true;
 }
-static bool on_dreq(void*, uint32_t channel) {
+static bool on_dreq(void*, uint32_t number, bool) {
     const int call = env.dreq_calls++;
-    add(kDreq, channel, 0, 0);
+    add(kDreq, number - kTestDreqBase, 0, 0);  // (the vectors name the channel; the chip's request is the base plus the channel)
     if (call == env.fail_dreq_on) { env.failed = 1; env.total_at_failure = env.total(); return false; }
     return true;
 }
@@ -95,7 +97,7 @@ static bool on_pin_read(void*, uint32_t pin, bool* level) {
     return true;
 }
 // The atomic-area message carries no offset in the reference's log, so the vectors do not either.
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) { add(kWarn, kind, kind == kPwmWarnReadAtomicArea ? 0u : offset, static_cast<uint64_t>(value)); }
+static void on_warn(void*, uint32_t, uint32_t kind, uint32_t offset, int64_t value) { add(kWarn, kind, kind == kPwmWarnReadAtomicArea ? 0u : offset, static_cast<uint64_t>(value)); }
 
 static void start() {
     if (block != nullptr) {
@@ -106,13 +108,14 @@ static void start() {
     clk.reset();
     env = Env();
     PwmHost host;
-    host.irq = on_irq;
-    host.dreq = on_dreq;
     host.pin_changed = on_pin_changed;
     host.pin_read = on_pin_read;
-    host.warn = on_warn;
-    host.failed = &env.failed;
-    pwm.init(&clk, host, 125e6);
+    ports = ChipPorts();
+    ports.warn = on_warn;
+    ports.irq = on_irq;
+    ports.dreq = on_dreq;
+    ports.failed = &env.failed;
+    pwm.init(&clk, &ports, 5, 4, kTestDreqBase, host, 125e6);
     CHECK(pwm.reset());
     env.n = 0;  // the construction and the first reset are not part of a scenario
     env.irq_calls = env.dreq_calls = env.pin_changed_calls = env.pin_read_calls = 0;

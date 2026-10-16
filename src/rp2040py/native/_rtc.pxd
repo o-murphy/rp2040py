@@ -12,17 +12,6 @@ cdef extern from "rtc.hpp" namespace "rp2040core":
     cdef const uint32_t kRtcWarnReadAtomicArea
     cdef const uint32_t kRtcWarnWrite
 
-    ctypedef void (*RtcWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-    ctypedef cppbool (*RtcIrqFn)(void* ctx, cppbool level)
-
-    cdef cppclass RtcHost:
-        RtcHost() noexcept
-        RtcWarnFn warn
-        RtcIrqFn irq
-        void* irq_ctx
-        void* ctx
-        const int* failed
-
     cdef cppclass RtcBlock:
         uint32_t clkdiv_m1
         uint32_t setup0
@@ -42,7 +31,6 @@ cdef extern from "rtc.hpp" namespace "rp2040core":
         uint32_t second
         uint32_t latched_date
         RtcBlock() noexcept
-        void init(Clock* clock, const RtcHost& host) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         double clk_rtc() noexcept

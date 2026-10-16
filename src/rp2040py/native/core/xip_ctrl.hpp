@@ -30,18 +30,12 @@ constexpr uint32_t kXipWarnSramRead = 1;   // a read of the cache-as-SRAM while 
 constexpr uint32_t kXipWarnSramWrite = 2;  // the same for a write; `address`
 constexpr uint32_t kXipWarnWrite = 3;      // an unimplemented register write (offset, value)
 
-using XipWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t address, int64_t value);
-using XipDreqFn = bool (*)(void* ctx, bool asserted);       // DREQ_XIP_STREAM; false: failure parked
 using XipRateFn = bool (*)(void* ctx, double* value);       // clk_sys in Hz / SSI.BAUDR (as read); false: failure parked
 
 struct XipHost {
-    XipWarnFn warn = nullptr;
-    XipDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
     XipRateFn clk_sys = nullptr;
     XipRateFn baudr = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;
 };
 
 namespace xip_regs {
@@ -65,10 +59,11 @@ public:
     XipBlock& operator=(const XipBlock&) = delete;
 
     // Binds the block to its clock, the chip's flash buffer and its host. Once, before anything else. Does not reset (the owner calls reset() when the chip is complete).
-    void init(Clock* clock, const uint8_t* flash, uint32_t flash_size, const XipHost& host) noexcept {
+    void init(Clock* clock, const uint8_t* flash, uint32_t flash_size, const ChipPorts* ports, uint32_t block, uint32_t dreq, const XipHost& host) noexcept {
         clock_ = clock;
         flash_ = flash;
         flash_size_ = flash_size;
+        port_.init(ports, block, 0, dreq);
         host_ = host;
         stream_alarm_.fire = &XipBlock::on_stream_alarm;
         stream_alarm_.ctx = this;
@@ -81,7 +76,7 @@ public:
         cancel_alarm(&stream_alarm_);
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The registers and state, public for the shell (the reference's attributes are read and, by tests, written directly).
@@ -144,7 +139,7 @@ public:
             if (ways[0] == tag) ways[0] = INVALID;
             if (ways[1] == tag) ways[1] = INVALID;
         } else if (ctrl & CTRL_ERR_BADWRITE) {
-            if (host_.warn) host_.warn(host_.ctx, kXipWarnBadWrite, address, 0);
+            port_.warn(kXipWarnBadWrite, address, 0);
         }
     }
 
@@ -153,7 +148,7 @@ public:
     // The word at `address` of the `0x15...` segment; 0xFFFFFFFF (and a report) while the cache is enabled or powered down - a bus error the model cannot raise.
     uint32_t sram_read(uint32_t address) noexcept {
         if (!sram_available()) {
-            if (host_.warn) host_.warn(host_.ctx, kXipWarnSramRead, address, 0);
+            port_.warn(kXipWarnSramRead, address, 0);
             return 0xFFFFFFFFu;
         }
         const uint32_t offset = address & (xip_regs::SRAM_SIZE - 1) & ~3u;
@@ -162,7 +157,7 @@ public:
 
     void sram_write(uint32_t address, uint32_t value) noexcept {
         if (!sram_available()) {
-            if (host_.warn) host_.warn(host_.ctx, kXipWarnSramWrite, address, 0);
+            port_.warn(kXipWarnSramWrite, address, 0);
             return;
         }
         const uint32_t offset = address & (xip_regs::SRAM_SIZE - 1) & ~3u;
@@ -234,7 +229,7 @@ public:
             default: break;
         }
         if (offset > REG_STREAM_FIFO) return true;  // cache maintenance past the register block: nothing to do
-        if (host_.warn) host_.warn(host_.ctx, kXipWarnWrite, offset, value);
+        port_.warn(kXipWarnWrite, offset, value);
         return !failed();
     }
 
@@ -293,7 +288,7 @@ private:
     }
 
     // False: a failure is pending.
-    bool update_dreq() noexcept { return host_.dreq(host_.dreq_ctx != nullptr ? host_.dreq_ctx : host_.ctx, fifo_len > 0); }
+    bool update_dreq() noexcept { return port_.dreq(0, fifo_len > 0); }
 
     bool maybe_start_stream() noexcept {
         using namespace xip_regs;
@@ -322,6 +317,7 @@ private:
         if (update_dreq()) maybe_start_stream();
     }
 
+    BlockPort port_;
     XipHost host_;
     Clock* clock_ = nullptr;
     const uint8_t* flash_ = nullptr;

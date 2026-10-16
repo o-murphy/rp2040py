@@ -14,23 +14,10 @@ cdef extern from "xip_ctrl.hpp" namespace "rp2040core":
     cdef const uint32_t kXipWarnSramWrite
     cdef const uint32_t kXipWarnWrite
 
-    ctypedef void (*XipWarnFn)(void* ctx, uint32_t kind, uint32_t address, int64_t value)
-    ctypedef cppbool (*XipDreqFn)(void* ctx, cppbool asserted)
     ctypedef cppbool (*XipRateFn)(void* ctx, double* value)
-
-    cdef cppclass XipHost:
-        XipHost() noexcept
-        XipWarnFn warn
-        XipDreqFn dreq
-        void* dreq_ctx
-        XipRateFn clk_sys
-        XipRateFn baudr
-        void* ctx
-        const int* failed
 
     cdef cppclass XipBlock:
         XipBlock() noexcept
-        void init(Clock* clock, const uint8_t* flash, uint32_t flash_size, const XipHost& host) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         uint32_t ctrl

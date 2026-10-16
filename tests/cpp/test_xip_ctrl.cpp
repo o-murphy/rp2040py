@@ -24,6 +24,7 @@ struct Env {
     uint32_t warn_kind[16], warn_address[16];
     int warns = 0;
     int dreq_calls = 0;
+    uint32_t dreq_number = 0;
     bool dreq_level = false;
     int failed = 0;
     bool fail_dreq = false, fail_clk = false, fail_baudr = false;
@@ -32,16 +33,19 @@ struct Env {
 static Env env;
 static Clock clk;
 static XipBlock xip;
+static ChipPorts ports;
+static constexpr uint32_t kTestDreq = 37;  // DREQ_XIP_STREAM
 static uint8_t flash[0x1000000];
 
-static void on_warn(void*, uint32_t kind, uint32_t address, int64_t) {
+static void on_warn(void*, uint32_t, uint32_t kind, uint32_t address, int64_t) {
     if (env.warns < 16) {
         env.warn_kind[env.warns] = kind;
         env.warn_address[env.warns] = address;
     }
     ++env.warns;
 }
-static bool on_dreq(void*, bool asserted) {
+static bool on_dreq(void*, uint32_t number, bool asserted) {
+    env.dreq_number = number;
     ++env.dreq_calls;
     env.dreq_level = asserted;
     if (env.fail_dreq) {
@@ -72,13 +76,14 @@ static void fresh() {
     clk.reset();
     for (uint32_t i = 0; i < sizeof flash; ++i) flash[i] = static_cast<uint8_t>(i * 7 + 1);
     XipHost host;
-    host.warn = on_warn;
-    host.dreq = on_dreq;
     host.clk_sys = on_clk;
     host.baudr = on_baudr;
-    host.failed = &env.failed;
+    ports = ChipPorts();
+    ports.warn = on_warn;
+    ports.dreq = on_dreq;
+    ports.failed = &env.failed;
     xip.detach();
-    xip.init(&clk, flash, sizeof flash, host);
+    xip.init(&clk, flash, sizeof flash, &ports, 3, kTestDreq, host);
     CHECK(xip.reset());
     env.warns = 0;
 }
@@ -358,15 +363,12 @@ static void test_the_stream() {
         static uint8_t short_image[0x108];
         for (uint32_t i = 0; i < sizeof short_image; ++i) short_image[i] = 0xA0;
         XipHost host;
-        host.warn = on_warn;
-        host.dreq = on_dreq;
         host.clk_sys = on_clk;
         host.baudr = on_baudr;
-        host.failed = &env.failed;
         static uint8_t big[0x200];
         for (uint32_t i = 0; i < sizeof big; ++i) big[i] = 0xB0;
         XipBlock small;
-        small.init(&clk, big, 0x102, host);  // a 0x102 byte image inside a bigger buffer: reading past 0x102 would find 0xB0
+        small.init(&clk, big, 0x102, &ports, 3, kTestDreq, host);  // a 0x102 byte image inside a bigger buffer: reading past 0x102 would find 0xB0
         CHECK(small.reset());
         small.write(REG_STREAM_ADDR, 0x100);
         small.write(REG_STREAM_CTR, 1);

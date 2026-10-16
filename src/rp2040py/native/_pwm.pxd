@@ -42,23 +42,8 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
     cdef const uint32_t kPwmWarnReadAtomicArea
     cdef const uint32_t kPwmWarnWrite
 
-    ctypedef cppbool (*PwmIrqFn)(void* ctx, cppbool level)
-    ctypedef cppbool (*PwmDreqFn)(void* ctx, uint32_t channel)
     ctypedef cppbool (*PwmPinChangedFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PwmPinReadFn)(void* ctx, uint32_t pin, cppbool* level)
-    ctypedef void (*PwmWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass PwmHost:
-        PwmHost() noexcept
-        PwmIrqFn irq
-        void* irq_ctx
-        void* dreq_ctx
-        PwmDreqFn dreq
-        PwmPinChangedFn pin_changed
-        PwmPinReadFn pin_read
-        PwmWarnFn warn
-        void* ctx
-        const int* failed
 
     cdef cppclass PwmChannel:
         Timer32 timer
@@ -107,7 +92,6 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         uint32_t gpio_value
         uint32_t gpio_direction
         PwmBlock() noexcept
-        void init(Clock* clock, const PwmHost& host, double clock_freq) noexcept
         void detach() noexcept
         Clock* clock() noexcept
         double clock_freq() noexcept

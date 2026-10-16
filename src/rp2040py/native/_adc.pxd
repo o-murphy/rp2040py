@@ -25,23 +25,8 @@ cdef extern from "adc.hpp" namespace "rp2040core":
     cdef const uint32_t kAdcWarnReadAtomicArea
     cdef const uint32_t kAdcWarnWrite
 
-    ctypedef cppbool (*AdcIrqFn)(void* ctx, cppbool level)
-    ctypedef cppbool (*AdcDreqFn)(void* ctx, cppbool asserted)
     ctypedef cppbool (*AdcReadFn)(void* ctx, uint32_t channel)
     ctypedef cppbool (*AdcChannelValueFn)(void* ctx, uint32_t channel, int64_t* value)
-    ctypedef void (*AdcWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass AdcHost:
-        AdcHost() noexcept
-        AdcIrqFn irq
-        void* irq_ctx
-        void* dreq_ctx
-        AdcDreqFn dreq
-        AdcReadFn read
-        AdcChannelValueFn channel_value
-        AdcWarnFn warn
-        void* ctx
-        const int* failed
 
     cdef cppclass AdcBlock:
         uint32_t cs
@@ -58,7 +43,6 @@ cdef extern from "adc.hpp" namespace "rp2040core":
         Alarm sample_alarm
         Alarm multi_shot_alarm
         AdcBlock() noexcept
-        void init(Clock* clock, const AdcHost& host) noexcept
         void detach() noexcept
         Clock* clock() noexcept
         int64_t raw_write_value() noexcept
