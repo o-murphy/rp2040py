@@ -16,7 +16,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kResetsWarnRead = kRegWarnRead, kResetsWarnReadAtomicArea = kRegWarnReadAtomicArea, kResetsWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kResetsWarnRead = kRegWarnRead, kResetsWarnReadAtomicArea = kRegWarnReadAtomicArea, kResetsWarnWrite = kRegWarnWrite;
 
 namespace resets_regs {
 constexpr uint32_t REG_RESET = 0x0, REG_WDSEL = 0x4, REG_RESET_DONE = 0x8, BITS_MASK = 0x01FFFFFF;

@@ -35,7 +35,7 @@ namespace rp2040core {
 using TimerIrqFn = bool (*)(void* ctx, uint32_t line, bool level);
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
 using TimerWarnFn = RegWarnFn;
 
 struct TimerHost {

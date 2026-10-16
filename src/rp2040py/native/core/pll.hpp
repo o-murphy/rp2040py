@@ -18,7 +18,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kPllWarnRead = kRegWarnRead, kPllWarnReadAtomicArea = kRegWarnReadAtomicArea, kPllWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kPllWarnRead = kRegWarnRead, kPllWarnReadAtomicArea = kRegWarnReadAtomicArea, kPllWarnWrite = kRegWarnWrite;
 
 using PllRefFn = double (*)(void* ctx);      // the crystal oscillator's output in Hz, 0 while it is not running
 using PllChangedFn = bool (*)(void* ctx);    // a register changed: the clock tree is re-derived; false: a failure is parked

@@ -27,7 +27,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kWatchdogWarnRead = kRegWarnRead, kWatchdogWarnReadAtomicArea = kRegWarnReadAtomicArea, kWatchdogWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kWatchdogWarnRead = kRegWarnRead, kWatchdogWarnReadAtomicArea = kRegWarnReadAtomicArea, kWatchdogWarnWrite = kRegWarnWrite;
 
 using WatchdogTriggerFn = bool (*)(void* ctx);  // the chip's reset; false: the failure is parked with the host
 using WatchdogTickFn = bool (*)(void* ctx, double tick_hz);  // the tick changed (0: stopped): the TIMER and SysTick follow it; false: the failure is parked with the host

@@ -40,7 +40,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kPpbWarnRead = kRegWarnRead, kPpbWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kPpbWarnRead = kRegWarnRead, kPpbWarnWrite = kRegWarnWrite;
 using PpbWarnFn = RegWarnFn;
 
 // AIRCR.SYSRESETREQ with a valid VECTKEY: the host resets the core (datasheet 2.4.2.9: "Reset the core only"). Called from inside the register write.

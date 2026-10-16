@@ -16,7 +16,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kVregWarnRead = kRegWarnRead, kVregWarnReadAtomicArea = kRegWarnReadAtomicArea, kVregWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kVregWarnRead = kRegWarnRead, kVregWarnReadAtomicArea = kRegWarnReadAtomicArea, kVregWarnWrite = kRegWarnWrite;
 
 namespace vreg_regs {
 constexpr uint32_t REG_VREG = 0x0, REG_BOD = 0x4, REG_CHIP_RESET = 0x8;

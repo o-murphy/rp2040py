@@ -46,7 +46,7 @@ using UartByteFn = bool (*)(void* ctx, uint32_t byte);           // a transmitte
 using UartBaudFn = bool (*)(void* ctx);                          // IBRD/FBRD changed: the host announces the new baud rate; false: failure parked
 using UartBitFn = bool (*)(void* ctx, double* nanos);            // the time of one bit on the wire (0 while no baud rate is configured); false: failure parked
 // The messages the Python block logs through `BasePeripheral.warn` (see core_host.hpp); the host formats them.
-constexpr uint32_t kUartWarnRead = kRegWarnRead, kUartWarnReadAtomicArea = kRegWarnReadAtomicArea, kUartWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kUartWarnRead = kRegWarnRead, kUartWarnReadAtomicArea = kRegWarnReadAtomicArea, kUartWarnWrite = kRegWarnWrite;
 using UartWarnFn = RegWarnFn;
 
 struct UartHost {

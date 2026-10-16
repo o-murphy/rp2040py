@@ -46,7 +46,7 @@ using I2cConnectFn = bool (*)(void* ctx, uint32_t address, uint32_t mode); // ..
 using I2cWriteFn = bool (*)(void* ctx, uint32_t value);                    // ... to take a byte
 using I2cReadFn = bool (*)(void* ctx, bool ack);                           // ... to give a byte (and be ACKed unless it is the last)
 using I2cStopFn = bool (*)(void* ctx);                                     // ... to produce a STOP
-constexpr uint32_t kI2cWarnRead = kRegWarnRead, kI2cWarnReadAtomicArea = kRegWarnReadAtomicArea, kI2cWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kI2cWarnRead = kRegWarnRead, kI2cWarnReadAtomicArea = kRegWarnReadAtomicArea, kI2cWarnWrite = kRegWarnWrite;
 using I2cWarnFn = RegWarnFn;
 
 struct I2cHost {

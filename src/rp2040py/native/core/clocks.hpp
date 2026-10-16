@@ -29,7 +29,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kClocksWarnRead = kRegWarnRead, kClocksWarnReadAtomicArea = kRegWarnReadAtomicArea, kClocksWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kClocksWarnRead = kRegWarnRead, kClocksWarnReadAtomicArea = kRegWarnReadAtomicArea, kClocksWarnWrite = kRegWarnWrite;
 
 using ClockHzFn = double (*)(void* ctx);                          // an oscillator's output in Hz (0: not running)
 using ClockSinkFn = bool (*)(void* ctx, double hz, double old);   // a clock changed (or, for the ref and rtc sinks, was re-derived); false: a failure is parked

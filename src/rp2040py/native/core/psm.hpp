@@ -16,7 +16,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kPsmWarnRead = kRegWarnRead, kPsmWarnReadAtomicArea = kRegWarnReadAtomicArea, kPsmWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kPsmWarnRead = kRegWarnRead, kPsmWarnReadAtomicArea = kRegWarnReadAtomicArea, kPsmWarnWrite = kRegWarnWrite;
 
 namespace psm_regs {
 constexpr uint32_t FRCE_ON = 0x00, FRCE_OFF = 0x04, REG_WDSEL = 0x08, REG_DONE = 0x0C, BITS_MASK = 0x0001FFFF;

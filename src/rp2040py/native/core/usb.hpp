@@ -40,7 +40,7 @@ namespace rp2040core {
 [[maybe_unused]] constexpr uint32_t kUsbOther = 3;  // (read by the shells and the checks; the block itself only tells the other answers apart from ACK / NAK / STALL)
 constexpr uint32_t kUsbAck = 0, kUsbNak = 1, kUsbStall = 2;
 
-constexpr uint32_t kUsbWarnRead = kRegWarnRead, kUsbWarnReadAtomicArea = kRegWarnReadAtomicArea, kUsbWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kUsbWarnRead = kRegWarnRead, kUsbWarnReadAtomicArea = kRegWarnReadAtomicArea, kUsbWarnWrite = kRegWarnWrite;
 
 struct UsbHost {
     bool (*irq)(void* ctx, bool level) = nullptr;

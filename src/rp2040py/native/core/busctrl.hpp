@@ -16,7 +16,7 @@
 
 namespace rp2040core {
 
-constexpr uint32_t kBusctrlWarnRead = kRegWarnRead, kBusctrlWarnReadAtomicArea = kRegWarnReadAtomicArea, kBusctrlWarnWrite = kRegWarnWrite;
+inline constexpr uint32_t kBusctrlWarnRead = kRegWarnRead, kBusctrlWarnReadAtomicArea = kRegWarnReadAtomicArea, kBusctrlWarnWrite = kRegWarnWrite;
 
 namespace busctrl_regs {
 constexpr uint32_t BUS_PRIORITY = 0x00, BUS_PRIORITY_ACK = 0x04, PERFCTR0 = 0x08, PERFSEL3 = 0x24;
