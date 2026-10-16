@@ -19,7 +19,7 @@ for its own `clock` field, so a native chip always has one.
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLines, mcu_irq_lines, native_mcu
+from rp2040py.native._mcu_irq cimport Mcu, mcu_irq_lines, native_mcu
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler

@@ -4,7 +4,7 @@ docs/records/0098-datasheet-conformance-audit.md "XIP_CTRL and the XIP subsystem
 `peripherals/xip_ctrl.py` is the facade that picks between them.
 
 What a firmware sees is the C++ block, in three places the chip wires when it adopts this object: its register window (`_native_window`, as every native block), the flash window and the
-`0x15...` cache-as-SRAM segment (the memory map's `XipHooks`, set by the chip from `_native_xip_hooks`) and the auxiliary slave `XIP_AUX` (`RPXIPAux`, a second window onto the same stream FIFO).
+`0x15...` cache-as-SRAM segment (the memory map's `XipHooks`, set by the `Mcu`) and the auxiliary slave `XIP_AUX` (`RPXIPAux`, a second window onto the same stream FIFO).
 What stays Python is the edge: the logger (a bus fault the model cannot raise is reported as a warning), the DMA request line, and the two chip numbers the timing derives from (`clk_sys` and
 SSI.BAUDR). Their failures are parked in the shared slot of `_pending.pyx` and re-raised by whoever called in. The stream's alarm lives on the chip's C++ `Clock`, so the block needs the native
 `SimulationClock`, and it reads the chip's own flash buffer by pointer.
@@ -12,8 +12,7 @@ SSI.BAUDR). Their failures are parked in the shared slot of `_pending.pyx` and r
 The reference's state is kept readable under its names (`ctrl`, `ctr_hit`, `ctr_acc`, `stream_addr`, `stream_ctr`, `stream_fifo`, `tags`, `recent`, `sram`, ...) as views of the C++ state.
 """
 
-from libc.stdint cimport int64_t, uint8_t, uint32_t
-from libcpp cimport bool as cppbool
+from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
@@ -185,12 +184,6 @@ cdef class RPXIPCtrl:
         """What `RP2040` registers in its C++ window table when it adopts this block instead of a Python trampoline (see `_rp2040.pyx`)."""
         cdef WindowHandler handler = self._block.window_handler()
         return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)
-
-    def _native_xip_hooks(self):
-        """The addresses of the block's memory-map hooks and its context: the chip hands them to its C++ memory map, which then reports every flash-window access (and serves the
-        `0x15...` cache-as-SRAM segment) through the block."""
-        cdef XipHooks hooks = self._block.hooks()
-        return (<size_t> hooks.read_access, <size_t> hooks.write_access, <size_t> hooks.sram_read, <size_t> hooks.sram_write, <size_t> hooks.ctx)
 
 
 cdef class RPXIPAux:

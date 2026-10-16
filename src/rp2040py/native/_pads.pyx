@@ -7,11 +7,9 @@ reaches are `rp2040.gpio` (bank0) or `rp2040.qspi` (qspi) at construction, which
 """
 
 from libc.stdint cimport int64_t, uint32_t
-from libcpp cimport bool as cppbool
 
 from rp2040py.native._gpio_pin cimport GPIOPin, GPIOPinBank
-from rp2040py.native._io cimport IoPadsHost
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPPADS",)

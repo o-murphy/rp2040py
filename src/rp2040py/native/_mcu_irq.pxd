@@ -23,21 +23,11 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         Mcu* mcu
         uint32_t base
 
-    cdef cppclass McuDreqLine:
-        McuDreqLine() noexcept
-        Mcu* mcu
-        uint32_t number
-
     cdef cppclass McuDreqPair:
         McuDreqPair() noexcept
         Mcu* mcu
         uint32_t if_true
         uint32_t if_false
-
-    cdef cppclass McuDreqBase:
-        McuDreqBase() noexcept
-        Mcu* mcu
-        uint32_t base
 
     cdef cppclass McuIoIrq:
         McuIoIrq() noexcept
@@ -45,10 +35,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         PinBank* bank
         uint32_t line
 
-    bool mcu_dreq_line(void* ctx, bool asserted) noexcept
     bool mcu_dreq_pair(void* ctx, bool which, bool asserted) noexcept
-    bool mcu_dreq_base(void* ctx, uint32_t channel) noexcept
-    bool mcu_dreq_number(void* ctx, uint32_t number, bool asserted) noexcept
     bool mcu_io_interrupt(void* ctx) noexcept
     bool mcu_irq_line(void* ctx, bool level) noexcept
     bool mcu_irq_lines(void* ctx, uint32_t line, bool level) noexcept

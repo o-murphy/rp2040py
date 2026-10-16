@@ -19,15 +19,13 @@ the block's two alarms), `num_channels`, `sample_time`, `resolution`, `divider`,
 """
 
 from libc.stdint cimport int64_t, uint32_t
-from libcpp cimport bool as cppbool
 
 from rp2040py.native._clock cimport Alarm
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLine, mcu_irq_line, native_mcu, McuDreqLine, mcu_dreq_line
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
-from rp2040py.irq import IRQ
 from rp2040py.peripherals._dma import DREQChannel
 
 __all__ = ("RPADC",)

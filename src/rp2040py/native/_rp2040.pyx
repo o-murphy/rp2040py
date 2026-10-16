@@ -20,7 +20,6 @@ dispatch - see native/_simulation_clock.pyx's own module docstring for the full 
 """
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t, uint64_t
-from libc.string cimport memset
 from libcpp cimport bool
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
@@ -28,10 +27,6 @@ from rp2040py.native._memory_map cimport (
     Region,
     kNotifyOnWrite,
     kXip,
-    XipAccessFn,
-    XipHooks,
-    XipSramReadFn,
-    XipSramWriteFn,
     kSubWord,
     kWordIndexed,
 )
@@ -40,7 +35,7 @@ from rp2040py.native._mcu cimport kMcuBlockBusctrl, kMcuBlockPsm, kMcuBlockReset
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._pio cimport PioBlock
 from rp2040py.native._bus cimport BusHost, kBusWarnInvalidRead, kBusWarnUnalignedRead
-from rp2040py.native._window_map cimport Read32Fn, Write32Fn, WindowHandler, kNoWindow
+from rp2040py.native._window_map cimport Read32Fn, Write32Fn, WindowHandler
 from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
@@ -71,10 +66,8 @@ from rp2040py.reset_cause import ResetCause
 from rp2040py.native._pio import RPPIO
 from rp2040py.native._ppb import RPPPB
 from rp2040py.native._psm import RPPSM
-from rp2040py.peripherals._psm import PSM_BITS_MASK, WDSEL_CLOCKS, WDSEL_RESETS, WDSEL_ROSC, WDSEL_SIO, WDSEL_XIP, WDSEL_XOSC
 from rp2040py.native._pwm import RPPWM
 from rp2040py.native._reset import RPReset
-from rp2040py.peripherals._reset import RESET_ADC, RESET_BUSCTRL, RESET_DMA, RESET_I2C0, RESET_I2C1, RESET_IO_BANK0, RESET_IO_QSPI, RESET_PADS_BANK0, RESET_PADS_QSPI, RESET_PIO0, RESET_PIO1, RESET_PWM, RESET_RTC, RESET_SPI0, RESET_SPI1, RESET_SYSCFG, RESET_TIMER, RESET_UART0, RESET_UART1, RESET_USBCTRL, RESETS_BITS_MASK
 from rp2040py.native._rtc import RP2040RTC
 from rp2040py.native._spi import RPSPI
 from rp2040py.peripherals._spi import ISPIDMAChannels
@@ -90,7 +83,7 @@ from rp2040py.native._watchdog import RPWatchdog
 from rp2040py.native._rosc import RPROSC
 from rp2040py.native._xosc import RPXOSC
 from rp2040py.native._sio import RPSIO
-from rp2040py.native._bit cimport u32, write_uint16_le
+from rp2040py.native._bit cimport u32
 from rp2040py.utils.logging import ConsoleLogger, LogLevel
 
 # Deliberately NOT `from cpython cimport array`: that pulls in CPython-internal array.array
@@ -148,36 +141,6 @@ cdef uint32_t _python_window_read32(void* ctx, uint32_t offset) noexcept:
 cdef void _python_window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t atomic_type) noexcept:
     try:
         (<_PythonWindow> ctx).peripheral.write_uint32_atomic(offset, raw_value, atomic_type)
-    except BaseException as error:
-        park_error(error)
-
-
-cdef void _python_xip_read_access(void* ctx, uint32_t address) noexcept:
-    try:
-        (<object> ctx).access(address)
-    except BaseException as error:
-        park_error(error)
-
-
-cdef void _python_xip_write_access(void* ctx, uint32_t address) noexcept:
-    try:
-        (<object> ctx).write_access(address)
-    except BaseException as error:
-        park_error(error)
-
-
-cdef uint32_t _python_xip_sram_read(void* ctx, uint32_t address) noexcept:
-    try:
-        value = (<object> ctx).sram_read(address)
-        return 0xFFFFFFFFU if value is None else <unsigned int> value
-    except BaseException as error:
-        park_error(error)
-        return 0
-
-
-cdef void _python_xip_sram_write(void* ctx, uint32_t address, uint32_t value) noexcept:
-    try:
-        (<object> ctx).sram_write(address, value)
     except BaseException as error:
         park_error(error)
 
@@ -1344,36 +1307,6 @@ cdef class RP2040:
         clocks = self._clocks  # (None while the chip is being built)
         if clocks is not None and hasattr(clocks, "rebind_consumers"):
             clocks.rebind_consumers()
-
-    def _attach_xip_hooks(self, xip):
-        """Hands the C++ memory map the XIP block's hooks, so the flash window (read-only to the bus, its reads counted and cached) and the `0x15...` cache-as-SRAM segment are served
-        through it. A block with native hooks (looked up on the TYPE, like `_native_window`) lends its own C++ functions; any other block (the pure-Python reference, which the facade hands out when
-        the native one is switched off) is reached through Python trampolines, so the flash window means the same thing whichever XIP the chip has."""
-        cdef XipHooks hooks
-        native_hooks = getattr(type(xip), "_native_xip_hooks", None)
-        if native_hooks is None:
-            hooks.read_access = _python_xip_read_access
-            hooks.write_access = _python_xip_write_access
-            hooks.sram_read = _python_xip_sram_read
-            hooks.sram_write = _python_xip_sram_write
-            hooks.ctx = <void*> xip
-            self._xip_owner = xip  # keeps the block (and so the context pointer) alive
-            self._mcu.bus.mem.set_xip(hooks)
-        else:
-            read_access, write_access, sram_read, sram_write, ctx = native_hooks(xip)
-            hooks.read_access = <XipAccessFn> <size_t> read_access
-            hooks.write_access = <XipAccessFn> <size_t> write_access
-            hooks.sram_read = <XipSramReadFn> <size_t> sram_read
-            hooks.sram_write = <XipSramWriteFn> <size_t> sram_write
-            hooks.ctx = <void*> <size_t> ctx
-            self._xip_owner = xip  # keeps the block (and so the context pointer) alive
-            self._mcu.bus.mem.set_xip(hooks)
-
-    def _native_flash_address(self):
-        """The address and size of this chip's flash buffer, for a native block that works on it directly (the SSI): allocated once, only ever
-        refilled in place, so the address is good for the chip's life. Looked up as an attribute of the chip, so a chip without one (the
-        pure-Python chip) simply does not answer."""
-        return (<size_t> &self._flash[0], self.flash_byte_size)
 
     def _native_pio_address(self, index):
         """The address of this chip's PIO block `index` (0 or 1), for the native PIO shell that is its Python view; None if there is no such block."""

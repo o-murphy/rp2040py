@@ -19,7 +19,7 @@ from libc.stdint cimport uint8_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._gpio_pin cimport GPIOPin
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport park_error
 from rp2040py.native._pin cimport (
     PinBank,
     kSrcPio0Oe,

@@ -19,14 +19,13 @@ names), `int_status`, `enabled`, `data_bits`, `master_mode`, `spi_mode`, `clock_
 """
 
 from libc.stdint cimport int64_t, uint32_t
-from libcpp cimport bool as cppbool
 
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLine, mcu_irq_line, native_mcu, McuDreqPair, mcu_dreq_pair
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
-from rp2040py.peripherals._spi import _bit_ns, _clock_frequency
+from rp2040py.peripherals._spi import _clock_frequency
 
 __all__ = ("RPSPI",)
 

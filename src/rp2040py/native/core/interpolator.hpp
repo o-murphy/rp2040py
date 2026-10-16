@@ -71,11 +71,6 @@ public:
 
     explicit Interpolator(int index = 0) noexcept : index_(index) { update(); }
 
-    void set_index(int index) noexcept {
-        index_ = index;
-        update();
-    }
-
     void reset() noexcept {
         accum0 = accum1 = base0 = base1 = base2 = 0;
         ctrl0 = ctrl1 = 0;

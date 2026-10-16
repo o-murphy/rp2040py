@@ -21,7 +21,7 @@ rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/..
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLine, mcu_irq_line, native_mcu, McuDreqPair, mcu_dreq_pair
+from rp2040py.native._mcu_irq cimport Mcu, mcu_irq_line, native_mcu, mcu_dreq_pair
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 

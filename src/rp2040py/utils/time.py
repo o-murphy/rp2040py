@@ -1,9 +1,4 @@
-import time
 from datetime import datetime
-
-
-def get_current_microseconds() -> int:
-    return int(time.perf_counter() * 1_000_000)
 
 
 def _left_pad(value: str, min_length: int, pad_char: str = " ") -> str:

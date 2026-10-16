@@ -21,8 +21,7 @@ bypassed; that is refused up front too (`MockClock` only adds `advance()`).
 
 import time
 
-from libc.stdint cimport int64_t, uint8_t
-from libcpp cimport bool
+from libc.stdint cimport uint8_t
 
 from rp2040py.native._batch cimport BatchParams, BatchResult, kBatchFault
 from rp2040py.native._clocks cimport RPClocks

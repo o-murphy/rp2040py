@@ -8,9 +8,8 @@ a register write (`changed`: the chip's `update_clocks()`). Their failures are p
 """
 
 from libc.stdint cimport int64_t, uint32_t
-from libcpp cimport bool as cppbool
 
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPPLL",)

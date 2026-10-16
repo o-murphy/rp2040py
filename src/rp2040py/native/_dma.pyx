@@ -22,12 +22,11 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._bus cimport Bus
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLines, mcu_irq_lines, native_mcu
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
-from rp2040py.irq import IRQ
 
 __all__ = ("RPDMA",)
 

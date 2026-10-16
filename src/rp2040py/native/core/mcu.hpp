@@ -1070,17 +1070,8 @@ inline bool mcu_irq_lines(void* ctx, uint32_t line, bool level) noexcept {
 }
 
 // A block's DMA request, bound to the chip: the context a shell hands the block as its `dreq_ctx`, and the function that goes with it, by the shape of the block's own `dreq`.
-// `McuDreqLine`: one request, `dreq(ctx, asserted)` (ADC, XIP stream). `McuDreqPair`: a TX and an RX request, `dreq(ctx, which, asserted)` - `if_true` is the request `which == true`
-// selects (the UART passes `rx`, the SPI and SSI `tx`, so each shell says which is which). `McuDreqBase`: the PWM's `dreq(ctx, channel)`, which only ever asserts (the pulse of a
-// wrap), the request being `base + channel`. The PIO needs no adapter state: its `dreq(ctx, number, asserted)` already carries the absolute number, so its context is the `Mcu`.
-struct McuDreqLine {
-    Mcu* mcu = nullptr;
-    uint32_t number = 0;
-};
-inline bool mcu_dreq_line(void* ctx, bool asserted) noexcept {
-    const McuDreqLine* l = static_cast<const McuDreqLine*>(ctx);
-    return l->mcu->set_dreq(l->number, asserted);
-}
+// `McuDreqPair`: a TX and an RX request, `dreq(ctx, which, asserted)` - `if_true` is the request `which == true` selects (the UART passes `rx`). Only the UART's stand-in path still hands this to a
+// block; the blocks the `Mcu` builds are wired inside it (`Mcu::set_dreq`).
 struct McuDreqPair {
     Mcu* mcu = nullptr;
     uint32_t if_true = 0, if_false = 0;
@@ -1089,15 +1080,6 @@ inline bool mcu_dreq_pair(void* ctx, bool which, bool asserted) noexcept {
     const McuDreqPair* l = static_cast<const McuDreqPair*>(ctx);
     return l->mcu->set_dreq(which ? l->if_true : l->if_false, asserted);
 }
-struct McuDreqBase {
-    Mcu* mcu = nullptr;
-    uint32_t base = 0;
-};
-inline bool mcu_dreq_base(void* ctx, uint32_t channel) noexcept {
-    const McuDreqBase* l = static_cast<const McuDreqBase*>(ctx);
-    return l->mcu->set_dreq(l->base + channel, true);
-}
-inline bool mcu_dreq_number(void* ctx, uint32_t number, bool asserted) noexcept { return static_cast<Mcu*>(ctx)->set_dreq(number, asserted); }
 
 // The IO_BANK0 interrupt line: the level of it is "any pin's IRQ value is set", re-evaluated on the pin bank whenever a pin says its own value may have changed.
 struct McuIoIrq {

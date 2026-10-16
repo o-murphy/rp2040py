@@ -15,8 +15,7 @@ The chip's C++ `Mcu` builds the block (record 0096, step 3a): its lines, its DRE
 """
 import asyncio
 
-from libc.stdint cimport int32_t, int64_t, uint32_t
-from libcpp cimport bool as cppbool
+from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler

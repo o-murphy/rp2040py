@@ -14,7 +14,6 @@ command (all the block keeps) and the *count* as its length.
 """
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t
-from libcpp cimport bool as cppbool
 
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler

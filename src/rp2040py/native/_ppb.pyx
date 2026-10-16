@@ -14,14 +14,12 @@ attributes: `frequency` is what `update_clocks` retunes), `systick_alarm`, `rese
 """
 
 from libc.stdint cimport int64_t, uint32_t
-from libcpp cimport bool as cppbool
 
 from rp2040py.native._cpu cimport Cpu
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
-from rp2040py.irq import MAX_HARDWARE_IRQ
 from rp2040py.utils.timer32 import TimerMode
 
 __all__ = ("RPPPB",)

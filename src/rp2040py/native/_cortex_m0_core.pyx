@@ -14,12 +14,11 @@ The architectural state is exposed field by field as properties (same names, sam
 `registers` and `interrupt_priorities` are memoryviews over the C++ arrays.
 """
 
-from libc.stdint cimport int64_t, uint32_t
+from libc.stdint cimport uint32_t
 from libcpp cimport bool
 
 from rp2040py.native._cpu cimport (
     CpuHost,
-    kCpuFault,
     kCpuLogInstrUnimplemented,
     kCpuLogMrsUnimplemented,
     kCpuLogSev,

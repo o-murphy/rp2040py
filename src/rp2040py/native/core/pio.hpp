@@ -596,13 +596,6 @@ public:
     // ---- window handler entry points: what the bus's C++ window registry calls ----
     WindowHandler window_handler() noexcept { return BlockWindow<PioBlock>::handler(this); }
 
-    // Used by the machines.
-    bool update_pin(uint32_t gpio) noexcept {
-        if (gpio >= kPioGpio) return true;
-        if (pins_[gpio] != nullptr) return pins_[gpio]->check_for_updates(pin_slots_[gpio]);
-        return host_.pin_update == nullptr || host_.pin_update(host_.ctx, gpio);
-    }
-
 private:
     bool write_ctrl(uint32_t value) noexcept {
         for (uint32_t m = 0; m < kPioMachines; ++m) {

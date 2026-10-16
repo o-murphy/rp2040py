@@ -20,15 +20,12 @@ alarms), `gpio_value`, `gpio_direction`, the private interrupt words `_int_raw`/
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._clock cimport Clock
-from rp2040py.native._mcu_irq cimport Mcu, McuIrqLine, mcu_irq_line, native_mcu, McuDreqBase, mcu_dreq_base
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
-from rp2040py.irq import IRQ
 from rp2040py.peripherals._pwm import PWMDivMode
-from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.utils.timer32 import TimerMode
 
 __all__ = ("RPPWM",)

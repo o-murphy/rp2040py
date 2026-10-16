@@ -4,7 +4,6 @@
 from libc.stdint cimport int64_t, uint32_t, uint64_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._mcu_irq cimport McuIrqLines
 
 from rp2040py.native._bus cimport Bus
 from rp2040py.native._clock cimport Clock

@@ -17,7 +17,7 @@ from libcpp cimport bool as cppbool
 
 from cpython.bytes cimport PyBytes_AsString, PyBytes_FromStringAndSize
 
-from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
+from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 from rp2040py.usb.usb_device import StandardRequest, parse_setup_packet

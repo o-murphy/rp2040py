@@ -187,12 +187,6 @@ int main() {
         CHECK(m.set_dreq(5, true) && dma.dreq(5));
         CHECK(m.set_dreq(5, false) && !dma.dreq(5));
 
-        McuDreqLine line;
-        line.mcu = &m;
-        line.number = 36;
-        CHECK(mcu_dreq_line(&line, true) && dma.dreq(36));
-        CHECK(mcu_dreq_line(&line, false) && !dma.dreq(36));
-
         McuDreqPair pair;
         pair.mcu = &m;
         pair.if_true = 20;
@@ -200,13 +194,6 @@ int main() {
         CHECK(mcu_dreq_pair(&pair, true, true) && dma.dreq(20) && !dma.dreq(21));
         CHECK(mcu_dreq_pair(&pair, false, true) && dma.dreq(21));
         CHECK(mcu_dreq_pair(&pair, true, false) && !dma.dreq(20) && dma.dreq(21));
-
-        McuDreqBase base;
-        base.mcu = &m;
-        base.base = 24;
-        CHECK(mcu_dreq_base(&base, 3) && dma.dreq(27));  // the PWM only ever asserts (a wrap)
-
-        CHECK(mcu_dreq_number(&m, 9, true) && dma.dreq(9) && mcu_dreq_number(&m, 9, false) && !dma.dreq(9));  // the PIO: the number is already absolute
 
         struct Seen {
             int n = 0;
