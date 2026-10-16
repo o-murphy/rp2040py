@@ -19,22 +19,8 @@ from rp2040py.peripherals._vreg_and_chip_reset import HAD_POR, HAD_PSM_RESTART, 
 __all__ = ("RPVREGAndChipReset",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPVREGAndChipReset block = <RPVREGAndChipReset> ctx
-    try:
-        if kind == kVregWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kVregWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RPVREGAndChipReset:
     def __init__(self, rp2040, name):
-        cdef VregHost host
         self.rp2040 = rp2040
         self.name = name
         address = getattr(rp2040, "_native_vreg_address", None)
@@ -43,12 +29,9 @@ cdef class RPVREGAndChipReset:
             # the chip's C++ `Mcu` has built the block already - with its window on the bus - and this object is the Python view of it
             self._block = <VregBlock*> <size_t> address()
         else:
-            host.warn = _warn_trampoline
-            host.ctx = <void*> self
-            host.failed = pending_flag()
-            self._block = &self._own
-            self._own.init(host)
-
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RPVREGAndChipReset is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
     @property
     def raw_write_value(self):
         return self._block.raw_write_value()

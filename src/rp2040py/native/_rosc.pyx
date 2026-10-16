@@ -20,14 +20,6 @@ from rp2040py.native._window_map cimport WindowHandler
 __all__ = ("RPROSC",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPROSC block = <RPROSC> ctx
-    try:
-        block._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
 cdef cppbool _frequency_trampoline(void* ctx, double hz) noexcept:
     cdef RPROSC block = <RPROSC> ctx
     try:
@@ -51,7 +43,6 @@ cdef cppbool _bit_trampoline(void* ctx, uint32_t* bit) noexcept:
 
 cdef class RPROSC:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef RoscHost host
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -69,16 +60,9 @@ cdef class RPROSC:
             # (its RANDOMBIT comes from the block's own seeded generator until a source is set: `random_bit = fn`)
             self._block = <RoscBlock*> <size_t> rp2040._native_rosc_address()
             return
-        self._block = &self._own
-        # The reference's default source, seeded the same way: the same firmware sees the same bits on every run
-        self._rng = random.Random(0x2040)
-        self._random_bit = lambda: self._rng.getrandbits(1)
-        host.warn = _warn_trampoline
-        host.frequency_changed = _frequency_trampoline
-        host.random_bit = _bit_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(&(<SimulationClock> clock)._clock, host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPROSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _rejoin_the_python_tree(self, tree):
         """`tree` is going away (the chip's clock tree was replaced): tell the chip through Python again, if this block was telling that tree."""
@@ -231,11 +215,6 @@ cdef class RPROSC:
     def _hz(self, value):
         self._block.hz = <double> value
 
-    def __dealloc__(self):
-        # Off the clock's rebase list before the block goes away (a no-op if the clock is gone already). The chip's own block is the `Mcu`'s to detach.
-        if self._block == &self._own:
-            self._own.detach()
-
     @property
     def random_bit(self):
         """The source of RANDOMBIT (the reference's hook). On the chip's own block, until one is set, the block uses its own seeded generator and this is None."""
@@ -244,11 +223,11 @@ cdef class RPROSC:
     @random_bit.setter
     def random_bit(self, value):
         self._random_bit = value
-        if self._block != &self._own:  # the chip's block: hand it (or take away) the source
-            if value is None:
-                self._block.bind_random_source(NULL, NULL)
-            else:
-                self._block.bind_random_source(_bit_trampoline, <void*> self)
+        # hand the chip's block the source (or take it away)
+        if value is None:
+            self._block.bind_random_source(NULL, NULL)
+        else:
+            self._block.bind_random_source(_bit_trampoline, <void*> self)
 
     def reset(self):
         """Back to power-on (enabled, div 16, LOW range). Gated on `PSM.WDSEL`'s ROSC bit by `RP2040.reset()` (see the reference)."""

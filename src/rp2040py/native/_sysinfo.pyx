@@ -20,32 +20,8 @@ from rp2040py.peripherals._sysinfo import rom_version
 __all__ = ("RP2040SysInfo",)
 
 
-cdef cppbool _rom_version_trampoline(void* ctx, uint32_t* version) noexcept:
-    cdef RP2040SysInfo block = <RP2040SysInfo> ctx
-    try:
-        version[0] = <uint32_t> rom_version(block.rp2040)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RP2040SysInfo block = <RP2040SysInfo> ctx
-    try:
-        if kind == kSysInfoWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kSysInfoWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RP2040SysInfo:
     def __init__(self, rp2040, name):
-        cdef SysInfoHost host
         self.rp2040 = rp2040
         self.name = name
         address = getattr(rp2040, "_native_sysinfo_address", None)
@@ -53,13 +29,9 @@ cdef class RP2040SysInfo:
             # the chip's C++ `Mcu` has built the block already - with its window on the bus - and this object is the Python view of it
             self._block = <SysInfoBlock*> <size_t> address()
         else:
-            host.rom_version = _rom_version_trampoline
-            host.warn = _warn_trampoline
-            host.ctx = <void*> self
-            host.failed = pending_flag()
-            self._block = &self._own
-            self._own.init(host)
-
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RP2040SysInfo is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
     @property
     def raw_write_value(self):
         return self._block.raw_write_value()

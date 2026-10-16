@@ -32,16 +32,6 @@ from rp2040py.irq import IRQ
 __all__ = ("RPDMA",)
 
 
-cdef cppbool _irq_trampoline(void* ctx, uint32_t line, cppbool level) noexcept:
-    cdef RPDMA dma = <RPDMA> ctx
-    try:
-        dma.rp2040.set_interrupt(line, level)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef double _clk_sys_trampoline(void* ctx) noexcept:
     cdef RPDMA dma = <RPDMA> ctx
     try:
@@ -49,14 +39,6 @@ cdef double _clk_sys_trampoline(void* ctx) noexcept:
     except BaseException as error:
         park_error(error)
         return 0.0
-
-
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPDMA dma = <RPDMA> ctx
-    try:
-        dma._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
 
 
 cdef class _Channel:
@@ -192,7 +174,6 @@ cdef class _DreqView:
 
 cdef class RPDMA:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef DmaHost host
         cdef Bus* bus
         clock = rp2040.clock
         bus_address = getattr(rp2040, "_native_bus_address", None)
@@ -211,28 +192,9 @@ cdef class RPDMA:
             self._block = <DmaBlock*> <size_t> rp2040._native_dma_address()
             self._unsubscribe_clock = None
         else:
-            bus = <Bus*> <size_t> bus_address()
-            mcu = native_mcu(rp2040)
-            if mcu != NULL:
-                # the lines go from the C++ block straight to the chip's CPU, with no Python in between (the block passes the absolute NVIC line)
-                self._irq_line.mcu = mcu
-                self._irq_line.base = 0
-                host.irq = mcu_irq_lines
-                host.irq_ctx = &self._irq_line
-            else:
-                host.irq = _irq_trampoline
-                host.irq_ctx = NULL
-            host.clk_sys = _clk_sys_trampoline
-            host.warn = _warn_trampoline
-            host.ctx = <void*> self
-            host.failed = pending_flag()
-            host.lines[0] = <uint32_t> int(IRQ.DMA_IRQ0)
-            host.lines[1] = <uint32_t> int(IRQ.DMA_IRQ1)
-            self._block = &self._own
-            self._own.init(bus, &(<SimulationClock> clock)._clock, host)
-            # A ready transfer takes one clk_sys cycle: keep that period current without asking Python on every transfer
-            self._own.transfer_ns = 1e9 / <double> rp2040.clk_sys
-            self._unsubscribe_clock = rp2040.add_clock_listener(self._clk_sys_changed)
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RPDMA is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
         self._bound_tree = None
         self._channels = []
         cdef _Channel view
@@ -272,11 +234,6 @@ cdef class RPDMA:
             self.warn("Unimplemented read from peripheral in the atomic operation region")
         else:
             self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
-    def __dealloc__(self):
-        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies. The chip's own block is the `Mcu`'s to detach.
-        if self._block == &self._own:
-            self._own.detach()
 
     # --- the reference's attributes --------------------------------------------------------------
 

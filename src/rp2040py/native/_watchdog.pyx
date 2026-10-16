@@ -22,41 +22,6 @@ from rp2040py.utils.timer32 import TimerMode
 __all__ = ("RPWatchdog",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPWatchdog block = <RPWatchdog> ctx
-    try:
-        block._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
-cdef cppbool _trigger_trampoline(void* ctx) noexcept:
-    """The chip's reset: whatever `on_watchdog_trigger` is now. False: it raised, and the error is parked."""
-    cdef RPWatchdog block = <RPWatchdog> ctx
-    try:
-        block.on_watchdog_trigger()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef cppbool _tick_trampoline(void* ctx, double tick_hz) noexcept:
-    """The tick changed: the TIMER and SysTick count on it, so they are told (the reference's `_retick`). False: one of them raised, and the error is parked."""
-    cdef RPWatchdog block = <RPWatchdog> ctx
-    try:
-        for name in ("timer", "ppb"):
-            consumer = getattr(block.rp2040, name, None)
-            if consumer is not None:
-                consumer.tick_changed(tick_hz)
-        for listener in list(block._tick_listeners):
-            listener(tick_hz)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef class _Words:
     """The reference's `scratch_data` list as a view of the C++ array: indexable, assignable (the tests poke `scratch_data[4] = MAGIC`) and equal to a list of the same values."""
 
@@ -183,7 +148,6 @@ cdef class _TimerView:
 
 cdef class RPWatchdog:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef WatchdogHost host
         cdef _TimerView timer
         cdef _AlarmView alarm
         cdef _Words words
@@ -204,13 +168,9 @@ cdef class RPWatchdog:
             # the chip's C++ `Mcu` has built this block already and wired it (its window, its lines, the clock tree, the watchdog's tick) - this object is the Python view of it
             self._block = <WatchdogBlock*> <size_t> rp2040._native_watchdog_address()
         else:
-            self._block = &self._own
-            host.warn = _warn_trampoline
-            host.trigger = _trigger_trampoline
-            host.tick_changed = _tick_trampoline
-            host.ctx = <void*> self
-            host.failed = pending_flag()
-            self._own.init(&(<SimulationClock> clock)._clock, host)
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RPWatchdog is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
         words = _Words.__new__(_Words)
         words._words = self._block.scratch
         self.scratch_data = words
@@ -244,11 +204,6 @@ cdef class RPWatchdog:
                 consumer.tick_changed(tick_hz)
         for listener in list(self._tick_listeners):
             listener(tick_hz)
-
-    def __dealloc__(self):
-        # Unlink the alarm from the clock before the block goes away (the chip's own block is the `Mcu`'s to detach).
-        if self._block == &self._own:
-            self._own.detach()
 
     def _default_watchdog_trigger(self):
         """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this hook: reset the chip (see the reference)."""

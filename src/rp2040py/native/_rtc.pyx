@@ -22,32 +22,8 @@ from rp2040py.irq import IRQ
 __all__ = ("RP2040RTC",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RP2040RTC block = <RP2040RTC> ctx
-    try:
-        if kind == kRtcWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kRtcWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
-cdef cppbool _irq_trampoline(void* ctx, cppbool level) noexcept:
-    cdef RP2040RTC block = <RP2040RTC> ctx
-    try:
-        block.rp2040.set_interrupt(IRQ.RTC, level)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef class RP2040RTC:
     def __init__(self, rp2040, name):
-        cdef RtcHost host
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -64,18 +40,9 @@ cdef class RP2040RTC:
             # the chip's C++ `Mcu` has built the block already - on its clock, with its window on the bus and its line on the CPU - and this object is the Python view of it
             self._block = <RtcBlock*> <size_t> address()
             return
-        # a stand-in chip (an oracle's, a test's) has no `Mcu`: the shell owns a block and wires it to the stand-in's `set_interrupt` and logger
-        self._block = &self._own
-        host.warn = _warn_trampoline
-        host.irq = _irq_trampoline
-        host.irq_ctx = NULL
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(&(<SimulationClock> clock)._clock, host)
-
-    def __dealloc__(self):
-        # Unlink the second from the clock before the block goes away (the chip's own block is the `Mcu`'s to detach).
-        self._own.detach()
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RP2040RTC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

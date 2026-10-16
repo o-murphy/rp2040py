@@ -37,67 +37,6 @@ cdef uint32_t SCR_MASK = 0xFF
 cdef uint32_t SCR_SHIFT = 8
 
 
-cdef cppbool _irq_trampoline(void* ctx, cppbool level) noexcept:
-    cdef RPSPI spi = <RPSPI> ctx
-    try:
-        spi.rp2040.set_interrupt(spi.irq, level)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef cppbool _dreq_trampoline(void* ctx, cppbool tx, cppbool asserted) noexcept:
-    cdef RPSPI spi = <RPSPI> ctx
-    try:
-        channel = spi.dreq.tx if tx else spi.dreq.rx
-        if asserted:
-            spi.rp2040.dma.set_dreq(channel)
-        else:
-            spi.rp2040.dma.clear_dreq(channel)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef cppbool _transmit_trampoline(void* ctx, uint32_t value) noexcept:
-    cdef RPSPI spi = <RPSPI> ctx
-    try:
-        callback = spi._on_transmit
-        if callback is None:
-            # The reference's default device: the byte comes straight back as 0, from inside the callback. Never leaves C++.
-            return spi._block.complete_transmit(0)
-        callback(value)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef cppbool _bit_trampoline(void* ctx, double* nanos) noexcept:
-    cdef RPSPI spi = <RPSPI> ctx
-    try:
-        nanos[0] = _bit_ns(spi.rp2040.clk_peri, spi._block.clock_divisor, (spi._block.control0 >> SCR_SHIFT) & SCR_MASK)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPSPI spi = <RPSPI> ctx
-    try:
-        if kind == kSpiWarnRead:
-            spi.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kSpiWarnReadAtomicArea:
-            spi.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            spi.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class _Fifo:
     """One of the two FIFOs as the reference's `utils.fifo.FIFO(8)` shows it."""
 
@@ -143,7 +82,6 @@ cdef class _Fifo:
 
 cdef class RPSPI:
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
-        cdef SpiHost host
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -164,36 +102,9 @@ cdef class RPSPI:
             if not self._block.power_on():
                 raise_if_pending()
             return
-        self._block = &self._own
-        mcu = native_mcu(rp2040)
-        if mcu != NULL:
-            # the line goes from the C++ block straight to the chip's CPU, with no Python in between
-            self._irq_line.mcu = mcu
-            self._irq_line.line = <uint32_t> int(irq)
-            host.irq = mcu_irq_line
-            host.irq_ctx = &self._irq_line
-        else:
-            host.irq = _irq_trampoline
-            host.irq_ctx = NULL
-        if mcu != NULL:
-            # the request goes from the C++ block straight to the chip (and its DMA), with no Python in between
-            self._dreq_pair.mcu = mcu
-            self._dreq_pair.if_true = <uint32_t> int(self.dreq.tx)
-            self._dreq_pair.if_false = <uint32_t> int(self.dreq.rx)
-            host.dreq = mcu_dreq_pair
-            host.dreq_ctx = &self._dreq_pair
-        else:
-            host.dreq = _dreq_trampoline
-            host.dreq_ctx = NULL
-        host.transmit = _transmit_trampoline
-        host.bit_ns = _bit_trampoline
-        host.warn = _warn_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(&(<SimulationClock> clock)._clock, host)
-        # The reference's constructor publishes both DREQs.
-        if not self._block.power_on():
-            raise_if_pending()
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPSPI is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _world_transmit(self, value):
         """A word is on the wire: the attached device answers; with none, the byte comes straight back as 0 (the reference's default device)."""
@@ -211,11 +122,6 @@ cdef class RPSPI:
             self.warn("Unimplemented read from peripheral in the atomic operation region")
         else:
             self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
-    def __dealloc__(self):
-        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
-        if self._block == &self._own:
-            self._own.detach()
 
     # --- the device on the bus -------------------------------------------------------------------
 

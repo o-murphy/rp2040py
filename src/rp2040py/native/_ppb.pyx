@@ -27,22 +27,6 @@ from rp2040py.utils.timer32 import TimerMode
 __all__ = ("RPPPB",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPPPB ppb = <RPPPB> ctx
-    try:
-        ppb._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
-cdef void _system_reset_trampoline(void* ctx) noexcept:
-    cdef RPPPB ppb = <RPPPB> ctx
-    try:
-        ppb.on_system_reset_request()
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class _AlarmView:
     """SysTick's compare alarm as the reference's `Timer32PeriodicAlarm` shows it (`target`, `enable`): the state lives in the C++ block."""
 
@@ -135,7 +119,6 @@ cdef class _TimerView:
 
 cdef class RPPPB:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef PpbHost host
         cdef _TimerView timer
         cdef _AlarmView alarm
         cdef Cpu* cpu
@@ -164,11 +147,9 @@ cdef class RPPPB:
             # the chip's C++ `Mcu` has built this block already and wired it (its window, its lines, the clock tree, the watchdog's tick) - this object is the Python view of it
             self._block = <PpbBlock*> <size_t> rp2040._native_ppb_address()
         else:
-            self._block = &self._own
-            host.warn = _warn_trampoline
-            host.system_reset_request = _system_reset_trampoline
-            host.ctx = <void*> self
-            self._own.init(cpu, &(<SimulationClock> clock)._clock, host, <double> rp2040.clk_sys, <uint32_t> int(MAX_HARDWARE_IRQ))
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RPPPB is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
         timer = _TimerView.__new__(_TimerView)
         timer._owner = self
         timer._timer = &self._block.timer
@@ -214,11 +195,6 @@ cdef class RPPPB:
     def _world_system_reset(self):
         """AIRCR.SYSRESETREQ: whatever `on_system_reset_request` is now (the chip's host calls this for the block it built)."""
         self.on_system_reset_request()
-
-    def __dealloc__(self):
-        # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies. The chip's own block is the `Mcu`'s to detach.
-        if self._block == &self._own:
-            self._own.detach()
 
     # --- the reference's attributes --------------------------------------------------------------
 

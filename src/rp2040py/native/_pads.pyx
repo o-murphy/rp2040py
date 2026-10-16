@@ -19,17 +19,8 @@ __all__ = ("RPPADS",)
 cdef uint32_t _WARN_READ = 0, _WARN_READ_ATOMIC = 1
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPPADS block = <RPPADS> ctx
-    try:
-        block._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RPPADS:
     def __init__(self, rp2040, name, bank, mcu_index=-1):
-        cdef IoPadsHost host
         cdef GPIOPin pin
         cdef GPIOPinBank owner = None
         cdef Py_ssize_t i
@@ -54,11 +45,9 @@ cdef class RPPADS:
             # the chip's C++ `Mcu` holds this bank (and the IO and PADS blocks on it): this object is the Python view of it
             self._block = <PadsBlock*> <size_t> rp2040._native_pads_address(mcu_index)
             return
-        self._block = &self._own
-        host.warn = _warn_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(owner._bank, bank == "qspi", host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPPADS is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

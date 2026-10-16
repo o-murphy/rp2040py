@@ -17,22 +17,8 @@ from rp2040py.native._window_map cimport WindowHandler
 __all__ = ("RPTBMAN",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPTBMAN block = <RPTBMAN> ctx
-    try:
-        if kind == kTbmanWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kTbmanWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RPTBMAN:
     def __init__(self, rp2040, name):
-        cdef TbmanHost host
         self.rp2040 = rp2040
         self.name = name
         address = getattr(rp2040, "_native_tbman_address", None)
@@ -40,12 +26,9 @@ cdef class RPTBMAN:
             # the chip's C++ `Mcu` has built the block already - with its window on the bus - and this object is the Python view of it
             self._block = <TbmanBlock*> <size_t> address()
             return
-        # a stand-in chip (an oracle's, a test's) has no `Mcu`: the shell owns a block and wires it to the stand-in's logger
-        self._block = &self._own
-        host.warn = _warn_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPTBMAN is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

@@ -17,22 +17,8 @@ from rp2040py.native._window_map cimport WindowHandler
 __all__ = ("RPPSM",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPPSM block = <RPPSM> ctx
-    try:
-        if kind == kPsmWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kPsmWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RPPSM:
     def __init__(self, rp2040, name):
-        cdef PsmHost host
         self.rp2040 = rp2040
         self.name = name
         address = getattr(rp2040, "_native_psm_address", None)
@@ -41,12 +27,9 @@ cdef class RPPSM:
             # the chip's C++ `Mcu` has built the block already - with its window on the bus - and this object is the Python view of it
             self._block = <PsmBlock*> <size_t> address()
         else:
-            host.warn = _warn_trampoline
-            host.ctx = <void*> self
-            host.failed = pending_flag()
-            self._block = &self._own
-            self._own.init(host)
-
+            raise TypeError(
+                "the native block is a view of the chip's C++ `Mcu` block: RPPSM is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+            )
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
         if kind == kPsmWarnRead:

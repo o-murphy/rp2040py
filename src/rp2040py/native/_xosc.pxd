@@ -45,8 +45,7 @@ cdef extern from "xosc.hpp" namespace "rp2040core":
 
 cdef class RPXOSC:
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
-    cdef XoscBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a block made directly (a stand-in chip, a test)
-    cdef XoscBlock _own
+    cdef XoscBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef object _bound_tree  # the native clock tree this block tells directly (None: it tells the chip through Python)
     cdef public object rp2040
     cdef public object name

@@ -65,8 +65,7 @@ cdef extern from "rtc.hpp" namespace "rp2040core":
 
 cdef class RP2040RTC:
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
-    cdef RtcBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a stand-in chip that has no `Mcu`
-    cdef RtcBlock _own
+    cdef RtcBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object rp2040
     cdef public object name
     cdef public object clock

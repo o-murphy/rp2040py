@@ -17,14 +17,6 @@ from rp2040py.native._window_map cimport WindowHandler
 __all__ = ("RPXOSC",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPXOSC block = <RPXOSC> ctx
-    try:
-        block._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
 cdef cppbool _stable_trampoline(void* ctx) noexcept:
     # The crystal started or stopped: the clock tree is re-derived (nothing is clocked from XOSC while it is stopped)
     cdef RPXOSC block = <RPXOSC> ctx
@@ -38,7 +30,6 @@ cdef cppbool _stable_trampoline(void* ctx) noexcept:
 
 cdef class RPXOSC:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef XoscHost host
         self.rp2040 = rp2040
         self.name = name
         self._from_mcu = mcu_index >= 0
@@ -46,12 +37,9 @@ cdef class RPXOSC:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus and its notices to the clock tree - and this object is the Python view of it
             self._block = <XoscBlock*> <size_t> rp2040._native_xosc_address()
             return
-        self._block = &self._own
-        host.warn = _warn_trampoline
-        host.stable_changed = _stable_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPXOSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _rejoin_the_python_tree(self, tree):
         """`tree` is going away (the chip's clock tree was replaced): tell the chip through Python again, if this block was telling that tree."""

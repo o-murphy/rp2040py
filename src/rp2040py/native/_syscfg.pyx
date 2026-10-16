@@ -33,7 +33,6 @@ cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t va
 
 cdef class RP2040SysCfg:
     def __init__(self, rp2040, name):
-        cdef SyscfgHost host
         address = getattr(rp2040, "_native_syscfg_address", None)
         self._from_mcu = address is not None
         if address is not None:
@@ -42,20 +41,9 @@ cdef class RP2040SysCfg:
             self.name = name
             self._block = <SyscfgBlock*> <size_t> address()
             return
-        native_cpu_address = getattr(rp2040.core, "_native_cpu_address", None)
-        if native_cpu_address is None:
-            raise TypeError(
-                "the native SYSCFG works on the native core's C++ CPU state (PROC0_NMI_MASK); "
-                f"{type(rp2040).__name__} with {type(rp2040.core).__name__} is not that "
-                "(use the pure-Python peripherals/_syscfg.RP2040SysCfg with it)"
-            )
-        self.rp2040 = rp2040
-        self.name = name
-        host.warn = _warn_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._block = &self._own
-        self._own.init(<Cpu*> (<size_t> native_cpu_address()), host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RP2040SysCfg is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     @property
     def raw_write_value(self):

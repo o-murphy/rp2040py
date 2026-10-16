@@ -52,8 +52,7 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
 
 cdef class RPWatchdog:
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
-    cdef WatchdogBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a block made directly (a stand-in chip, a test)
-    cdef WatchdogBlock _own
+    cdef WatchdogBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object rp2040
     cdef public object name
     cdef public object clock

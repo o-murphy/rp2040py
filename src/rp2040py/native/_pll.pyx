@@ -19,14 +19,6 @@ XOSC_STATUS = 0x04
 XOSC_STATUS_STABLE = 1 << 31
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPPLL block = <RPPLL> ctx
-    try:
-        block._warn_kind(kind, offset, value)
-    except BaseException as error:
-        park_error(error)
-
-
 cdef double _ref_trampoline(void* ctx) noexcept:
     # `xosc_hz()` of the reference: the crystal's frequency while the XOSC block is stable, nothing otherwise.
     cdef RPPLL block = <RPPLL> ctx
@@ -38,32 +30,17 @@ cdef double _ref_trampoline(void* ctx) noexcept:
         return 0.0
 
 
-cdef cppbool _changed_trampoline(void* ctx) noexcept:
-    cdef RPPLL block = <RPPLL> ctx
-    try:
-        block.rp2040.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef class RPPLL:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef PllHost host
         self.rp2040 = rp2040
         self.name = name
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus and its notices to the clock tree - and this object is the Python view of it
             self._block = <PllBlock*> <size_t> rp2040._native_pll_address(mcu_index)
             return
-        self._block = &self._own
-        host.warn = _warn_trampoline
-        host.ref_hz = _ref_trampoline
-        host.changed = _changed_trampoline
-        host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(host)
+        raise TypeError(
+            "the native block is a view of the chip's C++ `Mcu` block: RPPLL is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
+        )
 
     def _rejoin_the_python_tree(self, tree):
         """`tree` is going away (the chip's clock tree was replaced): ask the chip through Python for the reference again, if the PLL was asking that tree."""
