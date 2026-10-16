@@ -245,7 +245,7 @@ static void test_icr_uses_the_raw_value_whatever_the_alias_and_a_direct_write_th
     // CLR alias of ICR: the alias decode reads ICR first (an unimplemented read: a warning), but ICR clears the RAW bits
     CHECK(wr(ICR, INT_TX, kAtomicClear));
     CHECK(rd(IRIS) == INT_RX);
-    CHECK(env.warns >= 1 && env.warn_kind[0] == kUartWarnRead && env.warn_offset[0] == ICR);
+    CHECK(env.warns >= 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == ICR);
     CHECK(uart.raw_write_value() == INT_TX);
     // a direct write keeps the raw value the last atomic write left
     CHECK(uart.write(DR, 3));                                    // direct: raw_write_value stays INT_TX
@@ -331,16 +331,16 @@ static void test_alias_writes_decode_against_a_read_with_its_side_effects() {
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
     fresh();
-    CHECK(rd(0x08) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kUartWarnRead && env.warn_offset[0] == 0x08);
+    CHECK(rd(0x08) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x08);
     env.warns = 0;
     CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2);          // above 0x1000 the atomic-region warning follows
-    CHECK(env.warn_kind[1] == kUartWarnReadAtomicArea);
+    CHECK(env.warn_kind[1] == kRegWarnReadAtomicArea);
     env.warns = 0;
     CHECK(rd(0x1001) == 0xFFFFFFFFu && env.warns == 2);          // above 0x1000, aligned or not
     env.warns = 0;
     CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1);          // 0x1000 itself is not above it
     env.warns = 0;
-    CHECK(wr(0x08, 0x1234) && env.warns == 1 && env.warn_kind[0] == kUartWarnWrite && env.warn_offset[0] == 0x08 && env.warn_value[0] == 0x1234);
+    CHECK(wr(0x08, 0x1234) && env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == 0x08 && env.warn_value[0] == 0x1234);
     env.warns = 0;
     CHECK(wr(FR, 7) && env.warns == 1);                          // FR is read-only: a write is unimplemented
     CHECK(wr(IRIS, 7) && env.warns == 2);

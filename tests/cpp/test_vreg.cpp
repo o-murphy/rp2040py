@@ -89,9 +89,9 @@ static void test_a_recorded_cause_replaces_the_others_and_keeps_the_psm_flag() {
 
 static void test_unimplemented_offsets_warn() {
     fresh();
-    CHECK(block.read(0xC) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kVregWarnRead && env.warn_offset[0] == 0xC);
-    CHECK(block.read(0x3000) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kVregWarnReadAtomicArea);
-    CHECK(block.write(0x10, 9) && env.warns == 4 && env.warn_kind[3] == kVregWarnWrite && env.warn_value[3] == 9);
+    CHECK(block.read(0xC) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0xC);
+    CHECK(block.read(0x3000) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
+    CHECK(block.write(0x10, 9) && env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_value[3] == 9);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {

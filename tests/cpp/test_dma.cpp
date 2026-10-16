@@ -476,11 +476,11 @@ int main() {
     CHECK(!(reg(3, CTRL_TRIG) & BUSY) && !(reg(3, CTRL_TRIG) & (READ_ERROR | WRITE_ERROR)));
     // unimplemented registers warn; reads give all ones, with the second warning in the atomic area
     dma.read(0x438);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kDmaWarnRead && env.warn_offset[0] == 0x438);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x438);
     env.warns = 0;
-    CHECK(dma.read(0x1438) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kDmaWarnRead && env.warn_kind[1] == kDmaWarnReadAtomicArea);
+    CHECK(dma.read(0x1438) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kRegWarnRead && env.warn_kind[1] == kRegWarnReadAtomicArea);
     wr(0x434, 5);
-    CHECK(env.warns == 3 && env.warn_kind[2] == kDmaWarnWrite && env.warn_offset[2] == 0x434);
+    CHECK(env.warns == 3 && env.warn_kind[2] == kRegWarnWrite && env.warn_offset[2] == 0x434);
 
     // ---- failures stop a transfer where the reference's exception would -------------------------------------------------
     fresh();

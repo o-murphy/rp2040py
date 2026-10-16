@@ -43,7 +43,6 @@ namespace rp2040core {
 
 using DmaClockFn = double (*)(void* ctx);                          // clk_sys in Hz; a failure is parked and flagged
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-inline constexpr uint32_t kDmaWarnRead = kRegWarnRead, kDmaWarnReadAtomicArea = kRegWarnReadAtomicArea, kDmaWarnWrite = kRegWarnWrite;
 
 struct DmaHost {
     DmaClockFn clk_sys = nullptr;

@@ -13,8 +13,6 @@ cdef extern from "usb.hpp" namespace "rp2040core":
     cdef const uint32_t kUsbNak
     cdef const uint32_t kUsbStall
     cdef const uint32_t kUsbOther
-    cdef const uint32_t kUsbWarnRead
-    cdef const uint32_t kUsbWarnReadAtomicArea
 
     ctypedef cppbool (*UsbVoidFn)(void* ctx)
     ctypedef cppbool (*UsbEndpointReadFn)(void* ctx, uint32_t endpoint, uint32_t length)
@@ -80,7 +78,6 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         int64_t host_transaction_delay_microseconds
         int64_t host_reaction_microseconds
         UsbBlock() noexcept
-        void init(Clock* clock, uint8_t* dpram, const ChipPorts* ports, uint32_t block, uint32_t irq_line, const UsbHost& wire) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         cppbool has_scheduled_alarms() noexcept

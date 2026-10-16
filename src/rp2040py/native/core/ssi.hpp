@@ -38,7 +38,6 @@
 namespace rp2040core {
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
-inline constexpr uint32_t kSsiWarnRead = kRegWarnRead, kSsiWarnReadAtomicArea = kRegWarnReadAtomicArea, kSsiWarnWrite = kRegWarnWrite;
 // Only when no native pin is bound (a Python chip-select): whether the pin reads LOW now. False: a failure is pending with the caller.
 using SsiCsLowFn = bool (*)(void* ctx, bool* low);
 

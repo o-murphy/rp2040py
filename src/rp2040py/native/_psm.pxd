@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "psm.hpp" namespace "rp2040core":
-    cdef const uint32_t kPsmWarnRead
-    cdef const uint32_t kPsmWarnReadAtomicArea
-    cdef const uint32_t kPsmWarnWrite
 
     cdef cppclass PsmBlock:
         PsmBlock() noexcept

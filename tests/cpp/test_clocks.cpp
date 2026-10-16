@@ -558,12 +558,12 @@ static void test_a_new_count_replaces_the_one_in_progress_and_reset_clears_it() 
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(clocks.read(0xC8) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kClocksWarnRead && env.warn_offset[0] == 0xC8);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0xC8);
     W(0xCC, 7);
-    CHECK(env.warns == 2 && env.warn_kind[1] == kClocksWarnWrite && env.warn_value[1] == 7);
+    CHECK(env.warns == 2 && env.warn_kind[1] == kRegWarnWrite && env.warn_value[1] == 7);
     fresh();
     CHECK(clocks.read(0x1008) == 0xFFFFFFFFu);
-    CHECK(env.warns == 2 && env.warn_kind[1] == kClocksWarnReadAtomicArea);
+    CHECK(env.warns == 2 && env.warn_kind[1] == kRegWarnReadAtomicArea);
     fresh();
     CHECK(clocks.read(0x1000) == 0xFFFFFFFFu);  // the atomic area starts above 0x1000
     CHECK(env.warns == 1);

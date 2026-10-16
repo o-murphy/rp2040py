@@ -8,9 +8,6 @@ from rp2040py.native._cpu cimport Cpu
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "syscfg.hpp" namespace "rp2040core":
-    cdef const uint32_t kSyscfgWarnRead
-    cdef const uint32_t kSyscfgWarnReadAtomicArea
-    cdef const uint32_t kSyscfgWarnWrite
 
     cdef cppclass SyscfgBlock:
         SyscfgBlock() noexcept

@@ -119,7 +119,7 @@ static void test_every_read_reports_success() {
     }
     CHECK(env.warns == 2);  // 0x24 and 0x1000: one warning each, 0x1000 is not "in the atomic area"
     env.warns = 0;
-    CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRoscWarnRead);
+    CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead);
     CHECK(wr(REG_STATUS, 0));  // a write without BADWRITE clears nothing
     CHECK(wr(REG_DIV, 0xAA0u + 31) && env.warns == 1 && rd(REG_DIV) == 0xABFu);  // the largest valid div
     CHECK(wr(REG_STATUS, 0) && !(rd(REG_STATUS) & STATUS_BADWRITE));
@@ -247,9 +247,9 @@ static void test_aliases_unimplemented_offsets_and_the_window() {
     CHECK(rd(REG_DIV) == 0xAA7u && rosc.raw_write_value() == 3);
     CHECK(wr(REG_DIV, 0x1, kAtomicClear) && rd(REG_DIV) == 0xAA6u);
     CHECK(wr(REG_DIV, 0x1, kAtomicSet) && rd(REG_DIV) == 0xAA7u);
-    CHECK(rd(0x24) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRoscWarnRead && env.warn_offset[0] == 0x24);
-    CHECK(rd(0x1024) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kRoscWarnReadAtomicArea);
-    CHECK(wr(0x28, 5) && env.warns == 4 && env.warn_kind[3] == kRoscWarnWrite && env.warn_value[3] == 5);
+    CHECK(rd(0x24) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x24);
+    CHECK(rd(0x1024) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
+    CHECK(wr(0x28, 5) && env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_value[3] == 5);
     WindowHandler w = rosc.window_handler();
     w.write32(w.ctx, REG_COUNT, 9, kAtomicNormal);
     CHECK(w.read32(w.ctx, REG_COUNT) == 9);

@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "vreg.hpp" namespace "rp2040core":
-    cdef const uint32_t kVregWarnRead
-    cdef const uint32_t kVregWarnReadAtomicArea
-    cdef const uint32_t kVregWarnWrite
 
     cdef cppclass VregBlock:
         VregBlock() noexcept

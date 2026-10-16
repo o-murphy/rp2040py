@@ -97,9 +97,9 @@ static void test_a_new_block_is_in_its_reset_state() {
 
 static void test_unimplemented_offsets_warn() {
     fresh();
-    CHECK(block.read(0x1C) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSyscfgWarnRead && env.warn_offset[0] == 0x1C);
-    CHECK(block.read(0x3000) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kSyscfgWarnReadAtomicArea);
-    CHECK(block.write(0x20, 9) && env.warns == 4 && env.warn_kind[3] == kSyscfgWarnWrite && env.warn_value[3] == 9);
+    CHECK(block.read(0x1C) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x1C);
+    CHECK(block.read(0x3000) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
+    CHECK(block.write(0x20, 9) && env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_value[3] == 9);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {

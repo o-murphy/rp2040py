@@ -8,9 +8,6 @@ from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "rtc.hpp" namespace "rp2040core":
-    cdef const uint32_t kRtcWarnRead
-    cdef const uint32_t kRtcWarnReadAtomicArea
-    cdef const uint32_t kRtcWarnWrite
 
     cdef cppclass RtcBlock:
         uint32_t clkdiv_m1

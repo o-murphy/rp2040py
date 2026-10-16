@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "sysinfo.hpp" namespace "rp2040core":
-    cdef const uint32_t kSysInfoWarnRead
-    cdef const uint32_t kSysInfoWarnReadAtomicArea
-    cdef const uint32_t kSysInfoWarnWrite
 
     cdef cppclass SysInfoBlock:
         SysInfoBlock() noexcept

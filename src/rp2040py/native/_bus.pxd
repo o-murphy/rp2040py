@@ -11,7 +11,6 @@ cdef extern from "bus.hpp" namespace "rp2040core":
 
     cdef const uint32_t kBusWarnUnalignedRead
     cdef const uint32_t kBusWarnInvalidRead
-    cdef const uint32_t kBusWarnUndefinedWrite
 
     cdef cppclass BusHost:
         BusWarnFn warn

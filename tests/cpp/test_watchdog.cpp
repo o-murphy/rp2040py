@@ -262,11 +262,11 @@ static void test_reset_is_a_power_on_reset_of_the_whole_block() {
 static void test_unimplemented_offsets_warn() {
     Rig r;
     CHECK(r.block.read(0x30) == 0xFFFFFFFFu);
-    CHECK(r.env.warns == 1 && r.env.warn_kind[0] == kWatchdogWarnRead && r.env.warn_offset[0] == 0x30);
+    CHECK(r.env.warns == 1 && r.env.warn_kind[0] == kRegWarnRead && r.env.warn_offset[0] == 0x30);
     CHECK(r.block.read(0x3000) == 0xFFFFFFFFu);
-    CHECK(r.env.warns == 3 && r.env.warn_kind[2] == kWatchdogWarnReadAtomicArea);
+    CHECK(r.env.warns == 3 && r.env.warn_kind[2] == kRegWarnReadAtomicArea);
     CHECK(r.block.write(0x34, 9));
-    CHECK(r.env.warns == 4 && r.env.warn_kind[3] == kWatchdogWarnWrite && r.env.warn_offset[3] == 0x34 && r.env.warn_value[3] == 9);
+    CHECK(r.env.warns == 4 && r.env.warn_kind[3] == kRegWarnWrite && r.env.warn_offset[3] == 0x34 && r.env.warn_value[3] == 9);
     CHECK(r.block.write(REG_REASON, 0xFF) && r.env.warns == 4 && r.block.read(REG_REASON) == 0);  // REASON is read-only: the write is ignored, silently
     CHECK(r.block.read(REG_LOAD) == 0xFFFFFFFFu && r.env.warns == 5);  // LOAD is write-only: a read warns
     CHECK(r.block.read(0x0D) == 0xFFFFFFFFu);  // not word aligned: no register

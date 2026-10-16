@@ -24,7 +24,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kRtcWarnRead = kRegWarnRead, kRtcWarnReadAtomicArea = kRegWarnReadAtomicArea, kRtcWarnWrite = kRegWarnWrite;
 
 
 namespace rtc_regs {

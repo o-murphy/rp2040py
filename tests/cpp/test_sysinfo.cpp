@@ -94,11 +94,11 @@ static void test_writes_to_the_registers_are_ignored_silently() {
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(block.read(0x8) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kSysInfoWarnRead && env.warn_offset[0] == 0x8);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x8);
     CHECK(block.read(0x2004) == 0xFFFFFFFFu);  // above 0x1000: the atomic area warns a second time
-    CHECK(env.warns == 3 && env.warn_kind[1] == kSysInfoWarnRead && env.warn_kind[2] == kSysInfoWarnReadAtomicArea);
+    CHECK(env.warns == 3 && env.warn_kind[1] == kRegWarnRead && env.warn_kind[2] == kRegWarnReadAtomicArea);
     CHECK(block.write(0x8, 0x1234));
-    CHECK(env.warns == 4 && env.warn_kind[3] == kSysInfoWarnWrite && env.warn_offset[3] == 0x8 && env.warn_value[3] == 0x1234);
+    CHECK(env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_offset[3] == 0x8 && env.warn_value[3] == 0x1234);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {
@@ -107,7 +107,7 @@ static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value()
     CHECK(block.write_atomic(CHIP_ID, 0xFF, kAtomicSet) && block.raw_write_value() == 0xFF);
     CHECK(env.rom_calls == 1 && env.warns == 0);  // the decode read CHIP_ID; the write was ignored
     CHECK(block.write_atomic(0x8, 0x1, kAtomicXor));
-    CHECK(env.warns == 2 && env.warn_kind[0] == kSysInfoWarnRead && env.warn_kind[1] == kSysInfoWarnWrite);  // read, then write, of an unimplemented offset
+    CHECK(env.warns == 2 && env.warn_kind[0] == kRegWarnRead && env.warn_kind[1] == kRegWarnWrite);  // read, then write, of an unimplemented offset
     CHECK(block.write_atomic(REG_PLATFORM, 0x5, kAtomicNormal) && block.raw_write_value() == 0x5);
 }
 

@@ -71,11 +71,11 @@ static void test_done_is_the_complement_of_reset() {
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(block.read(0xC) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kResetsWarnRead && env.warn_offset[0] == 0xC);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0xC);
     CHECK(block.read(0x3000) == 0xFFFFFFFFu);
-    CHECK(env.warns == 3 && env.warn_kind[2] == kResetsWarnReadAtomicArea);
+    CHECK(env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
     CHECK(block.write(0x10, 9));
-    CHECK(env.warns == 4 && env.warn_kind[3] == kResetsWarnWrite && env.warn_offset[3] == 0x10 && env.warn_value[3] == 9);
+    CHECK(env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_offset[3] == 0x10 && env.warn_value[3] == 9);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {

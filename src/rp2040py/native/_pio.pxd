@@ -9,9 +9,6 @@ from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "pio.hpp" namespace "rp2040core":
-    cdef const uint32_t kPioWarnRead
-    cdef const uint32_t kPioWarnReadAtomicArea
-    cdef const uint32_t kPioWarnWrite
     cdef const uint32_t kPioErrorSmRead
     cdef const uint32_t kPioErrorSmWrite
 
@@ -21,18 +18,6 @@ cdef extern from "pio.hpp" namespace "rp2040core":
     ctypedef cppbool (*PioPinUpdateFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PioPinInputFn)(void* ctx, uint32_t pin, cppbool* level)
     ctypedef cppbool (*PioStartedFn)(void* ctx)
-
-    cdef cppclass PioHost:
-        PioHost() noexcept
-        PioIrqFn set_irq
-        void* set_irq_ctx
-        PioDreqFn dreq
-        void* dreq_ctx
-        PioLogFn log
-        PioPinUpdateFn pin_update
-        PioPinInputFn pin_input
-        PioStartedFn started
-        void* ctx
 
     cdef cppclass PioFifo:
         uint32_t buffer[8]
@@ -105,7 +90,6 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         int32_t stopped
         cppbool in_cycle
         int64_t cycle_fp, next_due_fp, backlog_drops, raw_write_value, resolve_due_fp
-        cppbool init(const PioHost& host, uint32_t first_irq, uint32_t index) noexcept
         void bind_pin(uint32_t gpio, PinBank* bank, uint32_t slot) noexcept
         uint32_t int_raw() noexcept
         uint32_t irq0_int_status() noexcept

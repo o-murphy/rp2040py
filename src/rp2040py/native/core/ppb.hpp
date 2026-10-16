@@ -40,7 +40,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kPpbWarnRead = kRegWarnRead, kPpbWarnWrite = kRegWarnWrite;
 
 // AIRCR.SYSRESETREQ with a valid VECTKEY: the host resets the core (datasheet 2.4.2.9: "Reset the core only"). Called from inside the register write.
 using PpbSystemResetFn = void (*)(void* ctx);
@@ -175,7 +174,7 @@ public:
             }
             return result;
         }
-        port_.warn(kPpbWarnRead, offset, 0);  // (no atomic-area message: the PPB window has no aliases)
+        port_.warn(kRegWarnRead, offset, 0);  // (no atomic-area message: the PPB window has no aliases)
         return 0xFFFFFFFFu;
     }
 

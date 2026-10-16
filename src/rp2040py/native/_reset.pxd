@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "resets.hpp" namespace "rp2040core":
-    cdef const uint32_t kResetsWarnRead
-    cdef const uint32_t kResetsWarnReadAtomicArea
-    cdef const uint32_t kResetsWarnWrite
 
     cdef cppclass ResetsBlock:
         ResetsBlock() noexcept

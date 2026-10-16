@@ -100,11 +100,11 @@ static void test_a_new_block_is_in_its_reset_state() {
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(block.read(0x28) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kBusctrlWarnRead && env.warn_offset[0] == 0x28);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x28);
     CHECK(block.read(0x3000) == 0xFFFFFFFFu);
-    CHECK(env.warns == 3 && env.warn_kind[2] == kBusctrlWarnReadAtomicArea);
+    CHECK(env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
     CHECK(block.write(0x2C, 9));
-    CHECK(env.warns == 4 && env.warn_kind[3] == kBusctrlWarnWrite && env.warn_offset[3] == 0x2C && env.warn_value[3] == 9);
+    CHECK(env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_offset[3] == 0x2C && env.warn_value[3] == 9);
     CHECK(block.read(0x02) == 0xFFFFFFFFu);  // not word aligned: no register
 }
 

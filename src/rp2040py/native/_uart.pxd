@@ -10,9 +10,6 @@ from rp2040py.native._clock cimport Alarm, Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "uart.hpp" namespace "rp2040core":
-    cdef const uint32_t kUartWarnRead
-    cdef const uint32_t kUartWarnReadAtomicArea
-    cdef const uint32_t kUartWarnWrite
 
     ctypedef cppbool (*UartByteFn)(void* ctx, uint32_t byte)
     ctypedef cppbool (*UartBaudFn)(void* ctx)

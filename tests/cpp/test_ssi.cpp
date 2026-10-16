@@ -395,12 +395,12 @@ int main() {
     CHECK(ssi.reset());
     CHECK(rd(SPI_CTRL_R0) == 0x03000000u && rd(IMR) == 0 && rd(SER) == 0 && rd(CTRLR0) == 0);
     fresh();
-    CHECK(rd(0xFC) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSsiWarnRead && env.warn_offset[0] == 0xFC);
+    CHECK(rd(0xFC) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0xFC);
     env.warns = 0;
-    CHECK(rd(0x10FC) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kSsiWarnRead && env.warn_kind[1] == kSsiWarnReadAtomicArea);
+    CHECK(rd(0x10FC) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[0] == kRegWarnRead && env.warn_kind[1] == kRegWarnReadAtomicArea);
     env.warns = 0;
     wr(0xFC, 0x1234);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kSsiWarnWrite && env.warn_offset[0] == 0xFC && env.warn_value[0] == 0x1234);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == 0xFC && env.warn_value[0] == 0x1234);
     env.warns = 0;
     // the atomic aliases decode against a read of the register
     wr(CTRLR0, 0x0F, kAtomicNormal);
@@ -410,7 +410,7 @@ int main() {
     CHECK(rd(CTRLR0) == 0x30);
     wr(CTRLR0, 0x70, kAtomicClear);  // 0x30 & ~0x70 = 0 (an and would give 0x30)
     CHECK(rd(CTRLR0) == 0 && ssi.raw_write_value() == 0x70);
-    CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSsiWarnRead);  // offset 0x1000 itself is not "in the atomic area"
+    CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead);  // offset 0x1000 itself is not "in the atomic area"
     env.warns = 0;
 
     // a finished command leaves nothing behind

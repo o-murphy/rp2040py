@@ -19,7 +19,6 @@
 namespace rp2040core {
 
 using SysInfoRomVersionFn = bool (*)(void* ctx, uint32_t* version);  // the bootrom's version byte; false: failure parked
-inline constexpr uint32_t kSysInfoWarnRead = kRegWarnRead, kSysInfoWarnReadAtomicArea = kRegWarnReadAtomicArea, kSysInfoWarnWrite = kRegWarnWrite;
 
 struct SysInfoHost {
     SysInfoRomVersionFn rom_version = nullptr;

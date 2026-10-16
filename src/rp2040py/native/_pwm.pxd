@@ -38,9 +38,6 @@ cdef extern from "timer32.hpp" namespace "rp2040core":
         cppbool scheduled() noexcept
 
 cdef extern from "pwm.hpp" namespace "rp2040core":
-    cdef const uint32_t kPwmWarnRead
-    cdef const uint32_t kPwmWarnReadAtomicArea
-    cdef const uint32_t kPwmWarnWrite
 
     ctypedef cppbool (*PwmPinChangedFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PwmPinReadFn)(void* ctx, uint32_t pin, cppbool* level)

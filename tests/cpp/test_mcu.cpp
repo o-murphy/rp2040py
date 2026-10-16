@@ -314,7 +314,7 @@ int main() {
 
         CHECK(world.warns == 0);
         (void)m.bus.read32(rtc + 0x3C);  // no such register
-        CHECK(world.warns == 1 && world.block == kMcuBlockRtc && world.kind == kRtcWarnRead && world.offset == 0x3C);
+        CHECK(world.warns == 1 && world.block == kMcuBlockRtc && world.kind == kRegWarnRead && world.offset == 0x3C);
 
         // 1 Hz clk_rtc, 2024-02-29 (a leap year) 23:59:58: two seconds later it is 2024-03-01 00:00:00.
         CHECK(m.rtc().clk_rtc_changed(1.0));
@@ -335,7 +335,7 @@ int main() {
         m.bus.write32(tbman, 0xFFFFFFFFu);
         CHECK(m.bus.read32(tbman) == 1 && world.warns == warns);
         (void)m.bus.read32(tbman + 0x10);
-        CHECK(world.warns == warns + 1 && world.block == kMcuBlockTbman && world.kind == kTbmanWarnRead && world.offset == 0x10);
+        CHECK(world.warns == warns + 1 && world.block == kMcuBlockTbman && world.kind == kRegWarnRead && world.offset == 0x10);
 
         // BUSCTRL, VREG, SYSINFO and SYSCFG, built by the same call (group 1 of step 3a). Addresses and values are literals, so a wrong constant fails here.
         static uint8_t rom[0x40];

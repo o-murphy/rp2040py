@@ -39,7 +39,6 @@ namespace rp2040core {
 
 using AdcReadFn = bool (*)(void* ctx, uint32_t channel);                           // a conversion was requested; the host runs its device or `default_adc_read()`
 using AdcChannelValueFn = bool (*)(void* ctx, uint32_t channel, int64_t* value);   // the analog value of a channel; false: failure parked (an invalid channel, say)
-inline constexpr uint32_t kAdcWarnRead = kRegWarnRead, kAdcWarnReadAtomicArea = kRegWarnReadAtomicArea, kAdcWarnWrite = kRegWarnWrite;
 
 struct AdcHost {
     AdcReadFn read = nullptr;

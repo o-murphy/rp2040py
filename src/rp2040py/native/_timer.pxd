@@ -10,9 +10,6 @@ from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "timer.hpp" namespace "rp2040core":
-    cdef const uint32_t kTimerWarnRead
-    cdef const uint32_t kTimerWarnReadAtomicArea
-    cdef const uint32_t kTimerWarnWrite
 
     cdef cppclass TimerBlock:
         TimerBlock() noexcept

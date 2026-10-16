@@ -282,13 +282,13 @@ int main() {
 
     // Unimplemented registers read as 0xFFFFFFFF and warn - twice in the atomic-alias area - and writes warn too.
     CHECK(rd(timer, 0x44) == 0xFFFFFFFFu);
-    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnRead && rec.warn_offset[0] == 0x44);
+    CHECK(rec.warns == 1 && rec.warn_kind[0] == kRegWarnRead && rec.warn_offset[0] == 0x44);
     clear(rec);
     CHECK(rd(timer, 0x2044) == 0xFFFFFFFFu);
-    CHECK(rec.warns == 2 && rec.warn_kind[1] == kTimerWarnReadAtomicArea);
+    CHECK(rec.warns == 2 && rec.warn_kind[1] == kRegWarnReadAtomicArea);
     clear(rec);
     timer.write_atomic(0x44, -2, kAtomicNormal);
-    CHECK(rec.warns == 1 && rec.warn_kind[0] == kTimerWarnWrite && rec.warn_offset[0] == 0x44 && rec.warn_value[0] == -2);
+    CHECK(rec.warns == 1 && rec.warn_kind[0] == kRegWarnWrite && rec.warn_offset[0] == 0x44 && rec.warn_value[0] == -2);
     clear(rec);
 
     // An alias write decodes against a read of the register - so a read side effect (TIMELR's latch) happens.

@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "tbman.hpp" namespace "rp2040core":
-    cdef const uint32_t kTbmanWarnRead
-    cdef const uint32_t kTbmanWarnReadAtomicArea
-    cdef const uint32_t kTbmanWarnWrite
 
     cdef cppclass TbmanBlock:
         TbmanBlock() noexcept

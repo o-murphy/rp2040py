@@ -550,9 +550,9 @@ static void test_datasheet_audit_flags_flush_activity_and_the_stored_registers()
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
     fresh();
-    CHECK(rd(0x0C) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kI2cWarnRead && env.warn_offset[0] == 0x0C);
+    CHECK(rd(0x0C) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x0C);
     env.warns = 0;
-    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kI2cWarnReadAtomicArea);
+    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kRegWarnReadAtomicArea);
     env.warns = 0;
     CHECK(rd(0x1001) == 0xFFFFFFFFu && env.warns == 2);
     env.warns = 0;
@@ -560,7 +560,7 @@ static void test_unimplemented_offsets_warn_and_read_all_ones() {
     env.warns = 0;
     CHECK(rd(0xAC) == 0xFFFFFFFFu && env.warns == 1);            // not a register
     env.warns = 0;
-    CHECK(wr(0x28, 0x77) && env.warns == 1 && env.warn_kind[0] == kI2cWarnWrite && env.warn_offset[0] == 0x28 && env.warn_value[0] == 0x77);
+    CHECK(wr(0x28, 0x77) && env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == 0x28 && env.warn_value[0] == 0x77);
     env.warns = 0;
     CHECK(wr(STATUS, 1) && wr(TXFLR, 1) && wr(COMP_TYPE, 1) && env.warns == 3);   // read-only registers
 }

@@ -382,7 +382,7 @@ static void test_registers_through_the_window() {
     fresh();
     CHECK(rd(0x20) == 0 && rd(0x40) == 0 && rd(0x2000) == 0 && rd(0x1) == 0);  // not all ones
     CHECK(wr(0x40, 0xDEADBEEF) && wr(0x2000, 1) && env.warns == 0);              // past the block: nothing to do
-    CHECK(wr(0x1, 5) && env.warns == 1 && env.warn_kind[0] == kXipWarnWrite);   // between the registers: unimplemented
+    CHECK(wr(0x1, 5) && env.warns == 1 && env.warn_kind[0] == kRegWarnWrite);   // between the registers: unimplemented
     CHECK(wr(REG_STAT, 7) && wr(REG_STREAM_FIFO, 7));                            // read only
     // atomic aliases decode against a read of the register
     wr(REG_CTRL, 0);

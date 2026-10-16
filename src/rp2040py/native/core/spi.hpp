@@ -42,7 +42,6 @@ namespace rp2040core {
 
 using SpiBitFn = bool (*)(void* ctx, double* nanos);                    // one SSPCLKOUT period (0 while no bit clock is configured); false: failure parked
 using SpiTransmitFn = bool (*)(void* ctx, uint32_t value);              // a byte (already masked to DSS + 1 bits) is on the wire; false: failure parked
-inline constexpr uint32_t kSpiWarnRead = kRegWarnRead, kSpiWarnReadAtomicArea = kRegWarnReadAtomicArea, kSpiWarnWrite = kRegWarnWrite;
 
 // The edges of the block that are the host's own (the device on the wire, the bit time); the line, requests, warnings and failure flag are the chip's `ChipPorts`.
 struct SpiHost {

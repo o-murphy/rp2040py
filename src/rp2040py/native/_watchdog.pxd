@@ -10,18 +10,9 @@ from rp2040py.native._pwm cimport Timer32, Timer32PeriodicAlarm
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "watchdog.hpp" namespace "rp2040core":
-    cdef const uint32_t kWatchdogWarnRead
-    cdef const uint32_t kWatchdogWarnReadAtomicArea
-    cdef const uint32_t kWatchdogWarnWrite
 
     ctypedef cppbool (*WatchdogTriggerFn)(void* ctx)
     ctypedef cppbool (*WatchdogTickFn)(void* ctx, double tick_hz)
-
-    cdef cppclass WatchdogHost:
-        WatchdogHost() noexcept
-        WatchdogTriggerFn trigger
-        WatchdogTickFn tick_changed
-        void* ctx
 
     cdef cppclass WatchdogBlock:
         Timer32 timer
@@ -36,7 +27,6 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
         cppbool pause_dbg1
         cppbool pause_jtag
         WatchdogBlock() noexcept
-        void init(Clock* clock, const ChipPorts* ports, uint32_t block, const WatchdogHost& host) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         cppbool fire_timeout() noexcept

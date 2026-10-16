@@ -11,17 +11,8 @@ from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "dma.hpp" namespace "rp2040core":
-    cdef const uint32_t kDmaWarnRead
-    cdef const uint32_t kDmaWarnReadAtomicArea
-    cdef const uint32_t kDmaWarnWrite
 
     ctypedef double (*DmaClockFn)(void* ctx)
-
-    cdef cppclass DmaHost:
-        DmaHost() noexcept
-        DmaClockFn clk_sys
-        void* clk_ctx
-        void* ctx
 
     cdef cppclass DmaChannel:
         int index
@@ -48,7 +39,6 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         uint32_t int_raw
         double transfer_ns
         DmaBlock() noexcept
-        void init(Bus* bus, Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, const DmaHost& host) noexcept
         void detach() noexcept
         uint32_t int_status0() noexcept
         uint32_t int_status1() noexcept

@@ -10,20 +10,11 @@ from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "ssi.hpp" namespace "rp2040core":
-    cdef const uint32_t kSsiWarnRead
-    cdef const uint32_t kSsiWarnReadAtomicArea
-    cdef const uint32_t kSsiWarnWrite
 
     ctypedef cppbool (*SsiCsLowFn)(void* ctx, cppbool* low)
 
-    cdef cppclass SsiHost:
-        SsiHost() noexcept
-        SsiCsLowFn cs_low
-        void* ctx
-
     cdef cppclass SsiBlock:
         SsiBlock() noexcept
-        void init(uint8_t* flash, uint32_t flash_size, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const SsiHost& host) noexcept
         cppbool bind_cs(PinBank* bank, uint32_t slot) noexcept
         void detach() noexcept
         void on_cs_change(cppbool low) noexcept

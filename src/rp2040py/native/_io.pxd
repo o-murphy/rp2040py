@@ -19,7 +19,6 @@ cdef extern from "io.hpp" namespace "rp2040core":
 
     cdef cppclass IoBlock:
         IoBlock() noexcept
-        void init(PinBank* bank, cppbool qspi_layout, const IoPadsHost& host) noexcept
         int64_t raw_write_value() noexcept
         void reset() noexcept
         uint32_t extra(uint32_t dest, cppbool force, uint32_t pin) noexcept

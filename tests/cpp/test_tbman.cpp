@@ -60,18 +60,18 @@ static void test_a_write_to_platform_is_ignored_silently() {
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(block.read(0x4) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kTbmanWarnRead && env.warn_offset[0] == 0x4);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x4);
     CHECK(block.read(0x3000) == 0xFFFFFFFFu);
-    CHECK(env.warns == 3 && env.warn_kind[2] == kTbmanWarnReadAtomicArea);
+    CHECK(env.warns == 3 && env.warn_kind[2] == kRegWarnReadAtomicArea);
     CHECK(block.write(0x4, 9));
-    CHECK(env.warns == 4 && env.warn_kind[3] == kTbmanWarnWrite && env.warn_offset[3] == 0x4 && env.warn_value[3] == 9);
+    CHECK(env.warns == 4 && env.warn_kind[3] == kRegWarnWrite && env.warn_offset[3] == 0x4 && env.warn_value[3] == 9);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {
     fresh();
     CHECK(block.write_atomic(REG_PLATFORM, 0x2, kAtomicSet) && block.raw_write_value() == 2 && env.warns == 0);
     CHECK(block.write_atomic(0x4, 0x1, kAtomicClear));
-    CHECK(env.warns == 2 && env.warn_kind[0] == kTbmanWarnRead && env.warn_kind[1] == kTbmanWarnWrite);
+    CHECK(env.warns == 2 && env.warn_kind[0] == kRegWarnRead && env.warn_kind[1] == kRegWarnWrite);
     CHECK(block.read(REG_PLATFORM) == 1u);
 }
 

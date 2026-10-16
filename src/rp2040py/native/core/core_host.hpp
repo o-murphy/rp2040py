@@ -25,7 +25,7 @@
 
 namespace rp2040core {
 
-// The messages a block reports for a register it does not implement; the host formats them (it owns the logger). The per-block names (`kDmaWarnRead`, ...) are aliases.
+// The messages a block reports for a register it does not implement; the host formats them (it owns the logger). The per-block names (`kRegWarnRead`, ...) are aliases.
 enum RegWarn : uint32_t {
     kRegWarnRead = 0,            // "Unimplemented peripheral read from 0x{offset:x}"
     kRegWarnReadAtomicArea = 1,  // "Unimplemented read from peripheral in the atomic operation region" (offset > 0x1000)

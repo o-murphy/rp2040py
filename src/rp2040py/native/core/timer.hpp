@@ -29,7 +29,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
 
 namespace timer_regs {
 constexpr uint32_t TIMEHW = 0x00, TIMELW = 0x04, TIMEHR = 0x08, TIMELR = 0x0C, ALARM0 = 0x10, ALARM1 = 0x14, ALARM2 = 0x18, ALARM3 = 0x1C;

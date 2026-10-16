@@ -97,7 +97,7 @@ static bool on_pin_read(void*, uint32_t pin, bool* level) {
     return true;
 }
 // The atomic-area message carries no offset in the reference's log, so the vectors do not either.
-static void on_warn(void*, uint32_t, uint32_t kind, uint32_t offset, int64_t value) { add(kWarn, kind, kind == kPwmWarnReadAtomicArea ? 0u : offset, static_cast<uint64_t>(value)); }
+static void on_warn(void*, uint32_t, uint32_t kind, uint32_t offset, int64_t value) { add(kWarn, kind, kind == kRegWarnReadAtomicArea ? 0u : offset, static_cast<uint64_t>(value)); }
 
 static void start() {
     if (block != nullptr) {

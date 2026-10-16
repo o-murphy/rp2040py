@@ -9,9 +9,6 @@ from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "rosc.hpp" namespace "rp2040core":
-    cdef const uint32_t kRoscWarnRead
-    cdef const uint32_t kRoscWarnReadAtomicArea
-    cdef const uint32_t kRoscWarnWrite
     cdef const uint32_t kRoscWarnInvalidFreqRange
     cdef const uint32_t kRoscWarnInvalidEnable
     cdef const uint32_t kRoscWarnInvalidFreqPasswd
@@ -22,16 +19,8 @@ cdef extern from "rosc.hpp" namespace "rp2040core":
     ctypedef cppbool (*RoscFrequencyFn)(void* ctx, double hz)
     ctypedef cppbool (*RoscBitFn)(void* ctx, uint32_t* bit)
 
-    cdef cppclass RoscHost:
-        RoscHost() noexcept
-        RoscFrequencyFn frequency_changed
-        RoscBitFn random_bit
-        void* random_ctx
-        void* ctx
-
     cdef cppclass RoscBlock:
         RoscBlock() noexcept
-        void init(Clock* clock, const ChipPorts* ports, uint32_t block, const RoscHost& host) noexcept
         void detach() noexcept
         void bind_frequency_listener(RoscFrequencyFn fn, void* ctx) noexcept
         void bind_random_source(RoscBitFn fn, void* ctx) noexcept

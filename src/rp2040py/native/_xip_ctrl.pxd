@@ -12,7 +12,6 @@ cdef extern from "xip_ctrl.hpp" namespace "rp2040core":
     cdef const uint32_t kXipWarnBadWrite
     cdef const uint32_t kXipWarnSramRead
     cdef const uint32_t kXipWarnSramWrite
-    cdef const uint32_t kXipWarnWrite
 
     ctypedef cppbool (*XipRateFn)(void* ctx, double* value)
 

@@ -18,7 +18,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kSyscfgWarnRead = kRegWarnRead, kSyscfgWarnReadAtomicArea = kRegWarnReadAtomicArea, kSyscfgWarnWrite = kRegWarnWrite;
 
 namespace syscfg_regs {
 constexpr uint32_t PROC0_NMI_MASK = 0x00, PROC1_NMI_MASK = 0x04, PROC_CONFIG = 0x08, PROC_IN_SYNC_BYPASS = 0x0C, PROC_IN_SYNC_BYPASS_HI = 0x10, DBGFORCE = 0x14, MEMPOWERDOWN = 0x18;

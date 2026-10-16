@@ -21,9 +21,6 @@ cdef extern from "fifo.hpp" namespace "rp2040core":
         void reset() noexcept
 
 cdef extern from "adc.hpp" namespace "rp2040core":
-    cdef const uint32_t kAdcWarnRead
-    cdef const uint32_t kAdcWarnReadAtomicArea
-    cdef const uint32_t kAdcWarnWrite
 
     ctypedef cppbool (*AdcReadFn)(void* ctx, uint32_t channel)
     ctypedef cppbool (*AdcChannelValueFn)(void* ctx, uint32_t channel, int64_t* value)

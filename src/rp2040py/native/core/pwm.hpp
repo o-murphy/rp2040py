@@ -32,7 +32,6 @@ namespace rp2040core {
 
 using PwmPinChangedFn = bool (*)(void* ctx, uint32_t pin);              // the block changed the word bit of `pin`: the host re-evaluates it; false: failure parked
 using PwmPinReadFn = bool (*)(void* ctx, uint32_t pin, bool* level);    // the input level of `pin`; false: failure parked
-inline constexpr uint32_t kPwmWarnRead = kRegWarnRead, kPwmWarnReadAtomicArea = kRegWarnReadAtomicArea, kPwmWarnWrite = kRegWarnWrite;
 
 struct PwmHost {
     PwmPinChangedFn pin_changed = nullptr;

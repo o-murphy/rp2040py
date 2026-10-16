@@ -334,10 +334,10 @@ static void test_reset_clears_the_block_and_keeps_clk_rtc() {
 
 static void test_unimplemented_offsets_warn() {
     Rig r;
-    CHECK(r.block.read(0x30) == 0xFFFFFFFFu && r.env.warns == 1 && r.env.warn_kind[0] == kRtcWarnRead && r.env.warn_offset[0] == 0x30);
+    CHECK(r.block.read(0x30) == 0xFFFFFFFFu && r.env.warns == 1 && r.env.warn_kind[0] == kRegWarnRead && r.env.warn_offset[0] == 0x30);
     CHECK(r.block.read(0x1000) == 0xFFFFFFFFu && r.env.warns == 2 && r.env.warn_offset[1] == 0x1000);  // exactly 0x1000 is not "in the atomic area" (> 0x1000)
-    CHECK(r.block.read(0x1034) == 0xFFFFFFFFu && r.env.warns == 4 && r.env.warn_kind[3] == kRtcWarnReadAtomicArea);
-    CHECK(r.block.write(0x40, 0x1234) && r.env.warns == 5 && r.env.warn_kind[4] == kRtcWarnWrite && r.env.warn_value[4] == 0x1234);
+    CHECK(r.block.read(0x1034) == 0xFFFFFFFFu && r.env.warns == 4 && r.env.warn_kind[3] == kRegWarnReadAtomicArea);
+    CHECK(r.block.write(0x40, 0x1234) && r.env.warns == 5 && r.env.warn_kind[4] == kRegWarnWrite && r.env.warn_value[4] == 0x1234);
 }
 
 static void test_alias_writes_decode_against_a_read_and_remember_the_raw_value() {

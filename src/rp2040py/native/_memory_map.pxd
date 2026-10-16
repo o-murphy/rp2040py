@@ -5,10 +5,6 @@ from libc.stdint cimport uint8_t, uint32_t
 
 cdef extern from "memory_map.hpp" namespace "rp2040core":
     cdef const int kNotHandled
-    cdef const uint32_t kWordIndexed
-    cdef const uint32_t kSubWord
-    cdef const uint32_t kNotifyOnWrite
-    cdef const uint32_t kXip
 
     ctypedef void (*XipAccessFn)(void* ctx, uint32_t address) noexcept
     ctypedef uint32_t (*XipSramReadFn)(void* ctx, uint32_t address) noexcept

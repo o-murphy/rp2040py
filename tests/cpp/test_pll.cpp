@@ -176,13 +176,13 @@ static void test_reset_announces_nothing() {
 static void test_unimplemented_offsets_warn() {
     fresh();
     CHECK(block.read(0x10) == 0xFFFFFFFFu);
-    CHECK(env.warns == 1 && env.warn_kind[0] == kPllWarnRead && env.warn_offset[0] == 0x10);
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x10);
     CHECK(block.write(0x14, 5));
-    CHECK(env.warns == 2 && env.warn_kind[1] == kPllWarnWrite && env.warn_value[1] == 5);
+    CHECK(env.warns == 2 && env.warn_kind[1] == kRegWarnWrite && env.warn_value[1] == 5);
     CHECK(env.changed == 0);
     fresh();
     CHECK(block.read(0x1004) == 0xFFFFFFFFu);
-    CHECK(env.warns == 2 && env.warn_kind[1] == kPllWarnReadAtomicArea);
+    CHECK(env.warns == 2 && env.warn_kind[1] == kRegWarnReadAtomicArea);
     fresh();
     CHECK(block.read(0x1000) == 0xFFFFFFFFu);  // the atomic area starts above 0x1000 (the reference's `offset > 0x1000`)
     CHECK(env.warns == 1);

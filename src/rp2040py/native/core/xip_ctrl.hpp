@@ -26,7 +26,6 @@ namespace rp2040core {
 
 // What the host is told. The register message is the shared one (`kRegWarnWrite`: an unimplemented register write, offset and value); the three below it are about the data path - the XIP's
 // memory windows, not its registers - and carry an `address`, so they start after the shared range.
-inline constexpr uint32_t kXipWarnWrite = kRegWarnWrite;
 inline constexpr uint32_t kXipWarnBadWrite = 3;   // a write to a non-caching alias with ERR_BADWRITE set (a bus fault); `address`
 inline constexpr uint32_t kXipWarnSramRead = 4;   // a read of the cache-as-SRAM while the cache is enabled or powered down; `address`
 inline constexpr uint32_t kXipWarnSramWrite = 5;  // the same for a write; `address`

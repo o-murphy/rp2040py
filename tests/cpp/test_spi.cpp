@@ -488,15 +488,15 @@ static void test_reset_clears_everything_republishes_the_dreqs_and_keeps_the_hos
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
     fresh();
-    CHECK(rd(0x28) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kSpiWarnRead && env.warn_offset[0] == 0x28);
+    CHECK(rd(0x28) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x28);
     env.warns = 0;
-    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kSpiWarnReadAtomicArea);
+    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kRegWarnReadAtomicArea);
     env.warns = 0;
     CHECK(rd(0x1001) == 0xFFFFFFFFu && env.warns == 2);          // above 0x1000, aligned or not
     env.warns = 0;
     CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1);
     env.warns = 0;
-    CHECK(wr(0x30, 0x77) && env.warns == 1 && env.warn_kind[0] == kSpiWarnWrite && env.warn_offset[0] == 0x30 && env.warn_value[0] == 0x77);
+    CHECK(wr(0x30, 0x77) && env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == 0x30 && env.warn_value[0] == 0x77);
     env.warns = 0;
     CHECK(wr(SR, 1) && wr(RIS, 1) && wr(MIS, 1) && env.warns == 3);  // read-only registers
 }

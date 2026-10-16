@@ -12,7 +12,6 @@ from rp2040py.native._window_map cimport WindowHandler
 cdef extern from "pads.hpp" namespace "rp2040core":
     cdef cppclass PadsBlock:
         PadsBlock() noexcept
-        void init(PinBank* bank, cppbool qspi, const IoPadsHost& host) noexcept
         int64_t raw_write_value() noexcept
         void reset() noexcept
         uint32_t voltage_select

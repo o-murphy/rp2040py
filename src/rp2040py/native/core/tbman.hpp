@@ -14,7 +14,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kTbmanWarnRead = kRegWarnRead, kTbmanWarnReadAtomicArea = kRegWarnReadAtomicArea, kTbmanWarnWrite = kRegWarnWrite;
 
 namespace tbman_regs {
 // (`REG_PLATFORM`, not `PLATFORM`: on Windows Python's pyconfig.h defines the macro PLATFORM as "win32", and MSVC then reads the constant as a string literal.)

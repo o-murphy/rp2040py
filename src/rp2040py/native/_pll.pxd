@@ -8,22 +8,12 @@ from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "pll.hpp" namespace "rp2040core":
-    cdef const uint32_t kPllWarnRead
-    cdef const uint32_t kPllWarnReadAtomicArea
-    cdef const uint32_t kPllWarnWrite
 
     ctypedef double (*PllRefFn)(void* ctx)
     ctypedef cppbool (*PllChangedFn)(void* ctx)
 
-    cdef cppclass PllHost:
-        PllHost() noexcept
-        PllRefFn ref_hz
-        PllChangedFn changed
-        void* ctx
-
     cdef cppclass PllBlock:
         PllBlock() noexcept
-        void init(const ChipPorts* ports, uint32_t block, const PllHost& host) noexcept
         void bind_reference(PllRefFn fn, void* ctx) noexcept
         int64_t raw_write_value() noexcept
         void reset() noexcept

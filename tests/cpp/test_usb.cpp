@@ -958,9 +958,9 @@ static void test_interrupt_registers_and_aliases() {
 
 static void test_unimplemented_registers_warn() {
     fresh();
-    CHECK(rd(0x88) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind == kUsbWarnRead && env.warn_offset == 0x88);
-    CHECK(rd(0x1088) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind == kUsbWarnReadAtomicArea);
-    CHECK(wr(0x9C, 1) && env.warns == 4 && env.warn_kind == kUsbWarnWrite);
+    CHECK(rd(0x88) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind == kRegWarnRead && env.warn_offset == 0x88);
+    CHECK(rd(0x1088) == 0xFFFFFFFFu && env.warns == 3 && env.warn_kind == kRegWarnReadAtomicArea);
+    CHECK(wr(0x9C, 1) && env.warns == 4 && env.warn_kind == kRegWarnWrite);
 }
 
 static void test_an_in_transfer() {

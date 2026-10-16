@@ -19,7 +19,6 @@
 
 namespace rp2040core {
 
-inline constexpr uint32_t kXoscWarnRead = kRegWarnRead, kXoscWarnReadAtomicArea = kRegWarnReadAtomicArea, kXoscWarnWrite = kRegWarnWrite;
 // Warnings that carry data beyond the three of `RegWarn` (the host formats the message): `value` is the offending field.
 constexpr uint32_t kXoscWarnInvalidFreqRange = 3, kXoscWarnInvalidEnable = 4, kXoscWarnInvalidDormant = 5;
 

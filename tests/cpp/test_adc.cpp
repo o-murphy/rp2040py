@@ -432,18 +432,18 @@ static void test_aliases_decode_against_a_read_with_its_side_effects() {
     wr(FCS, FCS_EN);
     CHECK(wr(INTE, 1, kAtomicSet));                                  // plain read, no side effect
     CHECK(wr(0x0C, 5, kAtomicSet) && adc.fifo.count() == 1);        // FIFO has no write handler, but the decode READ pulled 0x11; the write warns
-    CHECK(env.warns == 1 && env.warn_kind[0] == kAdcWarnWrite && env.warn_offset[0] == FIFO && env.warn_value[0] == (0x11 | 5));
+    CHECK(env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == FIFO && env.warn_value[0] == (0x11 | 5));
 }
 
 static void test_unimplemented_offsets_warn_and_read_all_ones() {
     fresh();
-    CHECK(rd(0x24) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kAdcWarnRead && env.warn_offset[0] == 0x24);
+    CHECK(rd(0x24) == 0xFFFFFFFFu && env.warns == 1 && env.warn_kind[0] == kRegWarnRead && env.warn_offset[0] == 0x24);
     env.warns = 0;
-    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kAdcWarnReadAtomicArea);
+    CHECK(rd(0x1004) == 0xFFFFFFFFu && env.warns == 2 && env.warn_kind[1] == kRegWarnReadAtomicArea);
     env.warns = 0;
     CHECK(rd(0x1000) == 0xFFFFFFFFu && env.warns == 1);
     env.warns = 0;
-    CHECK(wr(0x04, 0x77) && env.warns == 1 && env.warn_kind[0] == kAdcWarnWrite && env.warn_offset[0] == 0x04 && env.warn_value[0] == 0x77);   // RESULT is read-only
+    CHECK(wr(0x04, 0x77) && env.warns == 1 && env.warn_kind[0] == kRegWarnWrite && env.warn_offset[0] == 0x04 && env.warn_value[0] == 0x77);   // RESULT is read-only
     env.warns = 0;
     CHECK(wr(INTR, 1) && wr(INTS, 1) && wr(FIFO, 1) && env.warns == 3);
 }

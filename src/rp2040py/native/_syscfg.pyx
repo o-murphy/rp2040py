@@ -16,19 +16,6 @@ from rp2040py.native._window_map cimport WindowHandler
 __all__ = ("RP2040SysCfg",)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RP2040SysCfg block = <RP2040SysCfg> ctx
-    try:
-        if kind == kSyscfgWarnRead:
-            block.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kSyscfgWarnReadAtomicArea:
-            block.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            block.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-    except BaseException as error:
-        park_error(error)
-
-
 cdef class RP2040SysCfg:
     def __init__(self, rp2040, name):
         address = getattr(rp2040, "_native_syscfg_address", None)

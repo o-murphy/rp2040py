@@ -7,9 +7,6 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "busctrl.hpp" namespace "rp2040core":
-    cdef const uint32_t kBusctrlWarnRead
-    cdef const uint32_t kBusctrlWarnReadAtomicArea
-    cdef const uint32_t kBusctrlWarnWrite
 
     cdef cppclass BusctrlBlock:
         BusctrlBlock() noexcept

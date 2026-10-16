@@ -21,24 +21,12 @@ cdef extern from "fifo.hpp" namespace "rp2040core":
         void reset() noexcept
 
 cdef extern from "i2c.hpp" namespace "rp2040core":
-    cdef const uint32_t kI2cWarnRead
-    cdef const uint32_t kI2cWarnReadAtomicArea
-    cdef const uint32_t kI2cWarnWrite
 
     ctypedef cppbool (*I2cStartFn)(void* ctx, cppbool repeated)
     ctypedef cppbool (*I2cConnectFn)(void* ctx, uint32_t address, uint32_t mode)
     ctypedef cppbool (*I2cWriteFn)(void* ctx, uint32_t value)
     ctypedef cppbool (*I2cReadFn)(void* ctx, cppbool ack)
     ctypedef cppbool (*I2cStopFn)(void* ctx)
-
-    cdef cppclass I2cHost:
-        I2cHost() noexcept
-        I2cStartFn start
-        I2cConnectFn connect
-        I2cWriteFn write_byte
-        I2cReadFn read_byte
-        I2cStopFn stop
-        void* ctx
 
     cdef cppclass I2cBlock:
         uint32_t state
@@ -71,7 +59,6 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
         Fifo16 rx
         Fifo16 tx
         I2cBlock() noexcept
-        void init(const ChipPorts* ports, uint32_t block, uint32_t irq_line, const I2cHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t int_status() noexcept
         uint32_t master_bits() noexcept

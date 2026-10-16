@@ -22,18 +22,9 @@ cdef extern from "fifo.hpp" namespace "rp2040core":
         void reset() noexcept
 
 cdef extern from "spi.hpp" namespace "rp2040core":
-    cdef const uint32_t kSpiWarnRead
-    cdef const uint32_t kSpiWarnReadAtomicArea
-    cdef const uint32_t kSpiWarnWrite
 
     ctypedef cppbool (*SpiBitFn)(void* ctx, double* nanos)
     ctypedef cppbool (*SpiTransmitFn)(void* ctx, uint32_t value)
-
-    cdef cppclass SpiHost:
-        SpiHost() noexcept
-        SpiTransmitFn transmit
-        SpiBitFn bit_ns
-        void* ctx
 
     cdef cppclass SpiBlock:
         uint32_t control0
@@ -50,7 +41,6 @@ cdef extern from "spi.hpp" namespace "rp2040core":
         Fifo8 rx
         Fifo8 tx
         SpiBlock() noexcept
-        void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const SpiHost& host) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         uint32_t int_status() noexcept
