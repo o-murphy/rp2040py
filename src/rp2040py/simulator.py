@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
@@ -12,7 +13,6 @@ from rp2040py._clock_batch_gate import clock_tick_batch_size
 from rp2040py.clock.simulation_clock import SimulationClock
 from rp2040py.execute_batch import execute_batch
 from rp2040py.rp2040 import RP2040
-from rp2040py.utils.asyncio_loop_thread import start_loop_thread
 
 __all__ = ("ShutdownRequest", "Simulator")
 
@@ -28,28 +28,6 @@ _logger = logging.getLogger(__name__)
 _PACE_MIN_SLEEP_SECONDS = 0.002
 _PACE_MAX_CREDIT_SECONDS = 0.05
 _HELD_IN_RESET_POLL_SECONDS = 0.005
-
-# The GIL's switch interval while the engine-room thread runs. CPython's default (5 ms) makes a thread that wants the GIL wait that long for a holder that never blocks, and the
-# engine thread is exactly that: a host thread doing ordinary Python work next to it (a GUI, an image decoder, a test driver - each of whose file reads, sleeps and locks
-# releases the GIL and must win it back) pays up to one interval per release. A demo whose host thread decoded and saved five e-paper frames spent ~40 s of a 1 s emulation
-# waiting for the GIL at 5 ms and ~1 s at 1 ms (measured on the 2.9" e-paper demo, docs/records/0096). Process-wide by nature, set once when the engine-room thread is created,
-# and only when the interpreter is still at its default: an embedder's own choice, or RP2040PY_SWITCH_INTERVAL (seconds, 0 to leave it alone), wins.
-_ENGINE_SWITCH_INTERVAL_SECONDS = 0.001
-_DEFAULT_SWITCH_INTERVAL_SECONDS = 0.005
-
-
-def _tune_gil_switch_interval() -> None:
-    override = os.environ.get("RP2040PY_SWITCH_INTERVAL")
-    if override is not None:
-        try:
-            seconds = float(override)
-        except ValueError:
-            return
-        if seconds > 0:
-            sys.setswitchinterval(seconds)
-        return
-    if sys.getswitchinterval() == _DEFAULT_SWITCH_INTERVAL_SECONDS:
-        sys.setswitchinterval(_ENGINE_SWITCH_INTERVAL_SECONDS)
 
 
 class ShutdownRequest:
@@ -111,18 +89,19 @@ class _PumpedFuture(concurrent.futures.Future[_T]):
         return super().cancel()
 
 
-def _threadless_by_default() -> bool:
-    """Thread-free unless RP2040PY_THREADLESS=0 asks for the engine-room thread."""
-    return os.environ.get("RP2040PY_THREADLESS", "") != "0"
+def _warn_if_the_removed_thread_is_asked_for() -> None:
+    """`RP2040PY_THREADLESS=0` used to ask for the engine-room thread; the library starts no thread of its own any more (docs/reference/threading-model.md)."""
+    if os.environ.get("RP2040PY_THREADLESS", "") == "0":
+        warnings.warn(
+            "RP2040PY_THREADLESS=0 is ignored: the engine-room thread was removed, the engine runs on the caller's thread (pump(), await, or a blocking call)",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 class Simulator:
-    def __init__(
-        self, clock: SimulationClock | None = None, rp2040: RP2040 | None = None, *, threadless: "bool | None" = None
-    ):
-        # `threadless`: when no loop was registered with `bind_loop()`, create a plain loop for the engine *without* a thread behind it, to be driven by the caller (`pump()`, or a
-        # blocking `.result()`/`call()`, which pump) - instead of the engine-room thread `_ensure_loop()` starts otherwise. None (the default): thread-free, unless RP2040PY_THREADLESS=0 in the environment; `threadless=False` is the opt-in to the thread (a caller that starts the engine and then merely waits, relying on it making progress in the background).
-        self._threadless = _threadless_by_default() if threadless is None else threadless
+    def __init__(self, clock: SimulationClock | None = None, rp2040: RP2040 | None = None):
+        _warn_if_the_removed_thread_is_asked_for()
         # Held by the one thread that is currently running the (thread-free) loop for a blocking call or pump(); see _pump_until().
         self._pump_lock = threading.Lock()
         # `rp2040`, if given, is normally built via `boards.build_rp2040()` (or a bare `RP2040()`
@@ -167,11 +146,10 @@ class Simulator:
         # execute_instruction()'s bus dispatch (USBCDC, GDB command execution) only ever run here.
         # Usually the caller's own loop now (via bind_loop() - docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's
         # "Target shape"), not a dedicated background thread this Simulator spins up itself - that
-        # fallback (_ensure_loop()/start_loop_thread()) only kicks in lazily, for a caller that
+        # fallback (_ensure_loop(), a plain loop with no thread) only kicks in lazily, for a caller that
         # never calls bind_loop() (tests exercising ShutdownRequest alone, a caller wanting a
         # second, independently-running instance, ...).
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
         self._loop_init_lock = threading.Lock()
         self._execute_task: asyncio.Task[None] | None = None
         # Set by execute() itself, right before it re-raises, whenever _execute_batch() raises
@@ -206,11 +184,7 @@ class Simulator:
         if self._loop is None:
             with self._loop_init_lock:
                 if self._loop is None:
-                    if self._threadless:
-                        self._loop = asyncio.new_event_loop()  # nobody runs it until pump(), .result() or call() does
-                    else:
-                        _tune_gil_switch_interval()
-                        self._loop, self._loop_thread = start_loop_thread()
+                    self._loop = asyncio.new_event_loop()  # nobody runs it until pump(), .result() or call() does
         return self._loop
 
     def bind_loop(self, loop: "asyncio.AbstractEventLoop | None" = None) -> None:
@@ -230,7 +204,7 @@ class Simulator:
     def pump(self, seconds: float = 0.0) -> None:
         """Drives the engine on the *calling* thread, for a synchronous caller with no loop of its own (a Tk window, a script, a test): runs the loop registered by `bind_loop()`
         - which nobody else is running - for `seconds` of wall time, and returns. The simulation advances only while this runs; between calls it is paused, exactly as an
-        `await`-ing host's engine pauses while the host does its own work. No thread, so no GIL hand-offs (see `_tune_gil_switch_interval`). Typical use:
+        `await`-ing host's engine pauses while the host does its own work. No thread, so no GIL hand-offs. Typical use:
 
             loop = asyncio.new_event_loop()
             loop.run_until_complete(device.astart())                  # binds `loop` and starts the engine as a task on it
@@ -254,9 +228,8 @@ class Simulator:
                 loop.run_until_complete(asyncio.sleep(seconds))
 
     def start_execution(self) -> None:
-        """Schedules execute() to start running on this Simulator's own engine-room thread and
-        returns immediately - the replacement for `threading.Thread(target=simulator.execute,
-        daemon=True).start()`. execute() keeps running there until stop()."""
+        """Schedules execute() as a task on this Simulator's loop and returns immediately. Nothing runs it until the caller drives the loop (`pump()`, `await`, or a blocking
+        call); it then keeps running until stop(). No thread is started."""
         loop = self._ensure_loop()
 
         def _on_execute_done(task: "asyncio.Task[None]") -> None:
@@ -278,9 +251,9 @@ class Simulator:
 
     def _driven_by_caller(self) -> "asyncio.AbstractEventLoop | None":
         """The registered loop if it is one this Simulator has no thread for and the caller is not inside - the thread-free case, where a blocking call has to pump it itself.
-        None for the threaded engine-room loop and for a caller already running inside the loop (which must `await`)."""
+        None when no loop is registered and for a caller already running inside the loop (which must `await`)."""
         loop = self._loop
-        if loop is None or self._loop_thread is not None:
+        if loop is None:
             return None
         try:
             if asyncio.get_running_loop() is loop:
@@ -317,7 +290,7 @@ class Simulator:
         execute()/RPPIO/USBCDC state. Not needed by a caller that already shares this Simulator's
         own loop (per docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's "Target shape") - that caller just
         `await`s directly instead, no bridge required."""
-        if self._threadless and self._loop is None:
+        if self._loop is None:
             self._ensure_loop()
         loop = self._driven_by_caller()
         if loop is not None:
@@ -335,7 +308,7 @@ class Simulator:
         blocking - call()'s non-blocking counterpart, for a caller that wants to hand back a
         concurrent.futures.Future itself (device/mp_device.py's own *_async() API) rather than
         block the calling thread right away. Thread-free (see `pump()`): the coroutine becomes a task on the registered loop and the Future's `result()` pumps it."""
-        if self._threadless and self._loop is None:
+        if self._loop is None:
             self._ensure_loop()
         loop = self._driven_by_caller()
         if loop is not None:

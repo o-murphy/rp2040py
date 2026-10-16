@@ -28,7 +28,6 @@ def test_pump_advances_the_simulation_without_a_thread():
         simulator.pump(0.05)
         assert simulator.clock.nanos > t0  # time passed
         assert threading.active_count() == threads_before  # and nothing was started to make it
-        assert simulator._loop_thread is None
         stopped_at = simulator.clock.nanos
         # paused between pumps: nothing runs while the caller does its own work
         assert simulator.clock.nanos == stopped_at
@@ -113,10 +112,10 @@ def test_call_runs_the_coroutine_to_completion_on_the_callers_thread():
 @needs_blocking_loop
 def test_a_threadless_simulator_makes_its_own_loop_without_a_thread():
     threads_before = threading.active_count()
-    simulator = Simulator(rp2040=RP2040(), threadless=True)
+    simulator = Simulator(rp2040=RP2040())
     try:
         assert simulator.submit(_answer(7)).result(timeout=5) == 7
-        assert simulator._loop_thread is None and threading.active_count() == threads_before
+        assert threading.active_count() == threads_before
         simulator.rp2040.core.pc = 0x20000000
         simulator.start_execution()
         t0 = simulator.clock.nanos
@@ -128,28 +127,17 @@ def test_a_threadless_simulator_makes_its_own_loop_without_a_thread():
         simulator._loop.close()
 
 
-def test_threadless_is_the_default_and_the_environment_or_the_argument_opt_into_the_thread(monkeypatch):
-    monkeypatch.delenv("RP2040PY_THREADLESS", raising=False)
-    assert Simulator(rp2040=RP2040())._threadless is True
-    monkeypatch.setenv("RP2040PY_THREADLESS", "1")
-    assert Simulator(rp2040=RP2040())._threadless is True
+def test_the_removed_thread_is_not_started_and_its_switches_are_refused_or_warned(monkeypatch):
+    """The engine-room thread was removed: `threadless=` is gone (a TypeError), `RP2040PY_THREADLESS=0` is ignored with a warning, and no thread appears either way."""
+    threads_before = threading.active_count()
+    with pytest.raises(TypeError):
+        Simulator(rp2040=RP2040(), threadless=False)  # type: ignore[call-arg]
     monkeypatch.setenv("RP2040PY_THREADLESS", "0")
-    assert Simulator(rp2040=RP2040())._threadless is False
-    monkeypatch.delenv("RP2040PY_THREADLESS")
-    assert Simulator(rp2040=RP2040(), threadless=False)._threadless is False
-
-
-@needs_threads
-def test_the_threaded_mode_is_still_there_when_asked_for():
-    simulator = Simulator(rp2040=RP2040(), threadless=False)
-    try:
-        assert simulator._ensure_loop().is_running() or simulator._loop_thread is not None
-        assert simulator.submit(_answer(5)).result(timeout=5) == 5  # a real engine-room thread serves it
-    finally:
-        simulator.stop()
-        if simulator._loop is not None and simulator._loop_thread is not None:
-            simulator._loop.call_soon_threadsafe(simulator._loop.stop)
-            simulator._loop_thread.join(timeout=2.0)
+    with pytest.warns(RuntimeWarning, match="RP2040PY_THREADLESS=0 is ignored"):
+        simulator = Simulator(rp2040=RP2040())
+    simulator._ensure_loop()
+    assert threading.active_count() == threads_before and simulator._loop is not None
+    simulator._loop.close()
 
 
 @needs_threads
@@ -158,7 +146,7 @@ def test_two_threads_blocking_on_the_thread_free_loop_do_not_run_it_at_once():
     proactor loop on Windows. One thread pumps at a time; the other waits for it and takes over."""
     import threading
 
-    simulator = Simulator(threadless=True)
+    simulator = Simulator()
     loop = asyncio.new_event_loop()
     simulator.bind_loop(loop)
     errors: list[BaseException] = []

@@ -1,8 +1,7 @@
 # The threading model: the engine runs on the caller's thread
 
 Record [0096](../records/0096-cpp-mcu-core.md) (the progress-log entries of 2026-10-05 on the GIL, `pump()` and the threadless mode) has the history and the
-measurements; this page is what to know to *use* it. Since the entry "the engine runs without a thread by default" a `Simulator` has **no thread of its own**
-unless you ask for one.
+measurements; this page is what to know to *use* it. A `Simulator` has **no thread of its own**; the opt-in thread of the early versions of this page was removed on 2026-10-16.
 
 ## The rule
 
@@ -21,12 +20,11 @@ because its clock is virtual (see the time contract in 0096's "Core host contrac
 `device.start_async()` without `.result()`) and then just `time.sleep()`, or wait on a flag from another thread. Nothing runs the engine, so nothing happens
 - a stall, not an error. Pump it, wait through one of the blocking calls, or opt back in to the thread (below).
 
-## Opting in to the old engine-room thread
+## The engine-room thread was removed (2026-10-16)
 
-`Simulator(threadless=False)`, or `RP2040PY_THREADLESS=0` in the environment: the engine runs on a dedicated daemon thread with its own loop, and
-`start_execution()`, `submit()`, `call()` and `schedule_threadsafe()` reach it from other threads, as before. The simulator then lowers the interpreter's GIL
-switch interval from 5 ms to 1 ms once, when it creates the thread (only if the interval is still the default; `RP2040PY_SWITCH_INTERVAL=<seconds>` sets
-it, `0` leaves it alone) - see the next section for why.
+`Simulator(threadless=False)`, `RP2040PY_THREADLESS=0` and `RP2040PY_SWITCH_INTERVAL` used to give the engine a dedicated daemon thread (and lower the GIL switch interval to 1 ms for it). The library now
+starts **no thread of its own**: the keyword is gone (a `TypeError`), `RP2040PY_THREADLESS=0` is ignored with a `RuntimeWarning`, `RP2040PY_SWITCH_INTERVAL` is not read, and `utils/asyncio_loop_thread.py` is deleted.
+A caller that started the engine and then merely waited has to pump it (`pump()`), wait through a blocking call, or `await`, as the table at the top says. The numbers below are why the thread was never worth keeping.
 
 ## Why: the numbers
 
@@ -59,11 +57,11 @@ and not pursued, and why the `await`-ing model is the one `rp2040js` has (one ev
 
 ## Where threads remain
 
-- `Simulator(threadless=False)` / `RP2040PY_THREADLESS=0`: the optional engine-room thread above (tested: `tests/test_schedule_threadsafe.py`, the threaded
-  tests of `tests/test_device.py` run in both modes).
-- `cli/stdio_repl.py`: a fallback reader thread for stdin where the loop cannot watch it (a blocking read must stay off the engine's thread).
-- A *blocking* real-world call made from inside an engine callback (a socket connect in a CYW43 NAT path) would stall a thread-free engine; the NAT's paths
-  use `schedule_threadsafe()` and non-blocking sockets, and the suite passes thread-free, but a new device doing blocking I/O must not do it inline.
+The library starts none. What can still be threads are the *embedder's* (a GUI, a test, a worker handing input to the chip through `schedule_threadsafe()`, which queues it onto the engine's loop to run on the thread
+that pumps it) and one CLI helper:
 
-Verification of the claim "nothing in the library needs the thread": the full test suite, native build, with `RP2040PY_THREADLESS=1` (before the default
-changed): 1632 passed, 20 skipped, and the only two failures were the tests of the threaded semantics themselves, which now select `threadless=False`.
+- `cli/stdio_repl.py`: a fallback reader thread for stdin where the loop cannot watch it (a blocking read must stay off the engine's thread). It is the CLI, not the library.
+- A *blocking* real-world call made from inside an engine callback (a socket connect in a CYW43 NAT path) would stall the engine; the NAT's paths use `schedule_threadsafe()` and non-blocking sockets, and a new device
+  doing blocking I/O must not do it inline.
+
+The contract for these (which thread may touch the core, and how) is the "Core host contract: entry points, threads and the host interface" section of record 0096.

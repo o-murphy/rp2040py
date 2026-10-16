@@ -71,7 +71,7 @@ rp2040py (Python), ordered from fewest dependencies to most.
 - [x] `gdb/gdb-server.ts` → `gdb/gdb_server.py`
 - [x] `gdb/gdb-connection.ts` → `gdb/gdb_connection.py`
 - [x] `gdb/gdb-tcp-server.ts` → `gdb/gdb_tcp_server.py` (Node `net` → Python `asyncio.start_server()`,
-  its own dedicated engine-room thread - see "Threading model" below)
+  the engine's loop, driven on the caller's thread - see "Threading model" below)
 
 ### usb
 - [x] `usb/interfaces.ts` → `usb/interfaces.py`

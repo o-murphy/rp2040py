@@ -132,11 +132,10 @@ Prefer driving `Simulator._execute_batch()` directly (synchronous, no real OS th
 `start_execution()` + a real background thread, whenever a test doesn't specifically need to
 verify cross-thread behavior - the established pattern in most of `tests/test_simulator.py`.
 
-When a test genuinely needs a real background thread (`schedule_threadsafe()`, cross-thread
+The library starts no thread of its own (the engine runs on the thread that pumps it). When a test genuinely needs a thread of its own (a producer calling `schedule_threadsafe()`, cross-thread
 callbacks, etc.):
-- Always wrap the risky body in `try: ... finally: simulator.stop()`. A leaked engine-room thread
-  with `core.waiting=True` busy-loops a full CPU core for the rest of the test session -
-  "idle" doesn't mean cheap to leak here.
+- Always wrap the risky body in `try: ... finally: simulator.stop()` and pump the loop once afterwards. A `core.waiting=True` engine that is left running busy-loops a full CPU core for the rest of
+  the test session - "idle" doesn't mean cheap to leak here.
 - Don't add a blocking "wait for settle" API to `Simulator` itself to paper over a race (a
   `Simulator.stop(wait=True)` blocking on `future.result()` was tried and reverted - it
   measurably slowed the whole suite and could hang under real system load). Fix the race at the

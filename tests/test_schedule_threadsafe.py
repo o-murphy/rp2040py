@@ -1,36 +1,24 @@
 """Coverage for the CYW43_WIFI_BACKLOG.md "Concurrency model" plumbing: `Simulator`'s optional
 pre-built `rp2040` constructor argument, the `RP2040.simulator` back-reference it wires up, and
 `schedule_threadsafe()` on both - the mechanism a future `ExternalDevice` (e.g. CYW43439's NAT
-bridge) hands slow/blocking work off to the engine-room thread with. Also covers `bind_loop()`,
+bridge) hands slow/blocking work to the engine's loop with. Also covers `bind_loop()`,
 added for docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's caller-owns-the-loop model."""
 
 import asyncio
 import threading
 
 import pytest
-from utils.emscripten import needs_threads
+from utils.emscripten import needs_blocking_loop
 
 from rp2040py.simulator import Simulator
 
 
-def _stop_and_join(simulator: Simulator) -> None:
-    """`Simulator.stop()` only flips `self.stopped` - it stops the `execute()` *task*, not the
-    engine-room *loop* underneath it. `_ensure_loop()`'s background thread's target is
-    `loop.run_forever()` (`utils/asyncio_loop_thread.py`), which keeps running - idle, no longer
-    CPU-bound once the task actually notices `stopped` and returns, but still very much alive -
-    until something explicitly calls `loop.stop()`. A bare `simulator._loop_thread.join(timeout)`
-    after `stop()` alone therefore always blocks for the *entire* timeout before giving up, since
-    the thread never actually exits on its own: confirmed the hard way - an earlier version of
-    this helper did exactly that, silently "succeeding" every time by eating the full timeout
-    while leaving the (by-then-idle, not busy) thread alive regardless, which still reliably let a
-    stray thread outlive its test and interfere with whatever ran next (test_simulator.py's own
-    `time.monotonic` monkeypatch, called concurrently from a leftover thread here, being one
-    confirmed victim). Stopping the loop itself, not just the task, is what actually makes
-    `run_forever()` return and the thread exit for real."""
+def _stop_and_close(simulator: Simulator) -> None:
+    """`Simulator.stop()` flips `stopped`; the loop (made by `_ensure_loop()`, with no thread behind it) is then pumped once so the `execute()` task notices and returns, and closed."""
     simulator.stop()
-    if simulator._loop is not None and simulator._loop_thread is not None:
-        simulator._loop.call_soon_threadsafe(simulator._loop.stop)
-        simulator._loop_thread.join(timeout=2.0)
+    if simulator._loop is not None and not simulator._loop.is_running():
+        simulator.pump(0.01)
+        simulator._loop.close()
 
 
 def test_simulator_uses_a_given_rp2040_instead_of_constructing_one(rp2040_factory):
@@ -53,55 +41,48 @@ def test_bare_rp2040_schedule_threadsafe_raises_without_an_owning_simulator(rp20
         rp2040_factory().schedule_threadsafe(lambda: None)
 
 
-@needs_threads
-def test_schedule_threadsafe_runs_a_callable_on_the_engine_room_thread_not_the_caller(rp2040_factory):
-    simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
-    # No bootrom/firmware loaded - core.waiting=True keeps the engine room in _execute_batch()'s
-    # cheap idle-jump branch (see test_simulator.py) instead of actually executing garbage
-    # instructions from PC 0, which would otherwise spam "not implemented"/"invalid memory
-    # address" warnings for as long as this thread keeps running.
+def _scheduled_from_a_foreign_thread(rp2040_factory, make_work):
+    """`schedule_threadsafe()` called from a thread of the test: the work is queued and runs on the thread that pumps the engine's loop (this one), never on the caller's."""
+    simulator = Simulator(rp2040=rp2040_factory())
+    # No bootrom/firmware loaded - core.waiting=True keeps the engine in _execute_batch()'s cheap idle-jump branch instead of executing garbage instructions from PC 0.
     simulator.rp2040.core.waiting = True
+    simulator._ensure_loop()
     simulator.start_execution()
     try:
-        done = threading.Event()
-        result = {}
-
-        def _work():
-            result["thread"] = threading.current_thread()
-            done.set()
-
-        simulator.rp2040.schedule_threadsafe(_work)
-
-        assert done.wait(2), "schedule_threadsafe callable never ran"
-        assert result["thread"] is not threading.current_thread()
+        ran = {}
+        scheduler = threading.Thread(target=lambda: simulator.rp2040.schedule_threadsafe(make_work(ran)))
+        scheduler.start()
+        scheduler.join(5)
+        for _ in range(50):
+            simulator.pump(0.02)
+            if "thread" in ran:
+                break
+        assert "thread" in ran, "schedule_threadsafe work never ran"
+        assert ran["thread"] is threading.current_thread() and ran["thread"] is not scheduler
     finally:
-        # Not just tidiness: `core.waiting=True` makes _execute_batch()'s idle-jump branch a tight
-        # CPU-bound Python loop, not a real sleep - a Simulator left running past this test (e.g.
-        # because an assertion above raised before this could otherwise run) burns a full core for
-        # the rest of the whole test session, not a few idle threads sitting harmlessly in
-        # `select()`. See _stop_and_join()'s own docstring for why stop() alone isn't enough.
-        _stop_and_join(simulator)
+        _stop_and_close(simulator)
 
 
-@needs_threads
-def test_schedule_threadsafe_runs_a_coroutine_on_the_engine_room_thread(rp2040_factory):
-    simulator = Simulator(rp2040=rp2040_factory(), threadless=False)  # the engine-room *thread* is what is under test
-    simulator.rp2040.core.waiting = True  # see the sibling test above for why
-    simulator.start_execution()
-    try:
-        done = threading.Event()
-        result = {}
+@needs_blocking_loop
+def test_schedule_threadsafe_runs_a_callable_on_the_pumping_thread_not_the_caller(rp2040_factory):
+    def make(ran):
+        def work():
+            ran["thread"] = threading.current_thread()
 
-        async def _coro():
-            result["thread"] = threading.current_thread()
-            done.set()
+        return work
 
-        simulator.rp2040.schedule_threadsafe(_coro())
+    _scheduled_from_a_foreign_thread(rp2040_factory, make)
 
-        assert done.wait(2), "schedule_threadsafe coroutine never ran"
-        assert result["thread"] is not threading.current_thread()
-    finally:
-        _stop_and_join(simulator)  # see the sibling test above for why this must be unconditional
+
+@needs_blocking_loop
+def test_schedule_threadsafe_runs_a_coroutine_on_the_pumping_thread_not_the_caller(rp2040_factory):
+    def make(ran):
+        async def work():
+            ran["thread"] = threading.current_thread()
+
+        return work()
+
+    _scheduled_from_a_foreign_thread(rp2040_factory, make)
 
 
 def test_bind_loop_registers_the_given_loop_explicitly(rp2040_factory):
