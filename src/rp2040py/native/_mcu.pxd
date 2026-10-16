@@ -83,6 +83,17 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
     cdef const uint32_t kMcuBlockPsm
     cdef const uint32_t kMcuBlockResets
 
+    cdef cppclass McuMemory:
+        McuMemory() noexcept
+        uint8_t* rom
+        uint32_t rom_size
+        uint8_t* flash
+        uint32_t flash_size
+        uint8_t* sram
+        uint32_t sram_size
+        uint8_t* dpram
+        uint32_t dpram_size
+
     cdef cppclass McuHost:
         McuHost() noexcept
         McuWarnFn warn
@@ -153,6 +164,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         XipBlock& xip() noexcept
         UsbBlock& usb() noexcept
         void set_usb_dpram(uint8_t* data) noexcept
+        void set_memory(const McuMemory& memory) noexcept
         void set_flash(uint8_t* data, uint32_t size) noexcept
         void set_ssi_world(bool world) noexcept
         bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept

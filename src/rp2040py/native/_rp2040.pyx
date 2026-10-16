@@ -23,15 +23,8 @@ from libc.stdint cimport int64_t, uint8_t, uint32_t, uint64_t
 from libcpp cimport bool
 
 from rp2040py.native._cortex_m0_core cimport CortexM0Core
-from rp2040py.native._memory_map cimport (
-    Region,
-    kNotifyOnWrite,
-    kXip,
-    kSubWord,
-    kWordIndexed,
-)
 from rp2040py.native._dma cimport RPDMA
-from rp2040py.native._mcu cimport kMcuBlockBusctrl, kMcuBlockPsm, kMcuBlockResets, kMcuBlockRtc, kMcuBlockSyscfg, kMcuBlockSysinfo, kMcuBlockTbman, kMcuBlockVreg, Mcu, McuHost, kMcuBlockAdc, kMcuBlockClocks, kMcuBlockDma, kMcuBlockI2c0, kMcuBlockI2c1, kMcuBlockIoBank0, kMcuBlockIoQspi, kMcuBlockPadsBank0, kMcuBlockPadsQspi, kMcuBlockPllSys, kMcuBlockPllUsb, kMcuBlockPpb, kMcuBlockPio0, kMcuBlockPio1, kMcuBlockPwm, kMcuBlockRosc, kMcuBlockSsi, kMcuBlockUsb, kMcuBlockXip, kMcuBlockSio, kMcuBlockSpi0, kMcuBlockSpi1, kMcuBlockTimer, kMcuBlockUart0, kMcuBlockUart1, kMcuBlockWatchdog, kMcuBlockXosc
+from rp2040py.native._mcu cimport kMcuBlockBusctrl, kMcuBlockPsm, kMcuBlockResets, McuMemory, kMcuBlockRtc, kMcuBlockSyscfg, kMcuBlockSysinfo, kMcuBlockTbman, kMcuBlockVreg, Mcu, McuHost, kMcuBlockAdc, kMcuBlockClocks, kMcuBlockDma, kMcuBlockI2c0, kMcuBlockI2c1, kMcuBlockIoBank0, kMcuBlockIoQspi, kMcuBlockPadsBank0, kMcuBlockPadsQspi, kMcuBlockPllSys, kMcuBlockPllUsb, kMcuBlockPpb, kMcuBlockPio0, kMcuBlockPio1, kMcuBlockPwm, kMcuBlockRosc, kMcuBlockSsi, kMcuBlockUsb, kMcuBlockXip, kMcuBlockSio, kMcuBlockSpi0, kMcuBlockSpi1, kMcuBlockTimer, kMcuBlockUart0, kMcuBlockUart1, kMcuBlockWatchdog, kMcuBlockXosc
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._pio cimport PioBlock
 from rp2040py.native._usb cimport UsbHost, usb_wire_fill
@@ -672,39 +665,16 @@ cdef class RP2040:
         memoryviews pin them (a bytearray/array.array cannot be resized while exported). The
         per-region flags and mirror masks reproduce the pre-Phase-1 behaviour exactly - see
         core/memory_map.hpp and tests/test_memory_map_parity.py."""
-        cdef Region region
-        # Boot ROM: word-indexed, no sub-word fast path (composed from 32-bit reads, as before).
-        region.base = 0
-        region.window = self.bootrom_byte_size
-        region.size = self.bootrom_byte_size
-        region.mask = 0xFFFFFFFFU
-        region.data = <uint8_t*> &self._bootrom[0]
-        region.flags = kWordIndexed
-        self._mcu.bus.mem.attach(region)
-        # Flash: four 16 MiB aliases for reads (XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC); writes and
-        # sub-word accesses only below the real flash size.
-        region.base = FLASH_START
-        region.window = FLASH_END - FLASH_START
-        region.size = self.flash_byte_size
-        region.mask = 0x00FFFFFFU
-        region.data = <uint8_t*> &self._flash[0]
-        region.flags = kSubWord | kXip  # the whole window is read-only to the bus; the XIP block (once built) is told of every access
-        self._mcu.bus.mem.attach(region)
-        region.base = RAM_START
-        region.window = self.ram_byte_size
-        region.size = self.ram_byte_size
-        region.mask = 0xFFFFFFFFU
-        region.data = <uint8_t*> &self._sram[0]
-        region.flags = kSubWord
-        self._mcu.bus.mem.attach(region)
-        # USB DPRAM: a completed 32-bit write must reach `usb_ctrl.dpram_updated()`.
-        region.base = DPRAM_START
-        region.window = self.dpram_byte_size
-        region.size = self.dpram_byte_size
-        region.mask = 0xFFFFFFFFU
-        region.data = <uint8_t*> &self._usb_dpram[0]
-        region.flags = kNotifyOnWrite
-        self._mcu.bus.mem.attach(region)
+        cdef McuMemory memory
+        memory.rom = <uint8_t*> &self._bootrom[0]
+        memory.rom_size = self.bootrom_byte_size
+        memory.flash = <uint8_t*> &self._flash[0]
+        memory.flash_size = self.flash_byte_size
+        memory.sram = <uint8_t*> &self._sram[0]
+        memory.sram_size = self.ram_byte_size
+        memory.dpram = <uint8_t*> &self._usb_dpram[0]
+        memory.dpram_size = self.dpram_byte_size
+        self._mcu.set_memory(memory)
 
     def __init__(self, clock: IClock | None = None):
         cdef BusHost bus_host
@@ -754,8 +724,6 @@ cdef class RP2040:
         world.record_cause = _w_record_cause
         world.clk_sys = _w_clk_sys
         world.adc_channel_value = _w_adc_channel_value
-        self._mcu.set_flash(<uint8_t*> &self._flash[0], <uint32_t> self.flash_byte_size)
-        self._mcu.set_usb_dpram(<uint8_t*> &self._usb_dpram[0])
         self._mcu.build(world)
 
         # Clocks

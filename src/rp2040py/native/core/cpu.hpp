@@ -92,6 +92,7 @@ public:
     uint32_t vtor, shpr2, shpr3;
     bool bl_hook_enabled = false;  // call host.bl_taken on BL/BLX
 
+    bool initialised() const noexcept { return bus_ != nullptr; }  // `init()` has been called (by the `Mcu`, or by a shell that wants its own host)
     Bus& bus() noexcept { return *bus_; }
     const CpuHost& host() const noexcept { return host_; }
     bool failed() const noexcept { return *host_.failed != 0; }

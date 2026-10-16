@@ -148,6 +148,18 @@ struct McuInstance {  // the context of one UART / SPI / I2C: the chip and which
     uint32_t index = 0;
 };
 
+// The chip's memory: the host's buffers (see `Mcu::set_memory()`).
+struct McuMemory {
+    uint8_t* rom = nullptr;
+    uint32_t rom_size = 16 * 1024;
+    uint8_t* flash = nullptr;
+    uint32_t flash_size = 16 * 1024 * 1024;
+    uint8_t* sram = nullptr;
+    uint32_t sram_size = 264 * 1024;
+    uint8_t* dpram = nullptr;
+    uint32_t dpram_size = 4 * 1024;
+};
+
 class Mcu {
 public:
     static constexpr int kPioBlocks = 2;
@@ -186,6 +198,11 @@ public:
     // after `use_clock()` (the RTC's second is an alarm of that clock) and with the host that answers for what the chip cannot. The blocks come over one at a time (record 0096, 3a): the RTC first.
     void build(const McuHost& host) noexcept {
         host_world_ = host;
+        if (!cpu.initialised()) {  // the core on the bus; a shell that wants the core's break / BL / log notices has initialised it with its own host already
+            CpuHost cpu_host;
+            cpu_host.failed = host.failed;
+            cpu.init(&bus, cpu_host, kMaxHardwareIrq);
+        }
         // The clock tree (CLOCKS, both PLLs, the crystal and the ring oscillator): built before the blocks that run from it. The PLLs take the crystal from the tree, the oscillators and the PLL
         // registers tell the tree when they change, and the tree reads both oscillators off their blocks. The crystal's frequency is the board's: `set_crystal_hz()`.
         PllHost ps;
@@ -501,6 +518,7 @@ public:
             i2c_[i].init(ic);
             bus.windows.attach(kI2cBase[i], i2c_[i].window_handler());
         }
+        bind_tree_sinks();
     }
     RtcBlock& rtc() noexcept { return rtc_; }
     TbmanBlock& tbman() noexcept { return tbman_; }
@@ -560,7 +578,7 @@ public:
     bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept { return enter_reset(static_cast<McuResetCause>(cause), psm_wdsel, resets_wdsel, world); }
     // Out of reset: the core at the flash's entry point, where the boot ROM would have left it (the ROM image is optional for a host, record 0096 F2).
     void leave_reset() noexcept { cpu.registers[15] = kFlashStart; }
-    static constexpr uint32_t kFlashStart = 0x10000000;
+    static constexpr uint32_t kFlashStart = 0x10000000, kFlashEnd = 0x14000000, kRamStart = 0x20000000, kDpramStart = 0x50100000;
 
     ResetsBlock& resets() noexcept { return resets_; }
     PsmBlock& psm() noexcept { return psm_; }
@@ -638,7 +656,44 @@ public:
         ssi_world_ = world;
         bind_ssi_cs();
     }
-    // The chip's flash image: the host's buffer, which outlives the chip. Set before `build()`.
+    // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
+    // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
+    // reported to the XIP block once it is built; the SRAM at 0x20000000; the DPRAM at 0x50100000, a completed word write reported to the host's `dpram_written`). Call once, before `build()`;
+    // it hands the flash and the DPRAM to the blocks that work on them (`set_flash`, `set_usb_dpram`).
+    void set_memory(const McuMemory& m) noexcept {
+        Region region;
+        region.base = 0;
+        region.window = m.rom_size;
+        region.size = m.rom_size;
+        region.mask = 0xFFFFFFFFu;
+        region.data = m.rom;
+        region.flags = kWordIndexed;
+        bus.mem.attach(region);
+        region.base = kFlashStart;
+        region.window = kFlashEnd - kFlashStart;
+        region.size = m.flash_size;
+        region.mask = 0x00FFFFFFu;
+        region.data = m.flash;
+        region.flags = kSubWord | kXip;
+        bus.mem.attach(region);
+        region.base = kRamStart;
+        region.window = m.sram_size;
+        region.size = m.sram_size;
+        region.mask = 0xFFFFFFFFu;
+        region.data = m.sram;
+        region.flags = kSubWord;
+        bus.mem.attach(region);
+        region.base = kDpramStart;
+        region.window = m.dpram_size;
+        region.size = m.dpram_size;
+        region.mask = 0xFFFFFFFFu;
+        region.data = m.dpram;
+        region.flags = kNotifyOnWrite;
+        bus.mem.attach(region);
+        set_flash(m.flash, m.flash_size);
+        set_usb_dpram(m.dpram);
+    }
+    // The chip's flash image: the host's buffer, which outlives the chip. Set before `build()` (`set_memory()` does it).
     void set_flash(uint8_t* data, uint32_t size) noexcept {
         flash_ = data;
         flash_size_ = size;
@@ -673,6 +728,26 @@ public:
     // host's to give. The function receives the chip as its context.
     void set_clk_changed_flag(const volatile uint8_t* flag) noexcept { host_.clk_changed = flag; }
     void set_monotonic(double (*monotonic)(void* chip)) noexcept { host_.monotonic = monotonic != nullptr ? monotonic : no_time; }
+
+    // The clock tree tells its consumers when a rate changes: SysTick, the PWM counters and the DMA (`clk_sys`), the watchdog's tick (`clk_ref`) and the RTC (`clk_rtc`), then the flag below. Registered by
+    // `build()` in the reference's order (`update_clocks()`); a shell that puts its own consumer over one of them (an oracle's reference) clears the lists and registers its own.
+    void bind_tree_sinks() noexcept {
+        clocks_.clear_sinks();
+        (void)clocks_.add_sys_sink(ppb_sys_sink, &ppb_);
+        (void)clocks_.add_sys_sink(pwm_sys_sink, &pwm_);
+        (void)clocks_.add_sys_sink(dma_sys_sink, &own_dma_);
+        (void)clocks_.add_sys_sink(sys_changed_sink, this);
+        (void)clocks_.add_ref_sink(watchdog_ref_sink, &watchdog_);
+        (void)clocks_.add_rtc_sink(rtc_rtc_sink, &rtc_);
+    }
+    // Runs at the rate the clock tree has now: one instruction costs one `clk_sys` cycle, and a batch ends when `clk_sys` changes (so the next call starts at the new rate). What a wrapper calls in a loop
+    // when it has no clock tree of its own to follow (the Python `Simulator` does it itself, with its own flag, and calls `run()`).
+    int run_at_sys_clock(McuLimits limits, McuResult* result = nullptr) noexcept {
+        clk_changed_ = 0;
+        host_.clk_changed = &clk_changed_;
+        limits.cycle_nanos = 1e9 / clocks_.clk_sys();
+        return run(limits, result);
+    }
 
     // Runs until the limits or a request end it. Returns 0, or `kBatchFault` when a clock alarm, the CPU or a host call failed - the host has parked its own error, and
     // `result->reason` is `kStopFault`.
@@ -732,6 +807,10 @@ private:
             case kMcuBlockWatchdog: return watchdog_.reset();
             default: return true;
         }
+    }
+    static bool sys_changed_sink(void* chip, double, double) noexcept {
+        static_cast<Mcu*>(chip)->clk_changed_ = 1;
+        return true;
     }
     static bool step_pio(void* chip, int index, int64_t cycles) noexcept { return static_cast<Mcu*>(chip)->pio_[index].advance(cycles); }
     static double no_time(void*) noexcept { return 0.0; }
@@ -1026,6 +1105,7 @@ private:
     PwmBlock pwm_;
     McuInstance pio_ctx_[2];
     SsiBlock ssi_;
+    volatile uint8_t clk_changed_ = 0;  // raised by the tree when clk_sys changes (`run_at_sys_clock()`)
     UsbBlock usb_;
     uint8_t* usb_dpram_ = nullptr;
     XipBlock xip_;
