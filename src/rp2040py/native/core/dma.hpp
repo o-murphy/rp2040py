@@ -484,8 +484,8 @@ inline bool DmaChannel::write(uint32_t offset, int64_t value) noexcept {
     return true;
 }
 
-// The addresses and counts 0, CTRL 0 but for CHAIN_TO (the channel's own number). The CTRL goes in through the non-triggering alias: the trigger would start the channel, and writing it over
-// a running one left BUSY and the count set.
+// Every register 0 (datasheet 2.5.7), CHAIN_TO included: 0x0 for every channel, so a channel that does not set it chains to channel 0 when it completes (pico-sdk's default config sets it to
+// the channel's own number for that reason). The CTRL goes in through the non-triggering alias: the trigger would start the channel, and writing it over a running one left BUSY and the count set.
 inline bool DmaChannel::reset() noexcept {
     cycle_remainder = 0.0;
     dma_->clock_->cancel(&alarm);
@@ -495,7 +495,7 @@ inline bool DmaChannel::reset() noexcept {
     trans_count_reload = 0;
     dreq_counter = 0;
     ctrl = 0;
-    return write(dma_regs::AL1_CTRL, static_cast<int64_t>(index) << 11);
+    return write(dma_regs::AL1_CTRL, 0);
 }
 
 }  // namespace rp2040core

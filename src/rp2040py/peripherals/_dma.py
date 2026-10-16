@@ -327,8 +327,9 @@ class RPDMAChannel:
                 self.dma.check_interrupts()
 
     def reset(self) -> None:
-        # Every register of the channel back to its datasheet reset value (2.5.7): the addresses and counts 0, CTRL 0 but for CHAIN_TO, which resets to the channel's own number. The CTRL
-        # goes in through the non-triggering alias: the trigger would start the channel, and writing it over a running one left BUSY and the count set.
+        # Every register of the channel back to its datasheet reset value (2.5.7): all 0, CHAIN_TO included (0x0 for every channel: a channel that does not set it chains to channel 0 when it
+        # completes, which is why pico-sdk's default config sets it to the channel's own number). The CTRL goes in through the non-triggering alias: the trigger would start the channel, and
+        # writing it over a running one left BUSY and the count set.
         self._cycle_remainder = 0.0
         self.transfer_alarm.cancel()
         self._read_addr = 0
@@ -337,7 +338,7 @@ class RPDMAChannel:
         self._trans_count_reload = 0
         self._dreq_counter = 0
         self._ctrl = 0
-        self.write_uint32(CHN_AL1_CTRL, self.index << CHAIN_TO_SHIFT)
+        self.write_uint32(CHN_AL1_CTRL, 0)
 
 
 class RPDMA(BasePeripheral):

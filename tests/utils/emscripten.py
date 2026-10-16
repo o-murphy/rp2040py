@@ -9,7 +9,11 @@ IS_EMSCRIPTEN = sys.platform == "emscripten"
 # out of the test command (pyproject.toml's pyodide section).
 needs_sockets = pytest.mark.skipif(IS_EMSCRIPTEN, reason="Emscripten has no real sockets")
 needs_threads = pytest.mark.skipif(IS_EMSCRIPTEN, reason="Emscripten has no threads (can't start new thread)")
-needs_processes = pytest.mark.skipif(IS_EMSCRIPTEN, reason="Emscripten does not support processes")
+# Emscripten has no processes; on Android (the cibuildwheel testbed) `sys.executable` is empty, so a test that runs `[sys.executable, "-m", "pytest", ...]` ends in "PermissionError: ''".
+CANNOT_SPAWN = IS_EMSCRIPTEN or sys.platform == "android" or not sys.executable
+needs_processes = pytest.mark.skipif(
+    CANNOT_SPAWN, reason="no way to start a process here (Emscripten, or Android's empty sys.executable)"
+)
 # A synchronous call that waits for the simulation (`Simulator.call()`/`submit().result()`, `pump()`, a device's blocking start/exec) has to run the event loop from
 # the caller's thread; the WebLoop can do that only when the entry point is a JSPI-promising call, which a plain pytest run is not. Pyodide users await instead.
 needs_blocking_loop = pytest.mark.skipif(

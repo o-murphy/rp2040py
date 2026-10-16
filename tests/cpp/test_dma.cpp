@@ -408,7 +408,7 @@ int main() {
     settle();
     CHECK(dma.int_raw == 0x1 && !(reg(7, CTRL_TRIG) & BUSY) && !clk.has_alarm());
 
-    // ---- reset: the DREQs survive, every register of the channels goes (datasheet 2.5.7: the reset values; CHAIN_TO is the channel's own number) ------
+    // ---- reset: the DREQs survive, every register of the channels goes (datasheet 2.5.7: the reset values, CHAIN_TO 0 for every channel) ------
     fresh();
     cwr(7, TRANS_COUNT, 3);
     cwr(7, READ_ADDR, 0x20001000);
@@ -422,7 +422,7 @@ int main() {
     dma.int_raw = 0x40;
     env.irqs = 0;
     CHECK(dma.reset());
-    CHECK(reg(7, CTRL_TRIG) == (7u << 11));  // not BUSY, not enabled, CHAIN_TO its own number
+    CHECK(reg(7, CTRL_TRIG) == 0);  // not BUSY, not enabled, CHAIN_TO 0
     CHECK(reg(7, READ_ADDR) == 0 && reg(7, WRITE_ADDR) == 0 && reg(7, TRANS_COUNT) == 0 && reg(7, DBG_TCR) == 0 && !clk.has_alarm());
     CHECK(dma.dreq(11) && dma.int_raw == 0 && dma.read(INTE0) == 0 && dma.read(INTF1) == 0 && dma.read(TIMER2) == 0);
     CHECK(env.irqs == 2 && !env.irq_level[0] && !env.irq_level[1]);
