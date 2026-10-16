@@ -60,6 +60,7 @@ struct Env {
     uint32_t last_out_size = 0;
 };
 static Env env;
+static constexpr uint32_t kTestBlock = 42, kTestIrq = 5;  // the block id its warnings carry and the line it raises
 static Clock clk;
 static UsbBlock usb;
 static uint8_t dpram[kDpramSize];
@@ -71,7 +72,8 @@ static bool call() {
     }
     return true;
 }
-static bool h_irq(void*, bool level) {
+static bool h_irq(void*, uint32_t line, bool level) {
+    CHECK(line == kTestIrq);
     ++env.irq_calls;
     env.irq_level = level;
     return call();
@@ -154,10 +156,19 @@ static bool h_device_out(void*, uint32_t endpoint, const uint8_t* data, uint32_t
     *status = env.out_status;
     return call();
 }
-static void h_warn(void*, uint32_t kind, uint32_t offset, int64_t) {
+static void h_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t) {
+    CHECK(block == kTestBlock);
     ++env.warns;
     env.warn_kind = kind;
     env.warn_offset = offset;
+}
+
+static const ChipPorts& test_ports() {
+    static ChipPorts ports;
+    ports.irq = h_irq;
+    ports.warn = h_warn;
+    ports.failed = &env.failed;
+    return ports;
 }
 
 static void fresh() {
@@ -166,7 +177,6 @@ static void fresh() {
     clk.reset();
     std::memset(dpram, 0, sizeof dpram);
     UsbHost host;
-    host.irq = h_irq;
     host.usb_enabled = h_enabled;
     host.reset_received = h_reset_received;
     host.endpoint_read = h_endpoint_read;
@@ -180,9 +190,7 @@ static void fresh() {
     host.pending_response = h_pending;
     host.device_in = h_device_in;
     host.device_out = h_device_out;
-    host.warn = h_warn;
-    host.failed = &env.failed;
-    usb.init(&clk, dpram, host);
+    usb.init(&clk, dpram, &test_ports(), kTestBlock, kTestIrq, host);
     CHECK(usb.reset());
     env.irq_calls = 0;
     env.calls = 0;
@@ -207,10 +215,7 @@ static void test_a_constructed_block_is_at_power_on_without_a_reset() {
     static UsbBlock block;  // what the shell makes: init() only, no reset()
     static uint8_t memory[kDpramSize];
     UsbHost host;
-    host.irq = h_irq;
-    host.warn = h_warn;
-    host.failed = &env.failed;
-    block.init(&clk, memory, host);
+    block.init(&clk, memory, &test_ports(), kTestBlock, kTestIrq, host);
     CHECK(!block.connected && !block.connect_event && !block.host_connect_event && !block.host_mode && !block.sof_enabled && !block.has_device && !block.expecting_status_phase);
     CHECK(block.control_data_pid == 1 && block.nak_poll == NAK_POLL_RESET && block.usbphy_trim == USBPHY_TRIM_RESET && block.addr_endp == 0 && block.main_ctrl == 0 && block.sie_ctrl == 0);
     CHECK(block.int_raw == 0 && block.int_enable == 0 && block.int_force == 0 && block.sie_status == 0 && block.ep_abort == 0 && block.ep_abort_done == 0 && block.ep_stall_arm == 0);

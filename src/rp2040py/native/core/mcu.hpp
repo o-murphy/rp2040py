@@ -365,14 +365,8 @@ public:
         // The flash path: the SSI (the bootrom's flash commands, its chip select the QSPI_SS pin) and XIP_CTRL (the cache, the flash window and the stream) work on the chip's flash buffer
         // (`set_flash`). The XIP stream's pace derives from `clk_sys` (the tree) and SSI.BAUDR.
         if (flash_ != nullptr) {  // (an embedder with no flash image has neither block)
-            SsiHost sd;
-            sd.warn = block_warn<kMcuBlockSsi>;
-            sd.irq = ssi_irq;
-            sd.irq_ctx = this;
-            sd.dreq = ssi_dreq;
-            sd.dreq_ctx = this;
-            sd.ctx = this;
-            ssi_.init(flash_, flash_size_, sd);
+            SsiHost sd;  // (no Python chip-select here)
+            ssi_.init(flash_, flash_size_, &ports_, kMcuBlockSsi, kIrqXip, kDreqXipSsiTx, sd);  // (the chip-select is a pin of the bank: `bind_ssi_cs`, no host edge)
             bus.windows.attach(kSsiBase, ssi_.window_handler());
             bind_ssi_cs();
             XipHost xh;
@@ -389,14 +383,7 @@ public:
         // The USB controller: its line is the chip's own; the other end of the wire (the host's device, endpoints and callbacks) is the host's, given to the block by `usb().set_wire()`. The DPRAM is the
         // bus's memory region, handed over by `set_usb_dpram`.
         if (usb_dpram_ != nullptr) {
-            UsbHost uh;
-            uh.irq = usb_irq;
-            uh.irq_ctx = this;
-            uh.warn = block_warn<kMcuBlockUsb>;
-            uh.warn_ctx = this;
-            uh.failed = host.failed;
-            usb_.init(clock_, usb_dpram_, uh);
-            if (host.usb_wire != nullptr) usb_.set_wire(*host.usb_wire);
+            usb_.init(clock_, usb_dpram_, &ports_, kMcuBlockUsb, kIrqUsb, host.usb_wire != nullptr ? *host.usb_wire : UsbHost());
             bus.windows.attach(kUsbBase, usb_.window_handler());
         }
 
@@ -429,11 +416,7 @@ public:
         bus.windows.attach(kSyscfgBase, syscfg_.window_handler());
 
         // The blocks with lines, requests and devices (group 2). Each instance's callbacks get its own `McuInstance` as their context.
-        TimerHost tm;
-        tm.irq = timer_irq;
-        tm.warn = block_warn<kMcuBlockTimer>;
-        tm.ctx = this;
-        timer_.init(clock_, tm);
+        timer_.init(clock_, &ports_, kMcuBlockTimer, 0);  // (TIMER_0..3 are NVIC lines 0..3)
         bus.windows.attach(kTimerBase, timer_.window_handler());
 
         AdcHost ad;
@@ -830,10 +813,7 @@ private:
             for (uint32_t pin = 0; pin < 30; ++pin) pio_[p].bind_pin(pin, pins_world_[0] ? nullptr : &gpio_bank_, pin);
         }
     }
-    static bool usb_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqUsb, level); }
     // The SSI's and XIP_CTRL's hosts.
-    static bool ssi_irq(void* chip, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(kIrqXip, level); }
-    static bool ssi_dreq(void* chip, bool tx, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(tx ? kDreqXipSsiTx : kDreqXipSsiRx, asserted); }
     static bool xip_clk_sys(void* chip, double* hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         const McuHost& w = m->host_world_;

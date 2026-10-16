@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint8_t, uint32_t
 from libcpp cimport bool as cppbool
 
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -13,24 +14,16 @@ cdef extern from "ssi.hpp" namespace "rp2040core":
     cdef const uint32_t kSsiWarnReadAtomicArea
     cdef const uint32_t kSsiWarnWrite
 
-    ctypedef void (*SsiWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
     ctypedef cppbool (*SsiCsLowFn)(void* ctx, cppbool* low)
-    ctypedef cppbool (*SsiIrqFn)(void* ctx, cppbool level)
-    ctypedef cppbool (*SsiDreqFn)(void* ctx, cppbool tx, cppbool asserted)
 
     cdef cppclass SsiHost:
         SsiHost() noexcept
-        SsiWarnFn warn
         SsiCsLowFn cs_low
-        SsiIrqFn irq
-        void* irq_ctx
-        void* dreq_ctx
-        SsiDreqFn dreq
         void* ctx
 
     cdef cppclass SsiBlock:
         SsiBlock() noexcept
-        void init(uint8_t* flash, uint32_t flash_size, const SsiHost& host) noexcept
+        void init(uint8_t* flash, uint32_t flash_size, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const SsiHost& host) noexcept
         cppbool bind_cs(PinBank* bank, uint32_t slot) noexcept
         void detach() noexcept
         void on_cs_change(cppbool low) noexcept

@@ -4,9 +4,8 @@
 // What it owns: the counter's epoch, the latched high word, INTR/INTE/INTF, PAUSE, and four alarms
 // whose due times are scheduled on the C++ `Clock` (core/clock.hpp) - so a firmware's TIMELR poll loop, the
 // hottest register traffic of a boot (52% of the accesses of a MicroPython boot, 97.6% of CircuitPython's), never
-// leaves C++. What it does not own: logging, and the interrupt line - both are reached through a `TimerHost` of
-// plain function pointers (a Python trampoline today, the C++ NVIC/logger later), which also keeps this header free
-// of anything Python.
+// leaves C++. What it does not own: logging, and the interrupt line - both are reached through the chip's `ChipPorts`
+// (core/core_host.hpp), which also keeps this header free of anything Python.
 //
 // The count advances once per tick of the watchdog's tick generator (datasheet 4.6.4, 4.7.2): `tick_changed(hz)` is how the chip tells the block the tick's rate - nominally 1 MHz, a count per
 // microsecond - and 0 means the tick is not running, which freezes the count exactly as PAUSE does (a bare chip does not count until firmware has started the tick, as on silicon). The count
@@ -30,21 +29,7 @@
 
 namespace rp2040core {
 
-// A function that reports an interrupt line level may fail (a Python trampoline can raise); `false` means the
-// failure is pending with the caller, and whatever was running stops at once - as an exception would stop it.
-using TimerIrqFn = bool (*)(void* ctx, uint32_t line, bool level);
-
-// The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
 inline constexpr uint32_t kTimerWarnRead = kRegWarnRead, kTimerWarnReadAtomicArea = kRegWarnReadAtomicArea, kTimerWarnWrite = kRegWarnWrite;
-using TimerWarnFn = RegWarnFn;
-
-struct TimerHost {
-    TimerIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    TimerWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    uint32_t lines[4] = {0, 1, 2, 3};  // IRQ numbers of TIMER_0..3
-};
 
 namespace timer_regs {
 constexpr uint32_t TIMEHW = 0x00, TIMELW = 0x04, TIMEHR = 0x08, TIMELR = 0x0C, ALARM0 = 0x10, ALARM1 = 0x14, ALARM2 = 0x18, ALARM3 = 0x1C;
@@ -62,10 +47,10 @@ public:
     TimerBlock(const TimerBlock&) = delete;  // the alarm nodes point into this object
     TimerBlock& operator=(const TimerBlock&) = delete;
 
-    // Binds the block to its clock and host. Must be called once, before anything else.
-    void init(Clock* clock, const TimerHost& host) noexcept {
+    // Binds the block to its clock and the chip's ports; `irq_line` is the NVIC number of TIMER_0 (the four follow). Must be called once, before anything else.
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line) noexcept {
         clock_ = clock;
-        host_ = host;
+        port_.init(ports, block, irq_line);
         clock_->add_rebase_listener(&rebase_listener_, &TimerBlock::on_rebase, this);  // the clock's origin moved: this block's epoch is an absolute tick count
         for (int i = 0; i < kAlarms; ++i) {
             slots_[i].block = this;
@@ -184,7 +169,7 @@ public:
             target_[i] = 0;
         }
         for (int i = 0; i < kAlarms; ++i) {
-            if (!raise_irq(host_.lines[i], false)) return false;
+            if (!raise_irq(i, false)) return false;
         }
         return true;
     }
@@ -195,10 +180,7 @@ public:
     uint32_t read(uint32_t offset) noexcept {
         uint32_t value;
         if (read32(offset, &value)) return value;
-        if (host_.warn) {
-            host_.warn(host_.ctx, kTimerWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kTimerWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -210,8 +192,8 @@ public:
         if (atomic_type != kAtomicNormal) {
             value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);  // an alias that is none of the three (not reachable from an address) writes raw
         }
-        if (write32(offset, value, raw) == kWriteUnhandled && host_.warn) {
-            host_.warn(host_.ctx, kTimerWarnWrite, offset, value);
+        if (write32(offset, value, raw) == kWriteUnhandled) {
+            port_.unimplemented_write(offset, value);
         }
     }
 
@@ -313,7 +295,7 @@ private:
     bool check_interrupts() noexcept {
         const uint32_t status = int_status();
         for (int i = 0; i < kAlarms; ++i) {
-            if (!raise_irq(host_.lines[i], (status & (1u << i)) != 0)) return false;
+            if (!raise_irq(i, (status & (1u << i)) != 0)) return false;
         }
         return true;
     }
@@ -327,8 +309,8 @@ private:
     }
 
     Clock* clock_ = nullptr;
-    bool raise_irq(uint32_t line, bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, line, level); }
-    TimerHost host_;
+    bool raise_irq(int alarm, bool level) noexcept { return port_.irq(level, static_cast<uint32_t>(alarm)); }
+    BlockPort port_;
     static void on_rebase(void* ctx, int64_t delta) noexcept {
         auto* self = static_cast<TimerBlock*>(ctx);
         self->epoch_ticks_ -= delta;  // (the epoch is always near the clock's time, so this cannot run away)

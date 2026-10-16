@@ -4,29 +4,19 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
-from rp2040py.native._mcu_irq cimport McuIrqLines
+from rp2040py.native._core_host cimport ChipPorts
 
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "timer.hpp" namespace "rp2040core":
-    ctypedef bool (*TimerIrqFn)(void* ctx, uint32_t line, bool level)
-    ctypedef void (*TimerWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
     cdef const uint32_t kTimerWarnRead
     cdef const uint32_t kTimerWarnReadAtomicArea
     cdef const uint32_t kTimerWarnWrite
 
-    cdef cppclass TimerHost:
-        TimerIrqFn irq
-        void* irq_ctx
-        TimerWarnFn warn
-        void* ctx
-        uint32_t lines[4]
-
     cdef cppclass TimerBlock:
         TimerBlock() noexcept
-        void init(Clock* clock, const TimerHost& host) noexcept
+        void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line) noexcept
         void detach() noexcept
         uint32_t int_status() noexcept
         int64_t raw_write_value() noexcept
@@ -43,7 +33,7 @@ cdef extern from "timer.hpp" namespace "rp2040core":
 
 
 cdef class RPTimer:
-    cdef McuIrqLines _irq_line  # the line straight to the chip, when it has one (core/mcu.hpp)
+    cdef ChipPorts _ports  # a block made directly (`_own`) reaches the chip through these, trampolines into Python
     cdef TimerBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a block made directly (a stand-in chip, a test)
     cdef TimerBlock _own
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block (the watchdog's tick reaches it in C++)

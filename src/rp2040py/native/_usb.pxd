@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint8_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "usb.hpp" namespace "rp2040core":
@@ -15,7 +16,6 @@ cdef extern from "usb.hpp" namespace "rp2040core":
     cdef const uint32_t kUsbWarnRead
     cdef const uint32_t kUsbWarnReadAtomicArea
 
-    ctypedef cppbool (*UsbIrqFn)(void* ctx, cppbool level)
     ctypedef cppbool (*UsbVoidFn)(void* ctx)
     ctypedef cppbool (*UsbEndpointReadFn)(void* ctx, uint32_t endpoint, uint32_t length)
     ctypedef cppbool (*UsbWriteQueuedFn)(void* ctx, uint32_t endpoint, uint32_t half, const uint8_t* data, uint32_t length)
@@ -25,12 +25,9 @@ cdef extern from "usb.hpp" namespace "rp2040core":
     ctypedef cppbool (*UsbPendingFn)(void* ctx, uint32_t max_length, cppbool* present, const uint8_t** data, uint32_t* length)
     ctypedef cppbool (*UsbDeviceInFn)(void* ctx, uint32_t endpoint_address, uint32_t* status, const uint8_t** data, uint32_t* length)
     ctypedef cppbool (*UsbDeviceOutFn)(void* ctx, uint32_t endpoint, const uint8_t* data, uint32_t length, uint32_t* status)
-    ctypedef void (*UsbWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
 
     cdef cppclass UsbHost:
         UsbHost() noexcept
-        UsbIrqFn irq
-        void* irq_ctx
         UsbVoidFn usb_enabled
         UsbVoidFn reset_received
         UsbEndpointReadFn endpoint_read
@@ -44,9 +41,7 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         UsbPendingFn pending_response
         UsbDeviceInFn device_in
         UsbDeviceOutFn device_out
-        UsbWarnFn warn
         void* ctx
-        const int* failed
 
     cdef cppclass UsbBlock:
         void set_wire(const UsbHost& wire) noexcept
@@ -85,7 +80,7 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         int64_t host_transaction_delay_microseconds
         int64_t host_reaction_microseconds
         UsbBlock() noexcept
-        void init(Clock* clock, uint8_t* dpram, const UsbHost& host) noexcept
+        void init(Clock* clock, uint8_t* dpram, const ChipPorts* ports, uint32_t block, uint32_t irq_line, const UsbHost& wire) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         cppbool has_scheduled_alarms() noexcept

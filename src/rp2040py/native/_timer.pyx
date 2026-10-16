@@ -19,8 +19,7 @@ for its own `clock` field, so a native chip always has one.
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
-from rp2040py.native._mcu_irq cimport Mcu, mcu_irq_lines, native_mcu
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -28,11 +27,9 @@ from rp2040py.irq import IRQ
 
 __all__ = ("RPTimer",)
 
-_TIMER_IRQS = (int(IRQ.TIMER_0), int(IRQ.TIMER_1), int(IRQ.TIMER_2), int(IRQ.TIMER_3))
 
-
-cdef bool _irq_trampoline(void* ctx, uint32_t line, bool level) noexcept:
-    cdef RPTimer timer = <RPTimer> ctx
+cdef bool _ports_irq(void* chip, uint32_t line, bool level) noexcept:
+    cdef RPTimer timer = <RPTimer> chip
     try:
         timer.rp2040.set_interrupt(line, level)
     except BaseException as error:
@@ -41,22 +38,16 @@ cdef bool _irq_trampoline(void* ctx, uint32_t line, bool level) noexcept:
     return True
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPTimer timer = <RPTimer> ctx
+cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept:
+    cdef RPTimer timer = <RPTimer> chip
     try:
-        if kind == kTimerWarnRead:
-            timer.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kTimerWarnReadAtomicArea:
-            timer.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            timer.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
+        timer._warn_kind(kind, offset, value)
     except BaseException as error:
         park_error(error)
 
 
 cdef class RPTimer:
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef TimerHost host
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -72,21 +63,11 @@ cdef class RPTimer:
             self._block = <TimerBlock*> <size_t> rp2040._native_timer_address()
             return
         self._block = &self._own
-        mcu = native_mcu(rp2040)
-        if mcu != NULL:
-            # the lines go from the C++ block straight to the chip's CPU, with no Python in between (the block passes the absolute NVIC line)
-            self._irq_line.mcu = mcu
-            self._irq_line.base = 0
-            host.irq = mcu_irq_lines
-            host.irq_ctx = &self._irq_line
-        else:
-            host.irq = _irq_trampoline
-            host.irq_ctx = NULL
-        host.warn = _warn_trampoline
-        host.ctx = <void*> self
-        for i in range(4):
-            host.lines[i] = _TIMER_IRQS[i]
-        self._own.init(&(<SimulationClock> clock)._clock, host)
+        self._ports.chip = <void*> self
+        self._ports.warn = _ports_warn
+        self._ports.irq = _ports_irq
+        self._ports.failed = pending_flag()
+        self._own.init(&(<SimulationClock> clock)._clock, &self._ports, 0, int(IRQ.TIMER_0))
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

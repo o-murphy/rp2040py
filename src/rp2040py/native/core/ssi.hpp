@@ -39,20 +39,12 @@ namespace rp2040core {
 
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
 inline constexpr uint32_t kSsiWarnRead = kRegWarnRead, kSsiWarnReadAtomicArea = kRegWarnReadAtomicArea, kSsiWarnWrite = kRegWarnWrite;
-using SsiWarnFn = RegWarnFn;
 // Only when no native pin is bound (a Python chip-select): whether the pin reads LOW now. False: a failure is pending with the caller.
 using SsiCsLowFn = bool (*)(void* ctx, bool* low);
 
-using SsiIrqFn = bool (*)(void* ctx, bool level);               // the combined interrupt (XIP_IRQ) moved; false: a failure is pending with the caller
-using SsiDreqFn = bool (*)(void* ctx, bool tx, bool asserted);  // a DMA request (DREQ_XIP_SSITX / DREQ_XIP_SSIRX) moved; false: a failure is pending
-
+// The one thing outside the chip's `ChipPorts` (core/core_host.hpp) the block asks of its host.
 struct SsiHost {
-    SsiWarnFn warn = nullptr;
     SsiCsLowFn cs_low = nullptr;
-    SsiIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    SsiDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
     void* ctx = nullptr;
 };
 
@@ -98,9 +90,11 @@ public:
     SsiBlock& operator=(const SsiBlock&) = delete;
 
     // The flash is the caller's buffer and must outlive the block.
-    void init(uint8_t* flash, uint32_t flash_size, const SsiHost& host) noexcept {
+    // `irq_line` is XIP_IRQ; `dreq_base` DREQ_XIP_SSITX (DREQ_XIP_SSIRX follows).
+    void init(uint8_t* flash, uint32_t flash_size, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const SsiHost& host) noexcept {
         flash_ = flash;
         flash_size_ = flash_size;
+        port_.init(ports, block, irq_line, dreq_base);
         host_ = host;
     }
 
@@ -202,10 +196,7 @@ public:
             case SPI_CTRL_R0: return spictrl0_;
             default: break;
         }
-        if (host_.warn != nullptr) {
-            host_.warn(host_.ctx, kSsiWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kSsiWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -242,7 +233,7 @@ public:
             case SPI_CTRL_R0: spictrl0_ = word & SPI_CTRLR0_MASK; return;
             default: break;
         }
-        if (host_.warn != nullptr) host_.warn(host_.ctx, kSsiWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side
@@ -326,17 +317,17 @@ private:
         const bool level = isr() != 0;
         if (level != irq_level_) {
             irq_level_ = level;
-            if (host_.irq != nullptr && !raise_irq(level)) return false;
+            if (!port_.irq(level)) return false;
         }
         const bool tx = (stored_[DMACR_INDEX] & DMACR_TDMAE) != 0 && txflr_ <= stored_[DMATDLR_INDEX];
         if (tx != dreq_tx_) {
             dreq_tx_ = tx;
-            if (host_.dreq != nullptr && !raise_dreq(true, tx)) return false;
+            if (!port_.dreq(0, tx)) return false;
         }
         const bool rx = (stored_[DMACR_INDEX] & DMACR_RDMAE) != 0 && rx_count_ >= stored_[DMARDLR_INDEX] + 1;
         if (rx != dreq_rx_) {
             dreq_rx_ = rx;
-            if (host_.dreq != nullptr && !raise_dreq(false, rx)) return false;
+            if (!port_.dreq(1, rx)) return false;
         }
         return true;
     }
@@ -403,8 +394,7 @@ private:
 
     uint8_t* flash_ = nullptr;
     uint32_t flash_size_ = 0;
-    bool raise_dreq(bool which, bool asserted) noexcept { return host_.dreq(host_.dreq_ctx != nullptr ? host_.dreq_ctx : host_.ctx, which, asserted); }
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
+    BlockPort port_;
     SsiHost host_;
     PinBank* bank_ = nullptr;
     uint32_t slot_ = 0;  // the chip-select pin's position in its bank
