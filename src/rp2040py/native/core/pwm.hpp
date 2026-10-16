@@ -15,7 +15,7 @@
 // Quirks of the reference that are kept (pinned by the C++ checks and by tests/test_pwm_diff.py), several of them bugs that are fixed later, one commit each, with the oracle's mutants:
 //   - in phase-correct mode the wrap does not drive A and B, so a phase-correct output only ever changes at the compare alarms;
 //   - CC and TOP are double buffered: a write is held until the channel is enabled or wraps; a CC write is not masked (the reference keeps the 32-bit value; TOP keeps 16 bits);
-//   - reset() restarts the channels and the direction word, not INTR/INTE/INTF or `gpio_value`;
+//   - reset() restarts the channels, the direction word and INTR/INTE/INTF, not `gpio_value` (the pins' level);
 //   - an unimplemented offset warns and reads 0xFFFFFFFF (a read above 0x1000 warns a second time); an unimplemented write warns.
 //
 // Header-only, C++17, no exceptions/RTTI/STL, no allocation. Single-threaded by contract.
@@ -281,7 +281,10 @@ public:
         for (PwmChannel& channel : channels) {
             if (!channel.reset()) return false;
         }
-        return true;
+        int_raw = 0;  // INTR, INTE and INTF are registers of the block like the channels' (datasheet 4.5.3: reset 0); `gpio_value` is the pins' level, not a register
+        int_enable = 0;
+        int_force = 0;
+        return check_interrupts();
     }
 
     // ---- registers --------------------------------------------------------------------------------------------

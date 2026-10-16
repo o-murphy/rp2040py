@@ -2007,6 +2007,7 @@ static const Ev reset_while_running_ev[] = {
     {2, 40.0, 17u, 65537ull, 0ull},
     {2, 48.0, 0u, 65536ull, 0ull},
     {2, 48.0, 16u, 0ull, 0ull},
+    {0, 50.0, 0u, 0ull, 0ull},
     {4, 100.0, 0u, 0ull, 0ull},
     {4, 100.0, 4u, 16ull, 0ull},
     {4, 100.0, 8u, 0ull, 0ull},
@@ -2048,10 +2049,10 @@ static const Ev reset_while_running_ev[] = {
     {4, 100.0, 152u, 0ull, 0ull},
     {4, 100.0, 156u, 65535ull, 0ull},
     {4, 100.0, 160u, 0ull, 0ull},
-    {4, 100.0, 164u, 1ull, 0ull},
-    {4, 100.0, 168u, 1ull, 0ull},
+    {4, 100.0, 164u, 0ull, 0ull},
+    {4, 100.0, 168u, 0ull, 0ull},
     {4, 100.0, 172u, 0ull, 0ull},
-    {4, 100.0, 176u, 1ull, 0ull},
+    {4, 100.0, 176u, 0ull, 0ull},
 };
 static const Op phase_strobes_ops[] = {
     {0, 0.0, 16u, 7ull, 0},
@@ -2333,7 +2334,7 @@ static const Scenario kScenarios[] = {
     {"b_input_already_high_when_csr_is_written", b_input_already_high_when_csr_is_written_ops, sizeof(b_input_already_high_when_csr_is_written_ops) / sizeof(Op), b_input_already_high_when_csr_is_written_ev, 3},
     {"b_edges_count_without_poking_the_direction", b_edges_count_without_poking_the_direction_ops, sizeof(b_edges_count_without_poking_the_direction_ops) / sizeof(Op), b_edges_count_without_poking_the_direction_ev, 52},
     {"b_edges_are_ignored_while_the_pin_is_an_output", b_edges_are_ignored_while_the_pin_is_an_output_ops, sizeof(b_edges_are_ignored_while_the_pin_is_an_output_ops) / sizeof(Op), b_edges_are_ignored_while_the_pin_is_an_output_ev, 11},
-    {"reset_while_running", reset_while_running_ops, sizeof(reset_while_running_ops) / sizeof(Op), reset_while_running_ev, 56},
+    {"reset_while_running", reset_while_running_ops, sizeof(reset_while_running_ops) / sizeof(Op), reset_while_running_ev, 57},
     {"phase_strobes", phase_strobes_ops, sizeof(phase_strobes_ops) / sizeof(Op), phase_strobes_ev, 58},
     {"top_zero_and_cc_edges", top_zero_and_cc_edges_ops, sizeof(top_zero_and_cc_edges_ops) / sizeof(Op), top_zero_and_cc_edges_ev, 75},
 };

@@ -397,3 +397,8 @@ class RPPWM(BasePeripheral):
         self.gpio_direction = 0xFFFFFFFF
         for channel in self.channels:
             channel.reset()
+        # INTR, INTE and INTF are registers of the block like the channels' (datasheet 4.5.3: reset 0); `gpio_value` is the pins' level, not a register
+        self._int_raw = 0
+        self._int_enable = 0
+        self._int_force = 0
+        self.check_interrupts()

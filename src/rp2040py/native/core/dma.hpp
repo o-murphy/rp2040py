@@ -101,10 +101,7 @@ public:
     inline void abort() noexcept;
     inline uint32_t read(uint32_t offset) const noexcept;
     inline bool write(uint32_t offset, int64_t value) noexcept;
-    inline bool reset() noexcept {
-        cycle_remainder = 0.0;
-        return write(dma_regs::CTRL_TRIG, static_cast<int64_t>(index) << 11);
-    }
+    inline bool reset() noexcept;  // every register of the channel back to its reset value (defined below, where the block is complete)
 
 private:
     friend class DmaBlock;
@@ -485,6 +482,20 @@ inline bool DmaChannel::write(uint32_t offset, int64_t value) noexcept {
         }
     }
     return true;
+}
+
+// The addresses and counts 0, CTRL 0 but for CHAIN_TO (the channel's own number). The CTRL goes in through the non-triggering alias: the trigger would start the channel, and writing it over
+// a running one left BUSY and the count set.
+inline bool DmaChannel::reset() noexcept {
+    cycle_remainder = 0.0;
+    dma_->clock_->cancel(&alarm);
+    read_addr = 0;
+    write_addr = 0;
+    trans_count = 0;
+    trans_count_reload = 0;
+    dreq_counter = 0;
+    ctrl = 0;
+    return write(dma_regs::AL1_CTRL, static_cast<int64_t>(index) << 11);
 }
 
 }  // namespace rp2040core
