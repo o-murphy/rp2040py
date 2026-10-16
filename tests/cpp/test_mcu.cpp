@@ -631,15 +631,28 @@ int main() {
             m.bus.write32(0x4000C000 + 0x4, 1u << 24);  // USBCTRL alone
             CHECK(m.reset(true, true));
             CHECK(m.bus.read32(kUsbAddrEndp) == 0 && m.bus.read32(kUart0Ibrd) == 67 && m.bus.read32(kPwmCh0Top) == 7);
-            // PSM.WDSEL naming the RESETS controller itself resets every peripheral whatever RESETS.WDSEL says; the XIP domain is its own bit
+            // PSM.WDSEL naming the RESETS controller itself resets every peripheral whatever RESETS.WDSEL says - and, the power-on sequence being what it is (datasheet 2.13.4: a selected block takes every
+            // block after it with it; the bits are in sequence order), the XIP domain and the SIO behind it
             dirty();
             m.bus.write32(0x4000C000 + 0x4, 0);
             m.bus.write32(0x40010000 + 0x8, 0x8);
             CHECK(m.reset(true, true));
-            CHECK(m.bus.read32(kUart0Ibrd) == 0 && m.bus.read32(kPwmCh0Top) == 0xFFFF && m.bus.read32(kBusPriority) == 0 && m.bus.read32(0x14000000) == 1 && m.bus.read32(kUsbAddrEndp) == 0);
-            m.bus.write32(0x40010000 + 0x8, 0x1000);  // XIP
+            CHECK(m.bus.read32(kUart0Ibrd) == 0 && m.bus.read32(kPwmCh0Top) == 0xFFFF && m.bus.read32(kBusPriority) == 0 && m.bus.read32(0x14000000) == 3 && m.bus.read32(kUsbAddrEndp) == 0);
+            // the XIP domain (bit 12) takes the SIO and the blocks above, but not the peripherals before it
+            dirty();
+            m.bus.write32(0x40010000 + 0x8, 0x1000);
             CHECK(m.reset(true, true));
-            CHECK(m.bus.read32(0x14000000) == 3);
+            CHECK(m.bus.read32(0x14000000) == 3 && m.bus.read32(kUart0Ibrd) == 67 && m.bus.read32(kPwmCh0Top) == 7);
+            // the SIO alone (bit 14) resets only itself and what is above it: the peripherals and the XIP are left
+            dirty();
+            m.bus.write32(0x40010000 + 0x8, 0x4000);
+            CHECK(m.reset(true, true));
+            CHECK(m.bus.read32(0x14000000) == 1 && m.bus.read32(kUart0Ibrd) == 67 && m.bus.read32(kBusPriority) == 0x11);
+            // the CLOCKS (bit 2) take the RESETS controller - so every peripheral - and the XIP behind them
+            dirty();
+            m.bus.write32(0x40010000 + 0x8, 0x4);
+            CHECK(m.reset(true, true));
+            CHECK(m.bus.read32(kUart0Ibrd) == 0 && m.bus.read32(0x14000000) == 3 && m.bus.read32(kUsbAddrEndp) == 0);
             // any other reset covers everything, whatever the WDSEL registers hold
             dirty();
             m.bus.write32(0x40010000 + 0x8, 0);

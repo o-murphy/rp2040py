@@ -533,6 +533,10 @@ public:
     bool reset(bool from_watchdog, bool preserve_flash, uint64_t world = 0) noexcept { return reset(from_watchdog, preserve_flash, psm_.wdsel, resets_.wdsel, world); }
     bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept {
         if (from_watchdog) {
+            psm_wdsel &= kPsmBitsMask;
+            // "if a peripheral in the power-on state machine has the WDSEL bit set, every peripheral after it in the power-on sequence will also be reset" (datasheet 2.13.4): the bits of PSM.WDSEL
+            // are in sequence order (ROSC 0 .. PROC1 16), so the lowest bit set selects itself and everything above it.
+            if (psm_wdsel != 0) psm_wdsel = kPsmBitsMask & ~((psm_wdsel & (~psm_wdsel + 1u)) - 1u);
             if ((psm_wdsel & kPsmWdselResets) != 0) resets_wdsel = kResetsBitsMask;
         } else {
             psm_wdsel = kPsmBitsMask;

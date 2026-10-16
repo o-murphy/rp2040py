@@ -466,7 +466,11 @@ class RP2040:
         all, so `BasePeripheral`'s default no-op is their correct implementation.
         """
         if from_watchdog:
-            psm_wdsel = self.psm.wdsel
+            psm_wdsel = self.psm.wdsel & PSM_BITS_MASK
+            if psm_wdsel:
+                # "if a peripheral in the power-on state machine has the WDSEL bit set, every peripheral after it in the power-on sequence will also be reset" (datasheet 2.13.4): the bits of
+                # PSM.WDSEL are in sequence order (ROSC 0 .. PROC1 16), so the lowest bit set selects itself and everything above it.
+                psm_wdsel = PSM_BITS_MASK & ~((psm_wdsel & -psm_wdsel) - 1)
             resets_wdsel = self.resets.wdsel
             if psm_wdsel & WDSEL_RESETS:
                 # The RESETS controller itself is in the watchdog's reset domain, and a reset
