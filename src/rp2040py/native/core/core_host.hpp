@@ -3,8 +3,9 @@
 //
 // The contract, which the blocks follow and the wasm/FFI hosts will implement:
 //
-//   * A block never throws, never allocates, never calls a function it was not handed. Everything outside it - an interrupt line, a DREQ, a logger, a callback of the
-//     embedding program - is reached through a `...Host` struct of plain function pointers plus one `void* ctx`, filled in by the embedder before `init()`.
+//   * A block never throws, never allocates, never calls a function it was not handed. What the chip gives every block - an interrupt line, a DREQ, the warnings, the failure flag - is
+//     the chip's one `ChipPorts` (below), with the block's own id, line and first request as data; what is really the world's - a byte on a wire, a device on a bus, an oscillator's
+//     frequency - is a small `...Host` struct of plain function pointers plus one `void* ctx`, filled in by the embedder before `init()`.
 //   * A host function that can fail (a Python callback may raise, a JS callback may throw) returns `false`, or a block checks `host_failed()` after it: the host
 //     has parked its own error object and raised the shared failure flag. The block returns `false` at once, leaving *exactly* the state the reference implementation's
 //     exception would have left - what had been done before the failing call stays done, nothing after it happens. Entry points return `false` (or `kBatchFault`); the

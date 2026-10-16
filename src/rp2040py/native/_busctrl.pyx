@@ -72,15 +72,6 @@ cdef class RPBUSCTRL:
     def bus_priority(self, value):
         self._block.bus_priority = <uint32_t> (value & 0xFFFFFFFF)
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kBusctrlWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kBusctrlWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     def read_uint32(self, offset):
         cdef uint32_t value = self._block.read(<uint32_t> offset)
         raise_if_pending()

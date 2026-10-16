@@ -47,15 +47,6 @@ cdef class RP2040SysCfg:
     def raw_write_value(self):
         return self._block.raw_write_value()
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kSyscfgWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kSyscfgWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     def read_uint32(self, offset):
         cdef uint32_t value = self._block.read(<uint32_t> offset)
         raise_if_pending()

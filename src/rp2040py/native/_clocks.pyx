@@ -210,15 +210,6 @@ cdef class RPClocks:
         if not ok:
             raise RuntimeError("the clock tree's sink lists are full")
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kClocksWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kClocksWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     @property
     def raw_write_value(self):
         return self._block.raw_write_value()

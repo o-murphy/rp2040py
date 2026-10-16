@@ -89,15 +89,6 @@ cdef class RPSSI:
         self.rp2040 = rp2040
         self.name = name
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kSsiWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kSsiWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     def _detach(self):
         """Takes the block off the chip-select pin (the oracle's rig replaces an SSI after construction; a second one listening would apply every
         command to the same flash twice)."""

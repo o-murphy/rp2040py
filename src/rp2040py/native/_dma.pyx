@@ -225,15 +225,6 @@ cdef class RPDMA:
         self._block.bind_clock(_clk_sys_trampoline, <void*> self, <double> self.rp2040.clk_sys)
         self._unsubscribe_clock = self.rp2040.add_clock_listener(self._clk_sys_changed)
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kDmaWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kDmaWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     # --- the reference's attributes --------------------------------------------------------------
 
     @property

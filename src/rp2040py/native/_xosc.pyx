@@ -13,6 +13,7 @@ from libcpp cimport bool as cppbool
 
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
+from rp2040py.native._register_warning import register_warning
 
 __all__ = ("RPXOSC",)
 
@@ -50,18 +51,14 @@ cdef class RPXOSC:
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kXoscWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kXoscWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        elif kind == kXoscWarnInvalidFreqRange:
+        if kind == kXoscWarnInvalidFreqRange:
             self.warn(f"Invalid FREQ_RANGE value written: 0x{value:x}")
         elif kind == kXoscWarnInvalidEnable:
             self.warn(f"Invalid ENABLE value written: 0x{value:x}")
         elif kind == kXoscWarnInvalidDormant:
             self.warn(f"Invalid DORMANT value written: 0x{value:x}")
         else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
+            self.warn(register_warning(kind, offset, value))
 
     @property
     def raw_write_value(self):

@@ -29,15 +29,6 @@ cdef class RPPSM:
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPPSM is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kPsmWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kPsmWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     @property
     def raw_write_value(self):
         return self._block.raw_write_value()

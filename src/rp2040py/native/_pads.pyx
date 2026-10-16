@@ -14,7 +14,6 @@ from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPPADS",)
 
-cdef uint32_t _WARN_READ = 0, _WARN_READ_ATOMIC = 1
 
 
 cdef class RPPADS:
@@ -46,15 +45,6 @@ cdef class RPPADS:
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPPADS is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == _WARN_READ:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == _WARN_READ_ATOMIC:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
 
     @property
     def raw_write_value(self):

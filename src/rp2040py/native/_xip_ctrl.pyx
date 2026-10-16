@@ -16,6 +16,7 @@ from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
+from rp2040py.native._register_warning import register_warning
 
 
 __all__ = ("RPXIPAux", "RPXIPCtrl")
@@ -45,7 +46,7 @@ cdef class RPXIPCtrl:
         elif kind == kXipWarnSramWrite:
             self.warn(f"Write to the cache-as-SRAM at 0x{address:08x} while the cache is enabled or powered down (a bus error)")
         else:
-            self.warn(f"Unimplemented peripheral write to 0x{address:x}: 0x{value:x}")
+            self.warn(register_warning(kind, address, value))
 
     def reset(self):
         """The XIP domain (`PSM.WDSEL`'s XIP bit, see `RP2040.reset()`): registers to power-on, the stream stopped, the cache flushed; the data RAM keeps its contents."""

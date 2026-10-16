@@ -131,15 +131,6 @@ cdef class RPADC:
     def _world_channel_value(self, channel):
         return int(self.channel_values[channel])
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kAdcWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kAdcWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     # --- the device on the pins ------------------------------------------------------------------
 
     def _default_on_adc_read(self, channel):

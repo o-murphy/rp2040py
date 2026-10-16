@@ -86,6 +86,7 @@ from rp2040py.utils.logging import ConsoleLogger, LogLevel
 # actually do with `array` is call the plain array.array(...) constructor, which needs no special
 # declaration - a normal Python-level call works identically and is limited-API-safe.
 import array
+from rp2040py.native._register_warning import warn_register
 
 __all__ = (
     "APB_START_ADDRESS",
@@ -326,9 +327,8 @@ cdef void _mcu_warn(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, i
     try:
         # (the PPB and SIO are not in the peripherals table: the bus reaches them on its own)
         view = chip._ppb if block == kMcuBlockPpb else chip._sio if block == kMcuBlockSio else chip._peripherals.get(_BLOCK_WINDOW[block])
-        warn = getattr(view, "_warn_kind", None)
-        if warn is not None:
-            warn(kind, offset, value)
+        if view is not None:
+            warn_register(view, kind, offset, value)
     except BaseException as error:
         park_error(error)
 

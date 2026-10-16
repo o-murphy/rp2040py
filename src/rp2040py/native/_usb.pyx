@@ -362,15 +362,6 @@ cdef class RPUSBController:
         self._block = <UsbBlock*> <size_t> native_usb()
         rp2040._usb_wire_view = self  # (the wire's callbacks find this view through the chip; the chip keeps it alive)
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kUsbWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kUsbWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     # --- the reference's attributes --------------------------------------------------------------
 
     @property

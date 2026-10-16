@@ -183,13 +183,6 @@ cdef class RPPPB:
     def mpu_rasr(self):
         return [self._block.mpu_rasr[i] for i in range(8)]
 
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kPpbWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
-
     def _world_system_reset(self):
         """AIRCR.SYSRESETREQ: whatever `on_system_reset_request` is now (the chip's host calls this for the block it built)."""
         self.on_system_reset_request()

@@ -26,6 +26,7 @@ from rp2040py.native._window_map cimport WindowHandler
 
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.peripherals._uart import _WORD_LENGTH_BY_LCR_WLEN, _baud_rate, _bit_ns
+from rp2040py.native._register_warning import warn_register
 
 __all__ = ("RPUART",)
 
@@ -96,7 +97,7 @@ cdef cppbool _bit_trampoline(void* ctx, double* nanos) noexcept:
 cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept:
     cdef RPUART uart = <RPUART> chip
     try:
-        uart._warn_kind(kind, offset, value)
+        warn_register(uart, kind, offset, value)
     except BaseException as error:
         park_error(error)
 
@@ -215,15 +216,6 @@ cdef class RPUART:
         callback = self.on_baud_rate_change
         if callback:
             callback(self.baud_rate)
-
-    def _warn_kind(self, kind, offset, value):
-        """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
-        if kind == kUartWarnRead:
-            self.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kUartWarnReadAtomicArea:
-            self.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
 
     def __dealloc__(self):
         # Safe whichever of this block and its clock the collector frees first: the C++ clock unlinks its alarms when it dies.
