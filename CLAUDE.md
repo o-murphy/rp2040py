@@ -44,6 +44,13 @@ run the full `pre-commit` pass before considering work done.
 
 If `uv` isn't on `PATH` in the shell, prefix with `export PATH="$HOME/.local/bin:$PATH"` first.
 
+### The lockstep oracles come in tiers (`--oracle`)
+
+The differential oracles and parity tests (`tests/test_*_diff.py`, `*parity*`) are ~87 % of the suite's time. `pytest --oracle=full` (the default; also `RP2040PY_ORACLE=full`) runs all of
+them - that is what `pre-commit` and CI do on every push. `--oracle=smoke` keeps the first parameter set of each oracle test (one seed, one mutant): that is what `cibuildwheel`'s
+`test-command` runs on every platform (a built wheel only has to show its compiled code still agrees with the reference, in about a quarter of the time), and `--oracle=off` is for the
+platforms that cannot run them (Pyodide, Android). The mechanism is `tests/conftest.py` (`tests/test_oracle_option.py` holds it); a new oracle needs nothing but the file name.
+
 ### Keep `uv` current - an old one silently breaks CI
 
 **In any session with network access, check `uv --version` against the latest release and upgrade

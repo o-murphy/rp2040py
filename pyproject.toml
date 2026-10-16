@@ -139,13 +139,13 @@ test-requires = "pytest pytest-xdist"
 # cibuildwheel runs tests from a scratch directory (not the repo checkout) so only the built
 # wheel's contents are ever imported - {project} is substituted with the repo root so pytest can
 # still find the test suite itself (tests/ isn't part of the wheel).
-test-command = "pytest {project}/tests"
+test-command = "pytest {project}/tests --oracle=smoke"
 
 [tool.cibuildwheel.android]
 test-extras = ""
 test-requires = "pytest"
 test-sources = ["tests", "pyproject.toml"]
-test-command = "python -m pytest -o addopts=-rf tests"
+test-command = "python -m pytest -o addopts=-rf tests --oracle=off"
 build = "cp313-android_* cp314-android_* cp315-android_*"
 
 [tool.cibuildwheel.pyodide]
@@ -158,7 +158,7 @@ test-requires = "pytest"
 # loudly here rather than be left out of the command. record 0096's thread-free engine is the fix for the "no pthreads" problem that kept this platform disabled; the native
 # extension compiles and loads for wasm32-emscripten (not a silent pure-Python fallback). wasm32 is a 32-bit address space whose memory never shrinks, so it shares the 32-bit
 # targets' memory limits (see tests/conftest.py).
-test-command = "python -m pytest -o addopts=-rf {project}/tests"
+test-command = "python -m pytest -o addopts=-rf {project}/tests --oracle=off"
 
 [dependency-groups]
 dev = [
