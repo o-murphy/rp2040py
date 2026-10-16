@@ -83,3 +83,34 @@ def run(exe: Path, rom: Path, flash: Path, expected: str) -> "subprocess.Complet
 def callbacks(done: "subprocess.CompletedProcess[str]") -> "list[str]":
     """What the chip asked of the world, one line per kind of callback (the harness reports them on stderr)."""
     return [line for line in done.stderr.splitlines() if line.startswith("callback ")]
+
+
+def micropython_images(tmp_path: Path, main_py: bytes, version: str = "1.29.0") -> "tuple[Path, Path]":
+    """The ROM and flash images of a stock MicroPython `version` whose littlefs holds `main_py` as main.py (skips the test when the firmware is not available: no network and no cache; fails instead under
+    RP2040PY_REQUIRE_NATIVE=1, i.e. in CI)."""
+    import pytest
+
+    from rp2040py.cli.mklittlefs import build_littlefs_image
+    from rp2040py.utils.firmware_retrieve import MICROPYTHON, retrieve
+    from rp2040py.utils.firmware_retrieve import flash_layout as _flash_layout
+
+    try:
+        firmware = retrieve(MICROPYTHON, version)
+    except OSError as error:  # no network, no cache
+        firmware, why = None, str(error)
+    else:
+        why = "no network, no cache"
+    if firmware is None:
+        message = f"the MicroPython {version} image is not available ({why})"
+        if required():  # CI: the gate must run
+            pytest.fail(message)
+        pytest.skip(message)
+    layout = _flash_layout(MICROPYTHON, "pico")
+    flash = flash_from_uf2(Path(firmware), layout["fs_start"] + layout["fs_blocksize"] * layout["fs_blockcount"])
+    main = tmp_path / "main.py"
+    main.write_bytes(main_py)
+    image = tmp_path / "littlefs.img"
+    build_littlefs_image(str(image), [str(main)], main="main.py")
+    fs = image.read_bytes()
+    flash[layout["fs_start"] : layout["fs_start"] + len(fs)] = fs
+    return write_images(tmp_path, flash)
