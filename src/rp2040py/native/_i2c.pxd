@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "fifo.hpp" namespace "rp2040core":
@@ -24,26 +25,20 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
     cdef const uint32_t kI2cWarnReadAtomicArea
     cdef const uint32_t kI2cWarnWrite
 
-    ctypedef cppbool (*I2cIrqFn)(void* ctx, cppbool level)
     ctypedef cppbool (*I2cStartFn)(void* ctx, cppbool repeated)
     ctypedef cppbool (*I2cConnectFn)(void* ctx, uint32_t address, uint32_t mode)
     ctypedef cppbool (*I2cWriteFn)(void* ctx, uint32_t value)
     ctypedef cppbool (*I2cReadFn)(void* ctx, cppbool ack)
     ctypedef cppbool (*I2cStopFn)(void* ctx)
-    ctypedef void (*I2cWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
 
     cdef cppclass I2cHost:
         I2cHost() noexcept
-        I2cIrqFn irq
-        void* irq_ctx
         I2cStartFn start
         I2cConnectFn connect
         I2cWriteFn write_byte
         I2cReadFn read_byte
         I2cStopFn stop
-        I2cWarnFn warn
         void* ctx
-        const int* failed
 
     cdef cppclass I2cBlock:
         uint32_t state
@@ -76,7 +71,7 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
         Fifo16 rx
         Fifo16 tx
         I2cBlock() noexcept
-        void init(const I2cHost& host) noexcept
+        void init(const ChipPorts* ports, uint32_t block, uint32_t irq_line, const I2cHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t int_status() noexcept
         uint32_t master_bits() noexcept

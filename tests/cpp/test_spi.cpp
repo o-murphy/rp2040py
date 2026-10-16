@@ -42,14 +42,18 @@ struct Env {
     double bit_ns = 0.0;  // one SSPCLKOUT period; 0 (the default of these checks) is an unconfigured bit clock: a word has no time on the wire
 };
 static Env env;
+static constexpr uint32_t kTestBlock = 42, kTestIrq = 18, kTestDreqTx = 16;  // the id its warnings carry, its NVIC line and its TX request (RX follows)
 
-static bool on_irq(void*, bool level) {
+static bool on_irq(void*, uint32_t line, bool level) {
+    CHECK(line == kTestIrq);
     if (env.irq_n < 256) env.irq_calls[env.irq_n] = level;
     ++env.irq_n;
     if (env.fail_irq) { env.failed = 1; return false; }
     return true;
 }
-static bool on_dreq(void*, bool tx, bool asserted) {
+static bool on_dreq(void*, uint32_t number, bool asserted) {
+    CHECK(number == kTestDreqTx || number == kTestDreqTx + 1);
+    const bool tx = number == kTestDreqTx;
     if (env.dreq_n < 256) env.dreq_calls[env.dreq_n] = (tx ? 2u : 0u) | (asserted ? 1u : 0u);
     ++env.dreq_n;
     if (env.fail_dreq) { env.failed = 1; return false; }
@@ -68,7 +72,8 @@ static bool on_bit(void*, double* nanos) {
     if (env.fail_bit) { env.failed = 1; return false; }
     return true;
 }
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     if (env.warns < 32) {
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
@@ -77,19 +82,24 @@ static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
     ++env.warns;
 }
 
+static const ChipPorts& test_ports() {
+    static ChipPorts ports;
+    ports.irq = on_irq;
+    ports.dreq = on_dreq;
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
+    return ports;
+}
+
 // `enabled`: SSE set, as a firmware that is about to transfer has it (a disabled SSP sends nothing and raises no DMA request); the power-on tests ask for it off.
 static void fresh(int mode = kDefault, bool enabled = true) {
     env = Env();
     env.mode = mode;
     SpiHost host;
-    host.irq = on_irq;
-    host.dreq = on_dreq;
     host.transmit = on_transmit;
     host.bit_ns = on_bit;
-    host.warn = on_warn;
-    host.failed = &env.failed;
     clk.reset();
-    spi.init(&clk, host);
+    spi.init(&clk, &test_ports(), kTestBlock, kTestIrq, kTestDreqTx, host);
     spi.control0 = spi.dma_control = spi.clock_divisor = 0;
     spi.control1 = enabled ? CR1_SSE : 0;
     spi.int_raw = INT_TX;

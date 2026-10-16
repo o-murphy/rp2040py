@@ -429,39 +429,28 @@ public:
         for (uint32_t i = 0; i < 2; ++i) {
             instance_[i] = {this, i};
             UartHost u;
-            u.irq = uart_irq;
-            u.dreq = uart_dreq;
             u.on_byte = uart_byte;
             u.baud_changed = uart_baud;
             u.bit_ns = uart_bit_ns;
-            u.warn = i == 0 ? instance_warn<kMcuBlockUart0> : instance_warn<kMcuBlockUart1>;
             u.ctx = &instance_[i];
-            u.failed = host.failed;
-            uart_[i].init(clock_, u);
+            uart_[i].init(clock_, &ports_, i == 0 ? kMcuBlockUart0 : kMcuBlockUart1, kIrqUart[i], kDreqUartTx[i], u);
             bus.windows.attach(kUartBase[i], uart_[i].window_handler());
 
             SpiHost sp;
-            sp.irq = spi_irq;
-            sp.dreq = spi_dreq;
             sp.transmit = spi_transmit;
             sp.bit_ns = spi_bit_ns;
-            sp.warn = i == 0 ? instance_warn<kMcuBlockSpi0> : instance_warn<kMcuBlockSpi1>;
             sp.ctx = &instance_[i];
-            sp.failed = host.failed;
-            spi_[i].init(clock_, sp);
+            spi_[i].init(clock_, &ports_, i == 0 ? kMcuBlockSpi0 : kMcuBlockSpi1, kIrqSpi[i], kDreqSpiTx[i], sp);
             bus.windows.attach(kSpiBase[i], spi_[i].window_handler());
 
             I2cHost ic;
-            ic.irq = i2c_irq;
             ic.start = i2c_start;
             ic.connect = i2c_connect;
             ic.write_byte = i2c_write;
             ic.read_byte = i2c_read;
             ic.stop = i2c_stop;
-            ic.warn = i == 0 ? instance_warn<kMcuBlockI2c0> : instance_warn<kMcuBlockI2c1>;
             ic.ctx = &instance_[i];
-            ic.failed = host.failed;
-            i2c_[i].init(ic);
+            i2c_[i].init(&ports_, i == 0 ? kMcuBlockI2c0 : kMcuBlockI2c1, kIrqI2c[i], ic);
             bus.windows.attach(kI2cBase[i], i2c_[i].window_handler());
         }
         bind_tree_sinks();
@@ -777,12 +766,6 @@ private:
         Mcu* mcu = static_cast<Mcu*>(chip);
         if (mcu->host_world_.warn != nullptr) mcu->host_world_.warn(mcu->host_world_.ctx, Block, kind, offset, value);
     }
-    // The same for a block whose context is a `McuInstance` (a UART, SPI or I2C).
-    template <McuBlock Block>
-    static void instance_warn(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        if (i->mcu->host_world_.warn != nullptr) i->mcu->host_world_.warn(i->mcu->host_world_.ctx, Block, kind, offset, value);
-    }
     static bool tree_changed(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         return m->tree_hook_ != nullptr ? m->tree_hook_(m->tree_hook_ctx_) : m->clocks_.retune();
@@ -949,14 +932,6 @@ private:
         *value = 0;
         return true;
     }
-    static bool uart_irq(void* ctx, bool level) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        return i->mcu->set_interrupt(kIrqUart[i->index], level);
-    }
-    static bool uart_dreq(void* ctx, bool rx, bool asserted) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        return i->mcu->set_dreq(kDreqUartTx[i->index] + (rx ? 1u : 0u), asserted);
-    }
     static bool uart_byte(void* ctx, uint32_t byte) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;
@@ -975,14 +950,6 @@ private:
         *nanos = (divider <= 0 || clk_peri <= 0) ? 0.0 : 16 * divider * 1e9 / clk_peri;
         return true;
     }
-    static bool spi_irq(void* ctx, bool level) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        return i->mcu->set_interrupt(kIrqSpi[i->index], level);
-    }
-    static bool spi_dreq(void* ctx, bool tx, bool asserted) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        return i->mcu->set_dreq(kDreqSpiTx[i->index] + (tx ? 0u : 1u), asserted);
-    }
     static bool spi_transmit(void* ctx, uint32_t value) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;
@@ -996,10 +963,6 @@ private:
         const double frequency = sp.clock_divisor == 0 ? 0.0 : i->mcu->clocks_.clk_peri() / (static_cast<double>(sp.clock_divisor) * (1 + scr));
         *nanos = frequency != 0.0 ? 1e9 / frequency : 0.0;
         return true;
-    }
-    static bool i2c_irq(void* ctx, bool level) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        return i->mcu->set_interrupt(kIrqI2c[i->index], level);
     }
     static bool i2c_start(void* ctx, bool repeated) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);

@@ -40,26 +40,21 @@
 
 namespace rp2040core {
 
-using I2cIrqFn = bool (*)(void* ctx, bool level);                          // false: failure parked
 using I2cStartFn = bool (*)(void* ctx, bool repeated);                     // the device is asked to produce a (repeated) START
 using I2cConnectFn = bool (*)(void* ctx, uint32_t address, uint32_t mode); // ... to address a target; mode 0 = write, 1 = read
 using I2cWriteFn = bool (*)(void* ctx, uint32_t value);                    // ... to take a byte
 using I2cReadFn = bool (*)(void* ctx, bool ack);                           // ... to give a byte (and be ACKed unless it is the last)
 using I2cStopFn = bool (*)(void* ctx);                                     // ... to produce a STOP
 inline constexpr uint32_t kI2cWarnRead = kRegWarnRead, kI2cWarnReadAtomicArea = kRegWarnReadAtomicArea, kI2cWarnWrite = kRegWarnWrite;
-using I2cWarnFn = RegWarnFn;
 
+// The edges of the block that are the host's own (the devices on the bus); the line, warnings and failure flag are the chip's `ChipPorts`.
 struct I2cHost {
-    I2cIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
     I2cStartFn start = nullptr;
     I2cConnectFn connect = nullptr;
     I2cWriteFn write_byte = nullptr;
     I2cReadFn read_byte = nullptr;
     I2cStopFn stop = nullptr;
-    I2cWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace i2c_regs {
@@ -120,9 +115,13 @@ public:
     uint32_t sda_hold = 0x1, sda_setup = 0x64, ack_general_call = 0x1, slv_data_nack_only = 0, dma_control = 0, dma_tdlr = 0, dma_rdlr = 0;
     Fifo<kFifoDepth> rx, tx;
 
-    void init(const I2cHost& host) noexcept { host_ = host; }
+    // `irq_line` is the instance's NVIC line.
+    void init(const ChipPorts* ports, uint32_t block, uint32_t irq_line, const I2cHost& host) noexcept {
+        port_.init(ports, block, irq_line);
+        host_ = host;
+    }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
     uint32_t int_status() const noexcept { return int_raw & int_enable; }
     uint32_t master_bits() const noexcept { return (control & i2c_regs::CON_10BIT_MASTER) ? 10 : 7; }
@@ -318,10 +317,7 @@ public:
             case COMP_TYPE: return 0x44570140u;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kI2cWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kI2cWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -410,7 +406,7 @@ public:
                 return true;
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kI2cWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -507,8 +503,9 @@ private:
         return true;
     }
 
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
+    bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
+    BlockPort port_;
     I2cHost host_;
     int64_t raw_write_value_ = 0;
 };

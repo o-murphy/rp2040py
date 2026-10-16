@@ -40,26 +40,18 @@
 
 namespace rp2040core {
 
-using UartIrqFn = bool (*)(void* ctx, bool level);               // false: failure parked
-using UartDreqFn = bool (*)(void* ctx, bool rx, bool asserted);  // the TX (rx false) or RX DREQ; false: failure parked
 using UartByteFn = bool (*)(void* ctx, uint32_t byte);           // a transmitted byte, already masked to 8 bits; false: failure parked
 using UartBaudFn = bool (*)(void* ctx);                          // IBRD/FBRD changed: the host announces the new baud rate; false: failure parked
 using UartBitFn = bool (*)(void* ctx, double* nanos);            // the time of one bit on the wire (0 while no baud rate is configured); false: failure parked
 // The messages the Python block logs through `BasePeripheral.warn` (see core_host.hpp); the host formats them.
 inline constexpr uint32_t kUartWarnRead = kRegWarnRead, kUartWarnReadAtomicArea = kRegWarnReadAtomicArea, kUartWarnWrite = kRegWarnWrite;
-using UartWarnFn = RegWarnFn;
 
+// The edges of the block that are the host's own (the device on the wire, the baud rate, the bit time); its line, requests, warnings and failure flag are the chip's `ChipPorts`.
 struct UartHost {
-    UartIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp's `mcu_irq_line`)
-    UartDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
     UartByteFn on_byte = nullptr;
     UartBaudFn baud_changed = nullptr;
     UartBitFn bit_ns = nullptr;
-    UartWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace uart_regs {
@@ -95,8 +87,10 @@ public:
     // Stored, not acted on: the RX interrupt comes with every byte (a superset of any trigger level), the TX FIFO never fills, there is no IrDA.
     uint32_t ifls = uart_regs::IFLS_RESET, ilpr = 0, dmacr = 0, rsr = 0;
 
-    void init(Clock* clock, const UartHost& host) noexcept {
+    // `irq_line` is the instance's NVIC line, `dreq_base` its TX request (RX follows).
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const UartHost& host) noexcept {
         clock_ = clock;
+        port_.init(ports, block, irq_line, dreq_base);
         host_ = host;
         tx_alarm.fire = &UartBlock::on_tx_done;
         tx_alarm.ctx = this;
@@ -107,9 +101,9 @@ public:
 
     Alarm tx_alarm;
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
-    bool raise_dreq(bool which, bool asserted) noexcept { return host_.dreq(host_.dreq_ctx != nullptr ? host_.dreq_ctx : host_.ctx, which, asserted); }
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
+    bool failed() const noexcept { return port_.failed(); }
+    bool raise_dreq(bool rx, bool asserted) noexcept { return port_.dreq(rx ? 1u : 0u, asserted); }
+    bool raise_irq(bool level) noexcept { return port_.irq(level); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // ---- the RX FIFO (the reference's `utils.fifo.FIFO(32)`) ---------------------------------------------------
@@ -302,10 +296,7 @@ public:
             case PCELLID3: return 0xB1;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kUartWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kUartWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -357,7 +348,7 @@ public:
                 return update_dreq();  // DMAONERR: clearing the error interrupt lets the receive request through again
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kUartWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -388,6 +379,7 @@ private:
         return block->update_dreq();
     }
 
+    BlockPort port_;
     UartHost host_;
     Clock* clock_ = nullptr;
     uint32_t rx_[kRxCapacity] = {};

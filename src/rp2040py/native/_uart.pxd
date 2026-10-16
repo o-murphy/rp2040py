@@ -4,7 +4,7 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._mcu_irq cimport McuIrqLine, McuDreqPair
+from rp2040py.native._core_host cimport ChipPorts
 
 from rp2040py.native._clock cimport Alarm, Clock
 from rp2040py.native._window_map cimport WindowHandler
@@ -14,25 +14,16 @@ cdef extern from "uart.hpp" namespace "rp2040core":
     cdef const uint32_t kUartWarnReadAtomicArea
     cdef const uint32_t kUartWarnWrite
 
-    ctypedef cppbool (*UartIrqFn)(void* ctx, cppbool level)
-    ctypedef cppbool (*UartDreqFn)(void* ctx, cppbool rx, cppbool asserted)
     ctypedef cppbool (*UartByteFn)(void* ctx, uint32_t byte)
     ctypedef cppbool (*UartBaudFn)(void* ctx)
     ctypedef cppbool (*UartBitFn)(void* ctx, double* nanos)
-    ctypedef void (*UartWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
 
     cdef cppclass UartHost:
         UartHost() noexcept
-        UartIrqFn irq
-        void* irq_ctx
-        void* dreq_ctx
-        UartDreqFn dreq
         UartByteFn on_byte
         UartBaudFn baud_changed
         UartBitFn bit_ns
-        UartWarnFn warn
         void* ctx
-        const int* failed
 
     cdef cppclass UartBlock:
         uint32_t ctrl
@@ -47,7 +38,7 @@ cdef extern from "uart.hpp" namespace "rp2040core":
         uint32_t rsr
         Alarm tx_alarm
         UartBlock() noexcept
-        void init(Clock* clock, const UartHost& host) noexcept
+        void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const UartHost& host) noexcept
         void detach() noexcept
         int64_t raw_write_value() noexcept
         uint32_t rx_count() noexcept
@@ -83,8 +74,8 @@ cdef class RPUART:
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
     cdef UartBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a block made directly (a stand-in chip, a test)
     cdef UartBlock _own
-    cdef McuDreqPair _dreq_pair  # the DMA request straight to the chip, when it has one (core/mcu.hpp)
-    cdef McuIrqLine _irq_line  # the line straight to the chip, when it has one (core/mcu.hpp)
+    cdef ChipPorts _ports  # a block made directly (`_own`) reaches the chip through these, trampolines into Python
+    cdef uint32_t _dreq_base  # the stand-in's TX request number: the number the block passes for TX, the other is RX
     cdef public object rp2040
     cdef public object clock
     cdef public object name

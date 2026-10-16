@@ -40,23 +40,15 @@
 
 namespace rp2040core {
 
-using SpiIrqFn = bool (*)(void* ctx, bool level);                       // false: failure parked
-using SpiDreqFn = bool (*)(void* ctx, bool tx, bool asserted);          // `tx`: the TX DREQ, else the RX one; false: failure parked
 using SpiBitFn = bool (*)(void* ctx, double* nanos);                    // one SSPCLKOUT period (0 while no bit clock is configured); false: failure parked
 using SpiTransmitFn = bool (*)(void* ctx, uint32_t value);              // a byte (already masked to DSS + 1 bits) is on the wire; false: failure parked
 inline constexpr uint32_t kSpiWarnRead = kRegWarnRead, kSpiWarnReadAtomicArea = kRegWarnReadAtomicArea, kSpiWarnWrite = kRegWarnWrite;
-using SpiWarnFn = RegWarnFn;
 
+// The edges of the block that are the host's own (the device on the wire, the bit time); the line, requests, warnings and failure flag are the chip's `ChipPorts`.
 struct SpiHost {
-    SpiIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    SpiDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
     SpiTransmitFn transmit = nullptr;
     SpiBitFn bit_ns = nullptr;
-    SpiWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace spi_regs {
@@ -89,7 +81,9 @@ public:
     Fifo<kFifoDepth> rx, tx;
 
     // `clock` carries the frame alarm: a word occupies the wire for `data_bits` SSPCLKOUT periods from the moment it leaves the TX FIFO, and the device's reply is held until then.
-    void init(Clock* clock, const SpiHost& host) noexcept {
+    // `irq_line` is the instance's NVIC line, `dreq_base` its TX request (RX follows).
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, uint32_t dreq_base, const SpiHost& host) noexcept {
+        port_.init(ports, block, irq_line, dreq_base);
         clock_ = clock;
         host_ = host;
         frame_active = has_reply = false;
@@ -104,7 +98,7 @@ public:
     bool frame_active = false, has_reply = false;  // a word is being shifted out / the device has answered before its last bit
     uint32_t reply = 0;
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t int_status() const noexcept { return int_raw & int_enable; }
@@ -187,10 +181,7 @@ public:
             case PCELLID3: return 0xB1;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kSpiWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kSpiWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -224,7 +215,7 @@ public:
                 return check_interrupts();
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kSpiWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -305,9 +296,10 @@ private:
         return update_dma_rx();
     }
 
-    bool raise_dreq(bool which, bool asserted) noexcept { return host_.dreq(host_.dreq_ctx != nullptr ? host_.dreq_ctx : host_.ctx, which, asserted); }
-    bool raise_irq(bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, level); }
+    bool raise_dreq(bool tx, bool asserted) noexcept { return port_.dreq(tx ? 0u : 1u, asserted); }
+    bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
+    BlockPort port_;
     SpiHost host_;
     Clock* clock_ = nullptr;
     int64_t raw_write_value_ = 0;

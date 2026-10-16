@@ -21,7 +21,6 @@ rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/..
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._mcu_irq cimport Mcu, mcu_irq_line, native_mcu, mcu_dreq_pair
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -36,8 +35,8 @@ cdef uint32_t TXE = 1 << 8
 cdef uint32_t RXE = 1 << 9
 
 
-cdef cppbool _irq_trampoline(void* ctx, cppbool level) noexcept:
-    cdef RPUART uart = <RPUART> ctx
+cdef cppbool _ports_irq(void* chip, uint32_t line, cppbool level) noexcept:
+    cdef RPUART uart = <RPUART> chip
     try:
         uart.rp2040.set_interrupt(uart.irq, level)
     except BaseException as error:
@@ -46,10 +45,10 @@ cdef cppbool _irq_trampoline(void* ctx, cppbool level) noexcept:
     return True
 
 
-cdef cppbool _dreq_trampoline(void* ctx, cppbool rx, cppbool asserted) noexcept:
-    cdef RPUART uart = <RPUART> ctx
+cdef cppbool _ports_dreq(void* chip, uint32_t number, cppbool asserted) noexcept:
+    cdef RPUART uart = <RPUART> chip
     try:
-        channel = uart.dreq.rx if rx else uart.dreq.tx
+        channel = uart.dreq.tx if number == uart._dreq_base else uart.dreq.rx
         if asserted:
             uart.rp2040.dma.set_dreq(channel)
         else:
@@ -94,15 +93,10 @@ cdef cppbool _bit_trampoline(void* ctx, double* nanos) noexcept:
     return True
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPUART uart = <RPUART> ctx
+cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept:
+    cdef RPUART uart = <RPUART> chip
     try:
-        if kind == kUartWarnRead:
-            uart.warn(f"Unimplemented peripheral read from 0x{offset:x}")
-        elif kind == kUartWarnReadAtomicArea:
-            uart.warn("Unimplemented read from peripheral in the atomic operation region")
-        else:
-            uart.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
+        uart._warn_kind(kind, offset, value)
     except BaseException as error:
         park_error(error)
 
@@ -199,33 +193,17 @@ cdef class RPUART:
             self._block = <UartBlock*> <size_t> rp2040._native_uart_address(mcu_index)
             return
         self._block = &self._own
-        mcu = native_mcu(rp2040)
-        if mcu != NULL:
-            # the line goes from the C++ block straight to the chip's CPU, with no Python in between
-            self._irq_line.mcu = mcu
-            self._irq_line.line = <uint32_t> int(irq)
-            host.irq = mcu_irq_line
-            host.irq_ctx = &self._irq_line
-        else:
-            host.irq = _irq_trampoline
-            host.irq_ctx = NULL
-        if mcu != NULL:
-            # the request goes from the C++ block straight to the chip (and its DMA), with no Python in between
-            self._dreq_pair.mcu = mcu
-            self._dreq_pair.if_true = <uint32_t> int(self.dreq.rx)
-            self._dreq_pair.if_false = <uint32_t> int(self.dreq.tx)
-            host.dreq = mcu_dreq_pair
-            host.dreq_ctx = &self._dreq_pair
-        else:
-            host.dreq = _dreq_trampoline
-            host.dreq_ctx = NULL
+        self._ports.chip = <void*> self
+        self._ports.warn = _ports_warn
+        self._ports.irq = _ports_irq
+        self._ports.dreq = _ports_dreq
+        self._ports.failed = pending_flag()
+        self._dreq_base = <uint32_t> int(self.dreq.tx)
         host.on_byte = _byte_trampoline
         host.baud_changed = _baud_trampoline
         host.bit_ns = _bit_trampoline
-        host.warn = _warn_trampoline
         host.ctx = <void*> self
-        host.failed = pending_flag()
-        self._own.init(&(<SimulationClock> clock)._clock, host)
+        self._own.init(&(<SimulationClock> clock)._clock, &self._ports, 0, <uint32_t> int(irq), self._dreq_base, host)
 
     def _world_byte(self, byte):
         """A transmitted byte, for the device the host attached (the chip's host calls this for the block it built)."""

@@ -41,14 +41,18 @@ struct Env {
     bool fail_irq = false, fail_dreq = false, fail_byte = false, fail_baud = false, fail_bit = false;
 };
 static Env env;
+static constexpr uint32_t kTestBlock = 42, kTestIrq = 20, kTestDreqTx = 20;  // the id its warnings carry, its NVIC line and its TX request (RX follows)
 
-static bool on_irq(void*, bool level) {
+static bool on_irq(void*, uint32_t line, bool level) {
+    CHECK(line == kTestIrq);
     if (env.irq_n < 256) env.irq_calls[env.irq_n] = level;
     ++env.irq_n;
     if (env.fail_irq) { env.failed = 1; return false; }
     return true;
 }
-static bool on_dreq(void*, bool rx, bool asserted) {
+static bool on_dreq(void*, uint32_t number, bool asserted) {
+    CHECK(number == kTestDreqTx || number == kTestDreqTx + 1);
+    const bool rx = number == kTestDreqTx + 1;
     if (env.dreq_n < 256) {
         env.dreq_calls[env.dreq_n] = asserted;
         env.dreq_rx[env.dreq_n] = rx;
@@ -73,7 +77,8 @@ static bool on_bit(void*, double* nanos) {
     if (env.fail_bit) { env.failed = 1; return false; }
     return true;
 }
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     if (env.warns < 32) {
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
@@ -82,20 +87,25 @@ static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
     ++env.warns;
 }
 
+static const ChipPorts& test_ports() {
+    static ChipPorts ports;
+    ports.irq = on_irq;
+    ports.dreq = on_dreq;
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
+    return ports;
+}
+
 static UartBlock uart;
 static Clock clk;
 
 static void fresh_power_on() {
     env = Env();
     UartHost host;
-    host.irq = on_irq;
-    host.dreq = on_dreq;
     host.on_byte = on_byte;
     host.baud_changed = on_baud;
     host.bit_ns = on_bit;
-    host.warn = on_warn;
-    host.failed = &env.failed;
-    uart.init(&clk, host);
+    uart.init(&clk, &test_ports(), kTestBlock, kTestIrq, kTestDreqTx, host);
     (void)uart.reset();  // the TX FIFO, the shift register and its alarm back to power-on
     // a block as the reference's constructor leaves it
     uart.ctrl = CR_RXE | CR_TXE;
@@ -131,14 +141,10 @@ static void test_power_on_state() {
 static void test_a_default_constructed_block_is_at_power_on() {
     static UartBlock block;  // not through fresh(): the member defaults themselves
     UartHost host;
-    host.irq = on_irq;
-    host.dreq = on_dreq;
     host.on_byte = on_byte;
     host.baud_changed = on_baud;
     host.bit_ns = on_bit;
-    host.warn = on_warn;
-    host.failed = &env.failed;
-    block.init(&clk, host);
+    block.init(&clk, &test_ports(), kTestBlock, kTestIrq, kTestDreqTx, host);
     CHECK(block.read(CR) == (CR_RXE | CR_TXE) && block.read(FR) == (FR_TXFE | FR_RXFE));
     CHECK(block.read(IBRD) == 0 && block.read(FBRD) == 0 && block.read(LCR_H) == 0 && block.read(IMSC) == 0 && block.read(IRIS) == 0);
     CHECK(block.rx_count() == 0 && block.raw_write_value() == 0);
