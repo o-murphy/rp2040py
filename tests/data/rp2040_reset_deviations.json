@@ -1,0 +1,805 @@
+{
+"about": "Registers of a fresh chip that read differently from the SVD's reset value (tests/data/rp2040_reset_values.json), each with its reason; tests/test_reset_values_svd.py holds the chip to exactly this list and these values. ours/svd are masked to the register's readable bits.",
+"deviations": [
+{
+"name": "XIP_CTRL.STAT",
+"address": 335544328,
+"ours": 3,
+"svd": 2,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "SSI.SR",
+"address": 402653224,
+"ours": 6,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "SSI.RISR",
+"address": 402653236,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "SYSINFO.CHIP_ID",
+"address": 1073741824,
+"ours": 268445991,
+"svd": 536881447,
+"category": "constant",
+"reason": "REVISION is a constant of the silicon (datasheet: no reset value); the chip carries the B1 boot ROM and reports revision 1, the SVD's 2 is the later stepping"
+},
+{
+"name": "SYSINFO.PLATFORM",
+"address": 1073741828,
+"ours": 2,
+"svd": 0,
+"category": "constant",
+"reason": "a constant of the silicon (ASIC=1, FPGA=0); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "SYSINFO.GITREF_RP2040",
+"address": 1073741888,
+"ours": 3771273960,
+"svd": 0,
+"category": "constant",
+"reason": "the git hash of the RP2040 RTL, a constant of the silicon; the SVD's reset column is a placeholder 0"
+},
+{
+"name": "RESETS.RESET",
+"address": 1073790976,
+"ours": 0,
+"svd": 33554431,
+"category": "boot",
+"reason": "the chip starts where the boot ROM leaves it, at the flash entry with every block out of reset and the power-on sequence done (the SVD describes power-on)"
+},
+{
+"name": "RESETS.RESET_DONE",
+"address": 1073790984,
+"ours": 33554431,
+"svd": 0,
+"category": "boot",
+"reason": "the chip starts where the boot ROM leaves it, at the flash entry with every block out of reset and the power-on sequence done (the SVD describes power-on)"
+},
+{
+"name": "PSM.DONE",
+"address": 1073807372,
+"ours": 131071,
+"svd": 0,
+"category": "boot",
+"reason": "the chip starts where the boot ROM leaves it, at the flash entry with every block out of reset and the power-on sequence done (the SVD describes power-on)"
+},
+{
+"name": "IO_BANK0.INTR0",
+"address": 1073823984,
+"ours": 286331153,
+"svd": 0,
+"category": "status",
+"reason": "raw interrupt status of the pins' levels (an undriven input reads low: LEVEL_LOW set); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_BANK0.INTR1",
+"address": 1073823988,
+"ours": 286331153,
+"svd": 0,
+"category": "status",
+"reason": "raw interrupt status of the pins' levels (an undriven input reads low: LEVEL_LOW set); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_BANK0.INTR2",
+"address": 1073823992,
+"ours": 286331153,
+"svd": 0,
+"category": "status",
+"reason": "raw interrupt status of the pins' levels (an undriven input reads low: LEVEL_LOW set); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_BANK0.INTR3",
+"address": 1073823996,
+"ours": 1118481,
+"svd": 0,
+"category": "status",
+"reason": "raw interrupt status of the pins' levels (an undriven input reads low: LEVEL_LOW set); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SCLK_STATUS",
+"address": 1073840128,
+"ours": 12288,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SS_STATUS",
+"address": 1073840136,
+"ours": 667648,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SD0_STATUS",
+"address": 1073840144,
+"ours": 12288,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SD1_STATUS",
+"address": 1073840152,
+"ours": 12288,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SD2_STATUS",
+"address": 1073840160,
+"ours": 12288,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.GPIO_QSPI_SD3_STATUS",
+"address": 1073840168,
+"ours": 12288,
+"svd": 0,
+"category": "status",
+"reason": "live status of the QSPI pins (INFROMPAD, OUTTOPAD...); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "IO_QSPI.INTR",
+"address": 1073840176,
+"ours": 1118497,
+"svd": 0,
+"category": "status",
+"reason": "raw interrupt status of the pins' levels (an undriven input reads low: LEVEL_LOW set); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "XOSC.CTRL",
+"address": 1073889280,
+"ours": 2720,
+"svd": 0,
+"category": "datasheet",
+"reason": "datasheet 2.16: FREQ_RANGE resets to 0xAA0 and STARTUP.DELAY to 0xC4 (record 0098); the SVD's reset column is 0"
+},
+{
+"name": "XOSC.DORMANT",
+"address": 1073889288,
+"ours": 2002873189,
+"svd": 0,
+"category": "datasheet",
+"reason": "datasheet 2.16.7: 'On power-up this field is initialised to WAKE' (0x77616b65); the SVD's reset column is 0"
+},
+{
+"name": "XOSC.STARTUP",
+"address": 1073889292,
+"ours": 196,
+"svd": 0,
+"category": "datasheet",
+"reason": "datasheet 2.16: FREQ_RANGE resets to 0xAA0 and STARTUP.DELAY to 0xC4 (record 0098); the SVD's reset column is 0"
+},
+{
+"name": "BUSCTRL.BUS_PRIORITY_ACK",
+"address": 1073938436,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "UART0.UARTICR",
+"address": 1073954884,
+"ours": 2047,
+"svd": 0,
+"category": "unreviewed",
+"reason": "write-only register that reads back all ones (the last raw write); the datasheet gives no read value"
+},
+{
+"name": "UART1.UARTICR",
+"address": 1073971268,
+"ours": 2047,
+"svd": 0,
+"category": "unreviewed",
+"reason": "write-only register that reads back all ones (the last raw write); the datasheet gives no read value"
+},
+{
+"name": "SPI0.SSPICR",
+"address": 1073987616,
+"ours": 3,
+"svd": 0,
+"category": "unreviewed",
+"reason": "write-only register that reads back all ones (the last raw write); the datasheet gives no read value"
+},
+{
+"name": "SPI1.SSPICR",
+"address": 1074004000,
+"ours": 3,
+"svd": 0,
+"category": "unreviewed",
+"reason": "write-only register that reads back all ones (the last raw write); the datasheet gives no read value"
+},
+{
+"name": "I2C0.IC_INTR_STAT",
+"address": 1074020396,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "I2C0.IC_RAW_INTR_STAT",
+"address": 1074020404,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "I2C0.IC_CLR_INTR",
+"address": 1074020416,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "I2C1.IC_INTR_STAT",
+"address": 1074036780,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "I2C1.IC_RAW_INTR_STAT",
+"address": 1074036788,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "I2C1.IC_CLR_INTR",
+"address": 1074036800,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "ADC.FCS",
+"address": 1074053128,
+"ours": 256,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "ADC.INTR",
+"address": 1074053140,
+"ours": 1,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "ROSC.CTRL",
+"address": 1074135040,
+"ours": 16431776,
+"svd": 2720,
+"category": "boot",
+"reason": "the ring oscillator is running after the boot ROM (datasheet: ENABLE is initialised to ENABLE on power-up; the divider is the boot ROM's); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "ROSC.DORMANT",
+"address": 1074135052,
+"ours": 2002873189,
+"svd": 0,
+"category": "datasheet",
+"reason": "datasheet 2.17.7: 'On power-up this field is initialised to WAKE' (0x77616b65); the SVD's reset column is 0"
+},
+{
+"name": "ROSC.DIV",
+"address": 1074135056,
+"ours": 2736,
+"svd": 0,
+"category": "boot",
+"reason": "the ring oscillator is running after the boot ROM (datasheet: ENABLE is initialised to ENABLE on power-up; the divider is the boot ROM's); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "ROSC.STATUS",
+"address": 1074135064,
+"ours": 2147553280,
+"svd": 0,
+"category": "boot",
+"reason": "the ring oscillator is running after the boot ROM (datasheet: ENABLE is initialised to ENABLE on power-up; the divider is the boot ROM's); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "ROSC.RANDOMBIT",
+"address": 1074135068,
+"ours": 0,
+"svd": 1,
+"category": "status",
+"reason": "the live bit of the ring oscillator's random generator"
+},
+{
+"name": "VREG_AND_CHIP_RESET.CHIP_RESET",
+"address": 1074151432,
+"ours": 256,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "DMA.CH1_CTRL_TRIG",
+"address": 1342177356,
+"ours": 2048,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH1_AL1_CTRL",
+"address": 1342177360,
+"ours": 2048,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH1_AL2_CTRL",
+"address": 1342177376,
+"ours": 2048,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH1_AL3_CTRL",
+"address": 1342177392,
+"ours": 2048,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH2_CTRL_TRIG",
+"address": 1342177420,
+"ours": 4096,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH2_AL1_CTRL",
+"address": 1342177424,
+"ours": 4096,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH2_AL2_CTRL",
+"address": 1342177440,
+"ours": 4096,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH2_AL3_CTRL",
+"address": 1342177456,
+"ours": 4096,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH3_CTRL_TRIG",
+"address": 1342177484,
+"ours": 6144,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH3_AL1_CTRL",
+"address": 1342177488,
+"ours": 6144,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH3_AL2_CTRL",
+"address": 1342177504,
+"ours": 6144,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH3_AL3_CTRL",
+"address": 1342177520,
+"ours": 6144,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH4_CTRL_TRIG",
+"address": 1342177548,
+"ours": 8192,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH4_AL1_CTRL",
+"address": 1342177552,
+"ours": 8192,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH4_AL2_CTRL",
+"address": 1342177568,
+"ours": 8192,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH4_AL3_CTRL",
+"address": 1342177584,
+"ours": 8192,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH5_CTRL_TRIG",
+"address": 1342177612,
+"ours": 10240,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH5_AL1_CTRL",
+"address": 1342177616,
+"ours": 10240,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH5_AL2_CTRL",
+"address": 1342177632,
+"ours": 10240,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH5_AL3_CTRL",
+"address": 1342177648,
+"ours": 10240,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH6_CTRL_TRIG",
+"address": 1342177676,
+"ours": 12288,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH6_AL1_CTRL",
+"address": 1342177680,
+"ours": 12288,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH6_AL2_CTRL",
+"address": 1342177696,
+"ours": 12288,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH6_AL3_CTRL",
+"address": 1342177712,
+"ours": 12288,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH7_CTRL_TRIG",
+"address": 1342177740,
+"ours": 14336,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH7_AL1_CTRL",
+"address": 1342177744,
+"ours": 14336,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH7_AL2_CTRL",
+"address": 1342177760,
+"ours": 14336,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH7_AL3_CTRL",
+"address": 1342177776,
+"ours": 14336,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH8_CTRL_TRIG",
+"address": 1342177804,
+"ours": 16384,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH8_AL1_CTRL",
+"address": 1342177808,
+"ours": 16384,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH8_AL2_CTRL",
+"address": 1342177824,
+"ours": 16384,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH8_AL3_CTRL",
+"address": 1342177840,
+"ours": 16384,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH9_CTRL_TRIG",
+"address": 1342177868,
+"ours": 18432,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH9_AL1_CTRL",
+"address": 1342177872,
+"ours": 18432,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH9_AL2_CTRL",
+"address": 1342177888,
+"ours": 18432,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH9_AL3_CTRL",
+"address": 1342177904,
+"ours": 18432,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH10_CTRL_TRIG",
+"address": 1342177932,
+"ours": 20480,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH10_AL1_CTRL",
+"address": 1342177936,
+"ours": 20480,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH10_AL2_CTRL",
+"address": 1342177952,
+"ours": 20480,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH10_AL3_CTRL",
+"address": 1342177968,
+"ours": 20480,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH11_CTRL_TRIG",
+"address": 1342177996,
+"ours": 22528,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH11_AL1_CTRL",
+"address": 1342178000,
+"ours": 22528,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH11_AL2_CTRL",
+"address": 1342178016,
+"ours": 22528,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.CH11_AL3_CTRL",
+"address": 1342178032,
+"ours": 22528,
+"svd": 0,
+"category": "unreviewed",
+"reason": "CHAIN_TO resets to the channel's own number (as pico-sdk's default config sets it to disable chaining); the datasheet and the SVD say 0"
+},
+{
+"name": "DMA.SNIFF_CTRL",
+"address": 1342178356,
+"ours": 4095,
+"svd": 0,
+"category": "unimplemented",
+"reason": "not implemented (the DMA sniffer; the inter-core FIFO, which needs core 1): the read warns and returns all ones"
+},
+{
+"name": "DMA.SNIFF_DATA",
+"address": 1342178360,
+"ours": 4294967295,
+"svd": 0,
+"category": "unimplemented",
+"reason": "not implemented (the DMA sniffer; the inter-core FIFO, which needs core 1): the read warns and returns all ones"
+},
+{
+"name": "DMA.N_CHANNELS",
+"address": 1342178376,
+"ours": 12,
+"svd": 0,
+"category": "constant",
+"reason": "12 channels, a constant of the silicon; the SVD's reset column is a placeholder 0"
+},
+{
+"name": "PIO0.DBG_CFGINFO",
+"address": 1344274500,
+"ours": 2098180,
+"svd": 0,
+"category": "constant",
+"reason": "FIFO depth 4, 4 state machines, 32 instruction words: constants of the PIO block; the SVD's reset column is a placeholder 0"
+},
+{
+"name": "PIO0.INTR",
+"address": 1344274728,
+"ours": 240,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "PIO1.DBG_CFGINFO",
+"address": 1345323076,
+"ours": 2098180,
+"svd": 0,
+"category": "constant",
+"reason": "FIFO depth 4, 4 state machines, 32 instruction words: constants of the PIO block; the SVD's reset column is a placeholder 0"
+},
+{
+"name": "PIO1.INTR",
+"address": 1345323304,
+"ours": 240,
+"svd": 0,
+"category": "status",
+"reason": "live status of an empty FIFO / idle block / the reset cause (HAD_POR), not a configured value; the SVD's reset column is a placeholder"
+},
+{
+"name": "SIO.GPIO_HI_IN",
+"address": 3489660936,
+"ours": 2,
+"svd": 0,
+"category": "status",
+"reason": "the QSPI pins' input levels (SS is pulled up); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "SIO.FIFO_ST",
+"address": 3489661008,
+"ours": 15,
+"svd": 2,
+"category": "unimplemented",
+"reason": "not implemented (the DMA sniffer; the inter-core FIFO, which needs core 1): the read warns and returns all ones"
+},
+{
+"name": "PPB.SYST_RVR",
+"address": 3758153748,
+"ours": 16777215,
+"svd": 0,
+"category": "model",
+"reason": "ARMv6-M leaves SysTick RVR/CVR unknown at reset; the model starts them at 0xFFFFFF (the SVD says 0)"
+},
+{
+"name": "PPB.SYST_CVR",
+"address": 3758153752,
+"ours": 16777215,
+"svd": 0,
+"category": "model",
+"reason": "ARMv6-M leaves SysTick RVR/CVR unknown at reset; the model starts them at 0xFFFFFF (the SVD says 0)"
+},
+{
+"name": "PPB.SYST_CALIB",
+"address": 3758153756,
+"ours": 9999,
+"svd": 0,
+"category": "constant",
+"reason": "a constant of the SysTick of this chip (TENMS); the SVD's reset column is a placeholder 0"
+},
+{
+"name": "PPB.AIRCR",
+"address": 3758157068,
+"ours": 4194631680,
+"svd": 0,
+"category": "constant",
+"reason": "ARMv6-M: VECTKEYSTAT reads 0xFA05 in the upper half; the SVD's reset column is a placeholder 0"
+},
+{
+"name": "PPB.CCR",
+"address": 3758157076,
+"ours": 520,
+"svd": 0,
+"category": "constant",
+"reason": "ARMv6-M: UNALIGN_TRP (bit 3) and STKALIGN (bit 9) read as 1; the SVD's reset column is a placeholder 0"
+}
+]
+}
