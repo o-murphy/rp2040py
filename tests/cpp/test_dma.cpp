@@ -52,6 +52,8 @@ static Clock clk;
 static Bus bus;
 static DmaBlock dma;
 
+static constexpr uint32_t kTestBlock = 42, kTestIrq = 30;  // the id the block reports its warnings under; DMA_IRQ_0, distinct from the usual numbers to prove the base is used
+
 static bool on_irq(void*, uint32_t line, bool level) {
     const int call = env.irqs;
     if (env.irqs < 512) {
@@ -69,7 +71,8 @@ static double on_clk_sys(void*) {
     ++env.clk_calls;
     return env.clk_sys;
 }
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t) {
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t) {
+    CHECK(block == kTestBlock);
     if (env.warns < 64) {
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
@@ -160,14 +163,13 @@ int main() {
     bus.init(host);
     bus.mem.attach({kRam, sizeof ram, sizeof ram, 0xFFFFFFFF, ram, kSubWord});
     bus.windows.attach(kProbe, {probe_read, probe_write, nullptr});
+    ChipPorts ports;
+    ports.irq = on_irq;
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
     DmaHost dma_host;
-    dma_host.irq = on_irq;
     dma_host.clk_sys = on_clk_sys;
-    dma_host.warn = on_warn;
-    dma_host.failed = &env.failed;
-    dma_host.lines[0] = 30;  // distinct from the usual numbers, to prove the mapping is used
-    dma_host.lines[1] = 31;
-    dma.init(&bus, &clk, dma_host);
+    dma.init(&bus, &clk, &ports, kTestBlock, kTestIrq, dma_host);
     bus.windows.attach(kDmaBase, dma.window_handler());
 
     // ---- a plain 32-bit copy on PERMANENT: one clk_sys cycle a word (the host keeps `transfer_ns` = 1e9 / clk_sys) -------------
@@ -347,7 +349,7 @@ int main() {
         failing.clk_sys = Fail::clk;
         DmaBlock other;
         Clock other_clock;
-        other.init(&bus, &other_clock, failing);
+        other.init(&bus, &other_clock, &ports, kTestBlock, kTestIrq, failing);
         (void)other.write_atomic(TIMER0, (1u << 16) | 1u, kAtomicNormal);
         (void)other.write_atomic(READ_ADDR, kRam, kAtomicNormal);
         (void)other.write_atomic(TRANS_COUNT, 2, kAtomicNormal);

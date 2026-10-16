@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._bus cimport Bus
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -14,20 +15,13 @@ cdef extern from "dma.hpp" namespace "rp2040core":
     cdef const uint32_t kDmaWarnReadAtomicArea
     cdef const uint32_t kDmaWarnWrite
 
-    ctypedef cppbool (*DmaIrqFn)(void* ctx, uint32_t line, cppbool level)
     ctypedef double (*DmaClockFn)(void* ctx)
-    ctypedef void (*DmaWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
 
     cdef cppclass DmaHost:
         DmaHost() noexcept
-        DmaIrqFn irq
-        void* irq_ctx
         DmaClockFn clk_sys
         void* clk_ctx
-        DmaWarnFn warn
         void* ctx
-        const int* failed
-        uint32_t lines[2]
 
     cdef cppclass DmaChannel:
         int index
@@ -54,7 +48,7 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         uint32_t int_raw
         double transfer_ns
         DmaBlock() noexcept
-        void init(Bus* bus, Clock* clock, const DmaHost& host) noexcept
+        void init(Bus* bus, Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, const DmaHost& host) noexcept
         void detach() noexcept
         uint32_t int_status0() noexcept
         uint32_t int_status1() noexcept

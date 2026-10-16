@@ -211,33 +211,23 @@ public:
         // The clock tree (CLOCKS, both PLLs, the crystal and the ring oscillator): built before the blocks that run from it. The PLLs take the crystal from the tree, the oscillators and the PLL
         // registers tell the tree when they change, and the tree reads both oscillators off their blocks. The crystal's frequency is the board's: `set_crystal_hz()`.
         PllHost ps;
-        ps.warn = block_warn<kMcuBlockPllSys>;
         ps.changed = tree_changed;
         ps.ctx = this;
-        ps.failed = host.failed;
-        pll_[0].init(ps);
-        PllHost pu = ps;
-        pu.warn = block_warn<kMcuBlockPllUsb>;
-        pll_[1].init(pu);
+        pll_[0].init(&ports_, kMcuBlockPllSys, ps);
+        pll_[1].init(&ports_, kMcuBlockPllUsb, ps);
         XoscHost xo;
-        xo.warn = block_warn<kMcuBlockXosc>;
         xo.stable_changed = tree_changed;
         xo.ctx = this;
-        xo.failed = host.failed;
-        xosc_.init(xo);
+        xosc_.init(&ports_, kMcuBlockXosc, xo);
         RoscHost ro;
-        ro.warn = block_warn<kMcuBlockRosc>;
         ro.frequency_changed = rosc_changed;  // (no random source: the block has its own)
         ro.ctx = this;
-        ro.failed = host.failed;
-        rosc_.init(clock_, ro);
+        rosc_.init(clock_, &ports_, kMcuBlockRosc, ro);
         ClocksHost ch;
-        ch.warn = block_warn<kMcuBlockClocks>;
         ch.xosc_hz = tree_xosc_hz;  // (read only while a host's own oscillator block stands in for the chip's)
         ch.rosc_hz = tree_rosc_hz;
         ch.ctx = this;
-        ch.failed = host.failed;
-        clocks_.init(clock_, ch, &pll_[0], &pll_[1]);
+        clocks_.init(clock_, &ports_, kMcuBlockClocks, ch, &pll_[0], &pll_[1]);
         for (int i = 0; i < 2; ++i) pll_[i].bind_reference(clocks_xosc_hz, &clocks_);
         clocks_.bind_xosc(&xosc_);
         clocks_.bind_rosc(&rosc_);
@@ -315,29 +305,21 @@ public:
 
         // The core's own peripherals and the DMA: PPB (SysTick, NVIC, SCB on the CPU), the watchdog (it tells the TIMER and SysTick their tick) and the DMA (on the bus, reading clk_sys from the tree).
         PpbHost pp;
-        pp.warn = block_warn<kMcuBlockPpb>;
         pp.system_reset_request = ppb_reset_request;
         pp.ctx = this;
-        ppb_.init(&cpu, clock_, pp, clocks_.clk_sys(), kMaxHardwareIrq);
+        ppb_.init(&cpu, clock_, &ports_, kMcuBlockPpb, pp, clocks_.clk_sys(), kMaxHardwareIrq);
         bus.set_ppb(ppb_.window_handler());
 
         WatchdogHost wd;
-        wd.warn = block_warn<kMcuBlockWatchdog>;
         wd.trigger = watchdog_trigger;
         wd.tick_changed = watchdog_tick;
         wd.ctx = this;
-        wd.failed = host.failed;
-        watchdog_.init(clock_, wd);
+        watchdog_.init(clock_, &ports_, kMcuBlockWatchdog, wd);
         bus.windows.attach(kWatchdogBase, watchdog_.window_handler());
 
         DmaHost dm;
-        dm.irq = timer_irq;  // (the DMA passes the absolute NVIC line, like the TIMER)
-        dm.warn = block_warn<kMcuBlockDma>;
         dm.ctx = this;
-        dm.failed = host.failed;
-        dm.lines[0] = kIrqDma[0];
-        dm.lines[1] = kIrqDma[1];
-        own_dma_.init(&bus, clock_, dm);
+        own_dma_.init(&bus, clock_, &ports_, kMcuBlockDma, kIrqDma[0], dm);  // (DMA_IRQ_1 is the next line)
         own_dma_.bind_clock(clocks_clk_sys, &clocks_, clocks_.clk_sys());
         bus.windows.attach(kDmaBase, own_dma_.window_handler());
         attach_dma(&own_dma_);
@@ -919,7 +901,6 @@ private:
         return true;
     }
     // The blocks of group 2 call these; each raises its line / request on the chip, or hands the world the part it answers for. `ctx` is the Mcu (TIMER, ADC) or a `McuInstance`.
-    static bool timer_irq(void* chip, uint32_t line, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(line, level); }
     static bool adc_read(void* chip, uint32_t channel) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         if (m->host_world_.adc_read != nullptr) return m->host_world_.adc_read(m->host_world_.ctx, channel);

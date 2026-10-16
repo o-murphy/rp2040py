@@ -41,21 +41,14 @@
 
 namespace rp2040core {
 
-using DmaIrqFn = bool (*)(void* ctx, uint32_t line, bool level);  // false: failure parked
 using DmaClockFn = double (*)(void* ctx);                          // clk_sys in Hz; a failure is parked and flagged
 // The messages the Python block logs through `BasePeripheral.warn`; the host formats them (it owns the logger).
 inline constexpr uint32_t kDmaWarnRead = kRegWarnRead, kDmaWarnReadAtomicArea = kRegWarnReadAtomicArea, kDmaWarnWrite = kRegWarnWrite;
-using DmaWarnFn = RegWarnFn;
 
 struct DmaHost {
-    DmaIrqFn irq = nullptr;
-    void* irq_ctx = nullptr;  // the context of `irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
     DmaClockFn clk_sys = nullptr;
     void* clk_ctx = nullptr;           // the context `clk_sys` is called with; null: `ctx` (a host that answers it itself), non-null: the clock tree in C++ (`bind_clock`)
-    DmaWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;       // the shared parked-failure flag (see _pending.pyx)
-    uint32_t lines[2] = {11, 12};      // IRQ numbers of DMA_IRQ_0 / DMA_IRQ_1
 };
 
 namespace dma_regs {
@@ -137,7 +130,9 @@ public:
     // clk_sys is now `hz`: one clk_sys cycle is 1e9 / hz nanoseconds.
     void clk_sys_changed(double hz) noexcept { transfer_ns = 1e9 / hz; }
 
-    void init(Bus* bus, Clock* clock, const DmaHost& host) noexcept {
+    // `irq_line` is DMA_IRQ_0 (DMA_IRQ_1 follows).
+    void init(Bus* bus, Clock* clock, const ChipPorts* ports, uint32_t block, uint32_t irq_line, const DmaHost& host) noexcept {
+        port_.init(ports, block, irq_line);
         bus_ = bus;
         clock_ = clock;
         host_ = host;
@@ -158,7 +153,7 @@ public:
 
     Bus* bus() const noexcept { return bus_; }
     Clock* clock() const noexcept { return clock_; }
-    bool failed() const noexcept { return host_.failed != nullptr && *host_.failed != 0; }
+    bool failed() const noexcept { return port_.failed(); }
 
     uint32_t int_status0() const noexcept { return (int_raw & int_enable_[0]) | int_force_[0]; }
     uint32_t int_status1() const noexcept { return (int_raw & int_enable_[1]) | int_force_[1]; }
@@ -213,8 +208,8 @@ public:
 
     // Re-announces both lines, in order, whatever changed - the reference's call pattern.
     bool check_interrupts() noexcept {
-        if (!raise_irq(host_.lines[0], int_status0() != 0)) return false;
-        return raise_irq(host_.lines[1], int_status1() != 0);
+        if (!port_.irq(int_status0() != 0, 0)) return false;
+        return port_.irq(int_status1() != 0, 1);
     }
 
     // Channels back to power-on and the registers cleared; the asserted DREQs are deliberately untouched (see the
@@ -249,10 +244,7 @@ public:
             case MULTI_CHAN_TRIGGER: case CHAN_ABORT: case FIFO_LEVELS: return 0;  // self-clearing (an abort is flushed at once) / debug FIFO levels: see _dma.py
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kDmaWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kDmaWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -285,7 +277,7 @@ public:
                 return true;
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kDmaWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -309,7 +301,7 @@ private:
 
     Bus* bus_ = nullptr;
     Clock* clock_ = nullptr;
-    bool raise_irq(uint32_t line, bool level) noexcept { return host_.irq(host_.irq_ctx != nullptr ? host_.irq_ctx : host_.ctx, line, level); }
+    BlockPort port_;
     DmaHost host_;
     uint32_t int_enable_[2] = {0, 0}, int_force_[2] = {0, 0};
     uint32_t timers_[4] = {0, 0, 0, 0};

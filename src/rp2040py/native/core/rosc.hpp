@@ -32,18 +32,15 @@ inline constexpr uint32_t kRoscWarnRead = kRegWarnRead, kRoscWarnReadAtomicArea 
 // Warnings that carry data beyond the three of `RegWarn` (the host formats the message): `value` is the offending field.
 constexpr uint32_t kRoscWarnInvalidFreqRange = 3, kRoscWarnInvalidEnable = 4, kRoscWarnInvalidFreqPasswd = 5, kRoscWarnInvalidDormant = 6, kRoscWarnInvalidDiv = 7, kRoscWarnInvalidPhasePasswd = 8;
 
-using RoscWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t value);
 using RoscFrequencyFn = bool (*)(void* ctx, double hz);       // the output frequency changed: the chip's `rosc_freq` follows and its clocks are re-derived; false: failure parked
 using RoscBitFn = bool (*)(void* ctx, uint32_t* bit);          // one random bit; false: failure parked
 
 struct RoscHost {
-    RoscWarnFn warn = nullptr;
     RoscFrequencyFn frequency_changed = nullptr;
     void* frequency_ctx = nullptr;  // the context `frequency_changed` is called with; null: `ctx` (see `bind_frequency_listener`)
     RoscBitFn random_bit = nullptr;  // optional: without it the block uses its own seeded generator (the same bits on every run)
     void* random_ctx = nullptr;     // the context `random_bit` is called with; null: `ctx` (see `bind_random_source`)
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace rosc_regs {
@@ -67,7 +64,8 @@ public:
     RoscBlock(const RoscBlock&) = delete;  // the window handler holds a pointer to this object
     RoscBlock& operator=(const RoscBlock&) = delete;
 
-    void init(Clock* clock, const RoscHost& host) noexcept {
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, const RoscHost& host) noexcept {
+        port_.init(ports, block);
         clock_ = clock;
         host_ = host;
         clock_->add_rebase_listener(&rebase_listener_, &RoscBlock::on_rebase, this);  // the clock's origin moved: COUNT's epoch is an absolute tick count
@@ -90,7 +88,7 @@ public:
         Clock::remove_rebase_listener(&rebase_listener_);
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The registers and flags, public for the shell (the reference's private attributes are read and, by tests, written directly).
@@ -156,10 +154,7 @@ public:
             case REG_COUNT: *out = count_now(); return true;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kRoscWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kRoscWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         *out = 0xFFFFFFFFu;
         return true;
     }
@@ -242,7 +237,7 @@ public:
             case REG_RANDOMBIT: return true;  // read only
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kRoscWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -299,7 +294,7 @@ private:
 
     void bad_write(uint32_t kind, uint32_t offset, uint32_t field) noexcept {
         badwrite = true;
-        if (host_.warn) host_.warn(host_.ctx, kind, offset, field);
+        port_.warn(kind, offset, field);
     }
 
     void rebase_count() noexcept {
@@ -318,6 +313,7 @@ private:
         return true;
     }
 
+    BlockPort port_;
     RoscHost host_;
     RebaseListener rebase_listener_;
     Clock* clock_ = nullptr;

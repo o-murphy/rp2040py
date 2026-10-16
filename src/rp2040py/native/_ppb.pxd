@@ -4,6 +4,7 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._cpu cimport Cpu
 from rp2040py.native._pwm cimport Timer32, Timer32PeriodicAlarm
@@ -13,13 +14,11 @@ cdef extern from "ppb.hpp" namespace "rp2040core":
     cdef const uint32_t kPpbWarnRead
     cdef const uint32_t kPpbWarnWrite
 
-    ctypedef void (*PpbWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
 
     ctypedef void (*PpbSystemResetFn)(void* ctx)
 
     cdef cppclass PpbHost:
         PpbHost() noexcept
-        PpbWarnFn warn
         PpbSystemResetFn system_reset_request
         void* ctx
 
@@ -37,7 +36,7 @@ cdef extern from "ppb.hpp" namespace "rp2040core":
         uint32_t mpu_rbar[8]
         uint32_t mpu_rasr[8]
         PpbBlock() noexcept
-        void init(Cpu* cpu, Clock* clock, const PpbHost& host, double clk_sys, uint32_t max_hardware_irq) noexcept
+        void init(Cpu* cpu, Clock* clock, const ChipPorts* ports, uint32_t block, const PpbHost& host, double clk_sys, uint32_t max_hardware_irq) noexcept
         void detach() noexcept
         void reset() noexcept
         double clk_sys() noexcept

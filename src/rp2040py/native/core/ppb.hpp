@@ -41,13 +41,11 @@
 namespace rp2040core {
 
 inline constexpr uint32_t kPpbWarnRead = kRegWarnRead, kPpbWarnWrite = kRegWarnWrite;
-using PpbWarnFn = RegWarnFn;
 
 // AIRCR.SYSRESETREQ with a valid VECTKEY: the host resets the core (datasheet 2.4.2.9: "Reset the core only"). Called from inside the register write.
 using PpbSystemResetFn = void (*)(void* ctx);
 
 struct PpbHost {
-    PpbWarnFn warn = nullptr;
     PpbSystemResetFn system_reset_request = nullptr;
     void* ctx = nullptr;
 };
@@ -87,7 +85,8 @@ public:
 
     // Binds the block to the CPU whose private bus it is, the chip's clock and its clk_sys, and runs the reference's constructor: TOP, mode and alarm target, then reset().
     // `max_hardware_irq` is the CPU's (the highest IRQ a chip raises): ICPR cannot clear a pending bit at or below it.
-    void init(Cpu* cpu, Clock* clock, const PpbHost& host, double clk_sys, uint32_t max_hardware_irq) noexcept {
+    void init(Cpu* cpu, Clock* clock, const ChipPorts* ports, uint32_t block, const PpbHost& host, double clk_sys, uint32_t max_hardware_irq) noexcept {
+        port_.init(ports, block);
         cpu_ = cpu;
         host_ = host;
         hardware_interrupt_mask_ = max_hardware_irq >= 32 ? 0xFFFFFFFFu : (1u << max_hardware_irq) - 1u;
@@ -176,7 +175,7 @@ public:
             }
             return result;
         }
-        if (host_.warn) host_.warn(host_.ctx, kPpbWarnRead, offset, 0);
+        port_.warn(kPpbWarnRead, offset, 0);  // (no atomic-area message: the PPB window has no aliases)
         return 0xFFFFFFFFu;
     }
 
@@ -265,7 +264,7 @@ public:
             core.interrupts_updated = true;
             return true;
         }
-        if (host_.warn) host_.warn(host_.ctx, kPpbWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -306,6 +305,7 @@ private:
     Cpu* cpu_ = nullptr;
     double clk_sys_ = 0.0;
     double tick_hz_ = 0.0;  // the watchdog's tick: SysTick's reference clock
+    BlockPort port_;
     PpbHost host_;
     uint32_t hardware_interrupt_mask_ = 0;
     int64_t raw_write_value_ = 0;

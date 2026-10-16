@@ -35,7 +35,9 @@ static Env env;
 static Clock clk;
 static RoscBlock rosc;
 
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     if (env.warns < 16) {
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
@@ -62,15 +64,20 @@ static bool on_bit(void*, uint32_t* bit) {
     return true;
 }
 
+static const ChipPorts& test_ports() {
+    static ChipPorts ports;
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
+    return ports;
+}
+
 static void fresh() {
     env = Env();
     clk.reset();
     RoscHost host;
-    host.warn = on_warn;
     host.frequency_changed = on_freq;
     host.random_bit = on_bit;
-    host.failed = &env.failed;
-    rosc.init(&clk, host);
+    rosc.init(&clk, &test_ports(), kTestBlock, host);
     CHECK(rosc.reset());
     env.freq_calls = 0;
     env.warns = 0;
@@ -95,10 +102,9 @@ static void test_a_block_that_was_never_reset_is_at_power_on() {
     RoscBlock block;  // the shell only calls init(): the member defaults are the power-on state
     Clock c;
     RoscHost host;
-    host.warn = on_warn;
     host.frequency_changed = on_freq;
     host.random_bit = on_bit;
-    block.init(&c, host);
+    block.init(&c, &test_ports(), kTestBlock, host);
     CHECK(block.read(REG_CTRL) == 0x00FABAA0u && block.read(REG_DORMANT) == WAKE_VALUE && block.read(REG_DIV) == 0xAB0u && block.read(REG_PHASE) == 0x8u);
     CHECK(block.read(REG_STATUS) == 0x80011000u && block.enabled && !block.badwrite && block.hz == 6.5e6 && block.last_bit == 1);
     env.next_bit = 1;

@@ -4,6 +4,7 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "xosc.hpp" namespace "rp2040core":
@@ -14,19 +15,16 @@ cdef extern from "xosc.hpp" namespace "rp2040core":
     cdef const uint32_t kXoscWarnInvalidEnable
     cdef const uint32_t kXoscWarnInvalidDormant
 
-    ctypedef void (*XoscWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
     ctypedef cppbool (*XoscStableFn)(void* ctx)
 
     cdef cppclass XoscHost:
         XoscHost() noexcept
-        XoscWarnFn warn
         XoscStableFn stable_changed
         void* ctx
-        const int* failed
 
     cdef cppclass XoscBlock:
         XoscBlock() noexcept
-        void init(const XoscHost& host) noexcept
+        void init(const ChipPorts* ports, uint32_t block, const XoscHost& host) noexcept
         void bind_stable_listener(XoscStableFn fn, void* ctx) noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept

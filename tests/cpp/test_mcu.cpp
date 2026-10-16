@@ -181,7 +181,7 @@ int main() {
         Clock clock;
         DmaHost dma_host;
         DmaBlock dma;
-        dma.init(&m.bus, &clock, dma_host);
+        dma.init(&m.bus, &clock, nullptr, 0, 0, dma_host);  // (a block on its own: no ports)
         CHECK(m.set_dreq(5, true) && !dma.dreq(5));  // no DMA attached: nowhere to go, not a failure
         m.attach_dma(&dma);
         CHECK(m.set_dreq(5, true) && dma.dreq(5));

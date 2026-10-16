@@ -26,7 +26,10 @@ struct Warn {
     int resets = 0;  // AIRCR.SYSRESETREQ requests
 };
 static void on_system_reset(void* ctx) { ++static_cast<Warn*>(ctx)->resets; }
-static void on_warn(void* ctx, uint32_t kind, uint32_t offset, int64_t value) {
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
+
+static void on_warn(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     Warn* w = static_cast<Warn*>(ctx);
     if (w->n < 8) {
         w->kind[w->n] = kind;
@@ -45,12 +48,14 @@ struct Rig {
     Cpu cpu;
     PpbBlock ppb;
     Warn warns;
+    ChipPorts ports;
     Rig() {
+        ports.warn = on_warn;
+        ports.chip = &warns;
         PpbHost host;
-        host.warn = on_warn;
         host.system_reset_request = on_system_reset;
         host.ctx = &warns;
-        ppb.init(&cpu, &clk, host, kHz, kIrqMax);
+        ppb.init(&cpu, &clk, &ports, kTestBlock, host, kHz, kIrqMax);
         ppb.tick_changed(kSysTickRefClk);  // the watchdog's tick is running
     }
     ~Rig() { ppb.detach(); }
@@ -312,7 +317,7 @@ static void check_aircr() {
     Clock clk;
     Cpu cpu;
     PpbHost host;
-    bare.init(&cpu, &clk, host, kHz, kIrqMax);
+    bare.init(&cpu, &clk, nullptr, kTestBlock, host, kHz, kIrqMax);
     bare.write(AIRCR, 0x05FA0004u);
     bare.detach();
 }
@@ -409,7 +414,7 @@ static void check_detach_and_clock_destroyed_first() {
     {
         Clock clk;
         PpbHost host;
-        ppb.init(&cpu, &clk, host, kHz, kIrqMax);
+        ppb.init(&cpu, &clk, nullptr, kTestBlock, host, kHz, kIrqMax);
         ppb.tick_changed(kSysTickRefClk);
         ppb.write(SYST_CSR, 1);
         CHECK(clk.has_alarm());

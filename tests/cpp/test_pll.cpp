@@ -29,7 +29,10 @@ struct Env {
 };
 static Env env;
 
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
+
     if (env.warns < 8) {
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
@@ -49,14 +52,19 @@ static bool on_changed(void*) {
 
 static PllBlock block;
 
+static const ChipPorts& test_ports() {
+    static ChipPorts ports;
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
+    return ports;
+}
+
 static void fresh() {
     env = Env();
     PllHost host;
-    host.warn = on_warn;
     host.ref_hz = on_ref;
     host.changed = on_changed;
-    host.failed = &env.failed;
-    block.init(host);
+    block.init(&test_ports(), kTestBlock, host);
     block.reset();
 }
 
@@ -183,8 +191,7 @@ static void test_unimplemented_offsets_warn() {
 static void test_a_block_with_no_host_function_still_writes() {
     fresh();
     PllHost bare;
-    bare.failed = &env.failed;
-    block.init(bare);
+    block.init(&test_ports(), kTestBlock, bare);
     CHECK(block.write(REG_FBDIV_INT, 7));  // no `changed`, no `ref_hz`, no `warn`
     CHECK(block.read(REG_FBDIV_INT) == 7 && block.frequency() == 0.0 && block.read(0x10) == 0xFFFFFFFFu);
 }

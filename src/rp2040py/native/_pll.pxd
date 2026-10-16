@@ -4,6 +4,7 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "pll.hpp" namespace "rp2040core":
@@ -11,21 +12,18 @@ cdef extern from "pll.hpp" namespace "rp2040core":
     cdef const uint32_t kPllWarnReadAtomicArea
     cdef const uint32_t kPllWarnWrite
 
-    ctypedef void (*PllWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
     ctypedef double (*PllRefFn)(void* ctx)
     ctypedef cppbool (*PllChangedFn)(void* ctx)
 
     cdef cppclass PllHost:
         PllHost() noexcept
-        PllWarnFn warn
         PllRefFn ref_hz
         PllChangedFn changed
         void* ctx
-        const int* failed
 
     cdef cppclass PllBlock:
         PllBlock() noexcept
-        void init(const PllHost& host) noexcept
+        void init(const ChipPorts* ports, uint32_t block, const PllHost& host) noexcept
         void bind_reference(PllRefFn fn, void* ctx) noexcept
         int64_t raw_write_value() noexcept
         void reset() noexcept

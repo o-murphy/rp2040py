@@ -24,12 +24,10 @@ using PllRefFn = double (*)(void* ctx);      // the crystal oscillator's output 
 using PllChangedFn = bool (*)(void* ctx);    // a register changed: the clock tree is re-derived; false: a failure is parked
 
 struct PllHost {
-    RegWarnFn warn = nullptr;
     PllRefFn ref_hz = nullptr;
     void* ref_ctx = nullptr;  // the context `ref_hz` is called with; null: `ctx` (see `bind_reference`)
     PllChangedFn changed = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace pll_regs {
@@ -47,7 +45,10 @@ public:
     PllBlock(const PllBlock&) = delete;  // the window handler holds a pointer to this object
     PllBlock& operator=(const PllBlock&) = delete;
 
-    void init(const PllHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block, const PllHost& host) noexcept {
+        port_.init(ports, block);
+        host_ = host;
+    }
 
     // Whoever owns the clock tree takes over the reference (core/clock_sinks.hpp `clocks_xosc_hz`) in place of the host's `ref_hz`; `fn == nullptr` takes it back.
     void bind_reference(PllRefFn fn, void* ctx) noexcept {
@@ -55,7 +56,7 @@ public:
         host_.ref_ctx = ctx;
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t cs = pll_regs::CS_RESET;
@@ -104,10 +105,7 @@ public:
         if (offset == REG_PWR) return pwr;
         if (offset == REG_FBDIV_INT) return fbdiv_int;
         if (offset == REG_PRIM) return prim;
-        if (host_.warn) {
-            host_.warn(host_.ctx, kPllWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kPllWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -123,7 +121,7 @@ public:
         } else if (offset == REG_PRIM) {
             prim = v & PRIM_WRITE_MASK;
         } else {
-            if (host_.warn) host_.warn(host_.ctx, kPllWarnWrite, offset, value);
+            port_.unimplemented_write(offset, value);
             return true;
         }
         return host_.changed ? host_.changed(host_.ctx) : true;
@@ -141,6 +139,7 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<PllBlock>::handler(this); }
 
 private:
+    BlockPort port_;
     PllHost host_;
     int64_t raw_write_value_ = 0;
 };

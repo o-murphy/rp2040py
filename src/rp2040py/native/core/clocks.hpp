@@ -36,11 +36,9 @@ using ClockSinkFn = bool (*)(void* ctx, double hz, double old);   // a clock cha
 constexpr uint32_t kClockSinkCapacity = 16;
 
 struct ClocksHost {
-    RegWarnFn warn = nullptr;
     ClockHzFn xosc_hz = nullptr;
     ClockHzFn rosc_hz = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace clocks_regs {
@@ -87,7 +85,8 @@ public:
     ClocksBlock(const ClocksBlock&) = delete;  // the window handler and the alarm hold pointers to this object
     ClocksBlock& operator=(const ClocksBlock&) = delete;
 
-    void init(Clock* clock, const ClocksHost& host, PllBlock* pll_sys, PllBlock* pll_usb) noexcept {
+    void init(Clock* clock, const ChipPorts* ports, uint32_t block, const ClocksHost& host, PllBlock* pll_sys, PllBlock* pll_usb) noexcept {
+        port_.init(ports, block);
         clock_ = clock;
         host_ = host;
         pll_sys_ = pll_sys;
@@ -103,7 +102,7 @@ public:
     }
     void detach() noexcept { cancel_alarm(&fc_alarm_); }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The sinks, called in the order they were added. False: the list is full.
@@ -259,10 +258,7 @@ public:
             case INTS: return intf_;                  // INTS = (INTR & INTE) | INTF, and nothing raises INTR
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kClocksWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kClocksWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -307,7 +303,7 @@ public:
             case SYS_RESUS_STATUS: case ENABLED0: case ENABLED1: case INTR: case INTS: return true;  // read only
             default: break;
         }
-        if (host_.warn) host_.warn(host_.ctx, kClocksWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -440,6 +436,7 @@ private:
     }
 
     Clock* clock_ = nullptr;
+    BlockPort port_;
     ClocksHost host_;
     PllBlock* pll_sys_ = nullptr;
     PllBlock* pll_usb_ = nullptr;

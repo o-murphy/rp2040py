@@ -33,7 +33,10 @@ struct Env {
     bool tick_fails = false;
 };
 
-static void on_warn(void* ctx, uint32_t kind, uint32_t offset, int64_t value) {
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
+
+static void on_warn(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     Env* env = static_cast<Env*>(ctx);
     if (env->warns < 8) {
         env->warn_kind[env->warns] = kind;
@@ -69,15 +72,17 @@ struct Rig {
     Clock clk;
     WatchdogBlock block;
     Env env;
+    ChipPorts ports;
     Rig() {
         env.clock = &clk;
+        ports.warn = on_warn;
+        ports.chip = &env;
+        ports.failed = &env.failed;
         WatchdogHost host;
-        host.warn = on_warn;
         host.trigger = on_trigger;
         host.tick_changed = on_tick;
         host.ctx = &env;
-        host.failed = &env.failed;
-        block.init(&clk, host);
+        block.init(&clk, &ports, kTestBlock, host);
         block.clk_ref_changed(12e6);  // the crystal: clk_ref from XOSC
     }
     ~Rig() { block.detach(); }

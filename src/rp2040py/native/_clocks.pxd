@@ -4,6 +4,7 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._pll cimport PllBlock
 from rp2040py.native._rosc cimport RoscBlock
@@ -15,21 +16,18 @@ cdef extern from "clocks.hpp" namespace "rp2040core":
     cdef const uint32_t kClocksWarnReadAtomicArea
     cdef const uint32_t kClocksWarnWrite
 
-    ctypedef void (*ClocksWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
     ctypedef double (*ClockHzFn)(void* ctx)
     ctypedef cppbool (*ClockSinkFn)(void* ctx, double hz, double old)
 
     cdef cppclass ClocksHost:
         ClocksHost() noexcept
-        ClocksWarnFn warn
         ClockHzFn xosc_hz
         ClockHzFn rosc_hz
         void* ctx
-        const int* failed
 
     cdef cppclass ClocksBlock:
         ClocksBlock() noexcept
-        void init(Clock* clock, const ClocksHost& host, PllBlock* pll_sys, PllBlock* pll_usb) noexcept
+        void init(Clock* clock, const ChipPorts* ports, uint32_t block, const ClocksHost& host, PllBlock* pll_sys, PllBlock* pll_usb) noexcept
         void detach() noexcept
         void clear_sinks() noexcept
         void bind_xosc(const XoscBlock* block) noexcept
