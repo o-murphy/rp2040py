@@ -29,7 +29,7 @@ cdef enum:
 
 
 cdef cppbool _enabled_trampoline(void* ctx) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         callback = usb.on_usb_enabled
         if callback:
@@ -41,7 +41,7 @@ cdef cppbool _enabled_trampoline(void* ctx) noexcept:
 
 
 cdef cppbool _reset_received_trampoline(void* ctx) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         callback = usb.on_reset_received
         if callback:
@@ -53,7 +53,7 @@ cdef cppbool _reset_received_trampoline(void* ctx) noexcept:
 
 
 cdef cppbool _endpoint_read_trampoline(void* ctx, uint32_t endpoint, uint32_t length) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         callback = usb.on_endpoint_read
         if callback:
@@ -65,7 +65,7 @@ cdef cppbool _endpoint_read_trampoline(void* ctx, uint32_t endpoint, uint32_t le
 
 
 cdef cppbool _write_queued_trampoline(void* ctx, uint32_t endpoint, uint32_t half, const uint8_t* data, uint32_t length) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         usb._write_queue[endpoint].append((PyBytes_FromStringAndSize(<const char*> data, length), half))
     except BaseException as error:
@@ -75,7 +75,7 @@ cdef cppbool _write_queued_trampoline(void* ctx, uint32_t endpoint, uint32_t hal
 
 
 cdef cppbool _drain_write_trampoline(void* ctx, uint32_t endpoint) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         queued = usb._write_queue[endpoint]
         usb._write_queue[endpoint] = []
@@ -90,7 +90,7 @@ cdef cppbool _drain_write_trampoline(void* ctx, uint32_t endpoint) noexcept:
 
 
 cdef cppbool _drain_reaction_trampoline(void* ctx, uint32_t endpoint) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         buffers = usb._reaction_queue[endpoint]
         usb._reaction_queue[endpoint] = []
@@ -105,7 +105,7 @@ cdef cppbool _drain_reaction_trampoline(void* ctx, uint32_t endpoint) noexcept:
 
 
 cdef cppbool _drain_read_trampoline(void* ctx, uint32_t endpoint) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     cdef bytes buffer
     try:
         queued = usb._read_queue[endpoint]
@@ -121,7 +121,7 @@ cdef cppbool _drain_read_trampoline(void* ctx, uint32_t endpoint) noexcept:
 
 
 cdef cppbool _device_reset_trampoline(void* ctx) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         usb._device.on_reset()
     except BaseException as error:
@@ -131,7 +131,7 @@ cdef cppbool _device_reset_trampoline(void* ctx) noexcept:
 
 
 cdef cppbool _device_address_trampoline(void* ctx, uint32_t* address) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         address[0] = <uint32_t> (<int64_t> usb._device.address)
     except BaseException as error:
@@ -141,7 +141,7 @@ cdef cppbool _device_address_trampoline(void* ctx, uint32_t* address) noexcept:
 
 
 cdef cppbool _device_setup_trampoline(void* ctx, const uint8_t* setup, cppbool* has_response) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         packet = PyBytes_FromStringAndSize(<const char*> setup, 8)
         parsed = parse_setup_packet(packet)
@@ -176,7 +176,7 @@ cdef uint32_t _status_code(status):
 
 
 cdef cppbool _pending_trampoline(void* ctx, uint32_t max_length, cppbool* present, const uint8_t** data, uint32_t* length) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         response = usb._pending_response
         if response:
@@ -196,7 +196,7 @@ cdef cppbool _pending_trampoline(void* ctx, uint32_t max_length, cppbool* presen
 
 
 cdef cppbool _device_in_trampoline(void* ctx, uint32_t endpoint_address, uint32_t* status, const uint8_t** data, uint32_t* length) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         result = usb._device.handle_data_in(endpoint_address)
         status[0] = _status_code(result.status)
@@ -210,7 +210,7 @@ cdef cppbool _device_in_trampoline(void* ctx, uint32_t endpoint_address, uint32_
 
 
 cdef cppbool _device_out_trampoline(void* ctx, uint32_t endpoint, const uint8_t* data, uint32_t length, uint32_t* status) noexcept:
-    cdef RPUSBController usb = <RPUSBController> ctx
+    cdef RPUSBController usb = <RPUSBController> (<object> ctx)._usb_wire_view
     try:
         result = usb._device.handle_data_out(endpoint, PyBytes_FromStringAndSize(<const char*> data, length))
         status[0] = _status_code(result.status)
@@ -315,9 +315,26 @@ cdef class _Words:
         return repr(list(self))
 
 
+cdef void usb_wire_fill(UsbHost* wire, void* chip) noexcept:
+    """The host's end of the USB wire, for `McuHost.usb_wire`: the callbacks into the Python device and endpoint machinery of `chip`'s USB view (`chip._usb_wire_view`)."""
+    wire.usb_enabled = _enabled_trampoline
+    wire.reset_received = _reset_received_trampoline
+    wire.endpoint_read = _endpoint_read_trampoline
+    wire.write_queued = _write_queued_trampoline
+    wire.drain_write = _drain_write_trampoline
+    wire.drain_reaction = _drain_reaction_trampoline
+    wire.drain_read = _drain_read_trampoline
+    wire.device_reset = _device_reset_trampoline
+    wire.device_address = _device_address_trampoline
+    wire.device_setup = _device_setup_trampoline
+    wire.pending_response = _pending_trampoline
+    wire.device_in = _device_in_trampoline
+    wire.device_out = _device_out_trampoline
+    wire.ctx = chip
+
+
 cdef class RPUSBController:
     def __init__(self, rp2040, name):
-        cdef UsbHost host
         native_usb = getattr(rp2040, "_native_usb_address", None)
         if native_usb is None:
             raise TypeError(
@@ -340,25 +357,10 @@ cdef class RPUSBController:
         self.on_endpoint_read = None
         # The DPRAM is the chip's own 4 kB bytearray (a real memory region of the bus); this view keeps it from being resized under the block's pointer.
         self._dpram_view = rp2040.usb_dpram
-        # The chip's `Mcu` builds the block (its window, its line, its DPRAM pointer and its alarms on the chip's clock); this object is the other end of the wire: the callbacks below are the host's.
+        # The chip's `Mcu` builds the block (its window, its line, its DPRAM pointer, its alarms on the chip's clock and the host's end of the wire, `McuHost.usb_wire`); this object is the Python view of it.
         self._from_mcu = True
         self._block = <UsbBlock*> <size_t> native_usb()
-        host.usb_enabled = _enabled_trampoline
-        host.reset_received = _reset_received_trampoline
-        host.endpoint_read = _endpoint_read_trampoline
-        host.write_queued = _write_queued_trampoline
-        host.drain_write = _drain_write_trampoline
-        host.drain_reaction = _drain_reaction_trampoline
-        host.drain_read = _drain_read_trampoline
-        host.device_reset = _device_reset_trampoline
-        host.device_address = _device_address_trampoline
-        host.device_setup = _device_setup_trampoline
-        host.pending_response = _pending_trampoline
-        host.device_in = _device_in_trampoline
-        host.device_out = _device_out_trampoline
-        host.ctx = <void*> self
-        self._block.set_wire(host)
-        rp2040._usb_wire_view = self  # (the block keeps a raw pointer to this object: the chip keeps the object alive)
+        rp2040._usb_wire_view = self  # (the wire's callbacks find this view through the chip; the chip keeps it alive)
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

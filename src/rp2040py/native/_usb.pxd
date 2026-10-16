@@ -117,6 +117,9 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         cppbool disconnect_device() noexcept
         WindowHandler window_handler() noexcept
 
+cdef void usb_wire_fill(UsbHost* wire, void* chip) noexcept
+
+
 cdef class RPUSBController:
     cdef dict __dict__  # tests and boards replace methods (`dpram_updated`) with instance attributes, as on the pure-Python class
     cdef UsbBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view and the host's end of the wire

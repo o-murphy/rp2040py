@@ -34,6 +34,7 @@ from rp2040py.native._dma cimport RPDMA
 from rp2040py.native._mcu cimport kMcuBlockBusctrl, kMcuBlockPsm, kMcuBlockResets, kMcuBlockRtc, kMcuBlockSyscfg, kMcuBlockSysinfo, kMcuBlockTbman, kMcuBlockVreg, Mcu, McuHost, kMcuBlockAdc, kMcuBlockClocks, kMcuBlockDma, kMcuBlockI2c0, kMcuBlockI2c1, kMcuBlockIoBank0, kMcuBlockIoQspi, kMcuBlockPadsBank0, kMcuBlockPadsQspi, kMcuBlockPllSys, kMcuBlockPllUsb, kMcuBlockPpb, kMcuBlockPio0, kMcuBlockPio1, kMcuBlockPwm, kMcuBlockRosc, kMcuBlockSsi, kMcuBlockUsb, kMcuBlockXip, kMcuBlockSio, kMcuBlockSpi0, kMcuBlockSpi1, kMcuBlockTimer, kMcuBlockUart0, kMcuBlockUart1, kMcuBlockWatchdog, kMcuBlockXosc
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._pio cimport PioBlock
+from rp2040py.native._usb cimport UsbHost, usb_wire_fill
 from rp2040py.native._bus cimport BusHost, kBusWarnInvalidRead, kBusWarnUnalignedRead
 from rp2040py.native._window_map cimport Read32Fn, Write32Fn, WindowHandler
 from rp2040py.native._simulation_clock cimport SimulationClock
@@ -720,6 +721,7 @@ cdef class RP2040:
         # The blocks that live in the C++ `Mcu` are built by it - on this clock, with their windows on the bus and their lines on the CPU (record 0096, 3a); the host it is given is what answers for what the
         # core cannot (the logger, so far).
         cdef McuHost world
+        cdef UsbHost usb_wire
         world.warn = _mcu_warn
         world.ctx = <void*> self
         world.failed = pending_flag()
@@ -744,6 +746,8 @@ cdef class RP2040:
         world.adc_read = _w_adc_read
         world.pio_started = _w_pio_started
         world.ssi_baudr = _w_ssi_baudr
+        usb_wire_fill(&usb_wire, <void*> self)
+        world.usb_wire = &usb_wire
         world.reset_block = _w_reset_block
         world.usb_reset = _w_usb_reset
         world.bus_reset = _w_bus_reset

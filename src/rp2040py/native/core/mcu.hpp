@@ -98,6 +98,9 @@ struct McuHost {
     // The flash path. An SSI the host has replaced is asked for its BAUDR (`ssi_baudr`) by the XIP stream's pace; with a clock tree the host has put over the chip's, `clk_sys` is the host's. Both optional.
     bool (*ssi_baudr)(void* ctx, double* value) = nullptr;
     bool (*clk_sys)(void* ctx, double* hz) = nullptr;
+    // The host's end of the USB wire (the device at the other end of the link: its setup / IN / OUT handling, the endpoint transfers and the notifications of `core/usb.hpp`'s `UsbHost`). Optional: with
+    // none, the controller has nothing connected. Read once, by `build()`; the line, the warning and the failure flag of that struct are the chip's, not the host's.
+    const UsbHost* usb_wire = nullptr;
     // The reset cascade (`Mcu::reset`). A block the host has replaced (named in the `world` mask the host passes) is the host's to reset: `reset_block(block)`. `usb_reset` comes before the USB block's own
     // reset (the host drops the device and the transfers it queued), `bus_reset` is the USB link seeing the chip reset (the device's `on_reset`), `record_cause` is a host's own VREG_AND_CHIP_RESET block
     // being told the cause flag. All optional.
@@ -379,6 +382,7 @@ public:
             uh.warn_ctx = this;
             uh.failed = host.failed;
             usb_.init(clock_, usb_dpram_, uh);
+            if (host.usb_wire != nullptr) usb_.set_wire(*host.usb_wire);
             bus.windows.attach(kUsbBase, usb_.window_handler());
         }
 

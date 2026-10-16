@@ -133,6 +133,7 @@ public:
         clock_ = clock;
         dpram_ = dpram;
         host_ = host;
+        fill_unconnected();
         for (uint32_t i = 0; i < kAlarms; ++i) {
             slots_[i].owner = this;
             slots_[i].index = i;
@@ -150,6 +151,7 @@ public:
         host_.warn = keep.warn;
         host_.warn_ctx = keep.warn_ctx;
         host_.failed = keep.failed;
+        fill_unconnected();
     }
 
     // Unlinks every alarm from the clock; the owner calls it before the block goes away.
@@ -515,6 +517,32 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<UsbBlock>::handler(this); }
 
 private:
+    // A wire the host left out: nothing is connected at the other end. Every callback the block may call answers as an absent device would (no device, nothing queued, a NAK), so a host that gives
+    // no wire - or only some of it - never makes the block call a null pointer.
+    void fill_unconnected() noexcept {
+        if (host_.irq == nullptr) host_.irq = [](void*, bool) { return true; };
+        if (host_.usb_enabled == nullptr) host_.usb_enabled = [](void*) { return true; };
+        if (host_.reset_received == nullptr) host_.reset_received = [](void*) { return true; };
+        if (host_.endpoint_read == nullptr) host_.endpoint_read = [](void*, uint32_t, uint32_t) { return true; };
+        if (host_.write_queued == nullptr) host_.write_queued = [](void*, uint32_t, uint32_t, const uint8_t*, uint32_t) { return true; };
+        if (host_.drain_write == nullptr) host_.drain_write = [](void*, uint32_t) { return true; };
+        if (host_.drain_reaction == nullptr) host_.drain_reaction = [](void*, uint32_t) { return true; };
+        if (host_.drain_read == nullptr) host_.drain_read = [](void*, uint32_t) { return true; };
+        if (host_.device_reset == nullptr) host_.device_reset = [](void*) { return true; };
+        if (host_.device_address == nullptr) host_.device_address = [](void*, uint32_t* address) { *address = 0; return true; };
+        if (host_.device_setup == nullptr) host_.device_setup = [](void*, const uint8_t*, bool* has_response) { *has_response = false; return true; };
+        if (host_.pending_response == nullptr) host_.pending_response = [](void*, uint32_t, bool* present, const uint8_t**, uint32_t*) { *present = false; return true; };
+        if (host_.device_in == nullptr) {
+            host_.device_in = [](void*, uint32_t, uint32_t* status, const uint8_t** data, uint32_t* length) {
+                *status = kUsbNak;
+                *data = nullptr;
+                *length = 0;
+                return true;
+            };
+        }
+        if (host_.device_out == nullptr) host_.device_out = [](void*, uint32_t, const uint8_t*, uint32_t, uint32_t* status) { *status = kUsbNak; return true; };
+    }
+
     static constexpr uint32_t kAlarms = usb_regs::kEndpoints * 3 + 3;  // 16 OUT, 16 IN, 16 host reactions, bus reset, host SOF, host transaction
     static constexpr uint32_t kReactionAlarm = usb_regs::kEndpoints * 2, kResetAlarm = usb_regs::kEndpoints * 3, kSofAlarm = kResetAlarm + 1, kHostAlarm = kResetAlarm + 2;
 

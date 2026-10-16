@@ -229,7 +229,7 @@ int main() {
             int uart_bytes = 0;
             int resets = 0, triggers = 0, ticks = 0;
             int pin_changes = 0;
-            int bus_resets = 0, usb_resets = 0;
+            int bus_resets = 0, usb_resets = 0, usb_enabled = 0;
             uint64_t reset_blocks = 0;
             uint32_t pin_bank = 99, pin_number = 99;
             int pin_new = -1, pin_old = -1;
@@ -296,6 +296,13 @@ int main() {
         };
         for (uint32_t i = 0; i < sizeof flash_image; ++i) flash_image[i] = static_cast<uint8_t>(i * 7 + 3);
         m.set_flash(flash_image, sizeof flash_image);
+        UsbHost usb_wire;  // the host's end of the USB wire, given in the host and read by `build()`
+        usb_wire.ctx = &world;
+        usb_wire.usb_enabled = [](void* ctx) {
+            ++static_cast<World*>(ctx)->usb_enabled;
+            return true;
+        };
+        host.usb_wire = &usb_wire;
         m.set_usb_dpram(usb_dpram);
         m.build(host);
         const uint32_t rtc = 0x4005C000;  // (literal: the constant under test must not vouch for itself)
@@ -557,12 +564,10 @@ int main() {
             (void)m.bus.read32(0x50110000 + 0x300);
             CHECK(world.warns == w + 1 && world.block == kMcuBlockUsb);
         }
-        {
-            UsbHost wire;
-            int marker = 0;
-            wire.ctx = &marker;  // (a host's context: neither the line nor the warning goes through it)
-            m.usb().set_wire(wire);
-        }
+        // the wire the host gave reaches the block: a controller enabled in device mode tells the host (and the line and the warning, which are the chip's, still work)
+        CHECK(world.usb_enabled == 0);
+        m.bus.write32(0x50110000 + 0x40, 1);  // MAIN_CTRL.CONTROLLER_EN
+        CHECK(world.usb_enabled == 1);
         CHECK((m.cpu.pending_interrupts & (1u << 5)) == 0);
         m.bus.write32(0x50110000 + 0x90, 1);  // INTE
         m.bus.write32(0x50110000 + 0x94, 1);  // INTF: forced
@@ -573,6 +578,18 @@ int main() {
             const int w = world.warns;
             (void)m.bus.read32(0x50110000 + 0x300);
             CHECK(world.warns == w + 1 && world.block == kMcuBlockUsb);  // still the chip's warning after the wire
+        }
+
+        // a host that gives no wire: nothing is connected, and nothing the firmware does calls a null pointer
+        {
+            static uint8_t bare_dpram[4096];
+            Mcu bare;
+            bare.set_usb_dpram(bare_dpram);
+            McuHost none;
+            bare.build(none);
+            bare.bus.write32(0x50110000 + 0x40, 1);   // MAIN_CTRL.CONTROLLER_EN, device mode: the host is not asked
+            bare.bus.write32(0x50110000 + 0x4C, 0x20);  // SIE_CTRL: some control bit
+            CHECK(bare.bus.read32(0x50110000 + 0x40) == 1);
         }
 
         // RESETS and PSM (group 8): built by the Mcu - their windows, the warnings under their ids, the registers the cascade will read (WDSEL).

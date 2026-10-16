@@ -26,7 +26,7 @@ from rp2040py.native._rosc cimport RoscBlock
 from rp2040py.native._rtc cimport RtcBlock
 from rp2040py.native._sio cimport SioBlock
 from rp2040py.native._ssi cimport SsiBlock
-from rp2040py.native._usb cimport UsbBlock
+from rp2040py.native._usb cimport UsbBlock, UsbHost
 from rp2040py.native._xip_ctrl cimport XipBlock
 from rp2040py.native._spi cimport SpiBlock
 from rp2040py.native._syscfg cimport SyscfgBlock
@@ -109,6 +109,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*adc_read)(void* ctx, uint32_t channel) noexcept
         bool (*ssi_baudr)(void* ctx, double* value) noexcept
         bool (*clk_sys)(void* ctx, double* hz) noexcept
+        const UsbHost* usb_wire
         bool (*reset_block)(void* ctx, uint32_t block) noexcept
         bool (*usb_reset)(void* ctx) noexcept
         bool (*bus_reset)(void* ctx) noexcept
