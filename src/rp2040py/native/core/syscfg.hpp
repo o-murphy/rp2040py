@@ -20,12 +20,6 @@ namespace rp2040core {
 
 constexpr uint32_t kSyscfgWarnRead = kRegWarnRead, kSyscfgWarnReadAtomicArea = kRegWarnReadAtomicArea, kSyscfgWarnWrite = kRegWarnWrite;
 
-struct SyscfgHost {
-    RegWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
-
 namespace syscfg_regs {
 constexpr uint32_t PROC0_NMI_MASK = 0x00, PROC1_NMI_MASK = 0x04, PROC_CONFIG = 0x08, PROC_IN_SYNC_BYPASS = 0x0C, PROC_IN_SYNC_BYPASS_HI = 0x10, DBGFORCE = 0x14, MEMPOWERDOWN = 0x18;
 constexpr uint32_t PROC_CONFIG_WRITABLE = 0xFF000000u, PROC_CONFIG_RESET = 0x10000000u;
@@ -40,12 +34,12 @@ public:
     SyscfgBlock& operator=(const SyscfgBlock&) = delete;
 
     // `cpu` is the core whose NMI mask PROC0_NMI_MASK is (not owned).
-    void init(Cpu* cpu, const SyscfgHost& host) noexcept {
+    void init(Cpu* cpu, const ChipPorts* ports, uint32_t block) noexcept {
         cpu_ = cpu;
-        host_ = host;
+        port_.init(ports, block);
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t proc1_nmi_mask = 0;
@@ -79,10 +73,7 @@ public:
             case MEMPOWERDOWN: return mempowerdown;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kSyscfgWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kSyscfgWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -98,7 +89,7 @@ public:
             case DBGFORCE: dbgforce = (dbgforce & ~DBGFORCE_WRITABLE) | (v & DBGFORCE_WRITABLE); break;
             case MEMPOWERDOWN: mempowerdown = v & MEMPOWERDOWN_MASK; break;
             default:
-                if (host_.warn) host_.warn(host_.ctx, kSyscfgWarnWrite, offset, value);
+                port_.unimplemented_write(offset, value);
                 break;
         }
         return true;
@@ -117,7 +108,7 @@ public:
 
 private:
     Cpu* cpu_ = nullptr;
-    SyscfgHost host_;
+    BlockPort port_;
     int64_t raw_write_value_ = 0;
 };
 

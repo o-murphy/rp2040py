@@ -11,17 +11,8 @@ cdef extern from "busctrl.hpp" namespace "rp2040core":
     cdef const uint32_t kBusctrlWarnReadAtomicArea
     cdef const uint32_t kBusctrlWarnWrite
 
-    ctypedef void (*BusctrlWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass BusctrlHost:
-        BusctrlHost() noexcept
-        BusctrlWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass BusctrlBlock:
         BusctrlBlock() noexcept
-        void init(const BusctrlHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t bus_priority
         uint32_t perf_ctr[4]

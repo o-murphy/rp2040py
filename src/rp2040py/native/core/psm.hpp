@@ -18,12 +18,6 @@ namespace rp2040core {
 
 constexpr uint32_t kPsmWarnRead = kRegWarnRead, kPsmWarnReadAtomicArea = kRegWarnReadAtomicArea, kPsmWarnWrite = kRegWarnWrite;
 
-struct PsmHost {
-    RegWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
-
 namespace psm_regs {
 constexpr uint32_t FRCE_ON = 0x00, FRCE_OFF = 0x04, REG_WDSEL = 0x08, REG_DONE = 0x0C, BITS_MASK = 0x0001FFFF;
 }  // namespace psm_regs
@@ -34,9 +28,9 @@ public:
     PsmBlock(const PsmBlock&) = delete;  // the window handler holds a pointer to this object
     PsmBlock& operator=(const PsmBlock&) = delete;
 
-    void init(const PsmHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t frce_on = 0;
@@ -49,10 +43,7 @@ public:
         if (offset == FRCE_OFF) return frce_off;
         if (offset == REG_WDSEL) return wdsel;
         if (offset == REG_DONE) return (BITS_MASK & ~frce_off) | (frce_on & frce_off);
-        if (host_.warn) {
-            host_.warn(host_.ctx, kPsmWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kPsmWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -67,8 +58,8 @@ public:
             wdsel = v;
         } else if (offset == REG_DONE) {
             // read-only: no effect
-        } else if (host_.warn) {
-            host_.warn(host_.ctx, kPsmWarnWrite, offset, value);
+        } else {
+            port_.unimplemented_write(offset, value);
         }
         return true;
     }
@@ -85,7 +76,7 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<PsmBlock>::handler(this); }
 
 private:
-    PsmHost host_;
+    BlockPort port_;
     int64_t raw_write_value_ = 0;
 };
 

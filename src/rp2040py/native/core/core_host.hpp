@@ -35,6 +35,38 @@ using RegWarnFn = void (*)(void* ctx, uint32_t kind, uint32_t offset, int64_t va
 // True when a host function has parked an error (the shared failure flag, see native/_pending.pyx). A null flag means the block's host cannot fail.
 inline bool host_failed(const int* flag) noexcept { return flag != nullptr && *flag != 0; }
 
+// What the chip gives every block (docs/records/0096-cpp-mcu-core.md, the clean-up before wasm): ONE set of lines owned by the `Mcu`, instead of a `...Host` of adapters per block. A block
+// is handed `&ports` and *data* - its `McuBlock` id (and, for a block with a line, its IRQ line) - and calls through it; the `Mcu` writes no per-block adapter. The block's own `...Host` keeps
+// only what is really the world's (a UART's `on_byte`, an SPI's `transmit`, ...). `warn` is the host's: it gets the block id and the numbers, never a string. `failed` is the shared parked-failure flag.
+struct ChipPorts {
+    void (*warn)(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) = nullptr;
+    void* chip = nullptr;
+    const int* failed = nullptr;
+};
+
+// A block's end of `ChipPorts`: the pointer and the block's own id, and the two messages every register-only block sends for an offset it does not implement.
+class BlockPort {
+public:
+    void init(const ChipPorts* ports, uint32_t block) noexcept {
+        ports_ = ports;
+        block_ = block;
+    }
+    bool failed() const noexcept { return ports_ != nullptr && host_failed(ports_->failed); }
+    void warn(uint32_t kind, uint32_t offset, int64_t value) const noexcept {
+        if (ports_ != nullptr && ports_->warn != nullptr) ports_->warn(ports_->chip, block_, kind, offset, value);
+    }
+    // "Unimplemented peripheral read" and, above the alias window (offset > 0x1000), the atomic-area message as well.
+    void unimplemented_read(uint32_t offset) const noexcept {
+        warn(kRegWarnRead, offset, 0);
+        if (offset > 0x1000) warn(kRegWarnReadAtomicArea, offset, 0);
+    }
+    void unimplemented_write(uint32_t offset, int64_t value) const noexcept { warn(kRegWarnWrite, offset, value); }
+
+private:
+    const ChipPorts* ports_ = nullptr;
+    uint32_t block_ = 0;
+};
+
 // The value an atomic alias write ends up writing: `raw` is what the bus passed, `current` a *read* of the register (with that read's side effects). The reference
 // (`BasePeripheral.write_uint32_atomic`) does exactly this; a normal write, and an alias that is not one of the three, write `raw` as it is.
 inline int64_t decode_atomic(uint32_t atomic_type, int64_t current, int64_t raw) noexcept {

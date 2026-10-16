@@ -11,19 +11,8 @@ cdef extern from "sysinfo.hpp" namespace "rp2040core":
     cdef const uint32_t kSysInfoWarnReadAtomicArea
     cdef const uint32_t kSysInfoWarnWrite
 
-    ctypedef cppbool (*SysInfoRomVersionFn)(void* ctx, uint32_t* version)
-    ctypedef void (*SysInfoWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass SysInfoHost:
-        SysInfoHost() noexcept
-        SysInfoRomVersionFn rom_version
-        SysInfoWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass SysInfoBlock:
         SysInfoBlock() noexcept
-        void init(const SysInfoHost& host) noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept

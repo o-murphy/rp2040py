@@ -23,9 +23,7 @@ constexpr uint32_t kSysInfoWarnRead = kRegWarnRead, kSysInfoWarnReadAtomicArea =
 
 struct SysInfoHost {
     SysInfoRomVersionFn rom_version = nullptr;
-    RegWarnFn warn = nullptr;
     void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
 };
 
 namespace sysinfo_regs {
@@ -40,9 +38,12 @@ public:
     SysInfoBlock(const SysInfoBlock&) = delete;  // the window handler holds a pointer to this object
     SysInfoBlock& operator=(const SysInfoBlock&) = delete;
 
-    void init(const SysInfoHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block, const SysInfoHost& host) noexcept {
+        port_.init(ports, block);
+        host_ = host;
+    }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The block holds no state: nothing to put back.
@@ -62,17 +63,14 @@ public:
             case GITREF_RP2040: return 0xE0C912E8u;
             default: break;
         }
-        if (host_.warn) {
-            host_.warn(host_.ctx, kSysInfoWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kSysInfoWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
     bool write(uint32_t offset, int64_t value) noexcept {
         using namespace sysinfo_regs;
         if (offset == CHIP_ID || offset == REG_PLATFORM || offset == GITREF_RP2040) return true;  // read-only: no effect
-        if (host_.warn) host_.warn(host_.ctx, kSysInfoWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -88,6 +86,7 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<SysInfoBlock>::handler(this); }
 
 private:
+    BlockPort port_;
     SysInfoHost host_;
     int64_t raw_write_value_ = 0;
 };

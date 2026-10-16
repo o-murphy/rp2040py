@@ -12,17 +12,8 @@ cdef extern from "syscfg.hpp" namespace "rp2040core":
     cdef const uint32_t kSyscfgWarnReadAtomicArea
     cdef const uint32_t kSyscfgWarnWrite
 
-    ctypedef void (*SyscfgWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass SyscfgHost:
-        SyscfgHost() noexcept
-        SyscfgWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass SyscfgBlock:
         SyscfgBlock() noexcept
-        void init(Cpu* cpu, const SyscfgHost& host) noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept
         uint32_t proc1_nmi_mask

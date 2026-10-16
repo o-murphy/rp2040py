@@ -11,17 +11,8 @@ cdef extern from "resets.hpp" namespace "rp2040core":
     cdef const uint32_t kResetsWarnReadAtomicArea
     cdef const uint32_t kResetsWarnWrite
 
-    ctypedef void (*ResetsWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass ResetsHost:
-        ResetsHost() noexcept
-        ResetsWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass ResetsBlock:
         ResetsBlock() noexcept
-        void init(const ResetsHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t reset_bits
         uint32_t wdsel

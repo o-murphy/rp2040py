@@ -11,17 +11,8 @@ cdef extern from "tbman.hpp" namespace "rp2040core":
     cdef const uint32_t kTbmanWarnReadAtomicArea
     cdef const uint32_t kTbmanWarnWrite
 
-    ctypedef void (*TbmanWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass TbmanHost:
-        TbmanHost() noexcept
-        TbmanWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass TbmanBlock:
         TbmanBlock() noexcept
-        void init(const TbmanHost& host) noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept

@@ -18,12 +18,6 @@ namespace rp2040core {
 
 constexpr uint32_t kVregWarnRead = kRegWarnRead, kVregWarnReadAtomicArea = kRegWarnReadAtomicArea, kVregWarnWrite = kRegWarnWrite;
 
-struct VregHost {
-    RegWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
-
 namespace vreg_regs {
 constexpr uint32_t REG_VREG = 0x0, REG_BOD = 0x4, REG_CHIP_RESET = 0x8;
 constexpr uint32_t VREG_RESET = 0xB1, BOD_RESET = 0x91, VREG_WRITABLE = 0xF3, BOD_WRITABLE = 0xF1;
@@ -37,9 +31,9 @@ public:
     VregBlock(const VregBlock&) = delete;  // the window handler holds a pointer to this object
     VregBlock& operator=(const VregBlock&) = delete;
 
-    void init(const VregHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t vreg = vreg_regs::VREG_RESET;
@@ -54,10 +48,7 @@ public:
         if (offset == REG_VREG) return vreg;
         if (offset == REG_BOD) return bod;
         if (offset == REG_CHIP_RESET) return chip_reset;
-        if (host_.warn) {
-            host_.warn(host_.ctx, kVregWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kVregWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
@@ -70,8 +61,8 @@ public:
             bod = (bod & ~BOD_WRITABLE) | (v & BOD_WRITABLE);
         } else if (offset == REG_CHIP_RESET) {
             if (v & PSM_RESTART_FLAG) chip_reset &= ~PSM_RESTART_FLAG;  // write 1 to clear; the three status flags are read-only
-        } else if (host_.warn) {
-            host_.warn(host_.ctx, kVregWarnWrite, offset, value);
+        } else {
+            port_.unimplemented_write(offset, value);
         }
         return true;
     }
@@ -88,7 +79,7 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<VregBlock>::handler(this); }
 
 private:
-    VregHost host_;
+    BlockPort port_;
     int64_t raw_write_value_ = 0;
 };
 

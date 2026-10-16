@@ -198,6 +198,9 @@ public:
     // after `use_clock()` (the RTC's second is an alarm of that clock) and with the host that answers for what the chip cannot. The blocks come over one at a time (record 0096, 3a): the RTC first.
     void build(const McuHost& host) noexcept {
         host_world_ = host;
+        ports_.warn = ports_warn;
+        ports_.chip = this;
+        ports_.failed = host.failed;
         if (!cpu.initialised()) {  // the core on the bus; a shell that wants the core's break / BL / log notices has initialised it with its own host already
             CpuHost cpu_host;
             cpu_host.failed = host.failed;
@@ -411,54 +414,29 @@ public:
         rtc_.init(clock_, h);
         bus.windows.attach(kRtcBase, rtc_.window_handler());
 
-        TbmanHost t;
-        t.warn = block_warn<kMcuBlockTbman>;
-        t.ctx = this;
-        t.failed = host.failed;
-        tbman_.init(t);
+        // The blocks that only report (group 1 of the clean-up): the chip's one `ChipPorts` and their own id, no per-block host.
+        tbman_.init(&ports_, kMcuBlockTbman);
         bus.windows.attach(kTbmanBase, tbman_.window_handler());
 
-        BusctrlHost b;
-        b.warn = block_warn<kMcuBlockBusctrl>;
-        b.ctx = this;
-        b.failed = host.failed;
-        busctrl_.init(b);
+        busctrl_.init(&ports_, kMcuBlockBusctrl);
         bus.windows.attach(kBusctrlBase, busctrl_.window_handler());
 
-        ResetsHost rh;
-        rh.warn = block_warn<kMcuBlockResets>;
-        rh.ctx = this;
-        rh.failed = host.failed;
-        resets_.init(rh);
+        resets_.init(&ports_, kMcuBlockResets);
         bus.windows.attach(kResetsBase, resets_.window_handler());
 
-        PsmHost pm;
-        pm.warn = block_warn<kMcuBlockPsm>;
-        pm.ctx = this;
-        pm.failed = host.failed;
-        psm_.init(pm);
+        psm_.init(&ports_, kMcuBlockPsm);
         bus.windows.attach(kPsmBase, psm_.window_handler());
 
-        VregHost v;
-        v.warn = block_warn<kMcuBlockVreg>;
-        v.ctx = this;
-        v.failed = host.failed;
-        vreg_.init(v);
+        vreg_.init(&ports_, kMcuBlockVreg);
         bus.windows.attach(kVregBase, vreg_.window_handler());
 
         SysInfoHost i;
         i.rom_version = sysinfo_rom_version;  // read off the chip's own bus: the bootrom the chip holds
-        i.warn = block_warn<kMcuBlockSysinfo>;
         i.ctx = this;
-        i.failed = host.failed;
-        sysinfo_.init(i);
+        sysinfo_.init(&ports_, kMcuBlockSysinfo, i);
         bus.windows.attach(kSysinfoBase, sysinfo_.window_handler());
 
-        SyscfgHost c;
-        c.warn = block_warn<kMcuBlockSyscfg>;
-        c.ctx = this;
-        c.failed = host.failed;
-        syscfg_.init(&cpu, c);  // (PROC0_NMI_MASK is the chip's own CPU)
+        syscfg_.init(&cpu, &ports_, kMcuBlockSyscfg);  // (PROC0_NMI_MASK is the chip's own CPU)
         bus.windows.attach(kSyscfgBase, syscfg_.window_handler());
 
         // The blocks with lines, requests and devices (group 2). Each instance's callbacks get its own `McuInstance` as their context.
@@ -818,6 +796,11 @@ private:
     }
     static bool step_pio(void* chip, int index, int64_t cycles) noexcept { return static_cast<Mcu*>(chip)->pio_[index].advance(cycles); }
     static double no_time(void*) noexcept { return 0.0; }
+    // The chip's `ChipPorts::warn`: the block's own id and the numbers onto the host's `warn(ctx, block, kind, offset, value)`.
+    static void ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept {
+        Mcu* mcu = static_cast<Mcu*>(chip);
+        if (mcu->host_world_.warn != nullptr) mcu->host_world_.warn(mcu->host_world_.ctx, block, kind, offset, value);
+    }
     // A block's `warn(ctx, kind, offset, value)` onto the host's `warn(ctx, block, kind, offset, value)`: the block id is the template's, so every block shares this one function.
     template <McuBlock Block>
     static void block_warn(void* chip, uint32_t kind, uint32_t offset, int64_t value) noexcept {
@@ -1091,6 +1074,7 @@ private:
     TreeHook tree_hook_ = nullptr;
     void* tree_hook_ctx_ = nullptr;
     RtcBlock rtc_;
+    ChipPorts ports_;  // the lines every block shares (core_host.hpp): the host's `warn` with the block's id, and the failure flag
     TbmanBlock tbman_;
     BusctrlBlock busctrl_;
     ResetsBlock resets_;

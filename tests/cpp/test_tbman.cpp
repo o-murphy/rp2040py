@@ -18,15 +18,16 @@ static int failures = 0;
     } while (0)
 
 struct Env {
-    uint32_t warn_kind[16] = {}, warn_offset[16] = {};
+    uint32_t warn_block[16] = {}, warn_kind[16] = {}, warn_offset[16] = {};
     int64_t warn_value[16] = {};
     int warns = 0;
     int failed = 0;
 };
 static Env env;
 
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
+static void on_warn(void*, uint32_t block_id, uint32_t kind, uint32_t offset, int64_t value) {
     if (env.warns < 16) {
+        env.warn_block[env.warns] = block_id;
         env.warn_kind[env.warns] = kind;
         env.warn_offset[env.warns] = offset;
         env.warn_value[env.warns] = value;
@@ -35,13 +36,14 @@ static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t value) {
 }
 
 static TbmanBlock block;
+static ChipPorts ports;
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
 
 static void fresh() {
     env = Env();
-    TbmanHost host;
-    host.warn = on_warn;
-    host.failed = &env.failed;
-    block.init(host);
+    ports.warn = on_warn;
+    ports.failed = &env.failed;
+    block.init(&ports, kTestBlock);
 }
 
 static void test_platform_reads_asic() {
@@ -82,7 +84,14 @@ static void test_reset_and_the_window_handler() {
     CHECK(handler.read32(handler.ctx, REG_PLATFORM) == 1u && env.warns == 0);
 }
 
+static void test_warnings_carry_the_blocks_id() {
+    fresh();
+    (void)block.read(0x7C);
+    CHECK(env.warns == 1 && env.warn_block[0] == kTestBlock);
+}
+
 int main() {
+    test_warnings_carry_the_blocks_id();
     test_platform_reads_asic();
     test_a_write_to_platform_is_ignored_silently();
     test_unimplemented_offsets_warn();

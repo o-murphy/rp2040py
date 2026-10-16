@@ -16,12 +16,6 @@ namespace rp2040core {
 
 constexpr uint32_t kTbmanWarnRead = kRegWarnRead, kTbmanWarnReadAtomicArea = kRegWarnReadAtomicArea, kTbmanWarnWrite = kRegWarnWrite;
 
-struct TbmanHost {
-    RegWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
-
 namespace tbman_regs {
 // (`REG_PLATFORM`, not `PLATFORM`: on Windows Python's pyconfig.h defines the macro PLATFORM as "win32", and MSVC then reads the constant as a string literal.)
 constexpr uint32_t REG_PLATFORM = 0x0;
@@ -34,9 +28,9 @@ public:
     TbmanBlock(const TbmanBlock&) = delete;  // the window handler holds a pointer to this object
     TbmanBlock& operator=(const TbmanBlock&) = delete;
 
-    void init(const TbmanHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
+    bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The block holds no state: nothing to put back.
@@ -44,16 +38,13 @@ public:
 
     uint32_t read(uint32_t offset) noexcept {
         if (offset == tbman_regs::REG_PLATFORM) return tbman_regs::ASIC;
-        if (host_.warn) {
-            host_.warn(host_.ctx, kTbmanWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kTbmanWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         return 0xFFFFFFFFu;
     }
 
     bool write(uint32_t offset, int64_t value) noexcept {
         if (offset == tbman_regs::REG_PLATFORM) return true;  // read-only: no effect
-        if (host_.warn) host_.warn(host_.ctx, kTbmanWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -69,7 +60,7 @@ public:
     WindowHandler window_handler() noexcept { return BlockWindow<TbmanBlock>::handler(this); }
 
 private:
-    TbmanHost host_;
+    BlockPort port_;
     int64_t raw_write_value_ = 0;
 };
 

@@ -11,17 +11,8 @@ cdef extern from "vreg.hpp" namespace "rp2040core":
     cdef const uint32_t kVregWarnReadAtomicArea
     cdef const uint32_t kVregWarnWrite
 
-    ctypedef void (*VregWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass VregHost:
-        VregHost() noexcept
-        VregWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass VregBlock:
         VregBlock() noexcept
-        void init(const VregHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t vreg
         uint32_t bod

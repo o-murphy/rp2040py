@@ -11,17 +11,8 @@ cdef extern from "psm.hpp" namespace "rp2040core":
     cdef const uint32_t kPsmWarnReadAtomicArea
     cdef const uint32_t kPsmWarnWrite
 
-    ctypedef void (*PsmWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass PsmHost:
-        PsmHost() noexcept
-        PsmWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass PsmBlock:
         PsmBlock() noexcept
-        void init(const PsmHost& host) noexcept
         int64_t raw_write_value() noexcept
         uint32_t frce_on
         uint32_t frce_off
