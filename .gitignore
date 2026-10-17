@@ -100,6 +100,8 @@ tmp/
 src/**/*.html
 src/**/*.c
 src/**/*.cpp
+# ... except the hand-written wasm module (the generated ones are Cython's)
+!src/rp2040py/native/wasm/*.cpp
 
 # C extensions
 src/**/*.dll
