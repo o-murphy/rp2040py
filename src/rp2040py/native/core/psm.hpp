@@ -21,7 +21,7 @@ namespace psm_regs {
 constexpr uint32_t FRCE_ON = 0x00, FRCE_OFF = 0x04, REG_WDSEL = 0x08, REG_DONE = 0x0C, BITS_MASK = 0x0001FFFF;
 }  // namespace psm_regs
 
-class PsmBlock {
+class PsmBlock : public RegisterBlock<PsmBlock> {
 public:
     PsmBlock() = default;
     PsmBlock(const PsmBlock&) = delete;  // the window handler holds a pointer to this object
@@ -29,8 +29,6 @@ public:
 
     void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t frce_on = 0;
     uint32_t frce_off = 0;
@@ -64,19 +62,9 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<PsmBlock>::handler(this); }
 
 private:
-    BlockPort port_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

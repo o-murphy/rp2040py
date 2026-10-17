@@ -186,7 +186,7 @@ private:
     PwmBlock* pwm_ = nullptr;
 };
 
-class PwmBlock {
+class PwmBlock : public RegisterBlock<PwmBlock> {
 public:
     PwmBlock() = default;
     PwmBlock(const PwmBlock&) = delete;  // the channels' alarms and the window handler hold pointers to this object
@@ -212,9 +212,7 @@ public:
     }
 
     Clock* clock() const noexcept { return clock_; }
-    bool failed() const noexcept { return port_.failed(); }
     double clock_freq() const noexcept { return clock_freq_; }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // A new system clock: every counter keeps its value and continues at the new rate.
     void set_clock_freq(double freq) noexcept {
@@ -325,23 +323,14 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<PwmBlock>::handler(this); }
 
 private:
     bool raise_dreq(uint32_t channel) noexcept { return port_.dreq(channel, true); }
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
-    BlockPort port_;
     PwmHost host_;
     Clock* clock_ = nullptr;
     double clock_freq_ = 0.0;
-    int64_t raw_write_value_ = 0;
 };
 
 // ---- the channel, now that the block is complete ---------------------------------------------------------------------------------

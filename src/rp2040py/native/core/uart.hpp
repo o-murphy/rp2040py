@@ -69,7 +69,7 @@ constexpr uint32_t DMACR_DMAONERR = 1u << 2, DMACR_TXDMAE = 1u << 1, DMACR_RXDMA
 constexpr uint32_t LCR_H_MASK = 0xFFu, CR_MASK = 0xFF87u, IFLS_MASK = 0x3Fu, IFLS_RESET = 0x12u, DMACR_MASK = 0x7u, ILPR_MASK = 0xFFu;
 }  // namespace uart_regs
 
-class UartBlock {
+class UartBlock : public RegisterBlock<UartBlock> {
 public:
     static constexpr uint32_t kRxCapacity = 32;
     static constexpr uint32_t kTxDepth = 32;
@@ -100,10 +100,8 @@ public:
 
     Alarm tx_alarm;
 
-    bool failed() const noexcept { return port_.failed(); }
     bool raise_dreq(bool rx, bool asserted) noexcept { return port_.dreq(rx ? 1u : 0u, asserted); }
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // ---- the RX FIFO (the reference's `utils.fifo.FIFO(32)`) ---------------------------------------------------
 
@@ -353,18 +351,9 @@ public:
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side
     // effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        return write(offset, value);
-    }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------------
 
-    WindowHandler window_handler() noexcept { return BlockWindow<UartBlock>::handler(this); }
 
 private:
     // The character's stop bit has gone out: it reaches the line (or the loopback), and the next one starts.
@@ -378,7 +367,6 @@ private:
         return block->update_dreq();
     }
 
-    BlockPort port_;
     UartHost host_;
     Clock* clock_ = nullptr;
     uint32_t rx_[kRxCapacity] = {};
@@ -386,7 +374,6 @@ private:
     uint32_t tx_[kTxDepth] = {};
     uint32_t tx_start_ = 0, tx_used_ = 0, tx_byte_ = 0;
     bool tx_shifting_ = false;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

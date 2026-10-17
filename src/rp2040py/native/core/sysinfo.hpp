@@ -31,7 +31,7 @@ constexpr uint32_t CHIP_ID = 0x0, REG_PLATFORM = 0x4, GITREF_RP2040 = 0x40;
 constexpr uint32_t MANUFACTURER = 0x927, PART = 0x0002, ROM_VERSION_B2 = 3;
 }  // namespace sysinfo_regs
 
-class SysInfoBlock {
+class SysInfoBlock : public RegisterBlock<SysInfoBlock> {
 public:
     SysInfoBlock() = default;
     SysInfoBlock(const SysInfoBlock&) = delete;  // the window handler holds a pointer to this object
@@ -42,8 +42,6 @@ public:
         host_ = host;
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The block holds no state: nothing to put back.
     bool reset() noexcept { return true; }
@@ -74,20 +72,10 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<SysInfoBlock>::handler(this); }
 
 private:
-    BlockPort port_;
     SysInfoHost host_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

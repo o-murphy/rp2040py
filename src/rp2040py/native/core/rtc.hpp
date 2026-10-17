@@ -46,7 +46,7 @@ inline uint32_t days_in_month(uint32_t month, bool leap) noexcept {
 }
 }  // namespace rtc_regs
 
-class RtcBlock {
+class RtcBlock : public RegisterBlock<RtcBlock> {
 public:
     RtcBlock() = default;
     RtcBlock(const RtcBlock&) = delete;  // the alarm and the clock hold pointers into this object
@@ -67,8 +67,6 @@ public:
     // Unlinks the second from the clock; the owner calls it before the block goes away.
     void detach() noexcept { cancel_alarm(&alarm_); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     double clk_rtc() const noexcept { return clk_rtc_; }
 
     // The counter is counting: enabled, and clk_rtc runs.
@@ -183,13 +181,6 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
     // A second has gone by: the alarm calls it; the shell exposes it as `second_elapsed()` (the tests call it by hand).
     bool second_elapsed() noexcept {
@@ -198,7 +189,6 @@ public:
         return check_interrupts();
     }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<RtcBlock>::handler(this); }
 
 private:
     static bool on_second(void* ctx) noexcept { return static_cast<RtcBlock*>(ctx)->second_elapsed(); }
@@ -255,10 +245,8 @@ private:
 
     Clock* clock_ = nullptr;
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
-    BlockPort port_;
     Alarm alarm_;
     double clk_rtc_ = 0.0;  // clk_rtc in Hz, pushed by the chip: 0 = stopped
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

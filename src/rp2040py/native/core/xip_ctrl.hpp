@@ -52,7 +52,7 @@ constexpr uint32_t COUNTER_MAX = 0xFFFFFFFFu;
 constexpr uint32_t ALIAS_ALLOCATING = 0, ALIAS_NOCACHE = 2, ALIAS_BYPASS = 3;  // 0x10... allocating, 0x12... non-cacheable, 0x13... bypass; 0x11... (non-allocating) is "none of those"
 }  // namespace xip_regs
 
-class XipBlock {
+class XipBlock : public RegisterBlock<XipBlock> {
 public:
     XipBlock() = default;
     XipBlock(const XipBlock&) = delete;  // the alarm node, the window handler and the hooks hold a pointer to this object
@@ -76,8 +76,6 @@ public:
         cancel_alarm(&stream_alarm_);
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The registers and state, public for the shell (the reference's attributes are read and, by tests, written directly).
     uint32_t ctrl = xip_regs::CTRL_RESET, ctr_hit = 0, ctr_acc = 0, stream_addr = 0, stream_ctr = 0;
@@ -234,17 +232,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<XipBlock>::handler(this); }
 
     // XIP_AUX: a read-only slave onto the stream FIFO.
     WindowHandler aux_window_handler() noexcept { return WindowHandler{&XipBlock::aux_read32, &XipBlock::aux_write32, this}; }
@@ -317,14 +305,12 @@ private:
         if (update_dreq()) maybe_start_stream();
     }
 
-    BlockPort port_;
     XipHost host_;
     Clock* clock_ = nullptr;
     const uint8_t* flash_ = nullptr;
     uint32_t flash_size_ = 0;
     Alarm stream_alarm_;
     RebaseListener rebase_listener_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

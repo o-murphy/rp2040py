@@ -53,7 +53,7 @@ inline double tick_frequency(bool enable, uint32_t cycles, double clk_ref) noexc
 }
 }  // namespace watchdog_regs
 
-class WatchdogBlock {
+class WatchdogBlock : public RegisterBlock<WatchdogBlock> {
 public:
     WatchdogBlock() = default;
     WatchdogBlock(const WatchdogBlock&) = delete;  // the alarm and the clock hold pointers into this object
@@ -84,8 +84,6 @@ public:
     // Unlinks the alarm from the clock; the owner calls it before the block goes away.
     void detach() noexcept { alarm.detach(); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // clk_ref is now `hz` (called by the chip's clock tree): the tick follows it. False: the host's tick listener failed.
     bool clk_ref_changed(double hz) noexcept {
@@ -156,15 +154,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<WatchdogBlock>::handler(this); }
 
 private:
     static bool on_alarm(void* ctx) noexcept { return static_cast<WatchdogBlock*>(ctx)->fire_timeout(); }
@@ -183,10 +173,8 @@ private:
         return host_.tick_changed == nullptr || host_.tick_changed(host_.ctx, hz);
     }
 
-    BlockPort port_;
     WatchdogHost host_;
     double clk_ref_ = 0.0;  // clk_ref in Hz, pushed by the chip: the tick is derived from it
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

@@ -60,7 +60,7 @@ constexpr uint32_t FIFO_INT = 1u << 0;
 constexpr double kClockMhz = 48.0;  // the ADC's clock, for the free-running schedule
 }  // namespace adc_regs
 
-class AdcBlock {
+class AdcBlock : public RegisterBlock<AdcBlock> {
 public:
     static constexpr uint32_t kFifoDepth = 8;  // "Eight element receive sample FIFO" (RP2040 datasheet, 4.9)
 
@@ -96,8 +96,6 @@ public:
     }
 
     Clock* clock() const noexcept { return clock_; }
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // ---- derived ----------------------------------------------------------------------------------------------
 
@@ -257,16 +255,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<AdcBlock>::handler(this); }
 
 private:
     uint32_t threshold() const noexcept { return (fcs >> adc_regs::FCS_THRESH_SHIFT) & adc_regs::FCS_THRES_MASK; }
@@ -290,10 +279,8 @@ private:
     bool raise_dreq(bool asserted) noexcept { return port_.dreq(0, asserted); }
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
-    BlockPort port_;
     AdcHost host_;
     Clock* clock_ = nullptr;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

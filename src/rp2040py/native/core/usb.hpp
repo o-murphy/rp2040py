@@ -105,7 +105,7 @@ constexpr uint32_t INTR_ERROR_RX_OVERFLOW = 1u << 7, INTR_ERROR_RX_TIMEOUT = 1u 
 constexpr uint32_t INTR_HOST_SOF = 1u << 2, INTR_HOST_RESUME = 1u << 1, INTR_HOST_CONN_DIS = 1u << 0;
 }  // namespace usb_regs
 
-class UsbBlock {
+class UsbBlock : public RegisterBlock<UsbBlock> {
 public:
     static constexpr uint32_t kSlots = usb_regs::kEndpoints * 2;
 
@@ -150,8 +150,6 @@ public:
         for (uint32_t i = 0; i < kAlarms; ++i) cancel_alarm(&slots_[i].alarm);
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     bool has_scheduled_alarms() const noexcept {
         for (uint32_t i = 0; i < kAlarms; ++i) {
             if (slots_[i].alarm.scheduled) return true;
@@ -398,12 +396,6 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        return write(offset, value);
-    }
 
     // ---- device mode: the DPRAM -----------------------------------------------------------------------------------------------------------
 
@@ -501,7 +493,6 @@ public:
         return true;
     }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<UsbBlock>::handler(this); }
 
 private:
     // A wire the host left out: nothing is connected at the other end. Every callback the block may call answers as an absent device would (no device, nothing queued, a NAK), so a host that gives
@@ -876,7 +867,6 @@ private:
 
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
-    BlockPort port_;
     UsbHost host_;
     Clock* clock_ = nullptr;
     uint8_t* dpram_ = nullptr;
@@ -885,7 +875,6 @@ private:
     uint32_t done_n_[kSlots] = {};
     uint8_t pend_[usb_regs::kEndpoints][usb_regs::kFifoDepth] = {};
     uint32_t pend_n_[usb_regs::kEndpoints] = {};
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

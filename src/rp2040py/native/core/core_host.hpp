@@ -98,6 +98,41 @@ struct BlockWindow {
     static WindowHandler handler(Block* block) noexcept { return WindowHandler{&BlockWindow::read32, &BlockWindow::write32, block}; }
 };
 
+// What every register block shares (docs/records/0096-cpp-mcu-core.md, the clean-up before wasm): the chip's ports, the raw value of the last write, the failure query, the alias-write
+// decode and the bus entry point. A block derives from `RegisterBlock<Block>` and supplies `uint32_t read(uint32_t offset)` and `bool write(uint32_t offset, int64_t value)`.
+//
+// `write_atomic` is the reference's `BasePeripheral.write_uint32_atomic`: a SET / CLR / XOR alias is decoded against a *read* of the register (with that read's side effects), and if that
+// read failed (a host function parked an error) nothing is written - what had been done stays done, nothing after it happens (the contract above). A plain write is never refused for a failure parked earlier: the reference has no such flag, the caller re-raises after the call.
+template <class Block>
+class RegisterBlock {
+public:
+    bool failed() const noexcept { return port_.failed(); }
+    int64_t raw_write_value() const noexcept { return raw_write_value_; }
+
+    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
+        raw_write_value_ = raw;
+        int64_t value = raw;
+        if (atomic_type != kAtomicNormal) {
+            value = decode_atomic(atomic_type, static_cast<int64_t>(self().read(offset)), raw);
+            if (failed()) return false;
+        }
+        return self().write(offset, value);
+    }
+
+    WindowHandler window_handler() noexcept { return BlockWindow<Block>::handler(&self()); }
+
+protected:
+    RegisterBlock() = default;
+    RegisterBlock(const RegisterBlock&) = delete;  // the window handler holds a pointer to the block
+    RegisterBlock& operator=(const RegisterBlock&) = delete;
+
+    BlockPort port_;
+    int64_t raw_write_value_ = 0;
+
+private:
+    Block& self() noexcept { return static_cast<Block&>(*this); }
+};
+
 }  // namespace rp2040core
 
 #endif  // RP2040PY_CORE_CORE_HOST_HPP

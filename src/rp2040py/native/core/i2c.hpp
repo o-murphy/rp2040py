@@ -94,7 +94,7 @@ constexpr uint32_t STATE_IDLE = 0, STATE_START = 1, STATE_CONNECT = 2, STATE_CON
 constexpr uint32_t MODE_WRITE = 0, MODE_READ = 1;
 }  // namespace i2c_regs
 
-class I2cBlock {
+class I2cBlock : public RegisterBlock<I2cBlock> {
 public:
     static constexpr uint32_t kFifoDepth = 16;
 
@@ -120,8 +120,6 @@ public:
         host_ = host;
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     uint32_t int_status() const noexcept { return int_raw & int_enable; }
     uint32_t master_bits() const noexcept { return (control & i2c_regs::CON_10BIT_MASTER) ? 10 : 7; }
 
@@ -410,16 +408,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<I2cBlock>::handler(this); }
 
 private:
     static uint32_t max_u32(uint32_t a, uint32_t b) noexcept { return a > b ? a : b; }
@@ -504,9 +493,7 @@ private:
 
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
-    BlockPort port_;
     I2cHost host_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

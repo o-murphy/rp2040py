@@ -78,7 +78,7 @@ inline double clock_divisor(uint32_t div) noexcept {
     return integer ? static_cast<double>(integer) + static_cast<double>(div & clocks_regs::DIV_FRAC_MASK) / 256.0 : 65536.0;
 }
 
-class ClocksBlock {
+class ClocksBlock : public RegisterBlock<ClocksBlock> {
 public:
     ClocksBlock() = default;
     ClocksBlock(const ClocksBlock&) = delete;  // the window handler and the alarm hold pointers to this object
@@ -101,8 +101,6 @@ public:
     }
     void detach() noexcept { cancel_alarm(&fc_alarm_); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The sinks, called in the order they were added. False: the list is full.
     // Forgets every sink (the host re-registers them when a consumer is replaced).
@@ -307,15 +305,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<ClocksBlock>::handler(this); }
 
     // The registers a test (and the shell's properties) reads straight; the stored raw values, as written.
     uint32_t gpout_ctrl[4] = {};
@@ -435,7 +425,6 @@ private:
     }
 
     Clock* clock_ = nullptr;
-    BlockPort port_;
     ClocksHost host_;
     PllBlock* pll_sys_ = nullptr;
     PllBlock* pll_usb_ = nullptr;
@@ -443,7 +432,6 @@ private:
     const RoscBlock* rosc_ = nullptr;
     double crystal_hz_ = 12e6;
     Alarm fc_alarm_;
-    int64_t raw_write_value_ = 0;
 
     double clk_sys_ = clocks_regs::DEFAULT_HZ;
     double clk_peri_ = clocks_regs::DEFAULT_HZ;

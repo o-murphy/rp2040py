@@ -103,7 +103,7 @@ private:
     DmaBlock* dma_ = nullptr;
 };
 
-class DmaBlock {
+class DmaBlock : public RegisterBlock<DmaBlock> {
 public:
     static constexpr int kChannels = 12;
 
@@ -152,11 +152,9 @@ public:
 
     Bus* bus() const noexcept { return bus_; }
     Clock* clock() const noexcept { return clock_; }
-    bool failed() const noexcept { return port_.failed(); }
 
     uint32_t int_status0() const noexcept { return (int_raw & int_enable_[0]) | int_force_[0]; }
     uint32_t int_status1() const noexcept { return (int_raw & int_enable_[1]) | int_force_[1]; }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     uint32_t timer(int index) const noexcept { return timers_[index]; }
     uint64_t dreq_mask() const noexcept { return dreq_; }
     bool dreq(uint32_t number) const noexcept { return number < 64 && ((dreq_ >> number) & 1u) != 0; }
@@ -282,30 +280,19 @@ public:
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of
     // the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        return write(offset, value);
-    }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    WindowHandler window_handler() noexcept { return BlockWindow<DmaBlock>::handler(this); }
 
 private:
     friend class DmaChannel;
 
     Bus* bus_ = nullptr;
     Clock* clock_ = nullptr;
-    BlockPort port_;
     DmaHost host_;
     uint32_t int_enable_[2] = {0, 0}, int_force_[2] = {0, 0};
     uint32_t timers_[4] = {0, 0, 0, 0};
     uint64_t dreq_ = 0;
-    int64_t raw_write_value_ = 0;
 };
 
 // ---- the channel ----------------------------------------------------------------------------------------

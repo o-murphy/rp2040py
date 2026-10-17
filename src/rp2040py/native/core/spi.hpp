@@ -65,7 +65,7 @@ constexpr uint32_t CPSR_MASK = 0xFE;
 constexpr uint32_t INT_TX = 1u << 3, INT_RX = 1u << 2, INT_RT = 1u << 1, INT_ROR = 1u << 0;
 }  // namespace spi_regs
 
-class SpiBlock {
+class SpiBlock : public RegisterBlock<SpiBlock> {
 public:
     static constexpr uint32_t kFifoDepth = 8;
 
@@ -97,8 +97,6 @@ public:
     bool frame_active = false, has_reply = false;  // a word is being shifted out / the device has answered before its last bit
     uint32_t reply = 0;
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t int_status() const noexcept { return int_raw & int_enable; }
     bool enabled() const noexcept { return (control1 & spi_regs::CR1_SSE) != 0; }
@@ -219,16 +217,7 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<SpiBlock>::handler(this); }
 
 private:
     // "All request signals are deasserted if the PrimeCell SSP is disabled, or the DMA enable signal is cleared" (datasheet 4.4.3.16).
@@ -298,10 +287,8 @@ private:
     bool raise_dreq(bool tx, bool asserted) noexcept { return port_.dreq(tx ? 0u : 1u, asserted); }
     bool raise_irq(bool level) noexcept { return port_.irq(level); }
 
-    BlockPort port_;
     SpiHost host_;
     Clock* clock_ = nullptr;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

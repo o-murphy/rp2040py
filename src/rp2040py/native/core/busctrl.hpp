@@ -23,7 +23,7 @@ constexpr uint32_t BUS_PRIORITY = 0x00, BUS_PRIORITY_ACK = 0x04, PERFCTR0 = 0x08
 constexpr uint32_t BUS_PRIORITY_MASK = 0x1111, PERFSEL_MASK = 0x1F;
 }  // namespace busctrl_regs
 
-class BusctrlBlock {
+class BusctrlBlock : public RegisterBlock<BusctrlBlock> {
 public:
     BusctrlBlock() { reset(); }
     BusctrlBlock(const BusctrlBlock&) = delete;  // the window handler holds a pointer to this object
@@ -31,8 +31,6 @@ public:
 
     void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The registers the block owns, for the shell's attributes.
     uint32_t bus_priority;  // all set by the constructor, through reset()
@@ -79,19 +77,9 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<BusctrlBlock>::handler(this); }
 
 private:
-    BlockPort port_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

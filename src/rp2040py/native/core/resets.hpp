@@ -21,7 +21,7 @@ namespace resets_regs {
 constexpr uint32_t REG_RESET = 0x0, REG_WDSEL = 0x4, REG_RESET_DONE = 0x8, BITS_MASK = 0x01FFFFFF;
 }  // namespace resets_regs
 
-class ResetsBlock {
+class ResetsBlock : public RegisterBlock<ResetsBlock> {
 public:
     ResetsBlock() = default;
     ResetsBlock(const ResetsBlock&) = delete;  // the window handler holds a pointer to this object
@@ -29,8 +29,6 @@ public:
 
     void init(const ChipPorts* ports, uint32_t block) noexcept { port_.init(ports, block); }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t reset_bits = 0;  // the RESET register
     uint32_t wdsel = 0;
@@ -60,19 +58,9 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<ResetsBlock>::handler(this); }
 
 private:
-    BlockPort port_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

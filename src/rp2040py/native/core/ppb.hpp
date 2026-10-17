@@ -66,7 +66,7 @@ constexpr uint32_t VECTPENDING_SHIFT = 12, VECTACTIVE_MASK = 0x1FF;
 constexpr int64_t kSysTickTop = 0xFFFFFF;
 }  // namespace ppb_regs
 
-class PpbBlock {
+class PpbBlock : public RegisterBlock<PpbBlock> {
 public:
     PpbBlock() = default;
     PpbBlock(const PpbBlock&) = delete;  // the alarm and the clock hold pointers into this object
@@ -269,13 +269,6 @@ public:
 
     // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
     // The bus never sends an alias to this block; it is here because the reference inherits the method, and a host may call it.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        return write(offset, value);
-    }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     WindowHandler window_handler() noexcept { return WindowHandler{&PpbBlock::window_read32, &PpbBlock::window_write32, this}; }
 
@@ -304,10 +297,8 @@ private:
     Cpu* cpu_ = nullptr;
     double clk_sys_ = 0.0;
     double tick_hz_ = 0.0;  // the watchdog's tick: SysTick's reference clock
-    BlockPort port_;
     PpbHost host_;
     uint32_t hardware_interrupt_mask_ = 0;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

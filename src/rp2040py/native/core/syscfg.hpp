@@ -26,7 +26,7 @@ constexpr uint32_t PROC_IN_SYNC_BYPASS_MASK = 0x3FFFFFFFu, PROC_IN_SYNC_BYPASS_H
 constexpr uint32_t DBGFORCE_WRITABLE = 0xEEu, DBGFORCE_RESET = 0x66u, MEMPOWERDOWN_MASK = 0xFFu;
 }  // namespace syscfg_regs
 
-class SyscfgBlock {
+class SyscfgBlock : public RegisterBlock<SyscfgBlock> {
 public:
     SyscfgBlock() = default;
     SyscfgBlock(const SyscfgBlock&) = delete;  // the window handler holds a pointer to this object
@@ -38,8 +38,6 @@ public:
         port_.init(ports, block);
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t proc1_nmi_mask = 0;
     uint32_t proc_config = syscfg_regs::PROC_CONFIG_RESET;
@@ -95,20 +93,10 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<SyscfgBlock>::handler(this); }
 
 private:
     Cpu* cpu_ = nullptr;
-    BlockPort port_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

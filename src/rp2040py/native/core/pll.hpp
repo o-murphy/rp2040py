@@ -38,7 +38,7 @@ constexpr uint32_t FBDIV_MASK = 0xFFF;
 constexpr uint32_t PRIM_WRITE_MASK = 0x77000, PRIM_RESET = 0x77000, PRIM_POSTDIV1_SHIFT = 16, PRIM_POSTDIV2_SHIFT = 12, PRIM_POSTDIV_MASK = 0x7;
 }  // namespace pll_regs
 
-class PllBlock {
+class PllBlock : public RegisterBlock<PllBlock> {
 public:
     PllBlock() = default;
     PllBlock(const PllBlock&) = delete;  // the window handler holds a pointer to this object
@@ -55,8 +55,6 @@ public:
         host_.ref_ctx = ctx;
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     uint32_t cs = pll_regs::CS_RESET;
     uint32_t pwr = pll_regs::PWR_RESET;
@@ -127,20 +125,10 @@ public:
     }
 
     // `BasePeripheral.write_uint32_atomic`, step for step.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<PllBlock>::handler(this); }
 
 private:
-    BlockPort port_;
     PllHost host_;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core
