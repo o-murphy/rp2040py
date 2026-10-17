@@ -171,5 +171,5 @@ dev = [
     "littlefs-python>=0.18.0",
     "cython>=3.2.9",
     "pytest-xdist>=3.8.0",
-    "ziglang>=0.17.0",
+    "ziglang>=0.16.0,<0.17",
 ]

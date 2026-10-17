@@ -16,7 +16,7 @@ A third backend of the Python package, next to the Cython one and the pure-Pytho
 6. **Backend selection: `RP2040PY_BACKEND=auto|native|wasm|python`**, default `auto`. `RP2040PY_SKIP_CYTHON=1` stays as an alias of `python` and `RP2040PY_REQUIRE_NATIVE` as it is (about fifty uses, and both pre-commit runs hang on them). `auto` falls down quietly (an import of `_rp2040` that fails -> wasmhost with a usable engine -> pure Python); an explicit `native` or `wasm` fails loudly.
 7. **Testing per backend through `tests/conftest.py`**, like the `--oracle` tiers: `--backend` (or `RP2040PY_BACKEND`) with the loaded backend asserted (a requested backend that did not load *fails*, not skips - the generalisation of `RP2040PY_REQUIRE_NATIVE`), a marker `@pytest.mark.backend("native")` for what only one backend can show (the Cython shells), the active backend in the report header. The backend is chosen at import, so the whole suite runs once per backend (a hook each in pre-commit, a matrix entry in CI - the wasm one with `--oracle=smoke`); a second level crosses backends inside one process (`chip_pair.py` and the `*_diff.py` oracles get the wasm chip as a third side). The C++ unit tests (`tests/cpp`) are to be built for `wasm32-wasi` and run under `wasmhost`'s WASI too: it is the cheap check that the core is right on a 32-bit address space.
 
-## Measured (2026-10-17, `zig 0.17.0` from PyPI `ziglang`, no source changed)
+## Measured (2026-10-17, `zig 0.17.0` from PyPI `ziglang`, then re-checked with the pinned 0.16.0 - see risk 5; no source changed)
 
 - The core compiles to wasm32. With `clang --target=wasm32-unknown-unknown -ffreestanding` it needs a five-file shim (`cstdint cstddef cstring cmath limits`); `<cstdint>` is not found without it. With `zig c++ -target wasm32-wasi` it needs nothing: zig brings its own libc and libc++ headers.
 - A real link of `Mcu::build` + `Mcu::run` (nearly the whole core), `-Wl,--gc-sections -s`, one `.cpp` with two exports:
@@ -25,6 +25,8 @@ A third backend of the Python package, next to the Cython one and the pure-Pytho
   |---|---|---|
   | `-O2` | 148,390 bytes | 154,194 bytes |
   | `-Oz` | 112,346 bytes | 113,451 bytes |
+
+  With the pinned `zig 0.16.0`, `-O2`: 148,781 bytes freestanding, 156,378 wasi reactor (the same ~5 %; both link, zig builds its libc++ on the way).
 
   **Both import nothing** (the import section is empty; what reactor brings of WASI is garbage-collected). Freestanding also needed `-fno-use-cxa-atexit` and a stub `atexit` (the static `Mcu`'s destructor). The reactor build has none of that, hence decision 2.
 - The core uses `<cstdint>`, `<cstring>` (memcpy), `<cmath>` (`floor`, `ceil` - single wasm instructions), `<limits>` and `<cstddef>`; no malloc, no stdio, no exceptions, no threads, no `long double`.
@@ -40,7 +42,7 @@ Its module is pure computation and imports nothing. This core must call the host
 2. **`auto` must not hand out a smaller API silently.** On a wasm backend with only the headless subset, code that reaches `uart._ctrl_register` fails with `AttributeError` where native works. Until parity, the subset is the documented contract of every backend and the rest is marked native / python only (the `backend` marker above).
 3. **Speed is unmeasured.** The instruction loop runs inside the module; what crosses the boundary is the edges (a UART byte, a pin, time). With Node as the engine a crossing may be a process hop. To be measured with the existing CoreMark script before any API decision is built on it.
 4. **Engines are not everywhere.** `wasmhost` needs JavaScriptCore, Node, Bun, wasmtime or wasm3 on the machine; without one `auto` goes to pure Python. Pyodide cannot nest an engine, but has its own Cython wheel ([0097](0097-pyodide-wasm-wheel.md)).
-5. **Cost of the build dependency.** `ziglang` is a ~80 MB wheel per platform in every build isolation (every cibuildwheel job). It is in the dev group today only (added 2026-10-17, `e576fa0`) and unused; when the `build_wasm` hook lands it moves to `[build-system].requires` in the same commit (the maintainer's option B).
+5. **Cost of the build dependency, and a pin.** `ziglang` is a ~80 MB wheel per platform in every build isolation (every cibuildwheel job). It is in the dev group only and unused; when the `build_wasm` hook lands it moves to `[build-system].requires` in the same commit (the maintainer's option B). **Pin it below 0.17:** `ziglang 0.17.0` on PyPI (2026-10-08) ships six wheels and none for Windows, so `uv sync` failed on `windows-latest` (`Pre-commit` on `e576fa0`, which had `ziglang>=0.17.0`); 0.16.0 and the releases before it have `win32`, `win_amd64` and `win_arm64`. The dev dependency is `ziglang>=0.16.0,<0.17` until a release has a Windows wheel again. `tiny-bclibc-wasm` says `ziglang>=0.16.0`, which resolves to 0.17.0 and would fail the same way on Windows.
 6. **Threads.** The module is single-threaded; `request_stop` across threads needs shared memory and atomics (0102) and is not required for the first version.
 
 ## Order, once there is a go-ahead (nothing started)
