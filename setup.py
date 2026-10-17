@@ -14,6 +14,10 @@ Env vars:
 - RP2040PY_SKIP_NATIVE_BUILD=1 - skip building the extension outright, forcing a pure-Python wheel
   regardless of whether Cython/a C compiler are actually available (e.g. for a deliberately "pure"
   release artifact rather than a best-effort one).
+- RP2040PY_SKIP_WASM_BUILD=1 - do not build the wasm module (docs/records/0103-wasm-backend.md).
+- RP2040PY_REQUIRE_WASM=1 - a failed wasm build fails the build (CI sets it); without it a missing
+  `ziglang` or a failed build only warns and the wheel is made without the module, like the
+  extension above.
 
 Stable ABI (abi3): built against Py_LIMITED_API for CPython 3.11+ - its buffer-protocol support,
 needed by this code's heavy use of typed memoryviews, only entered the limited API at 3.11 (verified
@@ -35,6 +39,7 @@ from pathlib import Path
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext as _build_ext
+from setuptools.command.build_py import build_py as _build_py
 
 # Cross-compiled target detection.
 # NOTE: platform.system() reports the *host* OS under cross-compilation
@@ -237,7 +242,40 @@ class _parallel_build_ext(_build_ext):
             self.parallel = cpu_count() or 1
 
 
-cmdclass = {"build_ext": _parallel_build_ext}
+class _build_py_with_wasm(_build_py):
+    """Builds `rp2040py/native/wasm/rp2040.wasm` (the C++ core for wasm32, by the `ziglang` package) before the package files are collected, so it travels in every wheel as package data.
+
+    The module is one platform-independent file, but it is built per wheel, like the rest, rather than shipped as a separate artifact. Optional like the extension: where `ziglang` has no wheel
+    or the build fails, the wheel is made without it (the wasm backend is then not available) unless RP2040PY_REQUIRE_WASM=1.
+    """
+
+    def run(self):
+        if environ.get("RP2040PY_SKIP_WASM_BUILD") != "1":
+            self._build_wasm()
+        super().run()
+
+    @staticmethod
+    def _build_wasm():
+        import importlib.util
+        import warnings
+
+        required = environ.get("RP2040PY_REQUIRE_WASM") == "1"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "build_wasm", Path(__file__).resolve().parent / "build_wasm.py"
+            )
+            build_wasm = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(build_wasm)
+            build_wasm.build()
+        except Exception as error:
+            if required:
+                raise
+            warnings.warn(
+                f"rp2040py: the wasm module was not built ({error}); the wheel is made without it", stacklevel=2
+            )
+
+
+cmdclass = {"build_ext": _parallel_build_ext, "build_py": _build_py_with_wasm}
 if USE_LIMITED_API:
     from wheel.bdist_wheel import bdist_wheel
 

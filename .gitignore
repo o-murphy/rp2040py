@@ -106,3 +106,6 @@ src/**/*.dll
 src/**/*.so
 src/**/*.pyd
 src/**/*.dylib
+
+# The wasm module is built (build_wasm.py), never committed
+*.wasm

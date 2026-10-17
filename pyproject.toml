@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel"]
+# ziglang compiles the wasm module of record 0103 (build_wasm.py, called from setup.py's build_py). Pinned below 0.17: 0.17.0 is only partly uploaded to PyPI (no Windows wheels).
+requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel", "ziglang>=0.16.0,<0.17"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -117,6 +118,19 @@ include = ["rp2040py*"]
 # includes it via that git integration, which is why this went unnoticed until a non-git install
 # path exercised it.
 "rp2040py.utils" = ["firmware_specs.json"]
+# The wasm module (built from rp2040py/native/wasm/rp2040_wasm.cpp by setup.py's build_py; not tracked by git, so listed here).
+"rp2040py.native.wasm" = ["*.wasm"]
+
+[tool.uv]
+# Rebuild the editable install (and so the wasm module) when its sources or the build hooks change, not only when pyproject.toml does.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "setup.py" },
+    { file = "build_wasm.py" },
+    { file = "src/rp2040py/native/wasm/*.cpp" },
+    { file = "src/rp2040py/native/core/*.hpp" },
+    { git = { commit = true } },
+]
 
 [tool.setuptools_scm]
 root = "."
@@ -172,4 +186,5 @@ dev = [
     "cython>=3.2.9",
     "pytest-xdist>=3.8.0",
     "ziglang>=0.16.0,<0.17",
+    "wasmhost>=0.1.0",
 ]

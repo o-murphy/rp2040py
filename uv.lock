@@ -900,6 +900,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "rp2040py", extra = ["fs"] },
     { name = "ruff" },
+    { name = "wasmhost" },
     { name = "ziglang" },
 ]
 
@@ -924,6 +925,7 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "rp2040py", extras = ["fs"] },
     { name = "ruff", specifier = ">=0.16.0" },
+    { name = "wasmhost", specifier = ">=0.1.0" },
     { name = "ziglang", specifier = ">=0.16.0,<0.17" },
 ]
 
@@ -1059,6 +1061,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/dc/3f/935cf1757643381fb7f7cc98197b4bc119223d9c2cf37dc3b03ad2a4455f/virtualenv-21.14.7.tar.gz", hash = "sha256:5f427d56f39eb7e7447d641dd4b7ab1e9c92793f498f35f26da2e4972c5546ae", size = 5471741, upload-time = "2026-10-12T01:27:31.842Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/5b/799c3e5b8e04d5fa1c9b61a4c1f5079603e747205c7311b92abd30283df5/virtualenv-21.14.7-py3-none-any.whl", hash = "sha256:3769219a308c5d2f093e7729621ad12a6346b5767a7ec4338414e2a0fb0c526b", size = 5487587, upload-time = "2026-10-12T01:27:29.37Z" },
+]
+
+[[package]]
+name = "wasmhost"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/01/9368fd1042c0c6dd5992fdb3761fc372e620058e7ae51b670ec2e9c2d170/wasmhost-0.1.0.tar.gz", hash = "sha256:6a2f72998863cfe4729bde7a6276522072de917a1aa6d3e941677712ca5b505f", size = 4155799, upload-time = "2026-10-12T13:14:38.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/dd/d6952971cc636baa9126fe7f0c278a161e635e5bfe4cd0bbccbdc3c02c1c/wasmhost-0.1.0-py3-none-any.whl", hash = "sha256:a4926c48dd34c67cf2307416a1b4e3ff45b8926dd98f52e2a874b83dc8af1414", size = 109782, upload-time = "2026-10-12T13:14:37.001Z" },
 ]
 
 [[package]]
