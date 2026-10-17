@@ -56,6 +56,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
+- [ ] [0103] a wasm backend: toolchain, packaging, backend selection and testing | proposed, documentation only - ziglang + wasi reactor, the `.wasm` in every wheel, `RP2040PY_BACKEND` (native -> wasm -> python), a backend axis in the tests; headless proof of concept first
 - [ ] [0102] a C ABI around the core, for wasm (and, later, cffi) | proposed, documentation only - the host interface of 0096's G6 and the entry point of its Phase 6; cffi is a later consumer, not part of it
 - [ ] [0101] the chip's reset values, read on a real board | proposed, waiting for a board - the 56 registers on which a fresh chip is meant to differ from the SVD, to be measured; nothing changes in the chip until then
 - [ ] [0099] a WASM drop-in for the original rp2040js | proposed, nothing designed - once Phase 6 of 0096 boots MicroPython on wasmtime/node, try a TypeScript wrapper with rp2040js's public API and run its own specs against the core
@@ -287,6 +288,7 @@ record is added.
 [0095]: records/0095-github-action-at-repo-root.md
 [0096]: records/0096-cpp-mcu-core.md
 [0098]: records/0098-datasheet-conformance-audit.md
+[0103]: records/0103-wasm-backend.md
 [0102]: records/0102-c-abi-for-the-core.md
 [0101]: records/0101-reset-values-on-a-real-board.md
 [0100]: records/0100-integer-clock.md
