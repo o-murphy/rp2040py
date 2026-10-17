@@ -79,7 +79,7 @@ constexpr uint32_t STATUS_WEL = 0x02, STATUS2_QE = 0x02;
 constexpr uint8_t JEDEC_ID[3] = {0xEF, 0x40, 0x15};
 }  // namespace ssi_regs
 
-class SsiBlock {
+class SsiBlock : public RegisterBlock<SsiBlock> {
 public:
     static constexpr uint32_t kRxCapacity = 16;  // the hardware FIFO
     static constexpr uint32_t kTxKept = 4 + ssi_regs::FLASH_PAGE_SIZE;  // opcode + address + the data bytes of a page
@@ -150,7 +150,6 @@ public:
     uint8_t rx_at(uint32_t i) const noexcept { return rx_[(rx_head_ + i) % kRxCapacity]; }
     uint32_t tx_length() const noexcept { return tx_len_; }
     uint8_t tx_at(uint32_t i) const noexcept { return i < kTxKept ? tx_[i] : 0; }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     void set_write_enabled(bool value) noexcept { write_enabled_ = value; }
     void set_ssienr(uint32_t value) noexcept { ssienr_ = value; }
     void tx_append(uint8_t byte) noexcept { push_tx(byte); }
@@ -200,55 +199,45 @@ public:
     }
 
     // `value` is the value after any atomic-alias decode.
-    void write(uint32_t offset, int64_t value) noexcept {
+    bool write(uint32_t offset, int64_t value) noexcept {
         using namespace ssi_regs;
         const uint32_t word = static_cast<uint32_t>(value);
         if (const int slot = stored_index(offset); slot >= 0) {
             stored_[slot] = word & STORED_MASK[slot];
             update();
-            return;
+            return true;
         }
         if (is_data_register(offset)) {
             if (ssienr_ != 0) {
                 receive(cs_asserted_ ? shift_byte(static_cast<uint8_t>(word & 0xFFu)) : static_cast<uint8_t>(0xFF));
                 update();
             }
-            return;
+            return true;
         }
         switch (offset) {
-            case TXFLR: case RXFLR: case ISR: case RISR: case TXOICR: case RXOICR: case RXUICR: case MSTICR: case ICR: return;  // read-only status: a write is a no-op
-            case CTRLR0: ctrlr0_ = word & CTRLR0_MASK; return;
-            case CTRLR1: ctrlr1_ = word & CTRLR1_MASK; return;
+            case TXFLR: case RXFLR: case ISR: case RISR: case TXOICR: case RXOICR: case RXUICR: case MSTICR: case ICR: return true;  // read-only status: a write is a no-op
+            case CTRLR0: ctrlr0_ = word & CTRLR0_MASK; return true;
+            case CTRLR1: ctrlr1_ = word & CTRLR1_MASK; return true;
             case SSIENR:
                 ssienr_ = word & SSIENR_MASK;
                 if (ssienr_ == 0) {  // "The transmit and receive FIFO buffers are cleared when the DW_apb_ssi is disabled (SSI_EN = 0)" (datasheet 4.10.5)
                     rx_head_ = rx_count_ = 0;
                     update();
                 }
-                return;
-            case BAUDR: baudr_ = word & BAUDR_MASK; return;
-            case RX_SAMPLE_DLY: rxsampdly_ = word & 0xFFu; return;
-            case TXD_DRIVE_EDGE: txddriveedge_ = word & 0xFFu; return;
-            case SPI_CTRL_R0: spictrl0_ = word & SPI_CTRLR0_MASK; return;
+                return true;
+            case BAUDR: baudr_ = word & BAUDR_MASK; return true;
+            case RX_SAMPLE_DLY: rxsampdly_ = word & 0xFFu; return true;
+            case TXD_DRIVE_EDGE: txddriveedge_ = word & 0xFFu; return true;
+            case SPI_CTRL_R0: spictrl0_ = word & SPI_CTRLR0_MASK; return true;
             default: break;
         }
         port_.unimplemented_write(offset, value);
+        return true;
     }
 
-    // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side
-    // effects: a DR0 alias pops the RX queue), then write.
-    void write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);
-        }
-        write(offset, value);
-    }
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    WindowHandler window_handler() noexcept { return BlockWindow<SsiBlock>::handler(this); }
 
     // SSI.BAUDR as read (the XIP stream's pace derives from it).
     uint32_t baudr() const noexcept { return baudr_; }
@@ -393,7 +382,6 @@ private:
 
     uint8_t* flash_ = nullptr;
     uint32_t flash_size_ = 0;
-    BlockPort port_;
     SsiHost host_;
     PinBank* bank_ = nullptr;
     uint32_t slot_ = 0;  // the chip-select pin's position in its bank
@@ -407,7 +395,6 @@ private:
     uint32_t rx_head_ = 0, rx_count_ = 0;
     uint32_t sticky_ = 0;  // the held interrupts: TXO, RXU, RXO, MST
     bool irq_level_ = false, dreq_tx_ = false, dreq_rx_ = false;  // what the host was last told
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

@@ -269,10 +269,10 @@ static void test_failures_stop_at_once() {
     CHECK(!wr(REG_RANDOMBIT, 1, kAtomicXor));  // the read an alias decodes against asks the host for a bit, and fails
     fresh();
     env.failed = 1;
-    CHECK(!wr(REG_COUNT, 5, kAtomicXor) && rd(REG_COUNT) == 0);  // a failure already pending: the write does not happen
-    CHECK(!wr(REG_COUNT, 5) && rd(REG_COUNT) == 0);
+    CHECK(!wr(REG_COUNT, 5, kAtomicXor) && rd(REG_COUNT) == 0);  // a failure already pending: an alias write stops after its decoding read
+    CHECK(wr(REG_COUNT, 5) && rd(REG_COUNT) == 5);  // ...a plain write is not refused for it (the shared rule of RegisterBlock)
     env.failed = 0;
-    CHECK(wr(REG_COUNT, 5) && rd(REG_COUNT) == 5);
+    CHECK(wr(REG_COUNT, 7) && rd(REG_COUNT) == 7);
     fresh();
     CHECK(wr(REG_DIV, 0xAA0u + 2));
     env.fail_freq = true;

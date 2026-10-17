@@ -99,7 +99,7 @@ struct BlockWindow {
 };
 
 // What every register block shares (docs/records/0096-cpp-mcu-core.md, the clean-up before wasm): the chip's ports, the raw value of the last write, the failure query, the alias-write
-// decode and the bus entry point. A block derives from `RegisterBlock<Block>` and supplies `uint32_t read(uint32_t offset)` and `bool write(uint32_t offset, int64_t value)`.
+// decode and the bus entry point. A block derives from `RegisterBlock<Block>` and supplies `uint32_t read(uint32_t offset)` and `bool write(uint32_t offset, int64_t value)` (and `decode_read` when its read can fail).
 //
 // `write_atomic` is the reference's `BasePeripheral.write_uint32_atomic`: a SET / CLR / XOR alias is decoded against a *read* of the register (with that read's side effects), and if that
 // read failed (a host function parked an error) nothing is written - what had been done stays done, nothing after it happens (the contract above). A plain write is never refused for a failure parked earlier: the reference has no such flag, the caller re-raises after the call.
@@ -113,10 +113,18 @@ public:
         raw_write_value_ = raw;
         int64_t value = raw;
         if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(self().read(offset)), raw);
+            uint32_t current = 0;
+            if (!self().decode_read(offset, &current)) return false;
+            value = decode_atomic(atomic_type, static_cast<int64_t>(current), raw);
             if (failed()) return false;
         }
         return self().write(offset, value);
+    }
+
+    // The read the alias is decoded against. A block whose read can itself fail (it returns false) hides this with its own.
+    bool decode_read(uint32_t offset, uint32_t* out) noexcept {
+        *out = self().read(offset);
+        return true;
     }
 
     WindowHandler window_handler() noexcept { return BlockWindow<Block>::handler(&self()); }

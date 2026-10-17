@@ -41,8 +41,8 @@ cdef extern from "ssi.hpp" namespace "rp2040core":
         void tx_append(uint8_t byte) noexcept
         void rx_push(uint8_t byte) noexcept
         uint32_t read(uint32_t offset) noexcept
-        void write(uint32_t offset, int64_t value) noexcept
-        void write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
+        cppbool write(uint32_t offset, int64_t value) noexcept
+        cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
 

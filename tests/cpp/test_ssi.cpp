@@ -40,6 +40,7 @@ struct Env {
     int irq_calls = 0, tx_dreq_calls = 0, rx_dreq_calls = 0;
     bool irq_level = false, tx_dreq = false, rx_dreq = false;
     bool fail_irq = false, fail_dreq = false;
+    int failed = 0;  // the shared parked-failure flag the ports watch
 };
 static Env env;
 
@@ -61,6 +62,7 @@ static bool on_irq(void*, uint32_t line, bool level) {
     CHECK(line == kTestIrq);
     ++env.irq_calls;
     env.irq_level = level;
+    if (env.fail_irq) env.failed = 1;
     return !env.fail_irq;
 }
 static bool on_dreq(void*, uint32_t number, bool asserted) {
@@ -68,6 +70,7 @@ static bool on_dreq(void*, uint32_t number, bool asserted) {
     const bool tx = number == kTestDreqTx;
     (tx ? env.tx_dreq_calls : env.rx_dreq_calls)++;
     (tx ? env.tx_dreq : env.rx_dreq) = asserted;
+    if (env.fail_dreq) env.failed = 1;
     return !env.fail_dreq;
 }
 
@@ -250,6 +253,27 @@ static void test_the_fifos_and_the_interrupts() {
     env.fail_dreq = false;
 }
 
+// A read of DR0 pops the RX queue and tells the interrupt line; an alias write decodes against that read, so when the host fails there the write must not happen (RegisterBlock, core_host.hpp).
+static void test_a_failing_decode_read_stops_a_dr0_alias_write() {
+    fresh();
+    env = Env();
+    wr(SSIENR, 1);
+    cs(kCsLow);
+    burst(1);
+    wr(IMR, INT_RXF);  // the line is high while a frame waits
+    CHECK(env.irq_level && rd(RXFLR) == 1);
+    env.fail_irq = true;
+    CHECK(!ssi.write_atomic(DR0, 0x55, kAtomicSet));  // the decoding read pops the frame, the line falls, the host fails ...
+    CHECK(rd(RXFLR) == 0 && env.failed == 1);          // ... and the write that would have shifted a new frame in did not happen
+    fresh();
+    env = Env();
+    wr(SSIENR, 1);
+    cs(kCsLow);
+    burst(1);
+    wr(IMR, INT_RXF);
+    CHECK(ssi.write_atomic(DR0, 0x55, kAtomicSet) && rd(RXFLR) == 1);  // without the failure the write goes ahead
+}
+
 static void test_the_bit_positions_and_the_held_interrupts() {
     fresh();
     env = Env();
@@ -356,12 +380,14 @@ int main() {
     ports.warn = on_warn;
     ports.irq = on_irq;
     ports.dreq = on_dreq;
+    ports.failed = &env.failed;
     SsiHost ssi_host;
     ssi.init(flash, kFlashSize, &ports, kTestBlock, kTestIrq, kTestDreqTx, ssi_host);
     CHECK(ssi.bind_cs(&cs_pin));
     fresh();
     test_dr1_to_dr35_are_the_data_register_too();
     test_the_fifos_and_the_interrupts();
+    test_a_failing_decode_read_stops_a_dr0_alias_write();
     test_the_bit_positions_and_the_held_interrupts();
     test_the_dma_requests();
     fresh();

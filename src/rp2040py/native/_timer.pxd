@@ -22,7 +22,7 @@ cdef extern from "timer.hpp" namespace "rp2040core":
         int write32(uint32_t offset, int64_t value, int64_t raw) noexcept
         bint reset() noexcept
         uint32_t read(uint32_t offset) noexcept
-        void write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
+        bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         void tick_changed(double tick_hz) noexcept
         double tick_hz() noexcept
         bint paused() noexcept

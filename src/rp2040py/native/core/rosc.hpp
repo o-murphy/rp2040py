@@ -57,7 +57,7 @@ constexpr uint32_t COUNT_MASK = 0xFF;
 constexpr double NOMINAL_HZ = 6.5e6, NOMINAL_DIV = 16.0;
 }  // namespace rosc_regs
 
-class RoscBlock {
+class RoscBlock : public RegisterBlock<RoscBlock> {
 public:
     RoscBlock() = default;
     RoscBlock(const RoscBlock&) = delete;  // the window handler holds a pointer to this object
@@ -87,8 +87,6 @@ public:
         Clock::remove_rebase_listener(&rebase_listener_);
     }
 
-    bool failed() const noexcept { return port_.failed(); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The registers and flags, public for the shell (the reference's private attributes are read and, by tests, written directly).
     uint32_t ctrl = rosc_regs::CTRL_RESET, freqa = 0, freqb = 0, dormant = rosc_regs::WAKE_VALUE, div = rosc_regs::DIV_RESET, phase = rosc_regs::PHASE_RESET;
@@ -128,6 +126,9 @@ public:
     }
 
     // False: a failure is pending.
+    // The alias decode asks the fallible read.
+    bool decode_read(uint32_t offset, uint32_t* out) noexcept { return read(offset, out); }
+
     bool read(uint32_t offset, uint32_t* out) noexcept {
         using namespace rosc_regs;
         switch (offset) {
@@ -240,20 +241,7 @@ public:
         return true;
     }
 
-    // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            uint32_t current = 0;
-            if (!read(offset, &current)) return false;
-            value = decode_atomic(atomic_type, static_cast<int64_t>(current), raw);
-        }
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<RoscBlock>::handler(this); }
 
 private:
     // The block's own source of RANDOMBIT: xorshift32, seeded the same on every run, so a simulation is reproducible. (The pure-Python reference seeds Python's generator; no test compares the two sequences.)
@@ -312,11 +300,9 @@ private:
         return true;
     }
 
-    BlockPort port_;
     RoscHost host_;
     RebaseListener rebase_listener_;
     Clock* clock_ = nullptr;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

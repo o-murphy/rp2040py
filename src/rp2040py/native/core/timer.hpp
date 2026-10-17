@@ -37,7 +37,7 @@ constexpr uint32_t kDbgPauseMask = 0x6, kDbgPauseReset = 0x6;  // DBG1 (bit 2) a
 constexpr uint32_t INTR = 0x34, INTE = 0x38, INTF = 0x3C, INTS = 0x40;
 }  // namespace timer_regs
 
-class TimerBlock {
+class TimerBlock : public RegisterBlock<TimerBlock> {
 public:
     static constexpr int kAlarms = 4;
     static constexpr uint32_t kAlarmBits = 0xF;
@@ -66,7 +66,6 @@ public:
     }
 
     uint32_t int_status() const noexcept { return (int_raw_ & int_enable_) | int_force_; }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
     bool alarm_armed(int index) const noexcept { return armed_[index]; }
 
     // ---- registers: every "handled" return is false for an offset this block does not implement ----------
@@ -176,6 +175,13 @@ public:
     // ---- the register protocol as the bus (and the Python facade) uses it ---------------------------------
 
     // A read of any offset: an unimplemented one warns and reads as 0xFFFFFFFF, as `BasePeripheral` does.
+    // A write of the value after the alias decode; the raw bits the INTR clear acts on are `raw_write_value()`.
+    bool write(uint32_t offset, int64_t value) noexcept {
+        const int result = write32(offset, value, raw_write_value_);
+        if (result == kWriteUnhandled) port_.unimplemented_write(offset, value);
+        return result != kWriteFailed;
+    }
+
     uint32_t read(uint32_t offset) noexcept {
         uint32_t value;
         if (read32(offset, &value)) return value;
@@ -183,18 +189,6 @@ public:
         return 0xFFFFFFFFu;
     }
 
-    // A write through the atomic aliases: `BasePeripheral.write_uint32_atomic`, step for step - remember the raw
-    // value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    void write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            value = decode_atomic(atomic_type, static_cast<int64_t>(read(offset)), raw);  // an alias that is none of the three (not reachable from an address) writes raw
-        }
-        if (write32(offset, value, raw) == kWriteUnhandled) {
-            port_.unimplemented_write(offset, value);
-        }
-    }
 
     // ---- the watchdog's tick --------------------------------------------------------------------------------------
 
@@ -207,7 +201,6 @@ public:
 
     // ---- window handler entry points: what the bus's C++ window registry calls ---------------------------
 
-    WindowHandler window_handler() noexcept { return BlockWindow<TimerBlock>::handler(this); }
 
 private:
     struct Slot {
@@ -309,7 +302,6 @@ private:
 
     Clock* clock_ = nullptr;
     bool raise_irq(int alarm, bool level) noexcept { return port_.irq(level, static_cast<uint32_t>(alarm)); }
-    BlockPort port_;
     static void on_rebase(void* ctx, int64_t delta) noexcept {
         auto* self = static_cast<TimerBlock*>(ctx);
         self->epoch_ticks_ -= delta;  // (the epoch is always near the clock's time, so this cannot run away)
@@ -326,7 +318,6 @@ private:
     double tick_hz_ = 0.0;        // the watchdog's tick; 0 = not running, the count is frozen
     double frozen_micros_ = 0.0;  // the count, frozen, while PAUSE is set or the tick is not running
     uint32_t time_latch_low_ = 0, dbgpause_ = timer_regs::kDbgPauseReset;
-    int64_t raw_write_value_ = 0;
     bool armed_[kAlarms] = {false, false, false, false};
     uint32_t target_[kAlarms] = {0, 0, 0, 0};
     Alarm alarms_[kAlarms];
