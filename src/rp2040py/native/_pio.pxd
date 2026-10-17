@@ -86,7 +86,7 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         uint32_t irq0_int_enable, irq0_int_force, irq1_int_enable, irq1_int_force
         int32_t stopped
         cppbool in_cycle
-        int64_t cycle_fp, next_due_fp, backlog_drops, raw_write_value, resolve_due_fp
+        int64_t cycle_fp, next_due_fp, backlog_drops, resolve_due_fp
         void bind_pin(uint32_t gpio, PinBank* bank, uint32_t slot) noexcept
         uint32_t int_raw() noexcept
         uint32_t irq0_int_status() noexcept
@@ -105,6 +105,8 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         cppbool read32(uint32_t offset, uint32_t* out) noexcept
         cppbool write32(uint32_t offset, uint32_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
+        int64_t raw_write_value() noexcept
+        void set_raw_write_value(int64_t value) noexcept
         cppbool reset() noexcept
         void stop() noexcept
         WindowHandler window_handler() noexcept

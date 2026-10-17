@@ -381,7 +381,7 @@ static void test_wait_gpio_pin_and_irq_and_the_irq_instruction() {
     q.exec(op(IRQ_OP, (1 << 5) | 2), 0);  // IRQ set 2 and wait
     CHECK(q.pio.irq == (1u << 2) && q.sm().waiting && q.sm().wait_type == kPioWaitIrq);
     CHECK(q.pio.write32(IRQ, 0));
-    q.pio.raw_write_value = 1u << 2;  // the guest cleared flag 2
+    q.pio.set_raw_write_value(1u << 2);  // the guest cleared flag 2
     CHECK(q.pio.write32(IRQ, 0));
     CHECK(q.pio.irq == 0 && !q.sm().waiting);
     // WAIT IRQ with polarity 1 consumes the flag
@@ -622,12 +622,12 @@ static void test_reset_and_stop() {
     r.pio.instructions[3] = 7;
     r.pio.irq = 3;
     r.pio.pin_values = 0xFF;
-    r.pio.raw_write_value = 99;
+    r.pio.set_raw_write_value(99);
     r.pio.stopped = 0;
     r.host.count = 0;
     CHECK(r.pio.reset());
     CHECK(!r.sm().enabled && r.sm().x == 0 && r.sm().tx.empty() && r.pio.instructions[3] == 0 && r.pio.irq == 0 && r.pio.pin_values == 0 && r.pio.stopped);
-    CHECK(r.pio.raw_write_value == 99);  // not state
+    CHECK(r.pio.raw_write_value() == 99);  // not state
     CHECK(r.host.count_of(kDreq) == 8 && r.host.count_of(kIrq) == 2);  // every machine republishes its DREQs; both lines re-announced
     r.sm().enabled = true;
     r.pio.stopped = 0;

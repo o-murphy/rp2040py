@@ -197,7 +197,7 @@ private:
     inline bool set_sideset(uint32_t value, uint32_t count) noexcept;
 };
 
-class PioBlock {
+class PioBlock : public RegisterBlock<PioBlock> {
 public:
     PioBlock() = default;
     PioBlock(const PioBlock&) = delete;  // the machines point at their block
@@ -248,7 +248,6 @@ public:
     int64_t cycle_fp = 0;
     int64_t next_due_fp = kPioNeverDue;
     int64_t backlog_drops = 0;
-    int64_t raw_write_value = 0;
     // Pin-write arbitration (datasheet 3.5.6.1): `in_cycle` while `run_due()` steps the machines (their writes are collected, then collated once); `resolve_due_fp` is the cycle at which
     // the image falls back to the held (`OUT_STICKY`) writes after a higher-numbered machine overwrote them for one cycle.
     bool in_cycle = false;
@@ -512,7 +511,7 @@ public:
         return true;
     }
 
-    // `write_uint32`: `value` is the value after any alias decode; the raw value the guest wrote is `raw_write_value`.
+    // `write_uint32`: `value` is the value after any alias decode; the raw value the guest wrote is `raw_write_value()`.
     bool write32(uint32_t offset, uint32_t value) noexcept {
         using namespace pio_regs;
         if (offset >= INSTR_MEM0 && offset <= INSTR_MEM31) {
@@ -526,12 +525,12 @@ public:
         switch (offset) {
             case CTRL: return write_ctrl(value);
             case FDEBUG:
-                fdebug &= ~static_cast<uint32_t>(raw_write_value);
+                fdebug &= ~static_cast<uint32_t>(raw_write_value_);
                 fdebug |= tx_stall | rx_stall;
                 return true;
             case TXF0: case TXF0 + 4: case TXF0 + 8: case TXF0 + 12: return machines[(offset - TXF0) / 4].write_fifo(value);
             case IRQ:
-                irq &= ~static_cast<uint32_t>(raw_write_value);
+                irq &= ~static_cast<uint32_t>(raw_write_value_);
                 return irq_updated();
             case INPUT_SYNC_BYPASS: input_sync_bypass = value; return true;
             case IRQ_FORCE:
@@ -549,20 +548,11 @@ public:
         return true;
     }
 
-    // A write through the atomic aliases: `write_uint32_atomic` step for step - remember the raw value, decode the alias against a *read* of the register (with that
-    // read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value = raw;
-        uint32_t value = static_cast<uint32_t>(raw);
-        if (atomic_type != kAtomicNormal) {
-            uint32_t current = 0;
-            RP2040PY_PIO_TRY(read32(offset, &current));
-            value = static_cast<uint32_t>(decode_atomic(atomic_type, static_cast<int64_t>(current), static_cast<int64_t>(static_cast<uint32_t>(raw))));
-        }
-        return write32(offset, value);
-    }
+    // `RegisterBlock` supplies `write_atomic`: the alias is decoded against `read32` (the fallible read), then written here; only the low 32 bits count.
+    bool write(uint32_t offset, int64_t value) noexcept { return write32(offset, static_cast<uint32_t>(value)); }
+    bool decode_read(uint32_t offset, uint32_t* out) noexcept { return read32(offset, out); }
 
-    // The whole block back to power-on (0089 Phase 5): instruction memory, the four machines, the IRQ flags, the pacing state. `raw_write_value` is not state.
+    // The whole block back to power-on (0089 Phase 5): instruction memory, the four machines, the IRQ flags, the pacing state. `raw_write_value()` is not state.
     bool reset() noexcept {
         for (uint32_t i = 0; i < kPioMachines; ++i) RP2040PY_PIO_TRY(machines[i].reset());
         for (uint32_t i = 0; i < 32; ++i) instructions[i] = 0;
@@ -584,9 +574,6 @@ public:
         for (uint32_t i = 0; i < kPioMachines; ++i) machines[i].enabled = false;
         stopped = 1;
     }
-
-    // ---- window handler entry points: what the bus's C++ window registry calls ----
-    WindowHandler window_handler() noexcept { return BlockWindow<PioBlock>::handler(this); }
 
 private:
     bool write_ctrl(uint32_t value) noexcept {
@@ -612,7 +599,6 @@ private:
         return true;
     }
 
-    BlockPort port_;
     PioHost host_;
     uint32_t first_irq_ = 0;
     uint32_t index_ = 0;

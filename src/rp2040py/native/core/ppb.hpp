@@ -267,16 +267,10 @@ public:
         return true;
     }
 
-    // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    // The bus never sends an alias to this block; it is here because the reference inherits the method, and a host may call it.
-
-    WindowHandler window_handler() noexcept { return WindowHandler{&PpbBlock::window_read32, &PpbBlock::window_write32, this}; }
+    // The bus's PPB path writes the caller's value with `atomic_type` 0 (the reference's `RP2040.write_uint32` calls `write_uint32`, never the atomic form): `RegisterBlock::window_handler`
+    // therefore reaches `write` directly, and `write_atomic` (which the reference's block inherits) is there for a host that calls it.
 
 private:
-    static uint32_t window_read32(void* ctx, uint32_t offset) noexcept { return static_cast<PpbBlock*>(ctx)->read(offset); }
-    // The bus's PPB path writes the caller's value with `atomic_type` 0 and never has this block decode an alias (the reference's `RP2040.write_uint32` calls `write_uint32`).
-    static void window_write32(void* ctx, uint32_t offset, int64_t raw_value, uint32_t) noexcept { (void)static_cast<PpbBlock*>(ctx)->write(offset, raw_value); }
-
     // The compare alarm at 0: COUNTFLAG, the SysTick exception if TICKINT, and the reload.
     static bool on_systick_alarm(void* ctx) noexcept {
         PpbBlock* self = static_cast<PpbBlock*>(ctx);

@@ -559,11 +559,11 @@ cdef class RPPIO:
 
     @property
     def raw_write_value(self):
-        return self._block.raw_write_value
+        return self._block.raw_write_value()
 
     @raw_write_value.setter
     def raw_write_value(self, value):
-        self._block.raw_write_value = value
+        self._block.set_raw_write_value(value)
 
     @property
     def stopped(self):

@@ -108,6 +108,7 @@ class RegisterBlock {
 public:
     bool failed() const noexcept { return port_.failed(); }
     int64_t raw_write_value() const noexcept { return raw_write_value_; }
+    void set_raw_write_value(int64_t value) noexcept { raw_write_value_ = value; }  // for a view that mirrors the reference's assignable attribute (the PIO's)
 
     bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
         raw_write_value_ = raw;
