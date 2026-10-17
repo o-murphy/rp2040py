@@ -251,17 +251,10 @@ public:
             for (uint32_t k = 0; k < PinBank::kMaxPins; ++k) always[k] = b == 1;
             (void)(b == 0 ? gpio_bank_ : qspi_bank_).init(b == 0 ? 30 : 6, ph, always, 0);
         }
-        IoPadsHost io;
-        io.warn = block_warn<kMcuBlockIoBank0>;
-        io.ctx = this;
-        io.failed = host.failed;
-        io_bank0_.init(&gpio_bank_, false, io);
-        io.warn = block_warn<kMcuBlockIoQspi>;
-        io_qspi_.init(&qspi_bank_, true, io);
-        io.warn = block_warn<kMcuBlockPadsBank0>;
-        pads_bank0_.init(&gpio_bank_, false, io);
-        io.warn = block_warn<kMcuBlockPadsQspi>;
-        pads_qspi_.init(&qspi_bank_, true, io);
+        io_bank0_.init(&gpio_bank_, false, &ports_, kMcuBlockIoBank0);
+        io_qspi_.init(&qspi_bank_, true, &ports_, kMcuBlockIoQspi);
+        pads_bank0_.init(&gpio_bank_, false, &ports_, kMcuBlockPadsBank0);
+        pads_qspi_.init(&qspi_bank_, true, &ports_, kMcuBlockPadsQspi);
         bus.windows.attach(kIoBank0Base, io_bank0_.window_handler());
         bus.windows.attach(kIoQspiBase, io_qspi_.window_handler());
         bus.windows.attach(kPadsBank0Base, pads_bank0_.window_handler());
@@ -274,9 +267,8 @@ public:
         sh.qspi_in = sio_qspi_in;
         sh.update_pins = sio_update_pins;
         sh.add_cycles = sio_add_cycles;
-        sh.warn = block_warn<kMcuBlockSio>;
         sh.ctx = this;
-        sio_.init(sh);
+        sio_.init(&ports_, kMcuBlockSio, sh);
         bus.set_sio(sio_.window_handler());
         for (uint32_t b = 0; b < 2; ++b) {
             PinBank& bank = pins(b);
@@ -330,16 +322,11 @@ public:
             pio_ctx_[i].mcu = this;
             pio_ctx_[i].index = i;
             PioHost ph;
-            ph.set_irq = pio_irq;
-            ph.set_irq_ctx = this;
-            ph.dreq = pio_dreq;
-            ph.dreq_ctx = this;
-            ph.log = pio_log;
             ph.pin_update = pio_pin_update;
             ph.pin_input = pio_pin_input;
             ph.started = pio_started;
             ph.ctx = &pio_ctx_[i];
-            (void)pio_[i].init(ph, i == 0 ? kIrqPio0 : kIrqPio1, i);
+            (void)pio_[i].init(&ports_, i == 0 ? kMcuBlockPio0 : kMcuBlockPio1, ph, i == 0 ? kIrqPio0 : kIrqPio1, i);
             bus.windows.attach(i == 0 ? kPio0Base : kPio1Base, pio_[i].window_handler());
         }
         bind_pio_pins();
@@ -742,25 +729,12 @@ private:
     }
     static bool ports_irq(void* chip, uint32_t line, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(line, level); }
     static bool ports_dreq(void* chip, uint32_t number, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(number, asserted); }
-    // A block's `warn(ctx, kind, offset, value)` onto the host's `warn(ctx, block, kind, offset, value)`: the block id is the template's, so every block shares this one function.
-    template <McuBlock Block>
-    static void block_warn(void* chip, uint32_t kind, uint32_t offset, int64_t value) noexcept {
-        Mcu* mcu = static_cast<Mcu*>(chip);
-        if (mcu->host_world_.warn != nullptr) mcu->host_world_.warn(mcu->host_world_.ctx, Block, kind, offset, value);
-    }
     static bool tree_changed(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         return m->tree_hook_ != nullptr ? m->tree_hook_(m->tree_hook_ctx_) : m->clocks_.retune();
     }
     // SIO's host: the pins' effective inputs, the pins whose SIO-driven state moved, and the cycles SIO charges the CPU.
     // The PIOs' host: `chip` is the `Mcu` for the line and the requests (the PIO passes absolute numbers), a `McuInstance` for the rest.
-    static bool pio_irq(void* chip, uint32_t line, bool level) noexcept { return static_cast<Mcu*>(chip)->set_interrupt(line, level); }
-    static bool pio_dreq(void* chip, uint32_t number, bool set) noexcept { return static_cast<Mcu*>(chip)->set_dreq(number, set); }
-    static void pio_log(void* ctx, uint32_t kind, uint32_t a, uint32_t b) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        const McuHost& w = i->mcu->host_world_;
-        if (w.warn != nullptr) w.warn(w.ctx, i->index == 0 ? kMcuBlockPio0 : kMcuBlockPio1, kind, a, b);
-    }
     // (reached only for a pin of a bank the host holds: the others the block reads and updates directly)
     static bool pio_pin_update(void* ctx, uint32_t pin) noexcept { return sio_update_pins(static_cast<const McuInstance*>(ctx)->mcu, 1u << pin, false); }
     static bool pio_pin_input(void* ctx, uint32_t pin, bool* level) noexcept {

@@ -59,7 +59,9 @@ static bool on_io_irq(void*) {
     }
     return true;
 }
-static void on_warn(void*, uint32_t kind, uint32_t offset, int64_t) {
+static constexpr uint32_t kTestBlock = 42;  // the id the blocks report their warnings under
+static void on_warn(void*, uint32_t block, uint32_t kind, uint32_t offset, int64_t) {
+    CHECK(block == kTestBlock);
     if (env.warns < 8) {
         env.warn_kinds[env.warns] = kind;
         env.warn_offsets[env.warns] = offset;
@@ -74,6 +76,7 @@ static bool ok(Block& b, uint32_t offset, uint32_t expect) {
 }
 
 struct Rig {
+    ChipPorts ports;
     PinBank gpio, qspi;
     IoBlock io0, ioq;
     PadsBlock pads0, padsq;
@@ -86,13 +89,12 @@ struct Rig {
         gpio.init(30, host);
         const bool always[6] = {true, true, true, true, true, true};
         qspi.init(6, host, always);
-        IoPadsHost h;
-        h.warn = on_warn;
-        h.failed = &env.failed;
-        io0.init(&gpio, false, h);
-        ioq.init(&qspi, true, h);
-        pads0.init(&gpio, false, h);
-        padsq.init(&qspi, true, h);
+        ports.warn = on_warn;
+        ports.failed = &env.failed;
+        io0.init(&gpio, false, &ports, kTestBlock);
+        ioq.init(&qspi, true, &ports, kTestBlock);
+        pads0.init(&gpio, false, &ports, kTestBlock);
+        padsq.init(&qspi, true, &ports, kTestBlock);
     }
     void clear() {
         env.changes = 0;
@@ -245,8 +247,8 @@ static void test_a_block_with_no_logger_stays_silent() {
     bank.init(30, host);
     IoBlock io;
     PadsBlock pads;
-    io.init(&bank, false, IoPadsHost());
-    pads.init(&bank, false, IoPadsHost());
+    io.init(&bank, false, nullptr, kTestBlock);  // no ports: nothing is said, nothing can fail
+    pads.init(&bank, false, nullptr, kTestBlock);
     CHECK(ok(io, 0x300, 0xFFFFFFFFu) && ok(io, 0x1100, 0xFFFFFFFFu) && io.write(0x300, 1));
     CHECK(ok(pads, 0x300, 0xFFFFFFFFu) && ok(pads, 0x1300, 0xFFFFFFFFu) && pads.write(0x300, 1));
 }

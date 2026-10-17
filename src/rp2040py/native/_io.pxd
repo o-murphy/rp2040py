@@ -9,14 +9,6 @@ from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "io.hpp" namespace "rp2040core":
-    ctypedef void (*IoPadsWarnFn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value)
-
-    cdef cppclass IoPadsHost:
-        IoPadsHost() noexcept
-        IoPadsWarnFn warn
-        void* ctx
-        const int* failed
-
     cdef cppclass IoBlock:
         IoBlock() noexcept
         int64_t raw_write_value() noexcept

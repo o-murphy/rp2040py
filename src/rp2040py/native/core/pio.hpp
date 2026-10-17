@@ -53,19 +53,12 @@ constexpr int64_t kPioNeverDue = int64_t{1} << 62;
 constexpr int64_t kPioMaxArrearsFp = int64_t{8} << 8;
 constexpr uint32_t kPioMaxExecChain = 1024;
 
-using PioIrqFn = bool (*)(void* ctx, uint32_t line, bool level);        // rp2040.set_interrupt
-using PioDreqFn = bool (*)(void* ctx, uint32_t channel, bool set);       // dma.set_dreq / clear_dreq
-using PioLogFn = void (*)(void* ctx, uint32_t kind, uint32_t a, uint32_t b);
 using PioPinUpdateFn = bool (*)(void* ctx, uint32_t pin);                // a pin that is not a C++ one: gpio[pin].check_for_updates()
 using PioPinInputFn = bool (*)(void* ctx, uint32_t pin, bool* level);    // ... and its input_value
 using PioStartedFn = bool (*)(void* ctx);                                // CTRL started a stopped block: the host runs the "no owning Simulator" fallback
 
+// The edges of the block that are the host's own (a pin of a bank the host holds, the "no Simulator" start); the lines, the requests and the warnings are the chip's `ChipPorts`.
 struct PioHost {
-    PioIrqFn set_irq = nullptr;
-    void* set_irq_ctx = nullptr;  // the context of `set_irq` alone, when it is not `ctx` (a line bound straight to the chip, core/mcu.hpp)
-    PioDreqFn dreq = nullptr;
-    void* dreq_ctx = nullptr;  // the context of `dreq` alone, when it is not `ctx` (a request bound straight to the chip, core/mcu.hpp)
-    PioLogFn log = nullptr;
     PioPinUpdateFn pin_update = nullptr;
     PioPinInputFn pin_input = nullptr;
     PioStartedFn started = nullptr;
@@ -210,9 +203,10 @@ public:
     PioBlock(const PioBlock&) = delete;  // the machines point at their block
     PioBlock& operator=(const PioBlock&) = delete;
 
-    // `first_irq` is the line of IRQ0 (IRQ1 is the next); `index` is 0 or 1 (PIO0/PIO1), which fixes the DREQ channels. Publishes each machine's FIFO state to the DMA, as the machines'
-    // constructors do (RX then TX, machine by machine).
-    bool init(const PioHost& host, uint32_t first_irq, uint32_t index) noexcept {
+    // `first_irq` is the line of IRQ0 (IRQ1 is the next); `index` is 0 or 1 (PIO0/PIO1), which fixes the DREQ channels (8 per block: TX0..3, then RX0..3). Publishes each machine's FIFO state
+    // to the DMA, as the machines' constructors do (RX then TX, machine by machine).
+    bool init(const ChipPorts* ports, uint32_t block, const PioHost& host, uint32_t first_irq, uint32_t index) noexcept {
+        port_.init(ports, block, first_irq, index * 8);
         host_ = host;
         first_irq_ = first_irq;
         index_ = index;
@@ -221,8 +215,8 @@ public:
             m = PioMachine();
             m.block = this;
             m.index = i;
-            m.dreq_tx = index * 8 + i;
-            m.dreq_rx = index * 8 + 4 + i;
+            m.dreq_tx = i;       // (relative to the block's first request)
+            m.dreq_rx = 4 + i;
             RP2040PY_PIO_TRY(m.update_dma_rx());
             RP2040PY_PIO_TRY(m.update_dma_tx());
         }
@@ -238,6 +232,7 @@ public:
     }
 
     const PioHost& host() const noexcept { return host_; }
+    const BlockPort& port() const noexcept { return port_; }
     uint32_t first_irq() const noexcept { return first_irq_; }
     uint32_t index() const noexcept { return index_; }
 
@@ -271,8 +266,8 @@ public:
     uint32_t irq1_int_status() const noexcept { return (int_raw() & irq1_int_enable) | irq1_int_force; }
 
     bool check_interrupts() noexcept {
-        RP2040PY_PIO_TRY(host_.set_irq == nullptr || raise_irq(first_irq_, irq0_int_status() != 0));
-        return host_.set_irq == nullptr || raise_irq(first_irq_ + 1, irq1_int_status() != 0);
+        RP2040PY_PIO_TRY(port_.irq(irq0_int_status() != 0, 0));
+        return port_.irq(irq1_int_status() != 0, 1);
     }
 
     bool irq_updated() noexcept {
@@ -512,10 +507,7 @@ public:
             case IRQ1_INTS: *out = irq1_int_status(); return true;
             default: break;
         }
-        if (host_.log != nullptr) {
-            host_.log(host_.ctx, kPioWarnRead, offset, 0);
-            if (offset > 0x1000) host_.log(host_.ctx, kPioWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         *out = 0xFFFFFFFFu;
         return true;
     }
@@ -553,7 +545,7 @@ public:
             case IRQ1_INTF: irq1_int_force = value & 0xFFF; return check_interrupts();
             default: break;
         }
-        if (host_.log != nullptr) host_.log(host_.ctx, kPioWarnWrite, offset, value);
+        port_.unimplemented_write(offset, value);
         return true;
     }
 
@@ -620,8 +612,7 @@ private:
         return true;
     }
 
-    bool raise_irq(uint32_t line, bool level) noexcept { return host_.set_irq(host_.set_irq_ctx != nullptr ? host_.set_irq_ctx : host_.ctx, line, level); }
-
+    BlockPort port_;
     PioHost host_;
     uint32_t first_irq_ = 0;
     uint32_t index_ = 0;
@@ -633,12 +624,10 @@ private:
 // The machine
 
 inline bool PioMachine::update_dma_tx() noexcept {
-    const PioHost& h = block->host();
-    return h.dreq == nullptr || h.dreq(h.dreq_ctx != nullptr ? h.dreq_ctx : h.ctx, dreq_tx, !tx.full());
+    return block->port().dreq(dreq_tx, !tx.full());
 }
 inline bool PioMachine::update_dma_rx() noexcept {
-    const PioHost& h = block->host();
-    return h.dreq == nullptr || h.dreq(h.dreq_ctx != nullptr ? h.dreq_ctx : h.ctx, dreq_rx, !rx.empty());
+    return block->port().dreq(dreq_rx, !rx.empty());
 }
 
 inline void PioMachine::apply_fjoin() noexcept {
@@ -1165,7 +1154,7 @@ inline bool PioMachine::read32(uint32_t offset, uint32_t* out) noexcept {
         case SM0_PINCTRL: *out = pin_ctrl; return true;
         default: break;
     }
-    if (block->host().log != nullptr) block->host().log(block->host().ctx, kPioErrorSmRead, offset, 0);
+    block->port().warn(kPioErrorSmRead, offset, 0);
     *out = 0;
     return true;
 }
@@ -1204,7 +1193,7 @@ inline bool PioMachine::write32(uint32_t offset, uint32_t value) noexcept {
         case SM0_PINCTRL: pin_ctrl = value; return true;
         default: break;
     }
-    if (block->host().log != nullptr) block->host().log(block->host().ctx, kPioErrorSmWrite, offset, 0);
+    block->port().warn(kPioErrorSmWrite, offset, 0);
     return true;
 }
 

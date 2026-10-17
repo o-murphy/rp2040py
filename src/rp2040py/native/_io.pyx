@@ -19,7 +19,6 @@ __all__ = ("RPIO",)
 
 cdef class RPIO:
     def __init__(self, rp2040, name, pins=None, mcu_index=-1):
-        cdef IoPadsHost host
         cdef GPIOPin pin
         cdef GPIOPinBank owner = None
         cdef Py_ssize_t i

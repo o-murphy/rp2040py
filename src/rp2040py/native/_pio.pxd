@@ -12,9 +12,6 @@ cdef extern from "pio.hpp" namespace "rp2040core":
     cdef const uint32_t kPioErrorSmRead
     cdef const uint32_t kPioErrorSmWrite
 
-    ctypedef cppbool (*PioIrqFn)(void* ctx, uint32_t line, cppbool level)
-    ctypedef cppbool (*PioDreqFn)(void* ctx, uint32_t channel, cppbool set)
-    ctypedef void (*PioLogFn)(void* ctx, uint32_t kind, uint32_t a, uint32_t b)
     ctypedef cppbool (*PioPinUpdateFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PioPinInputFn)(void* ctx, uint32_t pin, cppbool* level)
     ctypedef cppbool (*PioStartedFn)(void* ctx)

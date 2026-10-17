@@ -5,7 +5,6 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._gpio_pin cimport GPIOPinBank
-from rp2040py.native._io cimport IoPadsHost
 from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 

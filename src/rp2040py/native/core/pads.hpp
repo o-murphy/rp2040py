@@ -26,23 +26,21 @@ constexpr uint32_t GPIO_FIRST = 0x4, GPIO_LAST = 0x78, QSPI_FIRST = 0x4, QSPI_LA
 constexpr uint32_t kQspiPadToPin[6] = {0, 2, 3, 4, 5, 1};  // SCLK, SD0, SD1, SD2, SD3, SS -> the bank's SCLK, SS, SD0..SD3
 }  // namespace pads_regs
 
-class PadsBlock {
+class PadsBlock : public RegisterBlock<PadsBlock> {
 public:
     PadsBlock() = default;
     PadsBlock(const PadsBlock&) = delete;  // the window handler holds a pointer to this object
     PadsBlock& operator=(const PadsBlock&) = delete;
 
-    void init(PinBank* bank, bool qspi, const IoPadsHost& host) noexcept {
+    void init(PinBank* bank, bool qspi, const ChipPorts* ports, uint32_t block) noexcept {
+        port_.init(ports, block);
         bank_ = bank;
         qspi_ = qspi;
-        host_ = host;
         first_ = qspi ? pads_regs::QSPI_FIRST : pads_regs::GPIO_FIRST;
         last_ = qspi ? pads_regs::QSPI_LAST : pads_regs::GPIO_LAST;
         reset();
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // `VOLTAGE_SELECT` and the debug pads, the only state this block owns itself - the per-pad registers live on the pins and are reset with them.
     void reset() noexcept {
@@ -52,6 +50,9 @@ public:
     }
 
     uint32_t voltage_select = 0, swclk = pads_regs::SWCLK_RESET, swd = pads_regs::SWD_RESET;
+
+    // The alias decode asks the fallible read.
+    bool decode_read(uint32_t offset, uint32_t* out) noexcept { return read(offset, out); }
 
     bool read(uint32_t offset, uint32_t* out) noexcept {
         using namespace pads_regs;
@@ -71,10 +72,7 @@ public:
             *out = swd;
             return true;
         }
-        if (host_.warn != nullptr) {
-            host_.warn(host_.ctx, kRegWarnRead, offset, 0);
-            if (offset > 0x1000) host_.warn(host_.ctx, kRegWarnReadAtomicArea, offset, 0);
-        }
+        port_.unimplemented_read(offset);
         *out = 0xFFFFFFFFu;
         return true;
     }
@@ -100,25 +98,13 @@ public:
             swclk = v & PAD_MASK;
         } else if (!qspi_ && offset == SWD) {
             swd = v & PAD_MASK;
-        } else if (host_.warn != nullptr) {
-            host_.warn(host_.ctx, kRegWarnWrite, offset, value);
+        } else {
+            port_.unimplemented_write(offset, value);
         }
         return true;
     }
 
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            uint32_t current = 0;
-            if (!read(offset, &current)) return false;
-            value = decode_atomic(atomic_type, static_cast<int64_t>(current), raw);
-        }
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<PadsBlock>::handler(this); }
 
 private:
     uint32_t pin_of(uint32_t offset) const noexcept {
@@ -128,9 +114,7 @@ private:
 
     PinBank* bank_ = nullptr;
     bool qspi_ = false;
-    IoPadsHost host_;
     uint32_t first_ = 0, last_ = 0;
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core

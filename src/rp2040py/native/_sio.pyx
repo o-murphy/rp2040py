@@ -20,7 +20,7 @@ pair, the divider's operands) are properties; `interp0`/`interp1` are views of t
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPSIO",)
@@ -72,8 +72,8 @@ cdef void _cycles_trampoline(void* ctx, uint32_t cycles) noexcept:
         park_error(error)
 
 
-cdef void _warn_trampoline(void* ctx, uint32_t kind, uint32_t offset, int64_t value) noexcept:
-    cdef RPSIO sio = <RPSIO> ctx
+cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept:
+    cdef RPSIO sio = <RPSIO> chip
     try:
         sio._warn_kind(kind, offset, value)
     except BaseException as error:
@@ -191,9 +191,11 @@ cdef class RPSIO:
             host.qspi_in = _qspi_in_trampoline
             host.update_pins = _update_pins_trampoline
             host.add_cycles = _cycles_trampoline
-            host.warn = _warn_trampoline
             host.ctx = <void*> self
-            self._own.init(host)
+            self._ports.chip = <void*> self
+            self._ports.warn = _ports_warn
+            self._ports.failed = pending_flag()
+            self._own.init(&self._ports, 0, host)
         self._interp0 = _InterpolatorView(self, 0)
         self._interp1 = _InterpolatorView(self, 1)
 

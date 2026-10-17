@@ -20,6 +20,7 @@
 
 #include <cstdint>
 
+#include "core_host.hpp"
 #include "interpolator.hpp"
 #include "window_map.hpp"
 
@@ -40,7 +41,6 @@ struct SioHost {
     uint32_t (*qspi_in)(void* ctx) = nullptr;                           // GPIO_HI_IN: the 6 QSPI pins'
     bool (*update_pins)(void* ctx, uint32_t pin_mask, bool qspi) = nullptr;  // these pins' (the QSPI bank's if `qspi`) SIO-driven state changed; false: it failed
     void (*add_cycles)(void* ctx, uint32_t cycles) = nullptr;           // charge the CPU
-    void (*warn)(void* ctx, uint32_t kind, uint32_t offset, int64_t value) = nullptr;
     void* ctx = nullptr;
 };
 
@@ -71,7 +71,10 @@ public:
     SioBlock(const SioBlock&) = delete;
     SioBlock& operator=(const SioBlock&) = delete;
 
-    void init(const SioHost& host) noexcept { host_ = host; }
+    void init(const ChipPorts* ports, uint32_t block, const SioHost& host) noexcept {
+        port_.init(ports, block);
+        host_ = host;
+    }
 
     // The registers the rest of the chip (and tests) read and write directly, as plain attributes of the Python block.
     uint32_t gpio_value = 0, gpio_output_enable = 0, qspi_gpio_value = 0, qspi_gpio_output_enable = 0;
@@ -99,7 +102,7 @@ public:
         using interp_detail::s32;
         using interp_detail::u32;
         if (div_divisor != 0 && (signed_division ? s32(div_divisor) : u32(div_divisor)) == 0) {
-            if (host_.warn) host_.warn(host_.ctx, kSioFailDivideByZero, 0, div_divisor);
+            port_.warn(kSioFailDivideByZero, 0, div_divisor);
             return false;
         }
         if (div_divisor == 0) {
@@ -152,7 +155,7 @@ public:
             case DIV_REMAINDER: return static_cast<double>(div_remainder);
             case DIV_CSR: return div_csr;
             case FIFO_ST: case FIFO_WR: case FIFO_RD:
-                if (host_.warn) host_.warn(host_.ctx, kSioWarnFifo, offset, 0);
+                port_.warn(kSioWarnFifo, offset, 0);
                 return 4294967295.0;
             default: break;
         }
@@ -179,7 +182,7 @@ public:
                 default: break;  // I_BASE_1AND0 is write-only: it falls through to "invalid", as in the Python block
             }
         }
-        if (host_.warn) host_.warn(host_.ctx, kSioWarnReadInvalid, offset, 0);
+        port_.warn(kSioWarnReadInvalid, offset, 0);
         return 4294967295.0;
     }
 
@@ -228,7 +231,7 @@ public:
             case DIV_REMAINDER: div_remainder = value; div_csr = 0b11; break;
             default:
                 if (!write_interpolator(offset, value)) {
-                    if (host_.warn) host_.warn(host_.ctx, kSioWarnWriteInvalid, offset, value);
+                    port_.warn(kSioWarnWriteInvalid, offset, value);
                 }
                 break;
         }
@@ -275,6 +278,7 @@ private:
         return false;
     }
 
+    BlockPort port_;
     SioHost host_;
     Interpolator interp_[2];
 };

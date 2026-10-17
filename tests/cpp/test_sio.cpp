@@ -41,7 +41,10 @@ static bool host_update_pins(void* c, uint32_t mask, bool qspi) {
     return !e->fail_updates;
 }
 static void host_add_cycles(void* c, uint32_t n) { static_cast<Env*>(c)->cycles += n; }
-static void host_warn(void* c, uint32_t kind, uint32_t offset, int64_t value) {
+static constexpr uint32_t kTestBlock = 42;  // the id the block reports its warnings under
+
+static void host_warn(void* c, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) {
+    CHECK(block == kTestBlock);
     Env* e = static_cast<Env*>(c);
     if (e->warns < 32) {
         e->warn_kind[e->warns] = kind;
@@ -58,10 +61,12 @@ int main() {
     host.qspi_in = host_qspi_in;
     host.update_pins = host_update_pins;
     host.add_cycles = host_add_cycles;
-    host.warn = host_warn;
     host.ctx = &env;
+    ChipPorts ports;
+    ports.warn = host_warn;
+    ports.chip = &env;
     SioBlock sio;
-    sio.init(host);
+    sio.init(&ports, kTestBlock, host);
 
     // Spinlocks: reading acquires (returns the bit, or 0 if held), any write releases; SPINLOCK_ST shows the state.
     CHECK(sio.read32(SPINLOCK0 + 4 * 3) == 8u);

@@ -22,12 +22,6 @@
 
 namespace rp2040core {
 
-struct IoPadsHost {
-    RegWarnFn warn = nullptr;
-    void* ctx = nullptr;
-    const int* failed = nullptr;  // the shared parked-failure flag (see _pending.pyx)
-};
-
 namespace io_regs {
 constexpr uint32_t CTRL_MASK = 0x3003331Fu;  // IRQOVER, INOVER, OEOVER, OUTOVER, FUNCSEL (datasheet table 285); the rest is reserved
 constexpr uint32_t PINS_PER_WORD = 8;
@@ -48,24 +42,22 @@ constexpr Group kQspiGroups[kGroups] = {
 };
 }  // namespace io_regs
 
-class IoBlock {
+class IoBlock : public RegisterBlock<IoBlock> {
 public:
     IoBlock() = default;
     IoBlock(const IoBlock&) = delete;  // the window handler holds a pointer to this object
     IoBlock& operator=(const IoBlock&) = delete;
 
     // `qspi_layout`: IO_QSPI's interrupt groups instead of IO_BANK0's.
-    void init(PinBank* bank, bool qspi_layout, const IoPadsHost& host) noexcept {
+    void init(PinBank* bank, bool qspi_layout, const ChipPorts* ports, uint32_t block) noexcept {
+        port_.init(ports, block);
         bank_ = bank;
         groups_ = qspi_layout ? io_regs::kQspiGroups : io_regs::kBank0Groups;
-        host_ = host;
         words_ = (bank->count() + io_regs::PINS_PER_WORD - 1) / io_regs::PINS_PER_WORD;
         pin_registers_end_ = bank->count() * 8;
         reset();
     }
 
-    bool failed() const noexcept { return host_failed(host_.failed); }
-    int64_t raw_write_value() const noexcept { return raw_write_value_; }
 
     // The stored proc 1 / dormant wake masks back to zero (proc 0's are on the pins, reset with them).
     void reset() noexcept {
@@ -78,6 +70,9 @@ public:
     uint32_t extra(uint32_t dest, bool force, uint32_t pin) const noexcept { return extra_[dest - 1][force ? 1 : 0][pin]; }
 
     // False: a failure is pending.
+    // The alias decode asks the fallible read.
+    bool decode_read(uint32_t offset, uint32_t* out) noexcept { return read(offset, out); }
+
     bool read(uint32_t offset, uint32_t* out) noexcept {
         using namespace io_regs;
         if (offset < pin_registers_end_) {
@@ -90,7 +85,7 @@ public:
         }
         const Group* g = (offset & 3u) ? nullptr : locate(offset);
         if (g == nullptr) {
-            warn_read(offset);
+            port_.unimplemented_read(offset);
             *out = 0xFFFFFFFFu;
             return true;
         }
@@ -134,7 +129,7 @@ public:
         }
         const Group* g = (offset & 3u) ? nullptr : locate(offset);
         if (g == nullptr) {
-            if (host_.warn != nullptr) host_.warn(host_.ctx, kRegWarnWrite, offset, value);
+            port_.unimplemented_write(offset, value);
             return true;
         }
         const uint32_t first = ((offset - g->base) >> 2) * PINS_PER_WORD;
@@ -163,20 +158,7 @@ public:
         return true;
     }
 
-    // `BasePeripheral.write_uint32_atomic`, step for step - remember the raw value, decode the alias against a *read* of the register (with that read's side effects), then write.
-    bool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept {
-        raw_write_value_ = raw;
-        int64_t value = raw;
-        if (atomic_type != kAtomicNormal) {
-            uint32_t current = 0;
-            if (!read(offset, &current)) return false;
-            value = decode_atomic(atomic_type, static_cast<int64_t>(current), raw);
-        }
-        if (failed()) return false;
-        return write(offset, value);
-    }
 
-    WindowHandler window_handler() noexcept { return BlockWindow<IoBlock>::handler(this); }
 
 private:
     const io_regs::Group* locate(uint32_t offset) const noexcept {
@@ -185,19 +167,11 @@ private:
         return nullptr;
     }
 
-    void warn_read(uint32_t offset) noexcept {
-        if (host_.warn == nullptr) return;
-        host_.warn(host_.ctx, kRegWarnRead, offset, 0);
-        if (offset > 0x1000) host_.warn(host_.ctx, kRegWarnReadAtomicArea, offset, 0);
-    }
-
     PinBank* bank_ = nullptr;
     const io_regs::Group* groups_ = io_regs::kBank0Groups;
-    IoPadsHost host_;
     uint32_t words_ = 0;
     uint32_t pin_registers_end_ = 0;
     uint32_t extra_[2][2][PinBank::kMaxPins] = {};  // [proc 1 / dormant wake][INTE / INTF][pin]
-    int64_t raw_write_value_ = 0;
 };
 
 }  // namespace rp2040core
