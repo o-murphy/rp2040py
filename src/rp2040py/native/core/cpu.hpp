@@ -18,6 +18,7 @@
 
 #include <cstdint>
 
+#include "inline_hints.hpp"
 #include "bus.hpp"
 
 namespace rp2040core {
@@ -372,7 +373,7 @@ public:
     }
 
     // One instruction. Returns its cycle count, or kCpuFault (see the failure model above).
-    int execute() noexcept {
+    RP2040PY_ALWAYS_INLINE int execute() noexcept {
         using namespace cpu_detail;
         if (interrupts_updated) {
             const int r = check_for_interrupts();

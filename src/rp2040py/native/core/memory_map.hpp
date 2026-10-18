@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include "inline_hints.hpp"
 
 namespace rp2040core {
 
@@ -97,7 +98,7 @@ public:
     // Every accessor returns the index of the region that served the access, or kNotHandled.
     // Reads fill *out; writes return the index so the caller can test kNotifyOnWrite.
 
-    int read32(uint32_t address, uint32_t* out) const noexcept {
+    RP2040PY_ALWAYS_INLINE int read32(uint32_t address, uint32_t* out) const noexcept {
         {  // the two places the firmware lives, tried first with the bases as constants, as the pre-0096 Cython bus's chain of compares did
             const uint32_t rel = address - kFlashBase;
             if (rel < flash_.window) {
@@ -134,7 +135,7 @@ public:
         return kNotHandled;
     }
 
-    int read16(uint32_t address, uint32_t* out) const noexcept {
+    RP2040PY_ALWAYS_INLINE int read16(uint32_t address, uint32_t* out) const noexcept {
         {  // the fast regions hand out their own data pointer: no second lookup through the region table
             const uint32_t offset = address - kFlashBase;
             if (static_cast<uint64_t>(offset) + 2 <= flash_.size) {

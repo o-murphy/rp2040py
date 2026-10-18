@@ -19,6 +19,7 @@
 #define RP2040PY_CORE_BUS_HPP
 
 #include <cstdint>
+#include "inline_hints.hpp"
 
 #include "memory_map.hpp"
 #include "window_map.hpp"
@@ -54,7 +55,7 @@ public:
     void set_sio(const WindowHandler& handler) noexcept { sio_ = handler; has_sio_ = handler.read32 && handler.write32; }
     void set_ppb(const WindowHandler& handler) noexcept { ppb_ = handler; has_ppb_ = handler.read32 && handler.write32; }
 
-    uint32_t read32(uint32_t addr) noexcept {
+    RP2040PY_ALWAYS_INLINE uint32_t read32(uint32_t addr) noexcept {
         if (addr & 0x3) warn(kBusWarnUnalignedRead, addr);
         uint32_t word;
         if (mem.read32(addr, &word) != kNotHandled) return word;
@@ -66,7 +67,7 @@ public:
     }
 
     // 16- and 8-bit reads assume natural alignment, as the Python bus does.
-    uint32_t read16(uint32_t addr) noexcept {
+    RP2040PY_ALWAYS_INLINE uint32_t read16(uint32_t addr) noexcept {
         uint32_t value;
         if (mem.read16(addr, &value) != kNotHandled) return value;
         value = read32(addr & 0xFFFFFFFCu);

@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include "inline_hints.hpp"
 
 namespace rp2040core {
 
@@ -216,7 +217,7 @@ public:
     // Advances time by `delta`, firing every alarm that comes due, in order, each at its own time. The list
     // is re-read after every callback (a callback may schedule or cancel anything). Returns false if a
     // callback asked to stop; the clock is then at that alarm's time and the rest of `delta` is not applied.
-    bool tick_ticks(int64_t delta) noexcept {
+    RP2040PY_ALWAYS_INLINE bool tick_ticks(int64_t delta) noexcept {
         ++depth_;
         const int64_t target = add_ticks(now_, delta);
         while (head_ != nullptr && head_->ticks <= target) {
