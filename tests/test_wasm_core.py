@@ -26,3 +26,12 @@ def test_a_program_writes_to_uart0(module_bytes):
     assert exports.rp2040_run() > 0
     assert wasm_core.uart_text(exports) == b"HI!\n"
     assert exports.rp2040_warnings() == 0  # every register the program touched is implemented
+
+
+def test_the_chip_boots_again_on_the_same_instance(module_bytes):
+    """`rp2040_boot` is a power-on reset after the first call (`Mcu::build` is for once: a second build used to hang): the UART bytes start again, the new program runs."""
+    _, exports = wasm_core.instantiate(module_bytes)
+    for text in (b"one\n", b"two\n", b"3\n"):
+        wasm_core.load_flash(exports, wasm_core.tiny_program(text))
+        assert exports.rp2040_run() > 0
+        assert wasm_core.uart_text(exports) == text
