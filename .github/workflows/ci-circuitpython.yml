@@ -8,7 +8,6 @@ name: Test CircuitPython Releases
 
 on:
   push:
-    branches: [main]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
@@ -17,8 +16,10 @@ on:
     branches: [main]
     paths-ignore: *non-code-paths
 
+# A branch with an open PR fires both `push` and `pull_request`; sharing the group by branch name makes one cancel the other
+# (a push-only branch still gets its run).
 concurrency:
-  group: ci-circuitpython-${{ github.workflow }}-${{ github.ref }}
+  group: ci-circuitpython-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
