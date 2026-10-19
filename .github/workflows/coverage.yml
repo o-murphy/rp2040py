@@ -19,10 +19,8 @@ on:
       - ".github/workflows/coverage.yml"
   workflow_dispatch:
 
-# A branch with an open PR fires both `push` and `pull_request`; sharing the group by branch name makes one cancel the other
-# (a push-only branch still gets its run).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
