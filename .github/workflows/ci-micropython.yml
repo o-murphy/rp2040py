@@ -25,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RP2040PY_SKIP_CYTHON: 1
+      # mklittlefs is pure Python (littlefs-python is the only thing it needs): compiling the C++ extension and the wasm module for it would be ~1 minute of nothing.
+      RP2040PY_SKIP_NATIVE_BUILD: 1
+      RP2040PY_SKIP_WASM_BUILD: 1
 
     steps:
       - uses: actions/checkout@v7
@@ -37,19 +40,19 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --no-dev --extra fs
 
       - name: Create filesystem
-        run: uv run rp2040py mklittlefs -o littlefs.img tests/micropython/main.py --main main.py
+        run: uv run --no-sync rp2040py mklittlefs -o littlefs.img tests/micropython/main.py --main main.py
 
       - name: Create SPI test filesystem
-        run: uv run rp2040py mklittlefs -o littlefs-spi.img tests/micropython/main-spi.py --main main-spi.py
+        run: uv run --no-sync rp2040py mklittlefs -o littlefs-spi.img tests/micropython/main-spi.py --main main-spi.py
 
       - name: Create flash read/write test filesystem
-        run: uv run rp2040py mklittlefs -o littlefs-flash-rw.img tests/micropython/main-flash-rw.py --main main-flash-rw.py
+        run: uv run --no-sync rp2040py mklittlefs -o littlefs-flash-rw.img tests/micropython/main-flash-rw.py --main main-flash-rw.py
 
       - name: Create reset-cause test filesystem
-        run: uv run rp2040py mklittlefs -o littlefs-reset-cause.img tests/micropython/main-reset-cause.py --main main-reset-cause.py
+        run: uv run --no-sync rp2040py mklittlefs -o littlefs-reset-cause.img tests/micropython/main-reset-cause.py --main main-reset-cause.py
 
       - name: Upload littlefs images
         uses: actions/upload-artifact@v7

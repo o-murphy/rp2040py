@@ -25,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RP2040PY_SKIP_CYTHON: 1
+      # mklittlefs is pure Python (littlefs-python is the only thing it needs): compiling the C++ extension and the wasm module for it would be ~1 minute of nothing.
+      RP2040PY_SKIP_NATIVE_BUILD: 1
+      RP2040PY_SKIP_WASM_BUILD: 1
 
     steps:
       - uses: actions/checkout@v7
@@ -37,13 +40,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --no-dev --extra fs
 
       # Kaluma's littlefs filesystem has no auto-run semantics of its own (unlike MicroPython's
       # main.py) - it's plain storage the staged script below writes into at runtime, so this just
       # needs a freshly formatted, empty image sized to Kaluma's own board.js block layout.
       - name: Create flash read/write test filesystem
-        run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
+        run: uv run --no-sync rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
 
       - name: Upload littlefs image
         uses: actions/upload-artifact@v7
