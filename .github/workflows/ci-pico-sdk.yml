@@ -17,8 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-pico-sdk:
-    name: Pico SDK ${{ matrix.sdk_version }} / ${{ matrix.python_runtime }}
+  # The firmware of one SDK release: hello_world/usb (for the Python runs) and hello_world/serial (for Gate G2), built from source. This is the only part that needs the ARM toolchain and the
+  # SDK, so it is separate from the runs: the package is built once per runtime in test-pico-sdk instead of once per (release, runtime) - 24 builds of ~2 minutes each.
+  build-firmware:
+    name: Pico SDK ${{ matrix.sdk_version }} firmware
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,13 +34,7 @@ jobs:
           - 2.1.1
           - 2.2.0
           - 2.3.0
-        python_runtime:
-          - pypy-3.10
-          - cpython-3.10
-          - cpython-3.15
     steps:
-      - uses: actions/checkout@v7
-
       - name: Cache Pico SDK
         id: cache-pico-sdk
         uses: actions/cache@v6
@@ -65,27 +61,52 @@ jobs:
           SDK_VERSION: ${{ matrix.sdk_version }}
           PICO_SDK_PATH: ~/pico/pico-sdk
 
-      - name: Setup Python ${{ matrix.python_runtime }}
+      - name: Collect the images
+        run: |
+          mkdir firmware
+          cp ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 ~/pico/pico-examples/build/hello_world/serial/hello_serial.uf2 firmware/
+
+      - name: Upload the images
+        uses: actions/upload-artifact@v7
+        with:
+          name: pico-firmware-${{ matrix.sdk_version }}
+          path: firmware/*.uf2
+          retention-days: 1
+
+  # One job per Python runtime, not per (release, runtime): scripts/ci/pico_sdk.sh boots every release in PICO_SDK_RELEASES one after another (and writes the per-step table to the job summary).
+  test-pico-sdk:
+    needs: build-firmware
+    name: Pico SDK / ${{ matrix.python_runtime }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python_runtime:
+          - pypy-3.10
+          - cpython-3.10
+          - cpython-3.15
+    env:
+      PICO_SDK_RELEASES: "1.2.0 1.3.1 1.4.0 1.5.1 2.0.0 2.1.1 2.2.0 2.3.0"  # keep in step with build-firmware's matrix
+      PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: ${{ matrix.python_runtime }}
           github-token: ${{ github.token }}
           enable-cache: true
 
-      # CortexM0Core.execute_instruction() is a pure-Python instruction interpreter; CPython is
-      # much slower here than V8 JIT-compiling the equivalent JS in rp2040js, hence the generous
-      # 10-minute timeout - and why this also runs under PyPy and CPython 3.15's experimental JIT
-      # (see docs/PORTING.md#known-differences-from-rp2040js). demo/micropython_run.py has zero
-      # runtime dependencies, so no `uv sync` is needed here.
-      - name: Test "Hello World" example ${{ matrix.python_runtime }}
-        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- python demo/micropython_run.py --image ~/pico/pico-examples/build/hello_world/usb/hello_usb.uf2 --expect-text "Hello, world!"
-        env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
+      # The one build of the package for this runtime (no dev group: the runs below need only the runtime dependencies).
+      - name: Install the package
+        run: uv sync --python ${{ matrix.python_runtime }} --no-dev
 
-      # Gate G2 of docs/records/0096-cpp-mcu-core.md: the example that prints over UART0 (hello_world/serial, built above from source) boots on the bare C++ core - no Python in the run: a C++
-      # harness builds the chip from the images and counts what the chip asks of its host. One runtime is enough: the Python here only prepares the images.
-      - name: Gate G2 - hello_world/serial on the bare C++ core
-        if: matrix.python_runtime == 'cpython-3.10'
-        env:
-          RP2040PY_REQUIRE_PICO_SERIAL: "1"  # the example was built above: a missing image fails the gate instead of skipping it
-        run: timeout 10m uv run --python cpython-3.10 --with pytest --with pytest-xdist -- python -m pytest tests/test_gate_g2.py -q -p no:cacheprovider -n 0 -rs
+      - name: Download the images
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pico-firmware-*
+          path: firmware
+
+      - name: Run the Pico SDK checks
+        run: scripts/ci/pico_sdk.sh ${{ matrix.python_runtime }} firmware $PICO_SDK_RELEASES
