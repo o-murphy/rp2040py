@@ -8,6 +8,8 @@ name: Test CircuitPython Releases
 
 on:
   push:
+    # branches only: a pushed tag is the same commit as the branch it was cut from, which already ran
+    branches: ["**"]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
