@@ -47,10 +47,13 @@ repos:
 
       # pre-commit's hook schema has no `env:` key (language: system runs entry/args directly,
       # no shell) - `env VAR=val cmd...` is the portable way to set one for the child process.
+      # --oracle=off: the lockstep oracles/parity tests (~87 % of the suite) build the native block and its pure-Python
+      # reference explicitly, whatever RP2040PY_SKIP_CYTHON says, so re-running them here would repeat the native run below
+      # (tests/test_batch_parity.py even skips itself under it). Everything else still runs on the pure-Python facades.
       - id: uv-pytest-pure
-        name: uv run pytest (pure-Python, RP2040PY_SKIP_CYTHON=1)
+        name: uv run pytest (pure-Python, RP2040PY_SKIP_CYTHON=1, no oracles)
         entry: env
-        args: ["RP2040PY_SKIP_CYTHON=1", "uv", "run", "pytest"]
+        args: ["RP2040PY_SKIP_CYTHON=1", "uv", "run", "pytest", "--oracle=off"]
         language: system
         pass_filenames: false
         files: '\.(py|pyx|pyd)$'

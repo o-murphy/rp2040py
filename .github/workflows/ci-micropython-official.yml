@@ -6,6 +6,7 @@ name: MicroPython official tests (report only)
 
 on:
   push:
+    branches: [main]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"

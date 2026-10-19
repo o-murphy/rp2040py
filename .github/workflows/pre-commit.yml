@@ -2,6 +2,7 @@ name: Pre-commit
 
 on:
   push:
+    branches: [main]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
@@ -62,8 +63,12 @@ jobs:
         run: uv tool install pre-commit
 
       # Non-ubuntu legs just check -- see the ubuntu-only auto-fix flow below.
+      # The pure-Python pytest hook is skipped here: it is OS-independent (the interpreter-level code is the same on every
+      # OS), ubuntu runs it, and the native run below is what differs per platform.
       - name: Run pre-commit
         if: matrix.os != 'ubuntu-latest'
+        env:
+          SKIP: uv-pytest-pure
         run: pre-commit run --all-files --show-diff-on-failure
 
       # Auto-fix (commit + push) only runs from the ubuntu-latest leg: the fix itself

@@ -6,10 +6,14 @@ on:
       - "v*"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
+    # Only what can change a built wheel (tests and docs cannot; the other workflows already run the suite on every code change).
+    paths:
+      - "src/**"
+      - "setup.py"
+      - "build_wasm.py"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - ".github/workflows/publish.yml"
   workflow_dispatch:
     inputs:
       testpypi:

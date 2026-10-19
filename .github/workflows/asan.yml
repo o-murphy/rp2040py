@@ -10,6 +10,7 @@ name: AddressSanitizer
 
 on:
   push:
+    branches: [main]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
