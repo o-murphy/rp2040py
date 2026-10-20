@@ -31,7 +31,8 @@ the remeasurement at its end): ~1.9x slower only for a loop that calls the nativ
 instruction from Python (`rp2040py bench`'s synthetic mode: ~13.4M vs. ~24.9M calls/sec, about 35 ns
 more per call); nothing measurable for the batch engine (CoreMark 26.9 s vs. 26.8 s of wall time) or
 for `bench --stepwise` (6.83k vs. 6.83k instructions/sec). The "3x" of the pre-C++ core is gone with
-the Python-side interpreter loop. Must match [tool.cibuildwheel] in pyproject.toml, which builds
+the Python-side interpreter loop. The cost is Cython's CYTHON_VECTORCALL being 0 below a 3.12 limited-API
+floor (docs/records/0013-cython-core.md); the floor stays at 3.11 by decision. Must match [tool.cibuildwheel] in pyproject.toml, which builds
 cp311-abi3 and cp3XXt separately for exactly this reason.
 """
 

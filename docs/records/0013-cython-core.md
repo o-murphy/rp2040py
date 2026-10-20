@@ -431,3 +431,6 @@ abi3 25.5 / 22.2 / 26.5 M/s, normal 20.2 / 26.3 / 24.2 M/s - no difference outsi
 **Decision for the owner of the wheel set, not made here:** raise the abi3 floor to 3.12 and let 3.11 build a normal `cp311` wheel (`[tool.cibuildwheel]` `build` gets `cp311-*` as its own line next to `cp310-*`, the
 `_ABI3_FLOOR` / `_ABI3_HEX` pair and `setup.py`'s docstring change, `cp312-*` becomes the abi3 builder). The price is one more wheel per platform; the gain is the ~35 ns per Python-to-core call back on 3.12+,
 which only code that steps the core from Python (not the batch engine) sees. Leaving the floor at 3.11 costs nothing measurable for CoreMark or MicroPython.
+
+**Decision (2026-10-20, the maintainer): the abi3 floor stays at 3.11.** It is not raised to 3.12; CPython 3.11 keeps the abi3 wheel and the ~35 ns per Python-to-core call (only a loop that steps the core from
+Python pays it). The measurement above stays as the note of what raising it would give, should the wheel set be reconsidered.
