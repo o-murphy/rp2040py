@@ -37,6 +37,105 @@ int g_failed = 0;
 Mcu g_mcu;
 McuLimits g_limits;
 
+// --- USB, device mode (docs/records/0103-wasm-backend.md, 2026-10-20): the host's end of the wire, answered inside the module so that it still imports nothing. What the Cython shell (`native/_usb.pyx`)
+// keeps in Python queues is kept here; what the Python host (`usb/cdc.py`, an external device) receives there as callbacks becomes records in an event buffer that the host reads after a `rp2040_run`,
+// and what it calls becomes exports. The host's answers therefore reach the chip when a slice ends, not in the same simulated microsecond as in the Cython build.
+constexpr uint32_t kUsbEndpoints = 16;
+constexpr uint32_t kUsbSlot = 64;       // one full-speed packet
+constexpr uint32_t kUsbQueueDepth = 8;  // buffers in flight per endpoint and queue
+constexpr uint32_t kUsbEventBytes = 64 * 1024;
+
+struct UsbBuffer {
+    uint8_t data[kUsbSlot];
+    uint32_t length;
+    uint32_t half;
+};
+struct UsbQueue {
+    UsbBuffer items[kUsbQueueDepth];
+    uint32_t count = 0;
+};
+UsbQueue g_usb_write[kUsbEndpoints];     // IN buffers the firmware started (the shell's _write_queue)
+UsbQueue g_usb_reaction[kUsbEndpoints];  // acknowledged, waiting for the host's reaction (_reaction_queue)
+UsbQueue g_usb_read[kUsbEndpoints];      // OUT data the host answered with (_read_queue)
+uint8_t g_usb_events[kUsbEventBytes];    // records: type(1) endpoint(1) length(2, LE) data(length)
+uint32_t g_usb_events_length = 0;
+uint32_t g_usb_events_dropped = 0;
+uint32_t g_usb_overflow = 0;             // a queue was full / a buffer longer than a packet
+uint8_t g_usb_scratch[1024];             // setup packets and OUT data from the host come through here
+enum : uint8_t { kEvtEnabled = 1, kEvtResetReceived = 2, kEvtReadRequest = 3, kEvtInData = 4 };
+
+void usb_event(uint8_t type, uint32_t endpoint, const uint8_t* data, uint32_t length) {
+    if (g_usb_events_length + 4 + length > kUsbEventBytes) {
+        ++g_usb_events_dropped;
+        return;
+    }
+    uint8_t* at = g_usb_events + g_usb_events_length;
+    at[0] = type;
+    at[1] = static_cast<uint8_t>(endpoint);
+    at[2] = static_cast<uint8_t>(length & 0xFF);
+    at[3] = static_cast<uint8_t>(length >> 8);
+    for (uint32_t i = 0; i < length; ++i) at[4 + i] = data[i];
+    g_usb_events_length += 4 + length;
+}
+
+bool usb_push(UsbQueue& queue, const uint8_t* data, uint32_t length, uint32_t half) {
+    if (queue.count >= kUsbQueueDepth) {
+        ++g_usb_overflow;
+        return true;
+    }
+    UsbBuffer& item = queue.items[queue.count++];
+    if (length > kUsbSlot) {
+        ++g_usb_overflow;
+        length = kUsbSlot;
+    }
+    for (uint32_t i = 0; i < length; ++i) item.data[i] = data[i];
+    item.length = length;
+    item.half = half;
+    return true;
+}
+
+UsbHost make_usb_wire() {
+    UsbHost wire;
+    wire.usb_enabled = [](void*) { usb_event(kEvtEnabled, 0, nullptr, 0); return true; };
+    wire.reset_received = [](void*) { usb_event(kEvtResetReceived, 0, nullptr, 0); return true; };
+    wire.endpoint_read = [](void*, uint32_t endpoint, uint32_t length) {
+        uint8_t size[2] = {static_cast<uint8_t>(length & 0xFF), static_cast<uint8_t>(length >> 8)};
+        usb_event(kEvtReadRequest, endpoint, size, 2);
+        return true;
+    };
+    wire.write_queued = [](void*, uint32_t endpoint, uint32_t half, const uint8_t* data, uint32_t length) {
+        return endpoint < kUsbEndpoints && usb_push(g_usb_write[endpoint], data, length, half);
+    };
+    wire.drain_write = [](void*, uint32_t endpoint) {
+        UsbQueue& queue = g_usb_write[endpoint];
+        const uint32_t count = queue.count;
+        queue.count = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!g_mcu.usb().finish_write(endpoint, queue.items[i].half)) return false;
+            usb_push(g_usb_reaction[endpoint], queue.items[i].data, queue.items[i].length, 0);
+        }
+        return true;
+    };
+    wire.drain_reaction = [](void*, uint32_t endpoint) {
+        UsbQueue& queue = g_usb_reaction[endpoint];
+        const uint32_t count = queue.count;
+        queue.count = 0;
+        for (uint32_t i = 0; i < count; ++i) usb_event(kEvtInData, endpoint, queue.items[i].data, queue.items[i].length);
+        return true;
+    };
+    wire.drain_read = [](void*, uint32_t endpoint) {
+        UsbQueue& queue = g_usb_read[endpoint];
+        const uint32_t count = queue.count;
+        queue.count = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!g_mcu.usb().finish_read(endpoint, queue.items[i].data, queue.items[i].length)) return false;
+        }
+        return true;
+    };
+    return wire;
+}
+UsbHost g_usb_wire;
+
 }  // namespace
 
 RP2040_EXPORT(rp2040_rom) uint8_t* rp2040_rom() { return g_rom; }
@@ -68,7 +167,18 @@ RP2040_EXPORT(rp2040_boot) int32_t rp2040_boot() {
         memory.dpram = g_dpram;
         g_mcu.set_memory(memory);
 
+        // The bus tells the host about a word written to the DPRAM (a firmware arming a buffer); the host passes it to the USB block, which starts the transfer from exactly that notification
+        // (the Cython chip's `_bus_dpram_written`). Without it the device is silent after its first SETUP.
+        BusHost bus_host;
+        bus_host.warn = [](void*, uint32_t, uint32_t) { ++g_warnings; };
+        bus_host.dpram_written = [](void*, uint32_t offset, int64_t) {
+            if (!g_mcu.usb().dpram_updated(offset)) g_failed = 1;
+        };
+        g_mcu.bus.init(bus_host);
+
         McuHost host;
+        g_usb_wire = make_usb_wire();
+        host.usb_wire = &g_usb_wire;
         host.failed = &g_failed;
         host.warn = [](void*, uint32_t, uint32_t, uint32_t, int64_t) { ++g_warnings; };
         host.uart_byte = [](void*, uint32_t instance, uint32_t byte) {
@@ -115,3 +225,23 @@ RP2040_EXPORT(rp2040_run_n) int64_t rp2040_run_n(uint32_t count) {
 
 // One slice of at most a million instructions. Returns the instructions run, or -1 when the core faulted.
 RP2040_EXPORT(rp2040_run) int64_t rp2040_run() { return rp2040_run_n(1000000); }
+
+// --- USB, device mode: events out (read after a run), actions in.
+RP2040_EXPORT(rp2040_usb_events) const uint8_t* rp2040_usb_events() { return g_usb_events; }
+RP2040_EXPORT(rp2040_usb_events_length) uint32_t rp2040_usb_events_length() { return g_usb_events_length; }
+RP2040_EXPORT(rp2040_usb_events_clear) void rp2040_usb_events_clear() { g_usb_events_length = 0; }
+RP2040_EXPORT(rp2040_usb_events_dropped) uint32_t rp2040_usb_events_dropped() { return g_usb_events_dropped; }
+RP2040_EXPORT(rp2040_usb_overflow) uint32_t rp2040_usb_overflow() { return g_usb_overflow; }
+RP2040_EXPORT(rp2040_usb_scratch) uint8_t* rp2040_usb_scratch() { return g_usb_scratch; }
+RP2040_EXPORT(rp2040_usb_reset_device) int32_t rp2040_usb_reset_device() { return g_mcu.usb().reset_device() ? 0 : 1; }
+RP2040_EXPORT(rp2040_usb_send_setup) int32_t rp2040_usb_send_setup(uint32_t length) {
+    return length <= sizeof g_usb_scratch && g_mcu.usb().send_setup_packet(g_usb_scratch, length) ? 0 : 1;
+}
+// The host's answer to an OUT read request: `length` bytes from the scratch buffer, delivered `read_delay_microseconds` later (the shell's `endpoint_read_done`).
+RP2040_EXPORT(rp2040_usb_endpoint_read_done) int32_t rp2040_usb_endpoint_read_done(uint32_t endpoint, uint32_t length) {
+    if (endpoint >= kUsbEndpoints || length > sizeof g_usb_scratch) return 1;
+    usb_push(g_usb_read[endpoint], g_usb_scratch, length, 0);
+    g_mcu.usb().schedule_read(endpoint, static_cast<double>(g_mcu.usb().read_delay_microseconds));
+    return 0;
+}
+RP2040_EXPORT(rp2040_dpram) uint8_t* rp2040_dpram() { return g_dpram; }
