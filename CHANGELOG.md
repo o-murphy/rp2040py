@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Creating a chip is twice as fast**: the first reset erases the 16 MB flash with `memset` instead of a byte loop (10.2 ms -> 4.7 ms).
 - **Development:** CI builds the package once per Python runtime and loops over the firmware versions in `scripts/ci/*.sh` (Kaluma, MicroPython, CircuitPython, Pico SDK; the Pico SDK firmware is built once per SDK release and the official MicroPython suite installs one wheel), writes a step summary, does not re-run branch workflows on a pushed tag, and the pure-Python `pytest` of `pre-commit` / coverage runs with `--oracle=off` (the oracles run on the native build). `tests/test_gate_g2.py` takes the firmware list from `RP2040PY_PICO_SERIALS`.
 
+### Added
+- **The wasm module can host a USB CDC console** ([record 0103](docs/records/0103-wasm-backend.md)): it answers the device-mode USB wire itself (still importing nothing) and hands the host an event stream (`rp2040_usb_*` exports), and the bus now reports DPRAM writes to the USB block - without that a firmware's USB device stayed silent after its first SETUP on the wasm core. MicroPython's REPL runs over CDC on it in the test suite (`tests/test_wasm_usb_cdc.py`); the Python layer and a backend selector are not there yet.
+
 ### Fixed
 - **`setup.py` no longer claims that the abi3 build is ~3x slower**: remeasured on the C++ core (CPython 3.11, same source), it costs ~1.9x only in a loop that calls the core once per instruction from Python (~35 ns per call) and nothing measurable in the batch engine ([record 0013](docs/records/0013-cython-core.md), last section).
 
