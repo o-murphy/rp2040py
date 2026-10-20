@@ -51,6 +51,118 @@ static void init(Probe& p, Clock& c, int id) {
     p.alarm.ctx = &p;
 }
 
+// ---- deferred time (`defer_ticks`) against ticking after every step -----------------------------------------------------------------------------------------------------------------------------
+// The batch loop of a CPU running alone defers the time and the clock settles it when somebody looks or an alarm is due. The contract is that this is invisible: the same operations on an eager clock
+// (`tick_ticks` after every step) and on a lazy one (`defer_ticks`) must give the same alarms, fired in the same order each at the same tick, the same time at every read, the same verdict at every step
+// (a callback that fails stops the clock at its own time on both) - including callbacks that read the time, re-arm themselves and cancel or arm others while the clock is settling.
+constexpr int kLazyAlarms = 6;
+constexpr int kLazyLog = 6000;
+
+struct LazySim;
+struct LazyNode {
+    LazySim* sim = nullptr;
+    Alarm alarm;
+    int id = 0;
+    int fired = 0;
+};
+struct LazySim {
+    Clock clock;
+    LazyNode node[kLazyAlarms];
+    int log_id[kLazyLog];
+    int64_t log_at[kLazyLog];
+    int log_n = 0;
+    int fail_at = -1;  // the n-th firing of alarm 3 fails (-1: never)
+};
+
+static bool lazy_fire(void* ctx) {
+    LazyNode* n = static_cast<LazyNode*>(ctx);
+    LazySim* s = n->sim;
+    ++n->fired;
+    if (s->log_n < kLazyLog) {
+        s->log_id[s->log_n] = n->id;
+        s->log_at[s->log_n] = s->clock.ticks();  // reads the time from inside a callback, while the clock is settling
+        ++s->log_n;
+    }
+    const uint32_t h = static_cast<uint32_t>(n->id + 1) * 2654435761u + static_cast<uint32_t>(n->fired) * 40503u;
+    if ((h >> 4) % 3 == 0) s->clock.schedule_ticks(&n->alarm, 1 + static_cast<int64_t>((h >> 8) % 3000));
+    if ((h >> 6) % 7 == 0) s->clock.cancel(&s->node[(h >> 10) % kLazyAlarms].alarm);
+    if ((h >> 9) % 11 == 0) s->clock.schedule_ticks(&s->node[(h >> 13) % kLazyAlarms].alarm, 1 + static_cast<int64_t>((h >> 16) % 2000));
+    if (s->fail_at >= 0 && n->id == 3 && n->fired == s->fail_at) return false;
+    return true;
+}
+
+static void lazy_setup(LazySim& s, int fail_at) {
+    s.clock.reset();
+    s.log_n = 0;
+    s.fail_at = fail_at;
+    for (int i = 0; i < kLazyAlarms; ++i) {
+        s.node[i].sim = &s;
+        s.node[i].id = i;
+        s.node[i].fired = 0;
+        s.node[i].alarm = Alarm();
+        s.node[i].alarm.fire = &lazy_fire;
+        s.node[i].alarm.ctx = &s.node[i];
+    }
+}
+
+static uint32_t lazy_rng(uint32_t& state) {
+    state = state * 1664525u + 1013904223u;
+    return state >> 8;
+}
+
+static void check_deferred_time_matches_eager() {
+    static LazySim eager, lazy;
+    for (uint32_t seed = 1; seed <= 400; ++seed) {
+        const int fail_at = seed % 5 == 0 ? static_cast<int>(2 + seed % 9) : -1;
+        lazy_setup(eager, fail_at);
+        lazy_setup(lazy, fail_at);
+        uint32_t rng = seed;
+        bool stopped = false;
+        for (int step = 0; step < 4000 && !stopped; ++step) {
+            const uint32_t r = lazy_rng(rng);
+            const uint32_t op = r % 10;
+            if (op <= 5) {  // let some time pass: 1 .. ~3000 ticks (an instruction is 128 at 125 MHz; sometimes a longer jump)
+                const int64_t d = 1 + static_cast<int64_t>(lazy_rng(rng) % (op == 5 ? 20000u : 400u));
+                const bool a = eager.clock.tick_ticks(d);
+                const bool b = lazy.clock.defer_ticks(d);
+                if (a != b) { CHECK(a == b); stopped = true; }
+                if (!a) stopped = true;
+            } else if (op == 6) {  // look at the time; each reader first, in turn (a reader that did not settle would otherwise be settled by the one before it)
+                if (lazy_rng(rng) % 2 == 0) {
+                    CHECK(eager.clock.nanos() == lazy.clock.nanos());
+                    CHECK(eager.clock.ticks() == lazy.clock.ticks());
+                } else {
+                    CHECK(eager.clock.ticks() == lazy.clock.ticks());
+                    CHECK(eager.clock.nanos() == lazy.clock.nanos());
+                }
+            } else if (op == 7) {  // arm an alarm
+                const int i = static_cast<int>(lazy_rng(rng) % kLazyAlarms);
+                const int64_t d = 1 + static_cast<int64_t>(lazy_rng(rng) % 5000u);
+                eager.clock.schedule_ticks(&eager.node[i].alarm, d);
+                lazy.clock.schedule_ticks(&lazy.node[i].alarm, d);
+            } else if (op == 8) {  // cancel one
+                const int i = static_cast<int>(lazy_rng(rng) % kLazyAlarms);
+                eager.clock.cancel(&eager.node[i].alarm);
+                lazy.clock.cancel(&lazy.node[i].alarm);
+            } else {  // ask about the next alarm
+                CHECK(eager.clock.has_alarm() == lazy.clock.has_alarm());
+                CHECK(eager.clock.ticks_to_next_alarm() == lazy.clock.ticks_to_next_alarm());
+            }
+        }
+        CHECK(eager.clock.ticks() == lazy.clock.ticks());
+        CHECK(lazy.clock.pending_ticks() == 0);
+        CHECK(eager.log_n == lazy.log_n);
+        for (int i = 0; i < eager.log_n && i < lazy.log_n; ++i) {
+            if (eager.log_id[i] != lazy.log_id[i] || eager.log_at[i] != lazy.log_at[i]) {
+                std::printf("seed %u: firing %d differs: eager alarm %d at %lld, lazy alarm %d at %lld\n", seed, i, eager.log_id[i], static_cast<long long>(eager.log_at[i]),
+                            lazy.log_id[i], static_cast<long long>(lazy.log_at[i]));
+                CHECK(false);
+                break;
+            }
+        }
+    }
+}
+
 int main() {
     Clock c;
     CHECK(c.frequency == 125e6 && c.nanos() == 0 && !c.has_alarm() && c.nanos_to_next_alarm() == 0);
@@ -210,5 +322,6 @@ int main() {
     }
 
     std::printf(failures ? "FAILED: %d\n" : "clock: all checks passed\n", failures);
+    check_deferred_time_matches_eager();
     return failures ? 1 : 0;
 }
