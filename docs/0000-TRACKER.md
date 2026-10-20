@@ -56,7 +56,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phases 0-4 and the gate G1-G8 done; Phase 5b under way (step 1 measured; flash `memset` and the lazy clock landed, CoreMark one core ~42 % -> ~50 % of real time; next: the two-core loop, the shells' trampolines), then Phase 6 beyond the PoC ([0103]), Phase 7; the second core is [0104]
+- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phases 0-4 and the gate G1-G8 done; Phase 5b under way (see its progress log), then Phase 6 beyond the PoC ([0103]), Phase 7; the second core is [0104]
 - [ ] [0106] routing the UART, SPI and I2C functions to the pads | proposed, nothing built - found by `extmod_hardware`; Wokwi routes by FUNCSEL over bit-level models; layer vs pin-bank sources is open
 - [ ] [0105] the time architecture: an audit of the clock, the tick generators and who counts what | audit done, TIMER/PIO fixes landed; `Timer32` and PIO-from-clock still proposed
 - [ ] [0104] the second core: seams, architecture, core 1 in the C++ core and the reference | P0-P2 done, core 1 on by default, `thread/` 24 of 33, dual-core CoreMark demo; open: per-core GPIO IRQs, GDB/wasm
@@ -79,6 +79,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0107] less CI load without less coverage: build once, loop the firmware versions in `scripts/ci/*.sh` | `ci/reduce-load`; one package build per runtime, no pure-build oracle repeat, no tag-push duplicates; the official-suite groups equal to the baseline
 - [x] [0098] CLOCKS and PLL: audit against datasheet 2.15 / 2.18, then the C++ port | reference fixed, `core/clocks.hpp` + `core/pll.hpp` held to a lockstep oracle; resus, switch delays, clock gating documented not built
 - [x] [0098] USB: audit against datasheet 4.1 and TinyUSB, then the C++ port | twelve findings fixed, `core/usb.hpp` held to a lockstep oracle; token-level wire, suspend/resume, device SOF documented not built
 - [x] [0053] second core (core1) + inter-core FIFO | built under [0104] (P0-P2, on by default); the no-OS-thread addendum stands
@@ -289,6 +290,7 @@ record is added.
 [0096]: records/0096-cpp-mcu-core.md
 [0098]: records/0098-datasheet-conformance-audit.md
 [0104]: records/0104-second-core-seams-and-architecture.md
+[0107]: records/0107-ci-load-reduction.md
 [0106]: records/0106-peripheral-routing-to-pads.md
 [0105]: records/0105-time-architecture-audit.md
 [0103]: records/0103-wasm-backend.md
