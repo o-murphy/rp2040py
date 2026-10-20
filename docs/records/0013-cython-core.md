@@ -400,3 +400,20 @@ Each of these was identified during this pass and deliberately left for later, n
    seconds" - that number hasn't been measured. See `docs/CYW43_WIFI_BACKLOG.md`'s own note on this
    under its "Performance side quest" entry.
 
+## Remeasurement of the abi3 cost (2026-10-20): the "3x" no longer holds
+
+The abi3 finding above (~5.2M vs. ~13.3M instr/sec, about 2.5x) was taken when the interpreter loop was still Cython code called from Python. Since the C++ core ([0096](0096-cpp-mcu-core.md)) the
+interpreter, the bus and the blocks are C++ and the batch loop crosses into Python only at the edges, so it was measured again: the same commit (`2ea363e`) built twice on the same CPython 3.11.17
+(`uv sync`; the second copy with `_ABI3_FLOOR` raised in `setup.py` so that the normal per-version extension is built), three runs of each, alternating, one machine (a 4-core cloud container).
+
+| Workload | abi3 (`.abi3.so`) | normal (`cpython-311`) |
+|---|---|---|
+| `bench --instructions 20000000` (one `execute_instruction()` call from Python per instruction) | 14.69, 11.17, 14.37 M/s | 24.71, 24.95, 25.10 M/s |
+| CoreMark, one core, wall time for 12.07 s simulated | 27.96, 26.34, 26.47 s | 24.89, 30.01, 25.63 s |
+| `bench --image ... --stepwise`, 60 s budget | 6,832, 6,811, 6,832 instr/s | 6,837, 6,830, 6,824 instr/s |
+
+CoreMark's result is identical in all six runs (248.477989 Iterations/Sec, 12.073504 s). Reading: abi3 costs about 1.9x (about 35 ns per call) **only** where Python calls the core once per instruction;
+a batch run (CoreMark, MicroPython, anything the `Simulator` drives) and the stepwise bench, which is bound by other work, show no difference outside the run-to-run spread (the normal build's 30.0 s
+outlier is larger than the whole gap). So the claim "abi3 is ~3x slower" in `setup.py`'s docstring was wrong for the current core and is replaced there; the one-wheel-for-every-3.11+ tradeoff stands and the normal
+build is not worth a second wheel set. Not root-caused why a Python-to-native call costs more under the limited API (the generated wrapper's argument handling and the missing fast-call paths are the likely
+part); it does not matter for the workloads above.

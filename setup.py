@@ -25,10 +25,14 @@ directly: forcing the floor down to 3.10 fails to compile - Py_buffer's struct f
 strides/itemsize, are hidden by CPython's own headers below the 3.11 hex gate). Below that floor,
 or on free-threaded builds (Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible per PEP
 703), falls back to a normal, version-specific extension - which also means 3.10 (this project's
-default dev target, see .python-version) always gets the normal build, never abi3, and measures
-faster for it (see docs/BACKLOG.md's Cython follow-up section: ~13.3M vs. ~5.2M instr/sec
-synthetic, same source, abi3 vs. normal). Must match [tool.cibuildwheel] in pyproject.toml, which
-builds cp311-abi3 and cp3XXt separately for exactly this reason.
+default dev target, see .python-version) always gets the normal build, never abi3. What abi3
+costs, measured 2026-10-20 on CPython 3.11, same source, abi3 vs. normal (docs/records/0013-cython-core.md,
+the remeasurement at its end): ~1.9x slower only for a loop that calls the native core once per
+instruction from Python (`rp2040py bench`'s synthetic mode: ~13.4M vs. ~24.9M calls/sec, about 35 ns
+more per call); nothing measurable for the batch engine (CoreMark 26.9 s vs. 26.8 s of wall time) or
+for `bench --stepwise` (6.83k vs. 6.83k instructions/sec). The "3x" of the pre-C++ core is gone with
+the Python-side interpreter loop. Must match [tool.cibuildwheel] in pyproject.toml, which builds
+cp311-abi3 and cp3XXt separately for exactly this reason.
 """
 
 import platform
