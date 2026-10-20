@@ -417,3 +417,17 @@ a batch run (CoreMark, MicroPython, anything the `Simulator` drives) and the ste
 outlier is larger than the whole gap). So the claim "abi3 is ~3x slower" in `setup.py`'s docstring was wrong for the current core and is replaced there; the one-wheel-for-every-3.11+ tradeoff stands and the normal
 build is not worth a second wheel set. Not root-caused why a Python-to-native call costs more under the limited API (the generated wrapper's argument handling and the missing fast-call paths are the likely
 part); it does not matter for the workloads above.
+
+### Root cause and the fix that was measured (2026-10-20, same day)
+
+The per-call cost is **Cython's `CYTHON_VECTORCALL`**: the generated C for `execute_instruction` is the same in both builds (same `METH_FASTCALL|METH_KEYWORDS` method definition, same `cpdef` override check), but
+Cython sets `CYTHON_VECTORCALL (__PYX_LIMITED_VERSION_HEX >= 0x030C0000)` under `Py_LIMITED_API`. With the floor at 3.11 (`_ABI3_HEX = 0x030B0000`) it is **0**, together with `CYTHON_USE_TYPE_SLOTS 0`,
+`CYTHON_FAST_THREAD_STATE 0`, `CYTHON_UNPACK_METHODS 0` and a type built from a `PyType_Spec`; the call goes through `_PyObject_MakeTpCall` (callgrind: 97 M Ir of 1,334 M for 1 M instructions, absent from the
+normal build's 1,033 M). The number of `.so` files is not involved (37 in both builds). The vectorcall protocol entered the limited API with 3.12.
+
+Measured: the same commit with the floor raised to 3.12 (`_ABI3_FLOOR = (3, 12)`, `_ABI3_HEX = "0x030C0000"`), built on CPython 3.12.3 against a normal 3.12 build, `bench --instructions 20000000`, alternating, 3 runs:
+abi3 25.5 / 22.2 / 26.5 M/s, normal 20.2 / 26.3 / 24.2 M/s - no difference outside the spread (the 3.11 pair above: 11.2-14.7 vs 24.7-25.1).
+
+**Decision for the owner of the wheel set, not made here:** raise the abi3 floor to 3.12 and let 3.11 build a normal `cp311` wheel (`[tool.cibuildwheel]` `build` gets `cp311-*` as its own line next to `cp310-*`, the
+`_ABI3_FLOOR` / `_ABI3_HEX` pair and `setup.py`'s docstring change, `cp312-*` becomes the abi3 builder). The price is one more wheel per platform; the gain is the ~35 ns per Python-to-core call back on 3.12+,
+which only code that steps the core from Python (not the batch engine) sees. Leaving the floor at 3.11 costs nothing measurable for CoreMark or MicroPython.
