@@ -210,7 +210,7 @@ def _run_batch(simulator: "Simulator", tick_batch: int, changed: list[bool]) -> 
             cycles = rp2040.core.execute_instruction()
             if tick_batch <= 1:
                 (
-                    clock.tick_ticks(cycles * cycle_ticks)
+                    clock.defer_ticks(cycles * cycle_ticks)
                     if cycle_ticks
                     else clock.advance_cycles(cycles, ticks_per_cycle)
                 )

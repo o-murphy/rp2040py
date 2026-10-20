@@ -126,6 +126,7 @@ static void check_deferred_time_matches_eager() {
                 const bool a = eager.clock.tick_ticks(d);
                 const bool b = lazy.clock.defer_ticks(d);
                 if (a != b) { CHECK(a == b); stopped = true; }
+                CHECK(eager.log_n == lazy.log_n);  // an alarm due at the end of the step has fired by the time it returns, with nobody asking the clock
                 if (!a) stopped = true;
             } else if (op == 6) {  // look at the time; each reader first, in turn (a reader that did not settle would otherwise be settled by the one before it)
                 if (lazy_rng(rng) % 2 == 0) {

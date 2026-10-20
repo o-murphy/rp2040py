@@ -39,4 +39,5 @@ cdef class SimulationClock:
     cpdef bint unlink_alarm(self, ClockAlarm alarm) except -1
     cpdef tick(self, double delta_nanos)
     cpdef tick_ticks(self, int64_t delta_ticks)
+    cpdef defer_ticks(self, int64_t delta_ticks)
     cpdef advance_cycles(self, int64_t cycles, double ticks_per_cycle)

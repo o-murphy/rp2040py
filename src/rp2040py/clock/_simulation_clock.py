@@ -28,6 +28,10 @@ MAX_TICKS = (1 << 63) // 2 - 1  # "never": times saturate here instead of growin
 # An idle chip fast-forwards (millions of simulated seconds per wall second when a periodic alarm is all that is pending), so the origin MOVES: once the time passes REBASE_AT the clock subtracts it from
 # `now`, from every linked alarm and - through the listeners - from every absolute tick count a block holds (docs/records/0100-integer-clock.md). `nanos` still never goes back.
 REBASE_AT = 1 << 58
+NO_HORIZON = 1 << 62  # no alarm linked: time may run on without ever having to fire one
+LAZY_DELTA = (
+    1 << 40
+)  # the largest step `defer_ticks` takes on its fast path (2**40 ticks, ~69 s of simulated time), far above any instruction's
 
 
 def nanos_to_ticks(nanos: float) -> int:
@@ -84,16 +88,26 @@ class SimulationClock(IClock):
         self._rebase_depth = 0
         self._rebase_listeners: list[Callable[[], Callable[[int], None] | None]] = []
         self._cycle_remainder = 0.0
+        self._pending = (
+            0  # ticks deferred by `defer_ticks`, not yet applied to `_ticks` (always below `_horizon` while at rest)
+        )
+        self._horizon = (
+            NO_HORIZON  # `_next_alarm.ticks - _ticks`: how far the deferred time may grow before the first alarm is due
+        )
         self.saturated = False  # a time was clamped to MAX_TICKS
 
     @property
     def ticks(self) -> int:
         """The time in ticks of 1/16 ns, exactly."""
+        if self._pending:
+            self._flush()
         return self._ticks
 
     @property
     def nanos(self) -> float:
         """The time in nanoseconds, derived (inexact beyond 2**53 / 16 ns: take differences in `ticks`)."""
+        if self._pending:
+            self._flush()
         return (self._ticks + self._rebased_ticks) / TICKS_PER_NANO
 
     @property
@@ -115,6 +129,8 @@ class SimulationClock(IClock):
 
     def rebase(self, delta: int) -> None:
         """Moves the origin by `delta` ticks (the clock does it itself at REBASE_AT; the tests call it by hand). Not from inside an alarm's callback."""
+        if self._pending:
+            self._flush()
         if delta <= 0 or delta > self._ticks:
             return
         self._ticks -= delta
@@ -155,6 +171,8 @@ class SimulationClock(IClock):
         return self.link_alarm_ticks(self._to_ticks(nanos), alarm)
 
     def link_alarm_ticks(self, ticks: int, alarm: ClockAlarm) -> ClockAlarm:
+        if self._pending:
+            self._flush()
         alarm.ticks = self._add_ticks(self._ticks, ticks)
         alarm_list_item = self._next_alarm
         last_item = None
@@ -173,6 +191,7 @@ class SimulationClock(IClock):
             self._next_alarm = alarm
             alarm.next = alarm_list_item
         alarm.scheduled = True
+        self._refresh_horizon()
         return alarm
 
     def unlink_alarm(self, alarm: ClockAlarm) -> bool:
@@ -186,6 +205,7 @@ class SimulationClock(IClock):
                     last_item.next = alarm_list_item.next
                 else:
                     self._next_alarm = alarm_list_item.next
+                self._refresh_horizon()
                 return True
             last_item = alarm_list_item
             alarm_list_item = alarm_list_item.next
@@ -195,6 +215,37 @@ class SimulationClock(IClock):
         self.tick_ticks(self._to_ticks(delta_nanos))
 
     def tick_ticks(self, delta_ticks: int) -> None:
+        if self._pending:
+            self._flush()
+        self._tick_now(delta_ticks)
+        self._refresh_horizon()
+
+    def defer_ticks(self, delta_ticks: int) -> None:
+        """The batch loop's way of letting time pass: records `delta_ticks` as run but not yet applied. Nothing is applied until an alarm is due (`_pending` reaches `_horizon`, the time to the next
+        alarm) or somebody reads the time, so a long stretch of instructions that touches no timing-dependent block costs one addition and one comparison each. Equivalent to `tick_ticks(delta)` after
+        every instruction: an alarm fires at the end of the very instruction that makes it due, and every read sees the time as of the end of the previous one. The only way to learn the time, or to
+        measure a delay from it, is through this class (`ticks`, `nanos`, `ticks_to_next_alarm`, `link_alarm*`, `rebase`, `tick*`), and each of them settles first."""
+        if delta_ticks < 0 or delta_ticks >= LAZY_DELTA:
+            self.tick_ticks(delta_ticks)
+            return
+        self._pending += delta_ticks
+        if self._pending >= self._horizon:
+            self._flush()
+
+    def _flush(self) -> None:
+        """Applies the deferred ticks."""
+        delta = self._pending
+        self._pending = 0
+        try:
+            self._tick_now(delta)
+        finally:
+            self._refresh_horizon()
+
+    def _refresh_horizon(self) -> None:
+        alarm = self._next_alarm
+        self._horizon = alarm.ticks - self._ticks if alarm else NO_HORIZON
+
+    def _tick_now(self, delta_ticks: int) -> None:
         target = self._add_ticks(self._ticks, delta_ticks)
         self._rebase_depth += 1
         try:
@@ -225,6 +276,8 @@ class SimulationClock(IClock):
 
     @property
     def ticks_to_next_alarm(self) -> int:
+        if self._pending:
+            self._flush()
         if self._next_alarm:
             return self._next_alarm.ticks - self._ticks
         return 0
