@@ -47,7 +47,7 @@ If `uv` isn't on `PATH` in the shell, prefix with `export PATH="$HOME/.local/bin
 ### The lockstep oracles come in tiers (`--oracle`)
 
 The differential oracles and parity tests (`tests/test_*_diff.py`, `*parity*`) are ~87 % of the suite's time. `pytest --oracle=full` (the default; also `RP2040PY_ORACLE=full`) runs all of
-them - that is what `pre-commit` and CI do on every push. `--oracle=smoke` keeps the first parameter set of each oracle test (one seed, one mutant): that is what `cibuildwheel`'s
+them - that is what the native pytest hook of `pre-commit` and CI do on every push (the pure-Python hook runs `--oracle=off`: the oracles build the native and the pure side themselves, so repeating them on the pure build would test the same pair twice). `--oracle=smoke` keeps the first parameter set of each oracle test (one seed, one mutant): that is what `cibuildwheel`'s
 `test-command` runs on every platform (a built wheel only has to show its compiled code still agrees with the reference, in about a quarter of the time), and `--oracle=off` is for the
 platforms that cannot run them (Pyodide, Android). The mechanism is `tests/conftest.py` (`tests/test_oracle_option.py` holds it); a new oracle needs nothing but the file name.
 

@@ -19,6 +19,7 @@
 #define RP2040PY_CORE_MCU_HPP
 
 #include <cstdint>
+#include <cstring>
 
 #include "adc.hpp"
 #include "batch.hpp"
@@ -486,7 +487,7 @@ public:
             if (!reset_step(kMcuBlockXip, world) || !reset_step(kMcuBlockSsi, world)) return false;
         }
         if (!preserve_flash && flash_ != nullptr) {
-            for (uint32_t i = 0; i < flash_size_; ++i) flash_[i] = 0xFF;
+            std::memset(flash_, 0xFF, flash_size_);  // erased flash reads 0xFF; 16 MB, so not a byte loop
         }
         return true;
     }

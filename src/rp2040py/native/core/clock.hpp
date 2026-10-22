@@ -38,6 +38,8 @@ constexpr int64_t kMaxTicks = INT64_MAX / 2;  // "never": times saturate here in
 // wall second - the whole `int64` in half a minute (found by the MicroPython `micropython/` tests, record 0100). So the origin MOVES: when the time passes kRebaseAt the clock subtracts it from `now`,
 // from every linked alarm and - through the listeners - from every absolute tick count a block holds, and carries the total apart (`rebased_ticks()`), so `nanos()` still never goes back.
 constexpr int64_t kRebaseAt = int64_t{1} << 58;  // 9e6 s, a little over 100 days
+constexpr int64_t kNoHorizon = INT64_MAX;  // no alarm linked: time may run on without ever having to fire one
+constexpr int64_t kLazyDelta = int64_t{1} << 40;  // the largest step `defer_ticks` takes on its fast path: 2^40 ticks, ~69 s of simulated time (16 ticks per ns), far above any instruction's
 using RebaseFn = void (*)(void* ctx, int64_t delta);
 
 class Clock;
@@ -109,6 +111,8 @@ public:
             listener->owner = nullptr;
         }
         now_ = 0;
+        pending_ = 0;
+        horizon_ = kNoHorizon;
         frequency = 125e6;
         cycle_remainder_ = 0.0;
         saturated_ = false;
@@ -138,6 +142,7 @@ public:
     // Moves the origin: `delta` is subtracted from the time, from every linked alarm (a "never" alarm stays at the end) and, through the listeners, from every absolute count a block holds. Not from inside an
     // alarm's callback (the list is being walked); `tick_ticks` does it when it has finished.
     void rebase(int64_t delta) noexcept {
+        settle();
         if (delta <= 0 || delta > now_) return;
         now_ -= delta;
         rebased_ticks_ += static_cast<double>(delta);
@@ -147,14 +152,25 @@ public:
         for (RebaseListener* listener = rebase_head_; listener != nullptr; listener = listener->next) listener->fn(listener->ctx, delta);
     }
 
-    int64_t ticks() const noexcept { return now_; }
+    // Every reader of the time below first brings the clock up to date (`settle`): the batch loop of a CPU running alone does not tick the clock after each instruction, it DEFERS the time (`defer_ticks`) and the
+    // clock settles it when somebody looks, or when an alarm is due. The only way to learn the time, or to measure a delay from it, is through this class, so no caller can see a stale time.
+    int64_t ticks() const noexcept {
+        settle();
+        return now_;
+    }
     // The time in nanoseconds, for display and for the blocks that think in them (inexact beyond 2^53 / 16 ns; differences of it should be taken in ticks).
-    double nanos() const noexcept { return (static_cast<double>(now_) + rebased_ticks_) / static_cast<double>(kTicksPerNano); }
+    double nanos() const noexcept {
+        settle();
+        return (static_cast<double>(now_) + rebased_ticks_) / static_cast<double>(kTicksPerNano);
+    }
     // The ticks the origin has been moved by so far (a double: it is for display, and `nanos()` stays monotonic across a move).
     double rebased_ticks() const noexcept { return rebased_ticks_; }
     bool has_alarm() const noexcept { return head_ != nullptr; }
     // Time until the next alarm is due, or 0 when there is none (has_alarm() tells the two apart).
-    int64_t ticks_to_next_alarm() const noexcept { return head_ != nullptr ? head_->ticks - now_ : 0; }
+    int64_t ticks_to_next_alarm() const noexcept {
+        settle();
+        return head_ != nullptr ? head_->ticks - now_ : 0;
+    }
     double nanos_to_next_alarm() const noexcept { return static_cast<double>(ticks_to_next_alarm()) / static_cast<double>(kTicksPerNano); }
     // Whether a time was ever clamped to kMaxTicks (an alarm "never" due, or a jump beyond 146 years) since the last reset.
     bool saturated() const noexcept { return saturated_; }
@@ -163,6 +179,7 @@ public:
     // the list goes AFTER them (FIFO): a zero-delay producer that reschedules itself must never cut in front
     // of a pending zero-delay consumer, or it can starve it (docs/records/0044).
     void link_ticks(Alarm* alarm, int64_t delta) noexcept {
+        settle();
         alarm->ticks = add_ticks(now_, delta);
         Alarm* item = head_;
         Alarm* last = nullptr;
@@ -178,6 +195,7 @@ public:
         alarm->next = item;
         alarm->owner = this;
         alarm->scheduled = true;
+        refresh_horizon();
     }
 
     // Removes `alarm` from the list if it is there; returns whether it was. Does not touch `scheduled`.
@@ -192,6 +210,7 @@ public:
                     head_ = item->next;
                 }
                 item->owner = nullptr;
+                refresh_horizon();
                 return true;
             }
             last = item;
@@ -217,7 +236,55 @@ public:
     // Advances time by `delta`, firing every alarm that comes due, in order, each at its own time. The list
     // is re-read after every callback (a callback may schedule or cancel anything). Returns false if a
     // callback asked to stop; the clock is then at that alarm's time and the rest of `delta` is not applied.
-    RP2040PY_ALWAYS_INLINE bool tick_ticks(int64_t delta) noexcept {
+    bool tick_ticks(int64_t delta) noexcept {
+        settle();
+        const bool ok = tick_now(delta);
+        refresh_horizon();
+        return ok;
+    }
+
+    // The batch loop's way of letting time pass: records `delta` ticks as run but not yet applied. Returns what `tick_ticks` would: false if an alarm that came due asked to stop. Nothing is applied
+    // until an alarm is due (`pending_` reaches `horizon_`, the time to the next alarm) or somebody reads the time, so a long stretch of instructions that touches no timing-dependent block costs one
+    // addition and one comparison each. Equivalent to `tick_ticks(delta)` after every instruction: an alarm fires at the end of the very instruction that makes it due, and every read sees the
+    // time as of the end of the previous one.
+    RP2040PY_ALWAYS_INLINE bool defer_ticks(int64_t delta) noexcept {
+        if (delta < 0 || delta >= kLazyDelta) return tick_ticks(delta);
+        pending_ += delta;
+        if (pending_ < horizon_) return true;
+        return flush();
+    }
+
+    // The ticks deferred by `defer_ticks` and not applied yet (0 once settled).
+    int64_t pending_ticks() const noexcept { return pending_; }
+
+    bool tick(double delta_nanos) noexcept { return tick_ticks(to_ticks(delta_nanos)); }
+
+    // Advances by `cycles` periods of `ticks_per_cycle` ticks each (not a whole number in general: 120.30 at 133 MHz) with the fraction CARRIED between calls, so
+    // the long-run rate is exact however the cycles are split into calls - the CPU's time, one call per instruction.
+    bool advance_cycles(int64_t cycles, double ticks_per_cycle) noexcept {
+        cycle_remainder_ += static_cast<double>(cycles) * ticks_per_cycle;
+        const double whole = std::floor(cycle_remainder_);
+        cycle_remainder_ -= whole;
+        return tick_ticks(whole >= static_cast<double>(kMaxTicks) ? kMaxTicks : static_cast<int64_t>(whole));
+    }
+
+private:
+    // Applies the deferred ticks. False if an alarm that came due asked to stop (the failure is pending with the caller, as for `tick_ticks`).
+    bool flush() noexcept {
+        const int64_t delta = pending_;
+        pending_ = 0;
+        const bool ok = tick_now(delta);
+        refresh_horizon();
+        return ok;
+    }
+    // For the readers: a failure of an alarm that fires here is parked by its owner (the flag the CPU checks after every host call), so the verdict is not needed.
+    RP2040PY_ALWAYS_INLINE void settle() const noexcept {
+        if (pending_ != 0) const_cast<Clock*>(this)->flush();
+    }
+    // The time the clock may run, from `now_`, before an alarm is due.
+    void refresh_horizon() noexcept { horizon_ = head_ != nullptr ? head_->ticks - now_ : kNoHorizon; }
+
+    RP2040PY_ALWAYS_INLINE bool tick_now(int64_t delta) noexcept {
         ++depth_;
         const int64_t target = add_ticks(now_, delta);
         while (head_ != nullptr && head_->ticks <= target) {
@@ -236,18 +303,6 @@ public:
         if (depth_ == 0 && now_ >= kRebaseAt) rebase(now_);  // the outermost tick only: nothing is walking the list
         return true;
     }
-    bool tick(double delta_nanos) noexcept { return tick_ticks(to_ticks(delta_nanos)); }
-
-    // Advances by `cycles` periods of `ticks_per_cycle` ticks each (not a whole number in general: 120.30 at 133 MHz) with the fraction CARRIED between calls, so
-    // the long-run rate is exact however the cycles are split into calls - the CPU's time, one call per instruction.
-    bool advance_cycles(int64_t cycles, double ticks_per_cycle) noexcept {
-        cycle_remainder_ += static_cast<double>(cycles) * ticks_per_cycle;
-        const double whole = std::floor(cycle_remainder_);
-        cycle_remainder_ -= whole;
-        return tick_ticks(whole >= static_cast<double>(kMaxTicks) ? kMaxTicks : static_cast<int64_t>(whole));
-    }
-
-private:
     // `nanos_to_ticks`, recording a clamp.
     int64_t to_ticks(double nanos) noexcept {
         const int64_t ticks = nanos_to_ticks(nanos);
@@ -264,6 +319,8 @@ private:
     }
 
     int64_t now_ = 0;
+    int64_t pending_ = 0;           // ticks deferred by `defer_ticks`, not yet applied to `now_` (always below `horizon_` while at rest)
+    int64_t horizon_ = kNoHorizon;  // `head_->ticks - now_`: how far the deferred time may grow before the first alarm is due
     double cycle_remainder_ = 0.0;
     double rebased_ticks_ = 0.0;
     bool saturated_ = false;

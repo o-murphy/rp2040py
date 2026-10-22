@@ -6,6 +6,8 @@ name: MicroPython official tests (report only)
 
 on:
   push:
+    # branches only: a pushed tag is the same commit as the branch it was cut from, which already ran
+    branches: ["**"]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
@@ -19,7 +21,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The package (C++ extension + wasm module) takes ~2 minutes to build; every group below used to build it again (~18 minutes of runner time per run, about 40 % of all of it).
+  # It is built once here and the groups only install the wheel.
+  build-wheel:
+    name: Build the package once
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm reads the version from the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.10"
+          github-token: ${{ github.token }}
+          enable-cache: true
+
+      - name: Build the wheel
+        env:
+          RP2040PY_REQUIRE_NATIVE: "1"  # a broken C++ build must fail here, not leave every group on the pure-Python path
+        run: uv build --wheel --out-dir dist
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-suite-wheel
+          path: dist/*.whl
+          retention-days: 1
+
   official-tests:
+    needs: build-wheel
     name: MicroPython ${{ matrix.micropython_tag }} official tests - ${{ matrix.group.name }} (${{ matrix.group.strict && 'gating' || 'report only' }})
     runs-on: ubuntu-latest
     continue-on-error: ${{ !matrix.group.strict }}
@@ -86,11 +118,20 @@ jobs:
           github-token: ${{ github.token }}
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Download the wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: official-suite-wheel
+          path: dist
+
+      # run_suite.sh runs the tools from `$VIRTUAL_ENV/bin` (rp2040py, mpremote, python), so this is a plain virtual environment with the wheel in it; the [fs] extra is what `uv sync` used to bring.
+      - name: Install the package
+        run: |
+          uv venv --python 3.10
+          uv pip install "rp2040py[fs] @ file://$(ls "$PWD"/dist/*.whl)"
 
       - name: Fetch the MicroPython firmware
-        run: uv run rp2040py micropython --image ${{ matrix.micropython_tag }} --fetch-fw-only
+        run: .venv/bin/rp2040py micropython --image ${{ matrix.micropython_tag }} --fetch-fw-only
 
       - name: Clone MicroPython at the same tag (its tests are the suite)
         run: git clone --depth 1 --branch v${{ matrix.micropython_tag }} https://github.com/micropython/micropython.git "$RUNNER_TEMP/micropython"

@@ -208,6 +208,13 @@ cdef class SimulationClock:
                 raise RuntimeError("the clock stopped ticking without a pending error")
             raise_if_pending()
 
+    cpdef defer_ticks(self, int64_t delta_ticks):
+        """Like `tick_ticks`, but the time is only recorded as run: it is applied when an alarm is due or when anything reads it (the batch loop of a CPU running alone)."""
+        if not self._clock.defer_ticks(delta_ticks):
+            if not has_pending_error():
+                raise RuntimeError("the clock stopped ticking without a pending error")
+            raise_if_pending()
+
     cpdef advance_cycles(self, int64_t cycles, double ticks_per_cycle):
         """Advances by `cycles` periods of `ticks_per_cycle` ticks, the fraction carried between calls (the CPU's time)."""
         if not self._clock.advance_cycles(cycles, ticks_per_cycle):

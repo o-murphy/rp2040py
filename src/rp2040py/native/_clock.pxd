@@ -40,6 +40,7 @@ cdef extern from "clock.hpp" namespace "rp2040core":
         void cancel(Alarm* alarm) noexcept
         bint tick(double delta_nanos) noexcept
         bint tick_ticks(int64_t delta) noexcept
+        bint defer_ticks(int64_t delta) noexcept
         bint advance_cycles(int64_t cycles, double ticks_per_cycle) noexcept
 
     int64_t nanos_to_ticks(double nanos) noexcept

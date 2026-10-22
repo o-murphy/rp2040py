@@ -2,6 +2,8 @@ name: Test Kaluma Releases
 
 on:
   push:
+    # branches only: a pushed tag is the same commit as the branch it was cut from, which already ran
+    branches: ["**"]
     paths-ignore: &non-code-paths
       - "**.md"
       - "docs/**"
@@ -23,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RP2040PY_SKIP_CYTHON: 1
+      # mklittlefs is pure Python (littlefs-python is the only thing it needs): compiling the C++ extension and the wasm module for it would be ~1 minute of nothing.
+      RP2040PY_SKIP_NATIVE_BUILD: 1
+      RP2040PY_SKIP_WASM_BUILD: 1
 
     steps:
       - uses: actions/checkout@v7
@@ -35,13 +40,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --no-dev --extra fs
 
       # Kaluma's littlefs filesystem has no auto-run semantics of its own (unlike MicroPython's
       # main.py) - it's plain storage the staged script below writes into at runtime, so this just
       # needs a freshly formatted, empty image sized to Kaluma's own board.js block layout.
       - name: Create flash read/write test filesystem
-        run: uv run rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
+        run: uv run --no-sync rp2040py mklittlefs --target kaluma -o kaluma-littlefs-flash-rw.img
 
       - name: Upload littlefs image
         uses: actions/upload-artifact@v7
@@ -50,100 +55,46 @@ jobs:
           path: kaluma-littlefs-flash-rw.img
           retention-days: 1
 
+  # One job per Python runtime, not per (version, runtime): the package (C++ extension + wasm module) takes minutes to build and the firmware checks themselves take seconds, so
+  # it is built once here and scripts/ci/kaluma.sh runs every version in KALUMA_VERSIONS one after another (and writes the per-step table to the job summary).
   test-kaluma:
     needs: build-littlefs
-    name: Kaluma ${{ matrix.kaluma_version }} / ${{ matrix.python_runtime }}
+    name: Kaluma / ${{ matrix.python_runtime }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Only the one version manually verified end-to-end (see demo/kaluma_run.py's docstring).
-        # 1.0.0/1.1.0/1.2.0 also ship a plain (non-`-w`) RP2040 `pico` build and could be added,
-        # but their exact boot-banner wording (matched below via --expect-text) wasn't checked
-        # against this older firmware, unlike 1.2.1 - 1.3.0+ dropped the plain `pico` build
-        # entirely (see rp2040py.cli.firmware_specs.json's "kaluma" entry).
-        kaluma_version:
-          - "1.2.1"
         python_runtime:
           - pypy-3.10
           - cpython-3.10
           - cpython-3.15
+    env:
+      # Only the one version manually verified end-to-end (see demo/kaluma_run.py's docstring).
+      # 1.0.0/1.1.0/1.2.0 also ship a plain (non-`-w`) RP2040 `pico` build and could be added,
+      # but their exact boot-banner wording (matched in scripts/ci/kaluma.sh via --expect-text) wasn't checked
+      # against this older firmware, unlike 1.2.1 - 1.3.0+ dropped the plain `pico` build
+      # entirely (see rp2040py.cli.firmware_specs.json's "kaluma" entry).
+      KALUMA_VERSIONS: "1.2.1"
+      PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: "3.10"
-          github-token: ${{ github.token }}
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Download littlefs image
-        uses: actions/download-artifact@v8
-        with:
-          name: kaluma-littlefs-image
-
-      - name: Setup Python ${{ matrix.python_runtime }}
+      - name: Install uv and Python ${{ matrix.python_runtime }}
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: ${{ matrix.python_runtime }}
           github-token: ${{ github.token }}
           enable-cache: true
 
-      # Downloads (and caches) this version's UF2 outside the timed test steps below, so a slow
-      # kaluma-project/kaluma GitHub-release fetch doesn't get counted as (or blow the budget of)
-      # actual boot/run time. Stages tests/kaluma/index.js (same as the real test step below) and
-      # matches its own console.log() output rather than Kaluma's boot banner - the banner is racy
-      # (see the Kaluma test step's comment below), a staged script's own output isn't.
-      # continue-on-error: a hiccup here shouldn't fail the job on its own - the real test step
-      # right after will fail with a clearer signal if genuinely broken.
-      - name: Warm up Kaluma ${{ matrix.kaluma_version }} download cache
-        continue-on-error: true
-        run: uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --fetch-fw-only
+      # The one build of the package for this runtime (no dev group: the tests below need only the runtime dependencies).
+      - name: Install the package
+        run: uv sync --python ${{ matrix.python_runtime }} --no-dev
 
-      # Real code-execution test: stages tests/kaluma/index.js into Kaluma's "user program" flash
-      # region (same one `kaluma flash index.js` writes to on real hardware), which Kaluma
-      # auto-executes on every boot. This needed the GPIO pull-up/pull-down resolution fix in
-      # gpio_pin.py to actually work (km_running_script_check() in Kaluma's system.c reads GP22
-      # with a pull-up enabled to decide whether to skip auto-run - an undriven pin used to always
-      # read low regardless of the pull, which looked identical to GP22 being pulled to GND, i.e.
-      # "skip loading"). No mklittlefs step needed - the program stages directly from the file.
-      - name: Test Kaluma ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} tests/kaluma/index.js --expect-text "Hello, Kaluma!"
-        env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
+      - name: Download littlefs image
+        uses: actions/download-artifact@v8
+        with:
+          name: kaluma-littlefs-image
 
-      # WiFi through the emulated CYW43439 + NAT bridge, from Kaluma's own `wifi`/`net` modules -
-      # a third, independent network stack over the same bus as MicroPython's lwIP and
-      # CircuitPython's (docs/records/0048-cyw43-nat-reflector.md). Pinned to one runtime rather
-      # than the whole matrix: this buys *firmware/stack* coverage, and the step opens a real TCP
-      # connection to the internet, so running it three times per push is cost without signal.
-      # Soft-failing for the same reason ci-micropython.yml's pico-w step is - a CI-runner network
-      # hiccup is not an emulator regression. 13s measured locally (2026-08-16); the 5m cap is a
-      # runner-speed allowance over that.
-      # The Wi-Fi test's part that needs no internet (scan, join) is a hard check: the emulator alone produces it, so a failure is a regression. The step below
-      # also waits for a real TCP response and stays soft-failing.
-      - name: Test Kaluma pico-w WLAN core ${{ matrix.kaluma_version }}
-        if: ${{ matrix.python_runtime == 'cpython-3.10' }}
-        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --board pico_w tests/kaluma/main-cyw43.js --expect-text "KALUMA CYW43 CORE OK"
-
-      - name: Test Kaluma pico-w WLAN ${{ matrix.kaluma_version }}
-        if: ${{ matrix.python_runtime == 'cpython-3.10' }}
-        run: |
-          timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --board pico_w tests/kaluma/main-cyw43.js --expect-text "KALUMA CYW43 OK" || \
-            echo "::warning title=Kaluma pico-w WLAN test failed::${{ matrix.kaluma_version }} did not complete cleanly - see docs/records/0027-cyw43-wifi.md and docs/records/0048-cyw43-nat-reflector.md (this script opens a real TCP connection to 1.1.1.1:80 through the emulator's NAT bridge - a transient CI-runner network hiccup, not necessarily an emulator regression, can also cause this)"
-
-      # Exercises the SSI flash-write path (see docs/BACKLOG.md) from Kaluma's side: mounts a
-      # littlefs image sized to Kaluma's own board.js layout (--target kaluma - a different
-      # block-size/count than MicroPython's), stages tests/kaluma/index-flash-rw.js as the
-      # auto-run user program (a separate flash region from the littlefs filesystem itself - see
-      # README's Kaluma section), and matches its own printed result rather than the racy
-      # boot-time "Welcome to Kaluma" banner.
-      - name: Test Kaluma flash read/write ${{matrix.python_runtime}}-${{ matrix.kaluma_version }}
-        run: timeout 5m uv run --python ${{ matrix.python_runtime }} --no-dev -- rp2040py kaluma --image ${{ matrix.kaluma_version }} --littlefs kaluma-littlefs-flash-rw.img tests/kaluma/index-flash-rw.js --expect-text "FLASH RW OK"
-        env:
-          PYTHON_JIT: ${{ matrix.python_runtime == 'cpython-3.15' && '1' || '' }}
+      - name: Run the Kaluma checks
+        run: scripts/ci/kaluma.sh ${{ matrix.python_runtime }} kaluma-littlefs-flash-rw.img $KALUMA_VERSIONS

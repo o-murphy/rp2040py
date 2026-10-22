@@ -400,3 +400,37 @@ Each of these was identified during this pass and deliberately left for later, n
    seconds" - that number hasn't been measured. See `docs/CYW43_WIFI_BACKLOG.md`'s own note on this
    under its "Performance side quest" entry.
 
+## Remeasurement of the abi3 cost (2026-10-20): the "3x" no longer holds
+
+The abi3 finding above (~5.2M vs. ~13.3M instr/sec, about 2.5x) was taken when the interpreter loop was still Cython code called from Python. Since the C++ core ([0096](0096-cpp-mcu-core.md)) the
+interpreter, the bus and the blocks are C++ and the batch loop crosses into Python only at the edges, so it was measured again: the same commit (`2ea363e`) built twice on the same CPython 3.11.17
+(`uv sync`; the second copy with `_ABI3_FLOOR` raised in `setup.py` so that the normal per-version extension is built), three runs of each, alternating, one machine (a 4-core cloud container).
+
+| Workload | abi3 (`.abi3.so`) | normal (`cpython-311`) |
+|---|---|---|
+| `bench --instructions 20000000` (one `execute_instruction()` call from Python per instruction) | 14.69, 11.17, 14.37 M/s | 24.71, 24.95, 25.10 M/s |
+| CoreMark, one core, wall time for 12.07 s simulated | 27.96, 26.34, 26.47 s | 24.89, 30.01, 25.63 s |
+| `bench --image ... --stepwise`, 60 s budget | 6,832, 6,811, 6,832 instr/s | 6,837, 6,830, 6,824 instr/s |
+
+CoreMark's result is identical in all six runs (248.477989 Iterations/Sec, 12.073504 s). Reading: abi3 costs about 1.9x (about 35 ns per call) **only** where Python calls the core once per instruction;
+a batch run (CoreMark, MicroPython, anything the `Simulator` drives) and the stepwise bench, which is bound by other work, show no difference outside the run-to-run spread (the normal build's 30.0 s
+outlier is larger than the whole gap). So the claim "abi3 is ~3x slower" in `setup.py`'s docstring was wrong for the current core and is replaced there; the one-wheel-for-every-3.11+ tradeoff stands and the normal
+build is not worth a second wheel set. Not root-caused why a Python-to-native call costs more under the limited API (the generated wrapper's argument handling and the missing fast-call paths are the likely
+part); it does not matter for the workloads above.
+
+### Root cause and the fix that was measured (2026-10-20, same day)
+
+The per-call cost is **Cython's `CYTHON_VECTORCALL`**: the generated C for `execute_instruction` is the same in both builds (same `METH_FASTCALL|METH_KEYWORDS` method definition, same `cpdef` override check), but
+Cython sets `CYTHON_VECTORCALL (__PYX_LIMITED_VERSION_HEX >= 0x030C0000)` under `Py_LIMITED_API`. With the floor at 3.11 (`_ABI3_HEX = 0x030B0000`) it is **0**, together with `CYTHON_USE_TYPE_SLOTS 0`,
+`CYTHON_FAST_THREAD_STATE 0`, `CYTHON_UNPACK_METHODS 0` and a type built from a `PyType_Spec`; the call goes through `_PyObject_MakeTpCall` (callgrind: 97 M Ir of 1,334 M for 1 M instructions, absent from the
+normal build's 1,033 M). The number of `.so` files is not involved (37 in both builds). The vectorcall protocol entered the limited API with 3.12.
+
+Measured: the same commit with the floor raised to 3.12 (`_ABI3_FLOOR = (3, 12)`, `_ABI3_HEX = "0x030C0000"`), built on CPython 3.12.3 against a normal 3.12 build, `bench --instructions 20000000`, alternating, 3 runs:
+abi3 25.5 / 22.2 / 26.5 M/s, normal 20.2 / 26.3 / 24.2 M/s - no difference outside the spread (the 3.11 pair above: 11.2-14.7 vs 24.7-25.1).
+
+**Decision for the owner of the wheel set, not made here:** raise the abi3 floor to 3.12 and let 3.11 build a normal `cp311` wheel (`[tool.cibuildwheel]` `build` gets `cp311-*` as its own line next to `cp310-*`, the
+`_ABI3_FLOOR` / `_ABI3_HEX` pair and `setup.py`'s docstring change, `cp312-*` becomes the abi3 builder). The price is one more wheel per platform; the gain is the ~35 ns per Python-to-core call back on 3.12+,
+which only code that steps the core from Python (not the batch engine) sees. Leaving the floor at 3.11 costs nothing measurable for CoreMark or MicroPython.
+
+**Decision (2026-10-20, the maintainer): the abi3 floor stays at 3.11.** It is not raised to 3.12; CPython 3.11 keeps the abi3 wheel and the ~35 ns per Python-to-core call (only a loop that steps the core from
+Python pays it). The measurement above stays as the note of what raising it would give, should the wheel set be reconsidered.

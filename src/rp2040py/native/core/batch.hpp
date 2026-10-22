@@ -79,7 +79,7 @@ inline int run_batch(Cpu& cpu, Clock& clock, const BatchHost& host, const BatchP
     // The common case (125 MHz: 128 ticks) is a whole number of ticks per cycle, and then time is plain integer arithmetic - no remainder to carry.
     const bool whole_ticks = ticks_per_cycle == std::floor(ticks_per_cycle) && ticks_per_cycle < 1e12;
     const int64_t cycle_ticks = whole_ticks ? static_cast<int64_t>(ticks_per_cycle) : 0;
-    auto advance = [&](int64_t n) noexcept { return whole_ticks ? clock.tick_ticks(n * cycle_ticks) : clock.advance_cycles(n, ticks_per_cycle); };
+    auto advance = [&](int64_t n) noexcept { return whole_ticks ? clock.defer_ticks(n * cycle_ticks) : clock.advance_cycles(n, ticks_per_cycle); };
     long i = 0;
     const int64_t start_ticks = clock.ticks();
     int stop_reason = kStopCeiling;

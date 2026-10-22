@@ -233,7 +233,7 @@ A GDB server on port 3333 can be enabled by specifying the `--gdb` flag:
 rp2040py micropython --gdb
 ```
 
-For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. It's repeatable (`--expect-text foo --expect-text bar` stops once *both* have appeared, on any line, not necessarily the same one or in that order) and, with `--expect-regex`, each `--expect-text` value is matched as a Python `re` pattern (via `re.search`) instead of a plain substring. You can find an example in [the MicroPython CI test](./.github/workflows/ci-micropython.yml).
+For using the MicroPython demo code in tests, `--expect-text` can come in handy: it will look for the given text in the serial output and exit with code 0 if found, or 1 if not found. It's repeatable (`--expect-text foo --expect-text bar` stops once *both* have appeared, on any line, not necessarily the same one or in that order) and, with `--expect-regex`, each `--expect-text` value is matched as a Python `re` pattern (via `re.search`) instead of a plain substring. You can find examples in [the MicroPython CI script](./scripts/ci/micropython.sh) (run by [the MicroPython CI workflow](./.github/workflows/ci-micropython.yml)).
 
 For one-shot, non-interactive runs (like `micropython`'s own CLI), pass one of `-c <command>`, `-m <module>`, or a script `<filename>` - mutually exclusive, matching `[-c <command> | -m <module> | <filename>]`. Instead of dropping into the REPL, rp2040py boots the device, runs it via the raw-REPL protocol, prints its stdout/stderr, and exits with the device's exit status (0 on success, 1 if it raised):
 
@@ -334,7 +334,7 @@ Enter several times") those bytes are typically gone by the time anything's list
 doesn't send anything to work around this - type `.hi` yourself at the prompt to reprint the same
 banner on demand if you need to see it; if you're scripting against a device's output instead of
 typing at it interactively, stage a `<script.js>` and match against *its* output, which isn't racy
-(see [the Kaluma CI test](./.github/workflows/ci-kaluma.yml), which does exactly that).
+(see [the Kaluma CI script](./scripts/ci/kaluma.sh), run by [the Kaluma CI workflow](./.github/workflows/ci-kaluma.yml), which does exactly that).
 
 ### Filesystem support
 
