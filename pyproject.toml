@@ -1,6 +1,6 @@
 [build-system]
 # ziglang compiles the wasm module of record 0103 (build_wasm.py, called from setup.py's build_py). Pinned below 0.17: 0.17.0 is only partly uploaded to PyPI (no Windows wheels).
-requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel", "ziglang>=0.16.0,<0.17"]
+requires = ["setuptools", "setuptools-scm", "cython>=3.2.9", "wheel", "ziglang>=0.16.0,<0.18"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -185,6 +185,6 @@ dev = [
     "littlefs-python>=0.18.0",
     "cython>=3.2.9",
     "pytest-xdist>=3.8.0",
-    "ziglang>=0.16.0,<0.17",
+    "ziglang>=0.16.0,<0.18",
     "wasmhost>=0.1.0",
 ]
