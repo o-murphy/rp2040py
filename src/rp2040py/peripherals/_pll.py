@@ -99,6 +99,10 @@ class RPPLL(BasePeripheral):
         postdiv = (self.postdiv1 or 1) * (self.postdiv2 or 1)
         return ref_freq * self.fbdiv / postdiv
 
+    def snapshot(self) -> dict[str, int]:
+        """The block's registers as plain values (the divisors, the reference and the lock are derived from them)."""
+        return {"cs": self.cs, "pwr": self.pwr, "fbdiv_int": self.fbdiv_int, "prim": self.prim}
+
     def read_uint32(self, offset: int) -> int:
         if offset == PLL_CS:
             return self.cs | (PLL_CS_LOCK if self.locked else 0)

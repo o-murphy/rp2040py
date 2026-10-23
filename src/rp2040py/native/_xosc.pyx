@@ -62,69 +62,19 @@ cdef class RPXOSC(NativeBlock):
         else:
             self.warn(register_warning(kind, offset, value))
 
-    @property
-    def _ctrl(self):
-        return self._block.ctrl
-
-    @_ctrl.setter
-    def _ctrl(self, value):
-        self._block.ctrl = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _status(self):
-        return self._block.status
-
-    @_status.setter
-    def _status(self, value):
-        self._block.status = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _dormant(self):
-        return self._block.dormant
-
-    @_dormant.setter
-    def _dormant(self, value):
-        self._block.dormant = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _startup(self):
-        return self._block.startup
-
-    @_startup.setter
-    def _startup(self, value):
-        self._block.startup = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _count(self):
-        return self._block.count
-
-    @_count.setter
-    def _count(self, value):
-        self._block.count = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _enabled(self):
-        return bool(self._block.enabled)
-
-    @_enabled.setter
-    def _enabled(self, value):
-        self._block.enabled = bool(value)
-
-    @property
-    def _stable(self):
-        return bool(self._block.stable)
-
-    @_stable.setter
-    def _stable(self, value):
-        self._block.stable = bool(value)
-
-    @property
-    def _is_dormant(self):
-        return bool(self._block.is_dormant)
-
-    @_is_dormant.setter
-    def _is_dormant(self, value):
-        self._block.is_dormant = bool(value)
+    def snapshot(self):
+        cdef uint32_t w[8]
+        self._block.snapshot(w)
+        return {
+            "ctrl": w[0],
+            "status": w[1],
+            "dormant": w[2],
+            "startup": w[3],
+            "count": w[4],
+            "enabled": bool(w[5]),
+            "stable": bool(w[6]),
+            "is_dormant": bool(w[7]),
+        }
 
     def reset(self):
         """Back to power-on: disabled, not stable, not dormant. Gated on `PSM.WDSEL`'s XOSC bit by `RP2040.reset()` (see the reference)."""

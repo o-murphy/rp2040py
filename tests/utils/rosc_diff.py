@@ -130,23 +130,7 @@ class Rig:
         chip, rosc = self.chip, self.chip.rosc
         return {
             "regs": tuple(int(chip.read_uint32(ROSC_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(rosc._ctrl),
-                int(rosc._freqa),
-                int(rosc._freqb),
-                int(rosc._dormant),
-                int(rosc._div),
-                int(rosc._phase),
-                bool(rosc._badwrite),
-                bool(rosc._enabled),
-                int(rosc._last_bit),
-                int(rosc._count),
-                int(rosc._count_epoch),
-                float(rosc._hz),
-                float(rosc.frequency),
-                int(rosc._count_now()),
-                int(rosc.raw_write_value),
-            ),
+            "state": (tuple(sorted(rosc.snapshot().items())), int(rosc.raw_write_value)),
             "chip": (float(chip.rosc_freq), float(chip.clk_sys), float(chip.clk_peri), float(chip.clock.nanos)),
         }
 
@@ -405,7 +389,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
     rosc = rig.chip.rosc
     for op in ops:
         before = len(rig.log)
-        was_count = rosc._count_now()
+        was_count = rosc.snapshot()["count_now"]
         _, error = _step(rig, op)
         if error is not None:
             count(f"raised.{error.split(':')[0]}")
@@ -419,14 +403,15 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
                 count("div.valid")
             if offset == P.ROSC_COUNT and (value & 0xFF):
                 count("count.start")
-        if was_count and rosc._count_now() == 0:
+        state = rosc.snapshot()
+        if was_count and state["count_now"] == 0:
             count("count.reached_zero")
-        if was_count and 0 < rosc._count_now() < was_count:
+        if was_count and 0 < state["count_now"] < was_count:
             count("count.counting")
-        if not rosc._enabled:
+        if not state["enabled"]:
             count("state.disabled")
-        if rosc._badwrite:
+        if state["badwrite"]:
             count("state.badwrite")
-        if rosc._hz != P.NOMINAL_HZ:
+        if state["hz"] != P.NOMINAL_HZ:
             count("state.retuned")
     return counts

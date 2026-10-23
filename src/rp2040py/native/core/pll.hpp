@@ -61,6 +61,15 @@ public:
     uint32_t fbdiv_int = 0;
     uint32_t prim = pll_regs::PRIM_RESET;
 
+    // The registers as one flat array: `cs`, `pwr`, `fbdiv_int`, `prim`.
+    static constexpr uint32_t kSnapshotWords = 4;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = cs;
+        out[1] = pwr;
+        out[2] = fbdiv_int;
+        out[3] = prim;
+    }
+
     // Back to power-on (the CLOCKS domain reset does it; the tree re-derives itself afterwards, so nothing is announced here).
     void reset() noexcept {
         using namespace pll_regs;

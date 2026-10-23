@@ -290,13 +290,13 @@ def test_xosc_resets_on_a_power_on_but_not_on_a_watchdog_reboot(rp2040_factory):
 
     # what firmware does: enable the crystal, which this model makes stable immediately
     rp2040.xosc.write_uint32(0x00, 0xFAB << 12)
-    assert rp2040.xosc._enabled and rp2040.xosc._stable
+    assert rp2040.xosc.snapshot()["enabled"] and rp2040.xosc.snapshot()["stable"]
 
     rp2040.psm.write_uint32(0x08, 0x1FFFC)  # watchdog_reboot()'s own value: XOSC/ROSC excluded
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xosc._enabled, "a watchdog reboot must not stop the oscillator clocking it"
+    assert rp2040.xosc.snapshot()["enabled"], "a watchdog reboot must not stop the oscillator clocking it"
 
     rp2040.reset(preserve_flash=True)  # a RUN-pin/power-on reset selects everything
-    assert not rp2040.xosc._enabled
-    assert not rp2040.xosc._stable
+    assert not rp2040.xosc.snapshot()["enabled"]
+    assert not rp2040.xosc.snapshot()["stable"]
     assert WDSEL_XOSC & 0x1FFFC == 0, "the bit watchdog_reboot() clears, spelled out"

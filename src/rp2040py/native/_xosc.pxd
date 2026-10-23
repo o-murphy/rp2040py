@@ -20,14 +20,7 @@ cdef extern from "xosc.hpp" namespace "rp2040core":
         void bind_stable_listener(XoscStableFn fn, void* ctx) noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept
-        uint32_t ctrl
-        uint32_t status
-        uint32_t dormant
-        uint32_t startup
-        uint32_t count
-        cppbool enabled
-        cppbool stable
-        cppbool is_dormant
+        void snapshot(uint32_t* out) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

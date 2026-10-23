@@ -102,104 +102,30 @@ cdef class RPROSC(NativeBlock):
     def frequency(self):
         return self._block.frequency()
 
-    def _count_now(self):
-        return self._block.count_now()
-
-    @property
-    def _ctrl(self):
-        return self._block.ctrl
-
-    @_ctrl.setter
-    def _ctrl(self, value):
-        self._block.ctrl = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _freqa(self):
-        return self._block.freqa
-
-    @_freqa.setter
-    def _freqa(self, value):
-        self._block.freqa = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _freqb(self):
-        return self._block.freqb
-
-    @_freqb.setter
-    def _freqb(self, value):
-        self._block.freqb = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _dormant(self):
-        return self._block.dormant
-
-    @_dormant.setter
-    def _dormant(self, value):
-        self._block.dormant = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _div(self):
-        return self._block.div
-
-    @_div.setter
-    def _div(self, value):
-        self._block.div = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _phase(self):
-        return self._block.phase
-
-    @_phase.setter
-    def _phase(self, value):
-        self._block.phase = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _badwrite(self):
-        return bool(self._block.badwrite)
-
-    @_badwrite.setter
-    def _badwrite(self, value):
-        self._block.badwrite = bool(value)
-
-    @property
-    def _enabled(self):
-        return bool(self._block.enabled)
-
-    @_enabled.setter
-    def _enabled(self, value):
-        self._block.enabled = bool(value)
-
-    @property
-    def _last_bit(self):
-        return self._block.last_bit
-
-    @_last_bit.setter
-    def _last_bit(self, value):
-        self._block.last_bit = <uint32_t> (value & 1)
-
-    @property
-    def _count(self):
-        return self._block.count
-
-    @_count.setter
-    def _count(self, value):
-        self._block.count = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _count_epoch(self):
-        return self._block.count_epoch
-
-    @_count_epoch.setter
-    def _count_epoch(self, value):
-        self._block.count_epoch = <int64_t> value
-
     @property
     def _hz(self):
+        """What the chip's `rosc_freq` reads (the frequency this block last announced): chip plumbing, read-only."""
         return self._block.hz
 
-    @_hz.setter
-    def _hz(self, value):
-        self._block.hz = <double> value
+    def snapshot(self):
+        """The block's state in one call: its registers and flags (public fields of the C++ block), the COUNT bookkeeping and what the clock makes of it."""
+        cdef RoscBlock* b = self._block
+        return {
+            "ctrl": b.ctrl,
+            "freqa": b.freqa,
+            "freqb": b.freqb,
+            "dormant": b.dormant,
+            "div": b.div,
+            "phase": b.phase,
+            "badwrite": bool(b.badwrite),
+            "enabled": bool(b.enabled),
+            "last_bit": b.last_bit,
+            "count": b.count,
+            "count_epoch": b.count_epoch,
+            "hz": b.hz,
+            "frequency": b.frequency(),
+            "count_now": b.count_now(),
+        }
 
     @property
     def random_bit(self):
