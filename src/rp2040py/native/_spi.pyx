@@ -21,6 +21,7 @@ names), `int_status`, `enabled`, `data_bits`, `master_mode`, `spi_mode`, `clock_
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
@@ -79,7 +80,7 @@ cdef class _Fifo:
         self._fifo().reset()
 
 
-cdef class RPSPI:
+cdef class RPSPI(NativeBlock):
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -98,6 +99,7 @@ cdef class RPSPI:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <SpiBlock*> <size_t> rp2040._native_spi_address(mcu_index)
+            self._ops = register_ops(self._block)
             if not self._block.power_on():
                 raise_if_pending()
             return
@@ -130,10 +132,6 @@ cdef class RPSPI:
             raise_if_pending()
 
     # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
 
     @property
     def rx_fifo(self):
@@ -248,43 +246,9 @@ cdef class RPSPI:
         if not self._block.check_interrupts():
             raise_if_pending()
 
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def reset(self):
         """Registers and both FIFOs, back to power-on (0089 Phase 5). `on_transmit` is wiring - a device on the bus - and survives, as does `irq`/`dreq` identity."""
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's own
-        read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder, a profiler)
-        cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

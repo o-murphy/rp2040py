@@ -10,14 +10,14 @@ functions in the bus's window table (see `_native_window`), so a register access
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._gpio_pin cimport GPIOPin, GPIOPinBank
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPIO",)
 
 
-
-cdef class RPIO:
+cdef class RPIO(NativeBlock):
     def __init__(self, rp2040, name, pins=None, mcu_index=-1):
         cdef GPIOPin pin
         cdef GPIOPinBank owner = None
@@ -46,14 +46,11 @@ cdef class RPIO:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` holds this bank (and the IO and PADS blocks on it): this object is the Python view of it
             self._block = <IoBlock*> <size_t> rp2040._native_io_address(mcu_index)
+            self._ops = register_ops(self._block)
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPIO is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
 
     @property
     def _extra(self):
@@ -74,34 +71,8 @@ cdef class RPIO:
         raise_if_pending()
         return value
 
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def reset(self):
         """The stored proc 1 / dormant wake masks back to zero (proc 0's are on the pins, reset with them)."""
         self._block.reset()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline (see `native/_rosc.pyx`)."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

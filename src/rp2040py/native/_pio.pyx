@@ -17,6 +17,7 @@ import asyncio
 
 from libc.stdint cimport int64_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -473,7 +474,7 @@ cdef class StateMachine:
             raise_if_pending()
 
 
-cdef class RPPIO:
+cdef class RPPIO(NativeBlock):
     def __cinit__(self, rp2040, str name, unsigned int first_irq, unsigned int index):
         block_address = getattr(rp2040, "_native_pio_address", None)
         if block_address is None:
@@ -486,6 +487,7 @@ cdef class RPPIO:
         if address is None:
             raise ValueError(f"the chip has no PIO block {index}")
         self._block = <PioBlock*> <size_t> address
+        self._ops = register_ops(self._block)
         self.rp2040 = rp2040
         self.name = name
         self.first_irq = first_irq
@@ -521,30 +523,11 @@ cdef class RPPIO:
         if not self._block.stopped and self.rp2040.simulator is None:
             self._run_task = asyncio.get_running_loop().create_task(self.run())
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     def write_uint32_atomic(self, offset, value, atomic_type):
         if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
             raise_if_pending()
 
     # --- the native bus protocol ------------------------------------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the
-        block's own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes
-        (a recorder, a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)
 
     # --- state ------------------------------------------------------------------------------------------------------------
 
@@ -722,11 +705,6 @@ cdef class RPPIO:
         return self._block.irq1_int_status()
 
     # --- register dispatch ------------------------------------------------------------------------------------------------
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
 
     def write_uint32(self, offset, value):
         # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.

@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._memory_map cimport XipHooks
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "xip_ctrl.hpp" namespace "rp2040core":
@@ -47,9 +48,6 @@ cdef extern from "xip_ctrl.hpp" namespace "rp2040core":
         XipHooks hooks() noexcept
 
 
-cdef class RPXIPCtrl:
+cdef class RPXIPCtrl(NativeBlock):
     cdef XipBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public bint _from_mcu
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock

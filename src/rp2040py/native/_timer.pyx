@@ -19,6 +19,7 @@ for its own `clock` field, so a native chip always has one.
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
@@ -47,7 +48,7 @@ cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset
         park_error(error)
 
 
-cdef class RPTimer:
+cdef class RPTimer(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -62,8 +63,10 @@ cdef class RPTimer:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <TimerBlock*> <size_t> rp2040._native_timer_address()
+            self._ops = register_ops(self._block)
             return
         self._block = &self._own
+        self._ops = register_ops(self._block)
         self._ports.chip = <void*> self
         self._ports.warn = _ports_warn
         self._ports.irq = _ports_irq
@@ -78,17 +81,8 @@ cdef class RPTimer:
     # --- BasePeripheral's surface -----------------------------------------------------------------
 
     @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    @property
     def int_status(self):
         return self._block.int_status()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
 
     def write_uint32(self, offset, value):
         # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
@@ -98,10 +92,6 @@ cdef class RPTimer:
         elif result == 1:  # kWriteUnhandled
             self.warn(f"Unimplemented peripheral write to 0x{offset:x}: 0x{value:x}")
 
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type)
-        raise_if_pending()
-
     def tick_changed(self, tick_hz):
         """The watchdog's tick is now `tick_hz` (0: stopped): the count continues at the new rate, or freezes (see core/timer.hpp)."""
         self._block.tick_changed(<double> tick_hz)
@@ -110,28 +100,4 @@ cdef class RPTimer:
     def tick_hz(self):
         return self._block.tick_hz()
 
-    def reset(self):
-        if not self._block.reset():
-            raise_if_pending()
-
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol ------------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python
-        trampoline: the addresses of the block's own read/write functions and its context. Looked up on the *type*
-        by the bus, so a wrapper that merely forwards attributes (a recorder, a profiler) cannot lend its target's
-        fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

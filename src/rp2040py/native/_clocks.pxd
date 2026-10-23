@@ -4,12 +4,13 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pll cimport PllBlock
 from rp2040py.native._rosc cimport RoscBlock
-from rp2040py.native._xosc cimport XoscBlock
 from rp2040py.native._window_map cimport WindowHandler
+from rp2040py.native._xosc cimport XoscBlock
 
 cdef extern from "clocks.hpp" namespace "rp2040core":
 
@@ -69,11 +70,8 @@ cdef extern from "clock_sinks.hpp" namespace "rp2040core":
     cppbool watchdog_ref_sink(void* ctx, double hz, double old) noexcept
     cppbool rtc_rtc_sink(void* ctx, double hz, double old) noexcept
 
-cdef class RPClocks:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPClocks(NativeBlock):
     cdef ClocksBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
     cdef object _pll_sys
     cdef object _pll_usb

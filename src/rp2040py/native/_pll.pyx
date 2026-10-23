@@ -9,6 +9,7 @@ a register write (`changed`: the chip's `update_clocks()`). Their failures are p
 
 from libc.stdint cimport int64_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -29,13 +30,14 @@ cdef double _ref_trampoline(void* ctx) noexcept:
         return 0.0
 
 
-cdef class RPPLL:
+cdef class RPPLL(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         self.rp2040 = rp2040
         self.name = name
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus and its notices to the clock tree - and this object is the Python view of it
             self._block = <PllBlock*> <size_t> rp2040._native_pll_address(mcu_index)
+            self._ops = register_ops(self._block)
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPPLL is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
@@ -47,27 +49,6 @@ cdef class RPPLL:
             return
         self._bound_tree = None
         self._block.bind_reference(_ref_trampoline, <void*> self)
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
-    def reset(self):
-        self._block.reset()
 
     @property
     def refdiv(self):
@@ -135,23 +116,4 @@ cdef class RPPLL:
     def prim(self, value):
         self._block.prim = <uint32_t> (value & 0xFFFFFFFF)
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

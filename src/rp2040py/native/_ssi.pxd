@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -46,8 +47,5 @@ cdef extern from "ssi.hpp" namespace "rp2040core":
         WindowHandler window_handler() noexcept
 
 
-cdef class RPSSI:
+cdef class RPSSI(NativeBlock):
     cdef SsiBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public bint _from_mcu
-    cdef public object rp2040
-    cdef public object name
