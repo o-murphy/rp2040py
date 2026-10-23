@@ -12,9 +12,8 @@ cdef extern from "psm.hpp" namespace "rp2040core":
     cdef cppclass PsmBlock:
         PsmBlock() noexcept
         int64_t raw_write_value() noexcept
-        uint32_t frce_on
-        uint32_t frce_off
         uint32_t wdsel
+        void snapshot(uint32_t* out) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

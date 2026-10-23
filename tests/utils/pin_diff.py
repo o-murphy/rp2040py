@@ -228,7 +228,7 @@ class Rig:
         for bank, pins in (("gpio", chip.gpio), ("qspi", chip.qspi)):
             out[bank] = tuple(self._pin_state(pin) for pin in pins)
         for pads in (chip.pads_bank0, chip.pads_qspi):
-            out[f"pads.{pads.name}"] = (int(pads.voltage_select), int(pads.swclk), int(pads.swd))
+            out[f"pads.{pads.name}"] = tuple(pads.snapshot().values())
         for block in (chip.io_bank0, chip.io_qspi):
             out[f"extra.{block.name}"] = tuple(tuple(masks) for dest in (1, 2) for masks in block._extra[dest])
         for base, offsets, _count in BLOCKS:

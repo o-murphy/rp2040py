@@ -47,29 +47,10 @@ cdef class RPPADS(NativeBlock):
             "the native block is a view of the chip's C++ `Mcu` block: RPPADS is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
 
-    @property
-    def voltage_select(self):
-        return self._block.voltage_select
-
-    @voltage_select.setter
-    def voltage_select(self, value):
-        self._block.voltage_select = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def swclk(self):
-        return self._block.swclk
-
-    @swclk.setter
-    def swclk(self, value):
-        self._block.swclk = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def swd(self):
-        return self._block.swd
-
-    @swd.setter
-    def swd(self, value):
-        self._block.swd = <uint32_t> (value & 0xFFFFFFFF)
+    def snapshot(self):
+        cdef uint32_t w[3]
+        self._block.snapshot(w)
+        return {"voltage_select": w[0], "swclk": w[1], "swd": w[2]}
 
     def read_uint32(self, offset):
         cdef uint32_t value = 0

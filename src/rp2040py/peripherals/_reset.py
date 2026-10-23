@@ -56,6 +56,10 @@ class RPReset(BasePeripheral):
         state holds every peripheral in reset. Both routes are honoured by `RP2040.reset()`."""
         return self._wdsel
 
+    def snapshot(self) -> dict[str, int]:
+        """The block's registers as plain values."""
+        return {"reset": self._reset, "wdsel": self._wdsel}
+
     def read_uint32(self, offset: int) -> int:
         if offset == RESET:
             return self._reset
