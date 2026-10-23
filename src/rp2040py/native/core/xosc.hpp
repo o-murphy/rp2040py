@@ -66,6 +66,19 @@ public:
     bool stable = false;
     bool is_dormant = false;
 
+    // The state as one flat array: `ctrl`, `status`, `dormant`, `startup`, `count`, then `enabled`, `stable`, `is_dormant` as 0 / 1.
+    static constexpr uint32_t kSnapshotWords = 8;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = ctrl;
+        out[1] = status;
+        out[2] = dormant;
+        out[3] = startup;
+        out[4] = count;
+        out[5] = enabled ? 1u : 0u;
+        out[6] = stable ? 1u : 0u;
+        out[7] = is_dormant ? 1u : 0u;
+    }
+
     // Back to power-on: disabled, not stable, not dormant.
     bool reset() noexcept {
         using namespace xosc_regs;

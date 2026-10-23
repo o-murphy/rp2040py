@@ -27,7 +27,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "PSM_BASE",
         "registers": (0x0, 0x4, 0x8, 0xC),
         "unimplemented": (0x10, 0x14, 0x40, 0xFFC),
-        "attrs": (),  # observed through `snapshot()`
         "ops": (),
     },
     "resets": {
@@ -36,7 +35,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "RESETS_BASE",
         "registers": (0x0, 0x4, 0x8),
         "unimplemented": (0xC, 0x10, 0x40, 0xFFC),
-        "attrs": (),  # observed through `snapshot()`
         "ops": (),
     },
     "xosc": {
@@ -45,7 +43,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "XOSC_BASE",
         "registers": (0x00, 0x04, 0x08, 0x0C, 0x1C),
         "unimplemented": (0x10, 0x14, 0x18, 0x20, 0x40, 0xFFC),
-        "attrs": ("_ctrl", "_status", "_dormant", "_startup", "_count", "_enabled", "_stable", "_is_dormant"),
         "ops": ("reset",),
     },
 }
@@ -122,10 +119,7 @@ class Rig:
         base, peripheral = self.spec["base"], self.peripheral
         return {
             "regs": tuple(int(self.chip.read_uint32(base + offset)) for offset in self.spec["registers"]),
-            "attrs": tuple(_freeze(getattr(peripheral, name)) for name in self.spec["attrs"]),
-            "state": _freeze_state(peripheral.snapshot())
-            if hasattr(peripheral, "snapshot")
-            else None,  # PSM and RESETS; XOSC is still read by attribute
+            "state": _freeze_state(peripheral.snapshot()),
             "raw": int(peripheral.raw_write_value),
         }
 

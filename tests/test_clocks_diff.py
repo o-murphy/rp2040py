@@ -36,7 +36,8 @@ def _change_a_divider(candidate: Rig, step: int) -> None:
 
 def _change_a_pll(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pll_usb.fbdiv_int ^= 0x10
+        pll = candidate.chip.pll_usb
+        pll.write_uint32(0x08, pll.read_uint32(0x08) ^ 0x10)  # FBDIV_INT
 
 
 def _move_the_clock(candidate: Rig, step: int) -> None:

@@ -84,36 +84,9 @@ cdef class RPPLL(NativeBlock):
         raise_if_pending()
         return value
 
-    @property
-    def cs(self):
-        return self._block.cs
-
-    @cs.setter
-    def cs(self, value):
-        self._block.cs = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def pwr(self):
-        return self._block.pwr
-
-    @pwr.setter
-    def pwr(self, value):
-        self._block.pwr = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def fbdiv_int(self):
-        return self._block.fbdiv_int
-
-    @fbdiv_int.setter
-    def fbdiv_int(self, value):
-        self._block.fbdiv_int = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def prim(self):
-        return self._block.prim
-
-    @prim.setter
-    def prim(self, value):
-        self._block.prim = <uint32_t> (value & 0xFFFFFFFF)
+    def snapshot(self):
+        cdef uint32_t w[4]
+        self._block.snapshot(w)
+        return {"cs": w[0], "pwr": w[1], "fbdiv_int": w[2], "prim": w[3]}
 
     # --- the native bus protocol -----------------------------------------------------------------

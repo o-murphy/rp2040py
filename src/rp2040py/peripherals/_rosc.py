@@ -166,6 +166,25 @@ class RPROSC(BasePeripheral):
         self._badwrite = True
         self.warn(message)
 
+    def snapshot(self) -> dict[str, int | float | bool]:
+        """The block's state as plain values: the registers, the flags, the COUNT bookkeeping and what is derived from the clock (`frequency`, the counter as it reads now)."""
+        return {
+            "ctrl": self._ctrl,
+            "freqa": self._freqa,
+            "freqb": self._freqb,
+            "dormant": self._dormant,
+            "div": self._div,
+            "phase": self._phase,
+            "badwrite": self._badwrite,
+            "enabled": self._enabled,
+            "last_bit": self._last_bit,
+            "count": self._count,
+            "count_epoch": self._count_epoch,
+            "hz": self._hz,
+            "frequency": self.frequency,
+            "count_now": self._count_now(),
+        }
+
     def read_uint32(self, offset: int) -> int:
         if offset == ROSC_CTRL:
             return self._ctrl

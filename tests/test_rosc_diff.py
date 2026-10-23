@@ -28,22 +28,25 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _change_the_count(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.rosc._count = 77
+        candidate.chip.write_uint32(ROSC_BASE + 0x20, 77)  # COUNT
 
 
 def _flip_the_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.rosc._enabled = not candidate.chip.rosc._enabled
+        enabled = candidate.chip.rosc.snapshot()["enabled"]
+        candidate.chip.write_uint32(
+            ROSC_BASE + 0x00, (0xD1E if enabled else 0xFAB) << 12 | 0xAA0
+        )  # CTRL: ENABLE <-> DISABLE
 
 
 def _set_badwrite(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.rosc._badwrite = True
+        candidate.chip.write_uint32(ROSC_BASE + 0x04, 0x1234)  # FREQA without its password: BADWRITE
 
 
 def _retune_the_frequency(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.rosc._hz = 1e6
+        candidate.chip.write_uint32(ROSC_BASE + 0x00, (0xFAB << 12) | 0xFA7)  # CTRL: FREQ_RANGE = HIGH
 
 
 def _advance_one_clock(candidate: Rig, step: int) -> None:
