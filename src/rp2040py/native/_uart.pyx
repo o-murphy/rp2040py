@@ -21,6 +21,7 @@ rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/..
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -171,7 +172,7 @@ cdef class _TxFifo:
         self._owner._block.tx_reset()
 
 
-cdef class RPUART:
+cdef class RPUART(NativeBlock):
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
         cdef UartHost host
         clock = rp2040.clock
@@ -192,8 +193,10 @@ cdef class RPUART:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <UartBlock*> <size_t> rp2040._native_uart_address(mcu_index)
+            self._ops = register_ops(self._block)
             return
         self._block = &self._own
+        self._ops = register_ops(self._block)
         self._ports.chip = <void*> self
         self._ports.warn = _ports_warn
         self._ports.irq = _ports_irq
@@ -223,10 +226,6 @@ cdef class RPUART:
             self._own.detach()
 
     # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
 
     @property
     def rx_fifo(self):
@@ -388,43 +387,9 @@ cdef class RPUART:
         if not self._block.feed_byte(<uint32_t> (<int64_t> value)):
             raise_if_pending()
 
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def reset(self):
         """Registers and the RX FIFO, back to power-on (0089 Phase 5). `on_byte`/`on_baud_rate_change` are not touched: they are wiring."""
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

@@ -17,6 +17,7 @@ from libcpp cimport bool as cppbool
 
 from cpython.bytes cimport PyBytes_AsString, PyBytes_FromStringAndSize
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -333,7 +334,7 @@ cdef void usb_wire_fill(UsbHost* wire, void* chip) noexcept:
     wire.ctx = chip
 
 
-cdef class RPUSBController:
+cdef class RPUSBController(NativeBlock):
     def __init__(self, rp2040, name):
         native_usb = getattr(rp2040, "_native_usb_address", None)
         if native_usb is None:
@@ -360,13 +361,10 @@ cdef class RPUSBController:
         # The chip's `Mcu` builds the block (its window, its line, its DPRAM pointer, its alarms on the chip's clock and the host's end of the wire, `McuHost.usb_wire`); this object is the Python view of it.
         self._from_mcu = True
         self._block = <UsbBlock*> <size_t> native_usb()
+        self._ops = register_ops(self._block)
         rp2040._usb_wire_view = self  # (the wire's callbacks find this view through the chip; the chip keeps it alive)
 
     # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
 
     @property
     def read_delay_microseconds(self):
@@ -665,21 +663,6 @@ cdef class RPUSBController:
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def dpram_updated(self, offset, value):
         if not self._block.dpram_updated(<uint32_t> offset):
             raise_if_pending()
@@ -728,21 +711,4 @@ cdef class RPUSBController:
         if not self._block.disconnect_device():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline (see `_uart.pyx`)."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 
 from rp2040py.native._clock cimport Alarm, Clock
 from rp2040py.native._window_map cimport WindowHandler
@@ -67,15 +68,12 @@ cdef extern from "uart.hpp" namespace "rp2040core":
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPUART:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPUART(NativeBlock):
     cdef UartBlock* _block  # the chip's (`Mcu` builds and wires it), or `_own` for a block made directly (a stand-in chip, a test)
     cdef UartBlock _own
     cdef ChipPorts _ports  # a block made directly (`_own`) reaches the chip through these, trampolines into Python
     cdef uint32_t _dreq_base  # the stand-in's TX request number: the number the block passes for TX, the other is RX
-    cdef public object rp2040
     cdef public object clock
-    cdef public object name
     cdef public object irq
     cdef public object dreq
     cdef public object on_byte

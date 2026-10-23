@@ -14,15 +14,15 @@ The reference's state is kept readable under its names (`ctrl`, `ctr_hit`, `ctr_
 
 from libc.stdint cimport int64_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._register_warning import register_warning
 
-
 __all__ = ("RPXIPAux", "RPXIPCtrl")
 
 
-cdef class RPXIPCtrl:
+cdef class RPXIPCtrl(NativeBlock):
     def __init__(self, rp2040, name):
         native_xip = getattr(rp2040, "_native_xip_address", None)
         if native_xip is None:
@@ -33,6 +33,7 @@ cdef class RPXIPCtrl:
         # the chip's `Mcu` builds the block: its window, the flash window's hooks, the XIP_AUX window, its DMA request and its pace (clk_sys, SSI.BAUDR) are wired inside
         self._from_mcu = True
         self._block = <XipBlock*> <size_t> native_xip()
+        self._ops = register_ops(self._block)
         self.rp2040 = rp2040
         self.name = name
         self.clock = rp2040.clock
@@ -53,22 +54,8 @@ cdef class RPXIPCtrl:
         if not self._block.reset():
             raise_if_pending()
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
     def write_uint32(self, offset, value):
         if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-        raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
             raise_if_pending()
         raise_if_pending()
 
@@ -168,24 +155,6 @@ cdef class RPXIPCtrl:
         cdef uint32_t word = self._block.pop_stream_fifo()
         raise_if_pending()
         return word
-
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block instead of a Python trampoline (see `_rp2040.pyx`)."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)
-
 
 cdef class RPXIPAux:
     """`XIP_AUX` (`0x50400000`): "a simple bus interface providing access only to the streaming FIFO" - a window onto the XIP block's FIFO."""

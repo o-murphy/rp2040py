@@ -15,9 +15,9 @@ command (all the block keeps) and the *count* as its length.
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
-
 
 __all__ = ("RPSSI",)
 
@@ -75,7 +75,7 @@ cdef class _TxView:
         return repr(self._kept())
 
 
-cdef class RPSSI:
+cdef class RPSSI(NativeBlock):
     def __init__(self, rp2040, name):
         native_ssi = getattr(rp2040, "_native_ssi_address", None)
         if native_ssi is None:
@@ -86,6 +86,7 @@ cdef class RPSSI:
         # the chip's `Mcu` builds the block: its window, its interrupt line, its DMA requests and its chip-select listener are wired inside
         self._from_mcu = True
         self._block = <SsiBlock*> <size_t> native_ssi()
+        self._ops = register_ops(self._block)
         self.rp2040 = rp2040
         self.name = name
 
@@ -166,46 +167,11 @@ cdef class RPSSI:
     def _cs_asserted(self):
         return self._block.cs_asserted()
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
     # --- BasePeripheral's surface -----------------------------------------------------------------
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        self._block.write(<uint32_t> offset, <int64_t> value)
-        raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type)
-        raise_if_pending()
 
     def reset(self):
         if not self._block.reset():
             raise_if_pending()
         raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol ------------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the
-        block's own read/write functions and its context. Looked up on the *type* by the bus."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

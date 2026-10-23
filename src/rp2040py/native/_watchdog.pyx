@@ -12,144 +12,29 @@ The API is the reference's: `scratch_data` (a view of the eight words), `timer` 
 
 from libc.stdint cimport int64_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
+from rp2040py.native._views cimport Timer32AlarmView, Timer32View, WordsView
 from rp2040py.native._window_map cimport WindowHandler
-
-from rp2040py.utils.timer32 import TimerMode
 
 __all__ = ("RPWatchdog",)
 
 
-cdef class _Words:
-    """The reference's `scratch_data` list as a view of the C++ array: indexable, assignable (the tests poke `scratch_data[4] = MAGIC`) and equal to a list of the same values."""
-
-    cdef uint32_t* _words
-
-    def __len__(self):
-        return 8
-
-    def __getitem__(self, index):
-        return list(self)[index]
-
-    def __setitem__(self, index, value):
-        cdef int i = range(8)[index]
-        self._words[i] = <uint32_t> (value & 0xFFFFFFFF)
-
-    def __iter__(self):
-        for i in range(8):
-            yield self._words[i]
-
-    def __eq__(self, other):
-        try:
-            return list(self) == list(other)
-        except TypeError:
-            return NotImplemented
-
-    def __repr__(self):
-        return repr(list(self))
-
-
-cdef class _AlarmView:
-    """The watchdog's compare alarm as the reference's `Timer32PeriodicAlarm` shows it (`target`, `enable`): the state lives in the C++ block."""
-
-    cdef RPWatchdog _owner
-    cdef Timer32PeriodicAlarm* _alarm
-
-    @property
-    def target(self):
-        return self._alarm.target()
-
-    @target.setter
-    def target(self, value):
-        self._alarm.set_target(<int64_t> value)
+cdef class _AlarmView(Timer32AlarmView):
+    """The watchdog's compare alarm: the shared view, plus the `callback` the tests call by hand."""
 
     @property
     def callback(self):
-        """What the alarm runs at its target: REASON = TIMER, then the chip's reset (the tests call it by hand)."""
+        """What the alarm runs at its target: REASON = TIMER, then the chip's reset."""
         return self._owner._fire_timeout
 
-    @property
-    def enable(self):
-        return bool(self._alarm.enable())
 
-    @enable.setter
-    def enable(self, value):
-        self._alarm.set_enable(bool(value))
-
-
-cdef class _TimerView:
-    """The watchdog's `Timer32` as the reference shows it."""
-
-    cdef RPWatchdog _owner
-    cdef Timer32* _timer
-
-    @property
-    def counter(self):
-        return self._timer.counter()
-
-    @property
-    def raw_counter(self):
-        return self._timer.raw_counter()
-
-    @property
-    def top(self):
-        return self._timer.top()
-
-    @top.setter
-    def top(self, value):
-        self._timer.set_top(<int64_t> value)
-
-    @property
-    def frequency(self):
-        return self._timer.frequency()
-
-    @frequency.setter
-    def frequency(self, value):
-        self._timer.set_frequency(<double> value)
-
-    @property
-    def prescaler(self):
-        return self._timer.prescaler()
-
-    @prescaler.setter
-    def prescaler(self, value):
-        self._timer.set_prescaler(<double> value)
-
-    @property
-    def enable(self):
-        return bool(self._timer.enable())
-
-    @enable.setter
-    def enable(self, value):
-        self._timer.set_enable(bool(value))
-
-    @property
-    def mode(self):
-        return TimerMode(self._timer.mode_raw())
-
-    @mode.setter
-    def mode(self, value):
-        self._timer.set_mode_raw(<uint32_t> int(value))
-
-    def set(self, value, zig_zag_down=False):
-        self._timer.set(<int64_t> value, bool(zig_zag_down))
-
-    def advance(self, delta):
-        self._timer.advance(<int64_t> delta)
-
-    def reset(self):
-        self._timer.reset()
-
-    def to_nanos(self, cycles):
-        return self._timer.to_nanos(<int64_t> cycles)
-
-
-cdef class RPWatchdog:
+cdef class RPWatchdog(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef _TimerView timer
+        cdef Timer32View timer
         cdef _AlarmView alarm
-        cdef _Words words
+        cdef WordsView words
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -166,14 +51,16 @@ cdef class RPWatchdog:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already and wired it (its window, its lines, the clock tree, the watchdog's tick) - this object is the Python view of it
             self._block = <WatchdogBlock*> <size_t> rp2040._native_watchdog_address()
+            self._ops = register_ops(self._block)
         else:
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPWatchdog is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-        words = _Words.__new__(_Words)
+        words = WordsView.__new__(WordsView)
         words._words = self._block.scratch
+        words._n = 8
         self.scratch_data = words
-        timer = _TimerView.__new__(_TimerView)
+        timer = Timer32View.__new__(Timer32View)
         timer._owner = self
         timer._timer = &self._block.timer
         self.timer = timer
@@ -204,10 +91,6 @@ cdef class RPWatchdog:
         """What the alarm runs at its target; the tests call it as `alarm.callback()`."""
         if not self._block.fire_timeout():
             raise_if_pending()
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
 
     def add_tick_listener(self, listener):
         """Calls `listener(tick_hz)` whenever the tick changes (0: stopped), after the TIMER and SysTick have been told. Returns the function that unsubscribes it."""
@@ -289,37 +172,4 @@ cdef class RPWatchdog:
         if not self._block.reset():
             raise_if_pending()
 
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

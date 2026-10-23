@@ -14,16 +14,17 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._dma cimport RPDMA
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
-from rp2040py.native._ppb cimport RPPPB
 from rp2040py.native._pll cimport RPPLL
-from rp2040py.native._rosc cimport RPROSC
+from rp2040py.native._ppb cimport RPPPB
 from rp2040py.native._pwm cimport RPPWM
+from rp2040py.native._rosc cimport RPROSC
 from rp2040py.native._rtc cimport RP2040RTC
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._watchdog cimport RPWatchdog
-from rp2040py.native._xosc cimport RPXOSC
 from rp2040py.native._window_map cimport WindowHandler
+from rp2040py.native._xosc cimport RPXOSC
 
 __all__ = ("RPClocks",)
 
@@ -110,7 +111,7 @@ cdef cppbool _peri_sink(void* ctx, double hz, double old) noexcept:
     return True
 
 
-cdef class RPClocks:
+cdef class RPClocks(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         pll_sys = rp2040.pll_sys  # the chip builds the PLLs first: the tree points at their C++ blocks
         pll_usb = rp2040.pll_usb
@@ -124,6 +125,7 @@ cdef class RPClocks:
             self._pll_sys = pll_sys
             self._pll_usb = pll_usb
             self._block = <ClocksBlock*> <size_t> rp2040._native_clocks_address()
+            self._ops = register_ops(self._block)
             self.rebind_consumers()
             return
         raise TypeError(
@@ -213,24 +215,6 @@ cdef class RPClocks:
         )
         if not ok:
             raise RuntimeError("the clock tree's sink lists are full")
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
 
     def reset(self):
         """The CLOCKS registers back to power-on (the clock tree's `clk_sys` / `clk_peri` are `reset_tree()`'s)."""
@@ -396,23 +380,4 @@ cdef class RPClocks:
     def rtc_div(self, value):
         self._block.rtc_div = <uint32_t> (value & 0xFFFFFFFF)
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

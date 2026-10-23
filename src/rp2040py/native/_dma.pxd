@@ -6,8 +6,9 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._bus cimport Bus
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "dma.hpp" namespace "rp2040core":
@@ -59,11 +60,8 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         void clk_sys_changed(double hz) noexcept
 
 
-cdef class RPDMA:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPDMA(NativeBlock):
     cdef DmaBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
     cdef object _channels
     cdef object _dreq_view

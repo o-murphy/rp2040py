@@ -23,10 +23,10 @@ from libcpp cimport bool as cppbool
 
 from rp2040py.native._bus cimport Bus
 from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
-
 
 __all__ = ("RPDMA",)
 
@@ -171,7 +171,7 @@ cdef class _DreqView:
         return repr(dict(self.items()))
 
 
-cdef class RPDMA:
+cdef class RPDMA(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         cdef Bus* bus
         clock = rp2040.clock
@@ -189,6 +189,7 @@ cdef class RPDMA:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already and bound it to the tree and the bus - this object is the Python view of it
             self._block = <DmaBlock*> <size_t> rp2040._native_dma_address()
+            self._ops = register_ops(self._block)
             self._unsubscribe_clock = None
         else:
             raise TypeError(
@@ -251,30 +252,7 @@ cdef class RPDMA:
     def int_status1(self):
         return self._block.int_status1()
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
     # --- BasePeripheral's surface -----------------------------------------------------------------
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
-    def reset(self):
-        if not self._block.reset():
-            raise_if_pending()
 
     def set_dreq(self, dreq_channel):
         cdef int64_t number = dreq_channel
@@ -300,24 +278,4 @@ cdef class RPDMA:
         if not self._block.check_interrupts():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol ------------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python
-        trampoline: the addresses of the block's own read/write functions and its context. Looked up on the *type*
-        by the bus, so a wrapper that merely forwards attributes (a recorder, a profiler) cannot lend its target's
-        fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

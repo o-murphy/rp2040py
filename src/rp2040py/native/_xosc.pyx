@@ -11,6 +11,7 @@ table (see `_native_window`), so a register access never enters Python. What sta
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._register_warning import register_warning
@@ -29,7 +30,7 @@ cdef cppbool _stable_trampoline(void* ctx) noexcept:
     return True
 
 
-cdef class RPXOSC:
+cdef class RPXOSC(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         self.rp2040 = rp2040
         self.name = name
@@ -37,6 +38,7 @@ cdef class RPXOSC:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus and its notices to the clock tree - and this object is the Python view of it
             self._block = <XoscBlock*> <size_t> rp2040._native_xosc_address()
+            self._ops = register_ops(self._block)
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPXOSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
@@ -59,24 +61,6 @@ cdef class RPXOSC:
             self.warn(f"Invalid DORMANT value written: 0x{value:x}")
         else:
             self.warn(register_warning(kind, offset, value))
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
 
     @property
     def _ctrl(self):
@@ -146,23 +130,4 @@ cdef class RPXOSC:
         """Back to power-on: disabled, not stable, not dormant. Gated on `PSM.WDSEL`'s XOSC bit by `RP2040.reset()` (see the reference)."""
         self._block.reset()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

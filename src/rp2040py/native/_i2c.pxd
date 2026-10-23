@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "fifo.hpp" namespace "rp2040core":
@@ -75,11 +76,8 @@ cdef extern from "i2c.hpp" namespace "rp2040core":
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPI2C:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPI2C(NativeBlock):
     cdef I2cBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object irq
     cdef object _on_start
     cdef object _on_connect
