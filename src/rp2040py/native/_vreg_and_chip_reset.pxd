@@ -12,9 +12,8 @@ cdef extern from "vreg.hpp" namespace "rp2040core":
     cdef cppclass VregBlock:
         VregBlock() noexcept
         int64_t raw_write_value() noexcept
-        uint32_t vreg
-        uint32_t bod
-        uint32_t chip_reset
+        void snapshot(uint32_t* out) noexcept
+        void set_psm_restart_flag() noexcept
         void record_reset_cause(uint32_t flag) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept

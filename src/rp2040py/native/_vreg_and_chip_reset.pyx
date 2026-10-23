@@ -33,29 +33,14 @@ cdef class RPVREGAndChipReset(NativeBlock):
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPVREGAndChipReset is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-    @property
-    def vreg(self):
-        return self._block.vreg
+    def snapshot(self):
+        cdef uint32_t w[3]
+        self._block.snapshot(w)
+        return {"vreg": w[0], "bod": w[1], "chip_reset": w[2]}
 
-    @vreg.setter
-    def vreg(self, value):
-        self._block.vreg = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def bod(self):
-        return self._block.bod
-
-    @bod.setter
-    def bod(self, value):
-        self._block.bod = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def chip_reset(self):
-        return self._block.chip_reset
-
-    @chip_reset.setter
-    def chip_reset(self, value):
-        self._block.chip_reset = <uint32_t> (value & 0xFFFFFFFF)
+    def set_psm_restart_flag(self):
+        """What a debugger's psm_restart does (see the reference)."""
+        self._block.set_psm_restart_flag()
 
     def record_reset_cause(self, flag):
         """Record which chip-level reset just happened (see the reference): `flag` is one of HAD_POR / HAD_RUN / HAD_PSM_RESTART."""

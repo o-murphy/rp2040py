@@ -32,53 +32,17 @@ cdef class RP2040SysCfg(NativeBlock):
             "the native block is a view of the chip's C++ `Mcu` block: RP2040SysCfg is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
 
-    @property
-    def proc1_nmi_mask(self):
-        return self._block.proc1_nmi_mask
-
-    @proc1_nmi_mask.setter
-    def proc1_nmi_mask(self, value):
-        self._block.proc1_nmi_mask = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def proc_config(self):
-        return self._block.proc_config
-
-    @proc_config.setter
-    def proc_config(self, value):
-        self._block.proc_config = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def proc_in_sync_bypass(self):
-        return self._block.proc_in_sync_bypass
-
-    @proc_in_sync_bypass.setter
-    def proc_in_sync_bypass(self, value):
-        self._block.proc_in_sync_bypass = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def proc_in_sync_bypass_hi(self):
-        return self._block.proc_in_sync_bypass_hi
-
-    @proc_in_sync_bypass_hi.setter
-    def proc_in_sync_bypass_hi(self, value):
-        self._block.proc_in_sync_bypass_hi = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def dbgforce(self):
-        return self._block.dbgforce
-
-    @dbgforce.setter
-    def dbgforce(self, value):
-        self._block.dbgforce = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def mempowerdown(self):
-        return self._block.mempowerdown
-
-    @mempowerdown.setter
-    def mempowerdown(self, value):
-        self._block.mempowerdown = <uint32_t> (value & 0xFFFFFFFF)
+    def snapshot(self):
+        cdef uint32_t w[6]
+        self._block.snapshot(w)
+        return {
+            "proc1_nmi_mask": w[0],
+            "proc_config": w[1],
+            "proc_in_sync_bypass": w[2],
+            "proc_in_sync_bypass_hi": w[3],
+            "dbgforce": w[4],
+            "mempowerdown": w[5],
+        }
 
     def reset(self):
         """`RESETS_RESET_SYSCFG`: every register back to its datasheet reset value, the core's NMI mask included."""
