@@ -40,9 +40,11 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 
 ## 1. The reference and the facade (before any C++)
 
-- `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle) and a new `peripherals/X.py`
-  facade that imports `native/_X` when it can (`native_disabled()` / `RP2040PY_SKIP_CYTHON` forces the reference). The pure chip
-  (`_rp2040.py`) imports `_X` directly; the native chip (`native/_rp2040.pyx`) imports the facade.
+- `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle). Both chips import their block directly: the pure chip
+  (`_rp2040.py`) `peripherals/_X`, the native chip (`native/_rp2040.pyx`) `native/_X`. **No facade by default.** Add a `peripherals/X.py` facade (imports `native/_X` when it can;
+  `native_disabled()` / `RP2040PY_SKIP_CYTHON` forces the reference) only when something outside the two chips imports the block's name or constants - the public
+  `rp2040py.RPPIO` / `RPI2C` / `RPUSBController`, a device's type hint, a test - because a native shell cannot be built on its own (it is the view of the chip's block). 15 facades nobody imported
+  were removed (record 0096, Phase 5b).
 - Anything the shell and the reference must compute the same way (a rounding, a division, an error message) is a function in `_X.py`
   that both call - not two copies. (Cython's `cdivision=True` turned `int / 64` into integer division in the UART shell.)
 
