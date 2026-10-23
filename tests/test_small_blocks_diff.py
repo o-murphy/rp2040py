@@ -48,6 +48,10 @@ def _write_with_an_alias(candidate: Rig, step: int) -> None:
 
 def _change_a_register(candidate: Rig, step: int) -> None:
     if step == 700:
+        damage = candidate.spec.get("damage")
+        if damage is not None:  # a block observed through `snapshot()` is damaged through its own back door
+            damage(candidate.peripheral)
+            return
         name = candidate.spec["attrs"][0]
         current = getattr(candidate.peripheral, name)
         setattr(candidate.peripheral, name, (current ^ 0x10) if isinstance(current, int) else current)

@@ -27,7 +27,8 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "BUSCTRL_BASE",
         "registers": (0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24),
         "unimplemented": (0x28, 0x2C, 0x40, 0x80, 0xFFC),
-        "attrs": ("bus_priority", "perf_ctr", "perf_sel"),
+        "attrs": (),  # the state is `snapshot()`, on both sides
+        "damage": lambda peripheral: peripheral.set_perf_counter(0, 1),
         "ops": ("reset", "count"),
     },
     "syscfg": {
@@ -61,6 +62,10 @@ CAUSES = (V.HAD_POR, V.HAD_RUN, V.HAD_PSM_RESTART)
 
 def _freeze(value: Any) -> Any:
     return tuple(value) if hasattr(value, "__iter__") else value
+
+
+def _freeze_state(state: dict[str, Any]) -> tuple:
+    return tuple(sorted((name, _freeze(value)) for name, value in state.items()))
 
 
 class Rig:
@@ -106,9 +111,7 @@ class Rig:
         elif kind == "reset":
             self.peripheral.reset()
         elif kind == "count":
-            self.peripheral.perf_ctr[op[1]] = op[
-                2
-            ]  # what a bus fabric that counted would do: nothing on the bus can make a counter non-zero
+            self.peripheral.set_perf_counter(op[1], op[2])  # what a bus fabric that counted would do
         elif kind == "nmi":
             chip.core.interrupt_nmi_mask = op[1]  # the CPU's side of PROC0_NMI_MASK
         elif kind == "psm_flag":
@@ -128,6 +131,7 @@ class Rig:
         return {
             "regs": tuple(int(self.chip.read_uint32(base + offset)) for offset in self.spec["registers"]),
             "attrs": tuple(_freeze(getattr(peripheral, name)) for name in self.spec["attrs"]),
+            "state": _freeze_state(peripheral.snapshot()) if hasattr(peripheral, "snapshot") else None,
             "raw": int(peripheral.raw_write_value),
             "nmi": int(self.chip.core.interrupt_nmi_mask),
         }
