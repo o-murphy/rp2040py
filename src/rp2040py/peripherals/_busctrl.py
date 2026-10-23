@@ -52,6 +52,14 @@ class RPBUSCTRL(BasePeripheral):
         self.perf_ctr = [0, 0, 0, 0]
         self.perf_sel = [0x1F, 0x1F, 0x1F, 0x1F]
 
+    def snapshot(self) -> dict[str, int | tuple[int, ...]]:
+        """The block's whole architectural state, as plain values: the one thing a test (or a host) reads besides the registers, whichever implementation is behind it."""
+        return {"bus_priority": self.bus_priority, "perf_ctr": tuple(self.perf_ctr), "perf_sel": tuple(self.perf_sel)}
+
+    def set_perf_counter(self, index: int, value: int) -> None:
+        """What a bus fabric that counted would do: the model has none, and nothing on the bus can make a counter non-zero."""
+        self.perf_ctr[index] = value
+
     def read_uint32(self, offset: int) -> int:
         if offset == BUS_PRIORITY:
             return self.bus_priority

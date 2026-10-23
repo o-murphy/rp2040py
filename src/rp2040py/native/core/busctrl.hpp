@@ -46,6 +46,21 @@ public:
         return true;
     }
 
+    // The state as one flat array - `bus_priority`, `perf_ctr[4]`, `perf_sel[4]` - for a host that wants all of it in one crossing (`kSnapshotWords` words).
+    static constexpr uint32_t kSnapshotWords = 9;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = bus_priority;
+        for (int i = 0; i < 4; ++i) {
+            out[1 + i] = perf_ctr[i];
+            out[5 + i] = perf_sel[i];
+        }
+    }
+
+    // What a bus fabric that counted would do (there is none: nothing on the bus makes a counter non-zero).
+    void set_perf_counter(uint32_t index, uint32_t value) noexcept {
+        if (index < 4) perf_ctr[index] = value;
+    }
+
     uint32_t read(uint32_t offset) noexcept {
         using namespace busctrl_regs;
         if (offset == BUS_PRIORITY) return bus_priority;

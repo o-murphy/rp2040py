@@ -12,9 +12,8 @@ cdef extern from "busctrl.hpp" namespace "rp2040core":
     cdef cppclass BusctrlBlock:
         BusctrlBlock() noexcept
         int64_t raw_write_value() noexcept
-        uint32_t bus_priority
-        uint32_t perf_ctr[4]
-        uint32_t perf_sel[4]
+        void snapshot(uint32_t* out) noexcept
+        void set_perf_counter(uint32_t index, uint32_t value) noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
@@ -23,6 +22,3 @@ cdef extern from "busctrl.hpp" namespace "rp2040core":
 
 cdef class RPBUSCTRL(NativeBlock):
     cdef BusctrlBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object voltage_select
-    cdef public object perf_ctr
-    cdef public object perf_sel
