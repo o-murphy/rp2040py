@@ -3,7 +3,7 @@ reference in `_usb.py` otherwise. Every caller imports from here - never from `_
 Held to identical behaviour by `tests/test_usb_diff.py` (docs/tasks/usb-port.md).
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 from rp2040py.peripherals._usb import (
     ADDR_ENDP,
     ADDR_ENDP1,
@@ -164,8 +164,7 @@ from rp2040py.peripherals._usb import (
 )
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._usb import RPUSBController
 except ImportError:
     from rp2040py.peripherals._usb import RPUSBController
