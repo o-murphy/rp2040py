@@ -14,12 +14,7 @@ cdef extern from "syscfg.hpp" namespace "rp2040core":
         SyscfgBlock() noexcept
         int64_t raw_write_value() noexcept
         cppbool reset() noexcept
-        uint32_t proc1_nmi_mask
-        uint32_t proc_config
-        uint32_t proc_in_sync_bypass
-        uint32_t proc_in_sync_bypass_hi
-        uint32_t dbgforce
-        uint32_t mempowerdown
+        void snapshot(uint32_t* out) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

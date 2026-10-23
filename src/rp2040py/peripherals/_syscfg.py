@@ -50,6 +50,17 @@ class RP2040SysCfg(BasePeripheral):
         self.dbgforce = DBGFORCE_RESET
         self.mempowerdown = 0
 
+    def snapshot(self) -> dict[str, int]:
+        """The block's own registers as plain values (PROC0_NMI_MASK is the core's, read from the core)."""
+        return {
+            "proc1_nmi_mask": self.proc1_nmi_mask,
+            "proc_config": self.proc_config,
+            "proc_in_sync_bypass": self.proc_in_sync_bypass,
+            "proc_in_sync_bypass_hi": self.proc_in_sync_bypass_hi,
+            "dbgforce": self.dbgforce,
+            "mempowerdown": self.mempowerdown,
+        }
+
     def read_uint32(self, offset: int) -> int:
         if offset == PROC0_NMI_MASK:
             return self.rp2040.core.interrupt_nmi_mask

@@ -67,6 +67,14 @@ class RPVREGAndChipReset(BasePeripheral):
         assert flag in (HAD_POR, HAD_RUN, HAD_PSM_RESTART), f"not a CHIP_RESET cause flag: 0x{flag:x}"
         self.chip_reset = (self.chip_reset & PSM_RESTART_FLAG) | flag
 
+    def snapshot(self) -> dict[str, int]:
+        """The block's registers as plain values."""
+        return {"vreg": self.vreg, "bod": self.bod, "chip_reset": self.chip_reset}
+
+    def set_psm_restart_flag(self) -> None:
+        """What a debugger's psm_restart does (tests/test_watchdog_reset.py): nothing on the bus can set PSM_RESTART_FLAG, only clear it."""
+        self.chip_reset |= PSM_RESTART_FLAG
+
     def read_uint32(self, offset: int) -> int:
         if offset == VREG:
             return self.vreg

@@ -27,8 +27,7 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "BUSCTRL_BASE",
         "registers": (0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24),
         "unimplemented": (0x28, 0x2C, 0x40, 0x80, 0xFFC),
-        "attrs": (),  # the state is `snapshot()`, on both sides
-        "damage": lambda peripheral: peripheral.set_perf_counter(0, 1),
+        "damage": (B.BUS_PRIORITY, 0x10),  # a register the candidate is written alone, to prove the comparison sees it
         "ops": ("reset", "count"),
     },
     "syscfg": {
@@ -37,14 +36,7 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "SYSCFG",
         "registers": (0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18),
         "unimplemented": (0x1C, 0x20, 0x40, 0xFFC),
-        "attrs": (
-            "proc1_nmi_mask",
-            "proc_config",
-            "proc_in_sync_bypass",
-            "proc_in_sync_bypass_hi",
-            "dbgforce",
-            "mempowerdown",
-        ),
+        "damage": (S.PROC_IN_SYNC_BYPASS, 0x10),
         "ops": ("reset", "nmi"),
     },
     "vreg": {
@@ -53,7 +45,7 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "VREG_AND_CHIP_RESET_BASE",
         "registers": (0x0, 0x4, 0x8),
         "unimplemented": (0xC, 0x10, 0x40, 0xFFC),
-        "attrs": ("vreg", "bod", "chip_reset"),
+        "damage": (V.VREG, 0x10),
         "ops": ("cause", "psm_flag"),
     },
 }
@@ -115,9 +107,7 @@ class Rig:
         elif kind == "nmi":
             chip.core.interrupt_nmi_mask = op[1]  # the CPU's side of PROC0_NMI_MASK
         elif kind == "psm_flag":
-            self.peripheral.chip_reset |= (
-                V.PSM_RESTART_FLAG
-            )  # what a debugger's psm_restart does (tests/test_watchdog_reset.py): nothing on the bus can set it
+            self.peripheral.set_psm_restart_flag()  # what a debugger's psm_restart does (tests/test_watchdog_reset.py)
         elif kind == "cause":
             self.peripheral.record_reset_cause(op[1])
         else:
@@ -130,8 +120,7 @@ class Rig:
         base, peripheral = self.spec["base"], self.peripheral
         return {
             "regs": tuple(int(self.chip.read_uint32(base + offset)) for offset in self.spec["registers"]),
-            "attrs": tuple(_freeze(getattr(peripheral, name)) for name in self.spec["attrs"]),
-            "state": _freeze_state(peripheral.snapshot()) if hasattr(peripheral, "snapshot") else None,
+            "state": _freeze_state(peripheral.snapshot()),
             "raw": int(peripheral.raw_write_value),
             "nmi": int(self.chip.core.interrupt_nmi_mask),
         }

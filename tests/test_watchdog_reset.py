@@ -292,7 +292,7 @@ def test_recording_a_cause_leaves_the_debugger_owned_psm_restart_flag_alone(tmp_
     """PSM_RESTART_FLAG is the block's one writable bit, cleared by the bootrom's write-1-to-clear
     handshake (record 0050) - a reset cause must not forge or clear it."""
     device = _make_device(tmp_path)
-    device.mcu.vreg_and_chip_reset.chip_reset |= PSM_RESTART_FLAG
+    device.mcu.vreg_and_chip_reset.set_psm_restart_flag()
 
     device.hard_reset(cause=ResetCause.RUN_PIN)
 
