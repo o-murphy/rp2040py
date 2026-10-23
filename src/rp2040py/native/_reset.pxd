@@ -12,8 +12,8 @@ cdef extern from "resets.hpp" namespace "rp2040core":
     cdef cppclass ResetsBlock:
         ResetsBlock() noexcept
         int64_t raw_write_value() noexcept
-        uint32_t reset_bits
         uint32_t wdsel
+        void snapshot(uint32_t* out) noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

@@ -34,6 +34,14 @@ public:
     uint32_t frce_off = 0;
     uint32_t wdsel = 0;
 
+    // The registers as one flat array: `frce_on`, `frce_off`, `wdsel`.
+    static constexpr uint32_t kSnapshotWords = 3;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = frce_on;
+        out[1] = frce_off;
+        out[2] = wdsel;
+    }
+
     // PROC1 is bit 16: forcing it off holds core 1 in reset (`multicore_reset_core1()` does it and clears it again). The chip is told each time the held state changes (record 0104).
     using Proc1Fn = void (*)(void* ctx, bool held);
     void bind_proc1(Proc1Fn fn, void* ctx) noexcept {

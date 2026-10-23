@@ -27,7 +27,7 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "PSM_BASE",
         "registers": (0x0, 0x4, 0x8, 0xC),
         "unimplemented": (0x10, 0x14, 0x40, 0xFFC),
-        "attrs": ("wdsel", "_frce_on", "_frce_off"),
+        "attrs": (),  # observed through `snapshot()`
         "ops": (),
     },
     "resets": {
@@ -36,7 +36,7 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "RESETS_BASE",
         "registers": (0x0, 0x4, 0x8),
         "unimplemented": (0xC, 0x10, 0x40, 0xFFC),
-        "attrs": ("wdsel", "_reset", "_wdsel"),
+        "attrs": (),  # observed through `snapshot()`
         "ops": (),
     },
     "xosc": {
@@ -64,6 +64,10 @@ XOSC_VALUES = (
     0xFF,
     0x100,
 )
+
+
+def _freeze_state(state: dict[str, Any]) -> tuple:
+    return tuple(sorted((name, _freeze(value)) for name, value in state.items()))
 
 
 def _freeze(value: Any) -> Any:
@@ -119,6 +123,9 @@ class Rig:
         return {
             "regs": tuple(int(self.chip.read_uint32(base + offset)) for offset in self.spec["registers"]),
             "attrs": tuple(_freeze(getattr(peripheral, name)) for name in self.spec["attrs"]),
+            "state": _freeze_state(peripheral.snapshot())
+            if hasattr(peripheral, "snapshot")
+            else None,  # PSM and RESETS; XOSC is still read by attribute
             "raw": int(peripheral.raw_write_value),
         }
 

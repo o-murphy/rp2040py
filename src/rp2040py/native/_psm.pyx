@@ -36,33 +36,10 @@ cdef class RPPSM(NativeBlock):
         """Which power-manager domains a *watchdog* reset resets - read by `RP2040.reset()` on the watchdog path (0089's D5)."""
         return self._block.wdsel
 
-    @wdsel.setter
-    def wdsel(self, value):
-        self._block.wdsel = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _frce_on(self):
-        return self._block.frce_on
-
-    @_frce_on.setter
-    def _frce_on(self, value):
-        self._block.frce_on = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _frce_off(self):
-        return self._block.frce_off
-
-    @_frce_off.setter
-    def _frce_off(self, value):
-        self._block.frce_off = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _wdsel(self):
-        return self._block.wdsel
-
-    @_wdsel.setter
-    def _wdsel(self, value):
-        self._block.wdsel = <uint32_t> (value & 0xFFFFFFFF)
+    def snapshot(self):
+        cdef uint32_t w[3]
+        self._block.snapshot(w)
+        return {"frce_on": w[0], "frce_off": w[1], "wdsel": w[2]}
 
     def reset(self):
         """The block is not on the RESETS list: nothing to put back (`BasePeripheral`'s no-op)."""

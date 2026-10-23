@@ -55,6 +55,10 @@ class RPPSM(BasePeripheral):
         outside, per CLAUDE.md's rule on cross-class private access."""
         return self._wdsel
 
+    def snapshot(self) -> dict[str, int]:
+        """The block's registers as plain values."""
+        return {"frce_on": self._frce_on, "frce_off": self._frce_off, "wdsel": self._wdsel}
+
     def read_uint32(self, offset: int) -> int:
         if offset == FRCE_ON:
             return self._frce_on

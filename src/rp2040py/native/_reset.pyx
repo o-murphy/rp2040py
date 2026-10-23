@@ -36,25 +36,10 @@ cdef class RPReset(NativeBlock):
         """Which peripheral blocks a *watchdog* reset resets directly (see the reference)."""
         return self._block.wdsel
 
-    @wdsel.setter
-    def wdsel(self, value):
-        self._block.wdsel = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _reset(self):
-        return self._block.reset_bits
-
-    @_reset.setter
-    def _reset(self, value):
-        self._block.reset_bits = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _wdsel(self):
-        return self._block.wdsel
-
-    @_wdsel.setter
-    def _wdsel(self, value):
-        self._block.wdsel = <uint32_t> (value & 0xFFFFFFFF)
+    def snapshot(self):
+        cdef uint32_t w[2]
+        self._block.snapshot(w)
+        return {"reset": w[0], "wdsel": w[1]}
 
     def reset(self):
         """The reset controller has no reset of its own here (`BasePeripheral`'s no-op)."""
