@@ -3,7 +3,7 @@ plain-Python reference in `_xip_ctrl.py` otherwise. Every caller imports from he
 deliberate exception). Held to identical behaviour by `tests/test_xip_diff.py` (docs/records/0098-datasheet-conformance-audit.md, "XIP_CTRL and the XIP subsystem").
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 from rp2040py.peripherals._xip_ctrl import (
     CTR_ACC,
     CTR_HIT,
@@ -24,8 +24,7 @@ from rp2040py.peripherals._xip_ctrl import (
 )
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._xip_ctrl import RPXIPAux, RPXIPCtrl
 except ImportError:
     from rp2040py.peripherals._xip_ctrl import RPXIPAux, RPXIPCtrl

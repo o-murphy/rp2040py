@@ -8,12 +8,11 @@ the oracle (docs/records/0096-cpp-mcu-core.md). `RPDMAChannel` is the reference'
 channels are views of C++ state with the same attribute names, not instances of it.
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 from rp2040py.peripherals._dma import TREQ, DREQChannel, RPDMAChannel
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._dma import RPDMA
 except ImportError:
     from rp2040py.peripherals._dma import RPDMA
