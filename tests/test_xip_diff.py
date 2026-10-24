@@ -23,17 +23,18 @@ def test_the_pure_python_xip_and_the_default_xip_agree(seed):
 
 def _count_an_access(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.xip_ctrl.ctr_acc = 12345
+        candidate.chip.xip_ctrl.set_counter("ctr_acc", 12345)
 
 
 def _change_the_ctrl(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.xip_ctrl.ctrl ^= 0x2
+        xip = candidate.chip.xip_ctrl
+        xip.write_uint32(0x00, xip.read_uint32(0x00) ^ 0x2)  # CTRL
 
 
 def _move_the_stream(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.xip_ctrl.stream_addr = 0x1230
+        candidate.chip.xip_ctrl.write_uint32(0x14, 0x1230)  # STREAM_ADDR
 
 
 def _change_the_flash(candidate: Rig, step: int) -> None:

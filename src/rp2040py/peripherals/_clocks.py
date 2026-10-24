@@ -191,6 +191,23 @@ class RPClocks(BasePeripheral):
         self._fc_started_hz = 0.0
         self._fc_reset()
 
+    def snapshot(self) -> dict[str, int]:
+        """The ten clock generators' CTRL and DIV words (ref, peri, usb, sys, adc, rtc) as plain values; the frequencies derived from them are `ref_freq` ... `adc_freq`."""
+        return {
+            "ref_ctrl": self.ref_ctrl,
+            "ref_div": self.ref_div,
+            "peri_ctrl": self.peri_ctrl,
+            "peri_div": self.peri_div,
+            "usb_ctrl": self.usb_ctrl,
+            "usb_div": self.usb_div,
+            "sys_ctrl": self.sys_ctrl,
+            "sys_div": self.sys_div,
+            "adc_ctrl": self.adc_ctrl,
+            "adc_div": self.adc_div,
+            "rtc_ctrl": self.rtc_ctrl,
+            "rtc_div": self.rtc_div,
+        }
+
     def reset(self) -> None:
         """Every CLK_*_CTRL/DIV back to its power-on value (0089 Phase 5) - `0x100`, i.e. a
         divisor of 1.0 in the block's 8.8 fixed-point encoding, which is what construction uses."""

@@ -106,7 +106,7 @@ class Rig:
         elif kind == "poke":
             chip.flash[op[1] : op[1] + len(op[2])] = op[2]
         elif kind == "saturate":
-            setattr(chip.xip_ctrl, op[1], 0xFFFFFFFF - op[2])
+            chip.xip_ctrl.set_counter(op[1], 0xFFFFFFFF - op[2])
         elif kind == "dma":
             chip.write_uint32(DMA_BASE + 0x00, XIP_AUX)
             chip.write_uint32(DMA_BASE + 0x04, DEST)
@@ -126,21 +126,7 @@ class Rig:
         chip, x = self.chip, self.chip.xip_ctrl
         return {
             "regs": tuple(int(chip.read_uint32(XIP_CTRL_BASE + offset)) for offset in (*REGISTERS, P.STAT)),
-            "state": (
-                int(x.ctrl),
-                int(x.ctr_hit),
-                int(x.ctr_acc),
-                int(x.stream_addr),
-                int(x.stream_ctr),
-                tuple(int(w) for w in x.stream_fifo),
-                bool(x.stream_in_flight),
-                int(x.flush_done_ticks),
-                bool(x.flush_ready),
-                int(x.stat),
-                bool(x.sram_available),
-            ),
-            "cache": (tuple(tuple(int(t) for t in ways) for ways in x.tags), tuple(int(r) for r in x.recent)),
-            "sram": bytes(x.sram),
+            "state": tuple((name, value) for name, value in sorted(x.snapshot().items())),
             "dma": (
                 int(chip.read_uint32(DMA_BASE + 0x08)),
                 int(chip.read_uint32(DMA_BASE + 0x0C)),

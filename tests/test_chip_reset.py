@@ -70,7 +70,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040.spi[0].write_uint32(0x00, 0x1234)  # SSPCR0
     rp2040.i2c[1].write_uint32(0x04, 0x42)  # IC_TAR
     rp2040.adc.write_uint32(0x00, 0x1)  # CS: EN
-    rp2040.clocks.sys_div = 0x999
+    rp2040.clocks.write_uint32(0x40, 0x99900)  # CLK_SYS_DIV
     rp2040.pio[0].instructions[0] = 0xDEAD
     rp2040.pio[0].machines[0].enabled = True
 
@@ -80,7 +80,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     assert rp2040.spi[0].snapshot()["control0"] == 0
     assert rp2040.i2c[1].snapshot()["target_address"] == 0x55
     assert rp2040.adc.snapshot()["cs"] == 0
-    assert rp2040.clocks.sys_div == 0x100
+    assert rp2040.clocks.snapshot()["sys_div"] == 0x100
     assert rp2040.pio[0].instructions[0] == 0
     assert rp2040.pio[0].machines[0].enabled is False
 
@@ -242,17 +242,17 @@ def test_xip_and_ssi_are_gated_on_the_psm_xip_domain_not_a_resets_bit(rp2040_fac
     """There is no `RESETS_RESET_XIP` or `_SSI` - the XIP domain is a `PSM.WDSEL` bit, and both
     halves of it reset together."""
     rp2040 = rp2040_factory()
-    rp2040.xip_ctrl.stream_addr = 0x1000
+    rp2040.xip_ctrl.write_uint32(0x14, 0x1000)  # STREAM_ADDR
     rp2040.ssi.write_uint32(0x08, 1)  # SSIENR
     rp2040.resets.write_uint32(0x04, 0x01FFFFFF)  # every RESETS bit, and it must not be enough
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xip_ctrl.stream_addr == 0x1000
+    assert rp2040.xip_ctrl.snapshot()["stream_addr"] == 0x1000
     assert rp2040.ssi.snapshot()["ssienr"] == 1
 
     rp2040.psm.write_uint32(0x08, WDSEL_XIP)
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xip_ctrl.stream_addr == 0
+    assert rp2040.xip_ctrl.snapshot()["stream_addr"] == 0
     assert rp2040.ssi.snapshot()["ssienr"] == 0
 
 

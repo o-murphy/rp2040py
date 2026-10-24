@@ -17,7 +17,7 @@ The model's own choices - not in the datasheet: least-recently-used replacement;
 access of the model's CPU is one count (a halfword fetch is an access), where the M0+ fetches words.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock._simulation_clock import nanos_to_ticks
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -83,6 +83,31 @@ class RPXIPCtrl(BasePeripheral):
         self.flush_done_ticks = max(
             self.flush_done_ticks - delta, 0
         )  # a deadline long past is just "done": it must not drift negative without bound (it would overflow in C++)
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers and counters, the stream (address, count, FIFO, in flight), the flush, the cache tags and recency, and the data RAM."""
+        return {
+            "ctrl": self.ctrl,
+            "ctr_hit": self.ctr_hit,
+            "ctr_acc": self.ctr_acc,
+            "stream_addr": self.stream_addr,
+            "stream_ctr": self.stream_ctr,
+            "stream_fifo": tuple(self.stream_fifo),
+            "stream_in_flight": bool(self.stream_in_flight),
+            "flush_done_ticks": self.flush_done_ticks,
+            "flush_ready": bool(self.flush_ready),
+            "stat": self.stat,
+            "sram_available": bool(self.sram_available),
+            "tags": tuple(tuple(ways) for ways in self.tags),
+            "recent": tuple(self.recent),
+            "sram": bytes(self.sram),
+        }
+
+    def set_counter(self, name: str, value: int) -> None:
+        """The one thing the bus cannot do: put a counter (`"ctr_acc"` or `"ctr_hit"`) near its ceiling (they count accesses, and the registers only clear), for a saturation test."""
+        if name not in ("ctr_acc", "ctr_hit"):
+            raise ValueError(f"not a counter: {name!r}")
+        setattr(self, name, value)
 
     def reset(self) -> None:
         """The XIP domain, which is a `PSM.WDSEL` bit rather than a `RESETS` one - there is no `RESETS_RESET_XIP` (0089 Phase 5): the registers back to power-on, the stream stopped and its FIFO

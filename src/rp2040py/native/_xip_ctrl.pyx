@@ -59,87 +59,36 @@ cdef class RPXIPCtrl(NativeBlock):
             raise_if_pending()
         raise_if_pending()
 
-    # --- the reference's state, as views -------------------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def ctrl(self):
-        return self._block.ctrl
+    def snapshot(self):
+        """The block's state in one call: the registers and counters, the stream, the flush, the cache tags and recency, and the data RAM."""
+        cdef XipBlock* b = self._block
+        return {
+            "ctrl": b.ctrl,
+            "ctr_hit": b.ctr_hit,
+            "ctr_acc": b.ctr_acc,
+            "stream_addr": b.stream_addr,
+            "stream_ctr": b.stream_ctr,
+            "stream_fifo": tuple([b.fifo[i] for i in range(b.fifo_len)]),
+            "stream_in_flight": bool(b.stream_in_flight),
+            "flush_done_ticks": b.flush_done_ticks,
+            "flush_ready": bool(b.flush_ready()),
+            "stat": b.stat(),
+            "sram_available": not (b.ctrl & 0x9),
+            "tags": tuple([(b.tags[i][0], b.tags[i][1]) for i in range(1024)]),
+            "recent": tuple([b.recent[i] for i in range(1024)]),
+            "sram": bytes(b.sram[:16384]),
+        }
 
-    @ctrl.setter
-    def ctrl(self, value):
-        self._block.ctrl = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def ctr_hit(self):
-        return self._block.ctr_hit
-
-    @ctr_hit.setter
-    def ctr_hit(self, value):
-        self._block.ctr_hit = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def ctr_acc(self):
-        return self._block.ctr_acc
-
-    @ctr_acc.setter
-    def ctr_acc(self, value):
-        self._block.ctr_acc = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_addr(self):
-        return self._block.stream_addr
-
-    @stream_addr.setter
-    def stream_addr(self, value):
-        self._block.stream_addr = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_ctr(self):
-        return self._block.stream_ctr
-
-    @stream_ctr.setter
-    def stream_ctr(self, value):
-        self._block.stream_ctr = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_fifo(self):
-        return [self._block.fifo[i] for i in range(self._block.fifo_len)]
-
-    @property
-    def stream_in_flight(self):
-        return bool(self._block.stream_in_flight)
-
-    @property
-    def flush_done_ticks(self):
-        return self._block.flush_done_ticks
-
-    @flush_done_ticks.setter
-    def flush_done_ticks(self, value):
-        self._block.flush_done_ticks = <int64_t> value
-
-    @property
-    def flush_ready(self):
-        return bool(self._block.flush_ready())
-
-    @property
-    def stat(self):
-        return self._block.stat()
-
-    @property
-    def tags(self):
-        return [[self._block.tags[i][0], self._block.tags[i][1]] for i in range(1024)]
-
-    @property
-    def recent(self):
-        return [self._block.recent[i] for i in range(1024)]
-
-    @property
-    def sram(self):
-        return bytes(self._block.sram[:16384])
-
-    @property
-    def sram_available(self):
-        return not (self._block.ctrl & 0x9)
+    def set_counter(self, name, value):
+        """The one thing the bus cannot do: put a counter (`"ctr_acc"` or `"ctr_hit"`) near its ceiling (see the reference)."""
+        if name == "ctr_acc":
+            self._block.ctr_acc = <uint32_t> (value & 0xFFFFFFFF)
+        elif name == "ctr_hit":
+            self._block.ctr_hit = <uint32_t> (value & 0xFFFFFFFF)
+        else:
+            raise ValueError(f"not a counter: {name!r}")
 
     # --- the bus protocol ----------------------------------------------------------------------------
 

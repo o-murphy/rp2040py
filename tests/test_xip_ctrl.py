@@ -167,7 +167,7 @@ def test_the_cache_off_bypasses_every_alias(rp2040_factory):
 
 def test_the_counters_are_write_to_clear_and_saturate(rp2040_factory):
     rp2040 = rp2040_factory()
-    rp2040.xip_ctrl.ctr_acc = 0xFFFFFFFF
+    rp2040.xip_ctrl.set_counter("ctr_acc", 0xFFFFFFFF)
     rp2040.read_uint32(XIP)
     assert reg(rp2040, CTR_ACC) == 0xFFFFFFFF
     put(rp2040, CTR_ACC, 0x1234)

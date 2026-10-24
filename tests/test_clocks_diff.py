@@ -31,7 +31,10 @@ def _write_with_an_alias(candidate: Rig, step: int) -> None:
 
 def _change_a_divider(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.clocks.sys_div ^= 0x300
+        clocks = candidate.chip.clocks
+        clocks.write_uint32(
+            0x04, clocks.read_uint32(0x04) ^ 0x300
+        )  # CLK_GPOUT0_DIV: a stored register, no retune (a retune would run the rig's failing listener)
 
 
 def _change_a_pll(candidate: Rig, step: int) -> None:
