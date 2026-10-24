@@ -16,7 +16,7 @@ SSE, SPI_TXDMAE = 1 << 1, 1 << 1
 
 
 def _asserted(chip: RP2040) -> set[int]:
-    return {number for number in range(64) if chip.dma.dreq.get(number, False)}
+    return set(chip.dma.snapshot()["dreq"])
 
 
 def _request_uart_tx(chip: RP2040) -> None:
@@ -71,7 +71,7 @@ def test_a_replaced_dma_gets_the_requests_instead_of_the_native_one():
     chip.dma = recorder  # type: ignore[assignment]
     _request_uart_tx(chip)
     assert ("set", int(DREQChannel.DREQ_UART0_TX)) in recorder.calls
-    assert DREQChannel.DREQ_UART0_TX not in {n for n in range(64) if native.dreq.get(n, False)}
+    assert DREQChannel.DREQ_UART0_TX not in native.snapshot()["dreq"]
 
 
 def test_giving_the_native_dma_back_sends_the_requests_to_it_again():

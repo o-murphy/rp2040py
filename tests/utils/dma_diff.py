@@ -144,7 +144,7 @@ class Rig:
 
             # The DREQs the chip's peripherals asserted at construction (a UART/SPI TX FIFO is ready from the start) went to the DMA built with the chip;
             # the replacement starts from the same levels, as a DMA reset leaves them (_dma.RPDMA.reset).
-            levels = dict(self.chip.dma.dreq)
+            levels = dict.fromkeys(self.chip.dma.snapshot()["dreq"], True)
             self.chip.dma = _dma.RPDMA(self.chip, "DMA")
             self.chip.dma.dreq.update(levels)
             self.chip.peripherals[DMA_BASE >> 12] = BusView(self.chip.dma)
@@ -216,8 +216,10 @@ class Rig:
         for offset in CONTROLLER_REGISTERS:
             regs.append(int(chip.read_uint32(DMA_BASE + offset)))
         out: dict[str, Any] = {"regs": tuple(regs)}
-        out["int_raw"] = int(chip.dma.int_raw)
-        out["dreq"] = tuple(sorted(int(k) for k, v in chip.dma.dreq.items() if v))
+        state = chip.dma.snapshot()
+        out["int_raw"] = int(state["int_raw"])
+        out["dreq"] = state["dreq"]
+        out["channels"] = state["channels"]
         out["now"] = float(chip.clock.nanos)
         out["next_alarm"] = (bool(chip.clock.has_scheduled_alarm), float(chip.clock.nanos_to_next_alarm))
         out["probe"] = (self.probe.reads, self.probe.last_write)
@@ -304,7 +306,7 @@ def mutant_rig(name: str) -> Rig:
                 self.dreq.clear()
 
     rig = Rig("pure")
-    levels = dict(rig.chip.dma.dreq)
+    levels = dict.fromkeys(rig.chip.dma.snapshot()["dreq"], True)
     dma = Controller(rig.chip, "DMA")
     dma.channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
     dma.dreq.update(levels)

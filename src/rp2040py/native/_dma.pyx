@@ -10,9 +10,8 @@ peripheral that is native too never touches Python. What stays Python is the edg
 (`rp2040.set_interrupt`), `rp2040.clk_sys` (asked only when a pacing timer is actually running) and the logger, reached through
 trampolines whose failures are parked in the shared slot of `_pending.pyx` and re-raised by whoever called in.
 
-The API is the reference's: `channels` (views of the C++ channels with the reference's attribute names), `dreq` (a read-only
-view of the asserted DREQs), `int_raw`, `int_status0/1`, `set_dreq/clear_dreq`, `get_timer`, `check_interrupts`, `reset`, plus
-`BasePeripheral`'s surface (name, rp2040, clock, read_uint32, write_uint32, write_uint32_atomic, raw_write_value, warn/...).
+The API is the reference's: `channels` (views of the C++ channels: `index`, `active`, `start`, `abort`, `schedule_transfer` and the channel's registers), `snapshot()` (the whole state in one call),
+`set_dreq/clear_dreq`, `get_timer`, `check_interrupts`, `reset`, plus `BasePeripheral`'s surface (name, rp2040, clock, read_uint32, write_uint32, write_uint32_atomic, raw_write_value, warn/...).
 
 A DMA needs the native chip (its bus) and the native `SimulationClock` (its alarms are nodes of the C++ clock); a native
 `RP2040` always has both.
@@ -59,50 +58,6 @@ cdef class _Channel:
         return self._channel.index
 
     @property
-    def _ctrl(self):
-        return self._channel.ctrl
-
-    @property
-    def _read_addr(self):
-        return self._channel.read_addr
-
-    @property
-    def _write_addr(self):
-        return self._channel.write_addr
-
-    @property
-    def _trans_count(self):
-        return self._channel.trans_count
-
-    @property
-    def _trans_count_reload(self):
-        return self._channel.trans_count_reload
-
-    @property
-    def _dreq_counter(self):
-        return self._channel.dreq_counter
-
-    @property
-    def _treq_value(self):
-        return self._channel.treq
-
-    @property
-    def _data_size(self):
-        return self._channel.data_size
-
-    @property
-    def _chain_to(self):
-        return self._channel.chain_to
-
-    @property
-    def _ring_mask(self):
-        return self._channel.ring_mask
-
-    @property
-    def treq(self):
-        return self._channel.treq
-
-    @property
     def active(self):
         return self._channel.active()
 
@@ -127,48 +82,6 @@ cdef class _Channel:
     def reset(self):
         if not self._channel.reset():
             raise_if_pending()
-
-
-cdef class _DreqView:
-    """A read-only view of the asserted DREQs, shaped like the reference's `dict[int, bool]` for what is looked at: a DREQ
-    number is a key exactly while it is asserted (the reference also keeps a `False` entry for one that was cleared)."""
-
-    cdef RPDMA _owner
-
-    def get(self, key, default=None):
-        cdef int64_t number = key
-        if 0 <= number < 64 and self._owner._block.dreq(<uint32_t> number):
-            return True
-        return default
-
-    def __getitem__(self, key):
-        cdef int64_t number = key
-        if 0 <= number < 64 and self._owner._block.dreq(<uint32_t> number):
-            return True
-        raise KeyError(key)
-
-    def __contains__(self, key):
-        cdef int64_t number
-        try:
-            number = key
-        except (TypeError, OverflowError):
-            return False
-        return 0 <= number < 64 and self._owner._block.dreq(<uint32_t> number)
-
-    def __iter__(self):
-        return iter(self.keys())
-
-    def __len__(self):
-        return len(self.keys())
-
-    def keys(self):
-        return [i for i in range(64) if self._owner._block.dreq(<uint32_t> i)]
-
-    def items(self):
-        return [(i, True) for i in self.keys()]
-
-    def __repr__(self):
-        return repr(dict(self.items()))
 
 
 cdef class RPDMA(NativeBlock):
@@ -203,9 +116,6 @@ cdef class RPDMA(NativeBlock):
             view._owner = self
             view._channel = &self._block.channels[i]
             self._channels.append(view)
-        cdef _DreqView dreq_view = _DreqView.__new__(_DreqView)
-        dreq_view._owner = self
-        self._dreq_view = dreq_view
 
     def _clk_sys_changed(self, clk_sys, old_clk_sys):
         self._block.transfer_ns = 1e9 / <double> clk_sys
@@ -232,25 +142,33 @@ cdef class RPDMA(NativeBlock):
     def channels(self):
         return self._channels
 
-    @property
-    def dreq(self):
-        return self._dreq_view
-
-    @property
-    def int_raw(self):
-        return self._block.int_raw
-
-    @int_raw.setter
-    def int_raw(self, value):
-        self._block.int_raw = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_status0(self):
-        return self._block.int_status0()
-
-    @property
-    def int_status1(self):
-        return self._block.int_status1()
+    def snapshot(self):
+        """The controller's state in one call: every channel's registers and internals, the asserted DREQs, the raw interrupt word and the two statuses."""
+        cdef DmaChannel* c
+        cdef uint32_t i
+        channels = []
+        for i in range(12):
+            c = &self._block.channels[i]
+            channels.append((
+                c.ctrl,
+                c.read_addr,
+                c.write_addr,
+                c.trans_count,
+                c.trans_count_reload,
+                c.dreq_counter,
+                c.treq,
+                c.data_size,
+                c.chain_to,
+                c.ring_mask,
+                bool(c.active()),
+            ))
+        return {
+            "channels": tuple(channels),
+            "dreq": tuple([i for i in range(64) if self._block.dreq(i)]),
+            "int_raw": self._block.int_raw,
+            "int_status0": self._block.int_status0(),
+            "int_status1": self._block.int_status1(),
+        }
 
     # --- BasePeripheral's surface -----------------------------------------------------------------
 

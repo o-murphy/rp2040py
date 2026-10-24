@@ -476,6 +476,31 @@ class RPDMA(BasePeripheral):
             return
         super().write_uint32(offset, value)
 
+    def snapshot(self) -> dict[str, tuple | int]:
+        """The controller's state as plain values: every channel's registers and internals (`ctrl`, the two addresses, the counts, the DREQ counter, the decoded TREQ / size / chain / ring, `active`), the asserted DREQs, the raw interrupt word and the two statuses."""
+        return {
+            "channels": tuple(
+                (
+                    c._ctrl,
+                    c._read_addr,
+                    c._write_addr,
+                    c._trans_count,
+                    c._trans_count_reload,
+                    c._dreq_counter,
+                    c._treq_value,
+                    c._data_size,
+                    c._chain_to,
+                    c._ring_mask,
+                    c.active,
+                )
+                for c in self.channels
+            ),
+            "dreq": tuple(sorted(int(n) for n, asserted in self.dreq.items() if asserted)),
+            "int_raw": self.int_raw,
+            "int_status0": self.int_status0,
+            "int_status1": self.int_status1,
+        }
+
     def set_dreq(self, dreq_channel: int) -> None:
         if not self.dreq.get(dreq_channel, False):
             self.dreq[dreq_channel] = True

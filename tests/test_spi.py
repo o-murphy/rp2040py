@@ -92,7 +92,8 @@ def test_dma_requests_need_the_ssp_enabled_and_the_dma_enable(rp2040_factory):
     chip = rp2040_factory()
 
     def asked() -> tuple[bool, bool]:
-        return bool(chip.dma.dreq.get(DREQ_SPI0_TX, False)), bool(chip.dma.dreq.get(DREQ_SPI0_RX, False))
+        asserted = chip.dma.snapshot()["dreq"]
+        return DREQ_SPI0_TX in asserted, DREQ_SPI0_RX in asserted
 
     chip.write_uint32(SPI0_BASE + SSPDMACR, 3)
     assert asked() == (False, False)  # DMA enabled, SSP not: nothing asked for
