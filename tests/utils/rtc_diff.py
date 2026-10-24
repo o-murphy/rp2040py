@@ -50,31 +50,6 @@ CLOCK_CONFIGS = (  # (CLK_RTC_CTRL, CLK_RTC_DIV): stopped; XOSC/256 = 46875 Hz; 
     (ENABLE_BIT | KILL_BIT | (3 << 5), 256 << 8),
     (ENABLE_BIT | (4 << 5), 256 << 8),
 )
-ATTRS = (
-    "clkdiv_m1",
-    "setup0",
-    "setup1",
-    "irq_setup0",
-    "irq_setup1",
-    "inte",
-    "intf",
-    "force_not_leap_year",
-    "enable",
-    "year",
-    "month",
-    "day",
-    "dotw",
-    "hour",
-    "minute",
-    "second",
-    "latched_date",
-    "ctrl",
-    "running",
-    "raw_interrupt",
-    "match_ena",
-    "date",
-    "time",
-)
 TIMES = (
     1,
     500,
@@ -187,7 +162,7 @@ class Rig:
         peripheral, clock = self.peripheral, self.chip.clock
         return {
             "regs": tuple(int(self.chip.read_uint32(BASE + offset)) for offset in READ_SAFE),
-            "attrs": tuple(getattr(peripheral, name) for name in ATTRS),
+            "state": tuple(sorted(peripheral.snapshot().items())),
             "raw": int(peripheral.raw_write_value),
             "alarm": (bool(clock.has_scheduled_alarm), float(clock.nanos_to_next_alarm)),
             "time": float(clock.nanos),
@@ -835,7 +810,8 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
     for op in ops:
         before = len(rig.log)
         peripheral = rig.peripheral
-        old = (peripheral.minute, peripheral.hour, peripheral.day, peripheral.month, peripheral.year, peripheral.dotw)
+        s = peripheral.snapshot()
+        old = (s["minute"], s["hour"], s["day"], s["month"], s["year"], s["dotw"])
         if op[0] == "read":
             count("read.reg" if op[1] in REGISTERS else "read.unimplemented")
             if op[2]:
@@ -849,7 +825,8 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         failed = _step(rig, op)[1] is not None
         if failed:
             count("exception")
-        new = (peripheral.minute, peripheral.hour, peripheral.day, peripheral.month, peripheral.year, peripheral.dotw)
+        s = peripheral.snapshot()
+        new = (s["minute"], s["hour"], s["day"], s["month"], s["year"], s["dotw"])
         if op[0] == "tick":
             for label, i in (("minute", 0), ("hour", 1), ("day", 2), ("month", 3), ("year", 4), ("dotw", 5)):
                 if old[i] != new[i]:
@@ -858,11 +835,11 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
                 count("carry.february")
             if old[2] == 28 and new[2] == 29 and new[3] == 2:
                 count("carry.leap_day")
-        if peripheral.running:
+        if s["running"]:
             count("state.running")
-        if peripheral.enable and not peripheral.running:
+        if s["enable"] and not s["running"]:
             count("state.enabled_without_clock")
-        if peripheral.raw_interrupt:
+        if s["raw_interrupt"]:
             count("state.match")
         for entry in rig.log[before:]:
             if entry[0] == "irq":

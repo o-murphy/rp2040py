@@ -216,8 +216,9 @@ def test_the_remaining_register_blocks_reset_too(rp2040_factory):
     its register file was read against the datasheet (0098); SYSINFO/TBMAN still inherit it, and correctly -
     they hold no instance state at all."""
     rp2040 = rp2040_factory()
-    rp2040.rtc.ctrl = 0xF
-    rp2040.rtc.setup0 = 0x1234
+    rp2040.rtc.write_uint32(0x0C, 0xF)  # CTRL
+    rp2040.rtc.write_uint32(0x04, 0x1234)  # SETUP_0
+    assert rp2040.rtc.snapshot()["ctrl"] != 0 and rp2040.rtc.snapshot()["setup0"] != 0
     rp2040.busctrl.set_perf_counter(1, 99)
     rp2040.busctrl.write_uint32(0x14, 0)  # PERFSEL1
     assert rp2040.busctrl.snapshot()["perf_ctr"] == (0, 99, 0, 0)
@@ -226,8 +227,8 @@ def test_the_remaining_register_blocks_reset_too(rp2040_factory):
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.rtc.ctrl == 0
-    assert rp2040.rtc.setup0 == 0
+    assert rp2040.rtc.snapshot()["ctrl"] == 0
+    assert rp2040.rtc.snapshot()["setup0"] == 0
     assert rp2040.busctrl.snapshot() == {
         "bus_priority": 0,
         "perf_ctr": (0, 0, 0, 0),

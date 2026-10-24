@@ -45,172 +45,39 @@ cdef class RP2040RTC(NativeBlock):
             "the native block is a view of the chip's C++ `Mcu` block: RP2040RTC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
 
-    # --- the reference's attributes, over the C++ state ------------------------------------------
-
-    @property
-    def clkdiv_m1(self):
-        return self._block.clkdiv_m1
-
-    @clkdiv_m1.setter
-    def clkdiv_m1(self, value):
-        self._block.clkdiv_m1 = <uint32_t> (value & 0xFFFF)
-
-    @property
-    def setup0(self):
-        return self._block.setup0
-
-    @setup0.setter
-    def setup0(self, value):
-        self._block.setup0 = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def setup1(self):
-        return self._block.setup1
-
-    @setup1.setter
-    def setup1(self, value):
-        self._block.setup1 = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def irq_setup0(self):
-        return self._block.irq_setup0
-
-    @irq_setup0.setter
-    def irq_setup0(self, value):
-        self._block.irq_setup0 = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def irq_setup1(self):
-        return self._block.irq_setup1
-
-    @irq_setup1.setter
-    def irq_setup1(self, value):
-        self._block.irq_setup1 = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def inte(self):
-        return self._block.inte
-
-    @inte.setter
-    def inte(self, value):
-        self._block.inte = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def intf(self):
-        return self._block.intf
-
-    @intf.setter
-    def intf(self, value):
-        self._block.intf = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def force_not_leap_year(self):
-        return bool(self._block.force_not_leap_year)
-
-    @force_not_leap_year.setter
-    def force_not_leap_year(self, value):
-        self._block.force_not_leap_year = bool(value)
-
-    @property
-    def enable(self):
-        return bool(self._block.enable)
-
-    @enable.setter
-    def enable(self, value):
-        self._block.enable = bool(value)
-
-    @property
-    def year(self):
-        return self._block.year
-
-    @year.setter
-    def year(self, value):
-        self._block.year = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def month(self):
-        return self._block.month
-
-    @month.setter
-    def month(self, value):
-        self._block.month = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def day(self):
-        return self._block.day
-
-    @day.setter
-    def day(self, value):
-        self._block.day = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def dotw(self):
-        return self._block.dotw
-
-    @dotw.setter
-    def dotw(self, value):
-        self._block.dotw = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def hour(self):
-        return self._block.hour
-
-    @hour.setter
-    def hour(self, value):
-        self._block.hour = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def minute(self):
-        return self._block.minute
-
-    @minute.setter
-    def minute(self, value):
-        self._block.minute = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def second(self):
-        return self._block.second
-
-    @second.setter
-    def second(self, value):
-        self._block.second = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def latched_date(self):
-        return self._block.latched_date
-
-    @latched_date.setter
-    def latched_date(self, value):
-        self._block.latched_date = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def ctrl(self):
-        return self._block.ctrl()
-
-    @ctrl.setter
-    def ctrl(self, value):
-        if not self._block.set_ctrl(<uint32_t> (value & 0xFFFFFFFF)):
-            raise_if_pending()
-
     @property
     def running(self):
+        """The counter is counting (the chip's clock tree and the clocks oracle read it)."""
         return bool(self._block.running())
 
-    @property
-    def match_ena(self):
-        return bool(self._block.match_ena())
-
-    @property
-    def raw_interrupt(self):
-        return bool(self._block.raw_interrupt())
-
-    @property
-    def date(self):
-        return self._block.date()
-
-    @property
-    def time(self):
-        return self._block.time()
+    def snapshot(self):
+        """The block's state in one call: the stored registers and counter fields (public fields of the C++ block) and what is derived from them."""
+        cdef RtcBlock* b = self._block
+        return {
+            "clkdiv_m1": b.clkdiv_m1,
+            "setup0": b.setup0,
+            "setup1": b.setup1,
+            "irq_setup0": b.irq_setup0,
+            "irq_setup1": b.irq_setup1,
+            "inte": b.inte,
+            "intf": b.intf,
+            "force_not_leap_year": bool(b.force_not_leap_year),
+            "enable": bool(b.enable),
+            "year": b.year,
+            "month": b.month,
+            "day": b.day,
+            "dotw": b.dotw,
+            "hour": b.hour,
+            "minute": b.minute,
+            "second": b.second,
+            "latched_date": b.latched_date,
+            "ctrl": b.ctrl(),
+            "running": bool(b.running()),
+            "match_ena": bool(b.match_ena()),
+            "raw_interrupt": bool(b.raw_interrupt()),
+            "date": b.date(),
+            "time": b.time(),
+        }
 
     def clk_rtc_changed(self, clk_rtc):
         """clk_rtc is now `clk_rtc` Hz (called by `update_clocks`; 0: the generator is stopped): the second follows it."""

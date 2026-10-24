@@ -230,7 +230,7 @@ class Rig:
         for pads in (chip.pads_bank0, chip.pads_qspi):
             out[f"pads.{pads.name}"] = tuple(pads.snapshot().values())
         for block in (chip.io_bank0, chip.io_qspi):
-            out[f"extra.{block.name}"] = tuple(tuple(masks) for dest in (1, 2) for masks in block._extra[dest])
+            out[f"extra.{block.name}"] = block.snapshot()["extra"]
         for base, offsets, _count in BLOCKS:
             out[f"regs.{base:x}"] = tuple(int(chip.read_uint32(base + offset)) for offset in offsets)
         # what a property of all the pins at once is (a chip asks its bank for these)
