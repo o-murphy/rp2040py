@@ -69,7 +69,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     rp2040.spi[0]._control0 = 0x1234
     rp2040.i2c[1].target_address = 0x42
-    rp2040.adc.cs = 0xFF
+    rp2040.adc.write_uint32(0x00, 0x1)  # CS: EN
     rp2040.clocks.sys_div = 0x999
     rp2040.pio[0].instructions[0] = 0xDEAD
     rp2040.pio[0].machines[0].enabled = True
@@ -79,7 +79,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
     assert rp2040.spi[0]._control0 == 0
     assert rp2040.i2c[1].target_address == 0x55
-    assert rp2040.adc.cs == 0
+    assert rp2040.adc.snapshot()["cs"] == 0
     assert rp2040.clocks.sys_div == 0x100
     assert rp2040.pio[0].instructions[0] == 0
     assert rp2040.pio[0].machines[0].enabled is False

@@ -159,40 +159,14 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, adc = self.chip, self.chip.adc
-        fifo = adc.fifo
         return {
             "regs": tuple(int(chip.read_uint32(ADC_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(adc.cs),
-                int(adc.fcs),
-                int(adc.clock_div),
-                int(adc.int_enable),
-                int(adc.int_force),
-                int(adc.result),
-                bool(adc.busy),
-                int(adc.current_channel),
-                int(adc.raw_write_value),
-            ),
-            "fifo": (bool(fifo.empty), bool(fifo.full), int(fifo.item_count), tuple(int(v) for v in fifo.items)),
-            "props": (
-                int(adc.temperature_enable),
-                int(adc.enabled),
-                float(adc.divider),
-                int(adc.int_raw),
-                int(adc.int_status),
-                int(adc._active_channel),
-            ),
+            "state": (tuple(sorted(adc.snapshot().items())), int(adc.raw_write_value)),
             "alarms": (
                 bool(chip.clock.has_scheduled_alarm),
                 float(chip.clock.nanos_to_next_alarm),
             ),  # the chip has no other alarm in this rig
-            "wiring": (
-                int(adc.num_channels),
-                adc.sample_time,
-                int(adc.resolution),
-                int(adc.dreq),
-                tuple(adc.channel_values),
-            ),
+            "wiring": (int(adc.resolution), int(adc.dreq), tuple(adc.channel_values)),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
             "time": float(chip.clock.nanos),
         }

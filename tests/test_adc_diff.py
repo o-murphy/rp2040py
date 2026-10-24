@@ -32,12 +32,14 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _change_the_interrupt_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.adc.int_enable ^= 0x1
+        adc = candidate.chip.adc
+        adc.write_uint32(0x18, adc.read_uint32(0x18) ^ 0x1)  # INTE
 
 
 def _change_the_channel(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.adc.current_channel ^= 0x1
+        adc = candidate.chip.adc
+        adc.write_uint32(0x00, adc.read_uint32(0x00) ^ (1 << 12))  # CS.AINSEL
 
 
 def _pull_a_result(candidate: Rig, step: int) -> None:

@@ -35,66 +35,6 @@ cdef uint32_t CS_TS_EN = 1 << 1
 cdef uint32_t CS_EN = 1 << 0
 
 
-cdef class _Fifo:
-    """The conversion FIFO as the reference's `utils.fifo.FIFO(8)` shows it."""
-
-    cdef RPADC _owner
-
-    @property
-    def size(self):
-        return 8
-
-    @property
-    def item_count(self):
-        return self._owner._block.fifo.count()
-
-    @property
-    def empty(self):
-        return self._owner._block.fifo.empty()
-
-    @property
-    def full(self):
-        return self._owner._block.fifo.full()
-
-    @property
-    def items(self):
-        cdef Fifo8* fifo = &self._owner._block.fifo
-        return [fifo.at(i) for i in range(fifo.count())]
-
-    def push(self, value):
-        self._owner._block.fifo.push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._owner._block.fifo.pull()
-
-    def peek(self):
-        return self._owner._block.fifo.peek()
-
-    def reset(self):
-        self._owner._block.fifo.reset()
-
-
-cdef class _AlarmView:
-    """One of the block's two alarms as the reference's `ClockAlarm` shows it: the node itself lives in the C++ block."""
-
-    cdef RPADC _owner
-    cdef Alarm* _node
-
-    def schedule(self, double delta_nanos):
-        self._owner._block.clock().schedule(self._node, delta_nanos)
-
-    def cancel(self):
-        self._owner._block.clock().cancel(self._node)
-
-    @property
-    def scheduled(self):
-        return bool(self._node.scheduled)
-
-    @property
-    def nanos(self):
-        return self._node.ticks / 16.0
-
-
 cdef class RPADC(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         clock = rp2040.clock
@@ -157,27 +97,7 @@ cdef class RPADC(NativeBlock):
         if not self._block.complete_adc_read(<int64_t> value, bool(error)):
             raise_if_pending()
 
-    # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def fifo(self):
-        cdef _Fifo view = _Fifo.__new__(_Fifo)
-        view._owner = self
-        return view
-
-    @property
-    def sample_alarm(self):
-        cdef _AlarmView view = _AlarmView.__new__(_AlarmView)
-        view._owner = self
-        view._node = &self._block.sample_alarm
-        return view
-
-    @property
-    def multi_shot_alarm(self):
-        cdef _AlarmView view = _AlarmView.__new__(_AlarmView)
-        view._owner = self
-        view._node = &self._block.multi_shot_alarm
-        return view
+    # --- the state, in one call ------------------------------------------------------------------
 
     @property
     def num_channels(self):
@@ -196,97 +116,30 @@ cdef class RPADC(NativeBlock):
         self._sample_time = value
         self._block.sample_time = <double> value
 
-    @property
-    def cs(self):
-        return self._block.cs
-
-    @cs.setter
-    def cs(self, value):
-        self._block.cs = <uint32_t> (<int64_t> value)
-
-    @property
-    def fcs(self):
-        return self._block.fcs
-
-    @fcs.setter
-    def fcs(self, value):
-        self._block.fcs = <uint32_t> (<int64_t> value)
-
-    @property
-    def clock_div(self):
-        return self._block.clock_div
-
-    @clock_div.setter
-    def clock_div(self, value):
-        self._block.clock_div = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_enable(self):
-        return self._block.int_enable
-
-    @int_enable.setter
-    def int_enable(self, value):
-        self._block.int_enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_force(self):
-        return self._block.int_force
-
-    @int_force.setter
-    def int_force(self, value):
-        self._block.int_force = <uint32_t> (<int64_t> value)
-
-    @property
-    def result(self):
-        return self._block.result
-
-    @result.setter
-    def result(self, value):
-        self._block.result = <int64_t> value
-
-    @property
-    def busy(self):
-        return bool(self._block.busy)
-
-    @busy.setter
-    def busy(self, value):
-        self._block.busy = bool(value)
-
-    @property
-    def current_channel(self):
-        return self._block.current_channel
-
-    @current_channel.setter
-    def current_channel(self, value):
-        self._block.current_channel = <uint32_t> (<int64_t> value)
-
-    @property
-    def temperature_enable(self):
-        return self._block.cs & CS_TS_EN
-
-    @property
-    def enabled(self):
-        return self._block.cs & CS_EN
-
-    @property
-    def divider(self):
-        return self._block.divider()
-
-    @property
-    def int_raw(self):
-        return self._block.int_raw()
-
-    @property
-    def int_status(self):
-        return self._block.int_status()
-
-    @property
-    def _active_channel(self):
-        return self._block.active_channel()
-
-    @_active_channel.setter
-    def _active_channel(self, channel):
-        self._block.set_active_channel(<int64_t> channel)
+    def snapshot(self):
+        """The block's state in one call: the registers, the conversion in flight, the result FIFO's contents and what is derived from them."""
+        cdef AdcBlock* b = self._block
+        cdef Fifo8* fifo = &b.fifo
+        cdef uint32_t i
+        return {
+            "cs": b.cs,
+            "fcs": b.fcs,
+            "clock_div": b.clock_div,
+            "int_enable": b.int_enable,
+            "int_force": b.int_force,
+            "result": b.result,
+            "busy": bool(b.busy),
+            "current_channel": b.current_channel,
+            "active_channel": b.active_channel(),
+            "fifo": tuple([fifo.at(i) for i in range(fifo.count())]),
+            "temperature_enable": b.cs & CS_TS_EN,
+            "enabled": b.cs & CS_EN,
+            "divider": b.divider(),
+            "int_raw": b.int_raw(),
+            "int_status": b.int_status(),
+            "num_channels": b.num_channels,
+            "sample_time": self._sample_time,
+        }
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 

@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals._dma import DREQChannel
@@ -187,6 +187,28 @@ class RPADC(BasePeripheral):
     def _active_channel(self, channel: int) -> None:
         self.cs &= ~(CS_AINSEL_MASK << CS_AINSEL_SHIFT)
         self.cs |= (channel & CS_AINSEL_MASK) << CS_AINSEL_SHIFT
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers, the conversion in flight, the result FIFO's contents and what is derived from them (the enables, the divider, the raw and masked interrupts)."""
+        return {
+            "cs": self.cs,
+            "fcs": self.fcs,
+            "clock_div": self.clock_div,
+            "int_enable": self.int_enable,
+            "int_force": self.int_force,
+            "result": self.result,
+            "busy": bool(self.busy),
+            "current_channel": self.current_channel,
+            "active_channel": self._active_channel,
+            "fifo": tuple(self.fifo.items),
+            "temperature_enable": int(self.temperature_enable),
+            "enabled": int(self.enabled),
+            "divider": float(self.divider),
+            "int_raw": int(self.int_raw),
+            "int_status": int(self.int_status),
+            "num_channels": self.num_channels,
+            "sample_time": self.sample_time,
+        }
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.ADC_FIFO, bool(self.int_status))

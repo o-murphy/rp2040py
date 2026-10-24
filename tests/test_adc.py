@@ -114,7 +114,8 @@ def test_ready_needs_the_adc_to_be_enabled_and_idle():
     assert not chip.read_uint32(ADC_BASE + CS) & (1 << 8)  # not enabled: not ready (the datasheet's reset value is 0)
     chip.write_uint32(ADC_BASE + CS, 1)
     assert chip.read_uint32(ADC_BASE + CS) & (1 << 8)
-    adc.busy = True
+    adc.on_adc_read = lambda channel: None  # a reader that has not answered yet
+    chip.write_uint32(ADC_BASE + CS, 1 | (1 << 2))  # EN | START_ONCE: a conversion is in flight
     assert not chip.read_uint32(ADC_BASE + CS) & (1 << 8)
 
 
