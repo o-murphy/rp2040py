@@ -346,6 +346,34 @@ class GPIOPin:
             return GPIOPinState.INPUT_PULL_UP
         return GPIOPinState.INPUT
 
+    @property
+    def driven(self) -> bool:
+        """True while a device holds the pin with `set_input_value()` (until `release_input()`): a wire between two pins asks this to let go of the far end."""
+        return self._driven
+
+    def snapshot(self) -> dict[str, int | bool]:
+        """The pin's state as plain values: its CTRL and pad words, the three interrupt words, what the outside holds on it (seen, raw, driven) and what is derived from them."""
+        return {
+            "ctrl": self.ctrl,
+            "pad_value": self.pad_value,
+            "irq_enable_mask": self.irq_enable_mask,
+            "irq_force_mask": self.irq_force_mask,
+            "irq_status": self.irq_status,
+            "seen": bool(self._seen),
+            "raw_input_value": bool(self._raw_input_value),
+            "driven": bool(self._driven),
+            "always_output_enabled": bool(self._always_output_enabled),
+            "status": int(self.status),
+            "value": int(self.value),
+            "input_value": bool(self.input_value),
+            "output_enable": bool(self.output_enable),
+            "output_value": bool(self.output_value),
+            "irq_value": bool(self.irq_value),
+            "raw_interrupt": bool(self.raw_interrupt),
+            "raw_output_enable": bool(self.raw_output_enable),
+            "raw_output_value": bool(self.raw_output_value),
+        }
+
     def set_input_value(self, value: bool) -> None:
         self._driven = True
         self._apply_input_value(value)

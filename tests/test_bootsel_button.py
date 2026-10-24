@@ -40,9 +40,9 @@ def test_release_stops_driving_rather_than_forcing_the_line_high(rp2040_factory)
     button.attach(rp2040)
 
     button.press()
-    assert rp2040.qspi[1]._driven is True
+    assert rp2040.qspi[1].driven is True
     button.release()
-    assert rp2040.qspi[1]._driven is False
+    assert rp2040.qspi[1].driven is False
 
 
 def test_click_leaves_the_button_released(rp2040_factory):

@@ -202,25 +202,7 @@ class Rig:
     # --- the observation -------------------------------------------------------------------------------------------------
 
     def _pin_state(self, pin: Any) -> tuple:
-        return (
-            int(pin.ctrl),
-            int(pin.pad_value),
-            int(pin.irq_enable_mask),
-            int(pin.irq_force_mask),
-            int(pin.irq_status),
-            bool(pin._seen),
-            bool(pin._raw_input_value),
-            bool(pin._driven),
-            int(pin.status),
-            int(pin.value),
-            bool(pin.input_value),
-            bool(pin.output_enable),
-            bool(pin.output_value),
-            bool(pin.irq_value),
-            bool(pin.raw_interrupt),
-            bool(pin.raw_output_enable),
-            bool(pin.raw_output_value),
-        )
+        return tuple(sorted(pin.snapshot().items()))
 
     def snapshot(self) -> dict[str, Any]:
         chip = self.chip

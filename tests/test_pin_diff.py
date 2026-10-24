@@ -6,7 +6,7 @@ step the damage is done, and so is a change of the reference's *logic* (every en
 """
 
 import pytest
-from utils.pin_diff import IO_BANK0, MUTANTS, PADS_BANK0, Rig, coverage, generate, mutant_rig, run_pair
+from utils.pin_diff import IO_BANK0, MUTANTS, PADS_BANK0, PADS_QSPI, Rig, coverage, generate, mutant_rig, run_pair
 
 STEPS = 4000
 DIFF_STEPS = 2500
@@ -38,17 +38,23 @@ def _drive_a_pin(candidate: Rig, step: int) -> None:
 
 def _change_a_mask(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.gpio[4].irq_enable_mask ^= 0x8
+        candidate.chip.write_uint32(
+            IO_BANK0 + 0x100, candidate.chip.read_uint32(IO_BANK0 + 0x100) ^ (0x8 << 16)
+        )  # PROC0_INTE0: GPIO4's nibble, the high-level bit
 
 
 def _change_the_status(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.gpio[11].irq_status ^= 0x4
+        candidate.chip.write_uint32(
+            IO_BANK0 + 0x114, candidate.chip.read_uint32(IO_BANK0 + 0x114) ^ (0x4 << 12)
+        )  # PROC0_INTF1: force GPIO11's edge-low bit
 
 
 def _change_a_qspi_pad(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.qspi[2].pad_value ^= 0x8
+        candidate.chip.write_uint32(
+            PADS_QSPI + 0x10, candidate.chip.read_uint32(PADS_QSPI + 0x10) ^ 0x8
+        )  # PADS_QSPI: SD0's pull-up bit
 
 
 @pytest.mark.parametrize(

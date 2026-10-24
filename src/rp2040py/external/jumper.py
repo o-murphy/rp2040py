@@ -53,7 +53,7 @@ class Jumper:
                 b.release_input()
                 return
             sink.set_input_value(source.value == GPIOPinState.HIGH)
-            if source._driven:  # (the far end was driven by this wire earlier: let go of it)
+            if source.driven:  # (the far end was driven by this wire earlier: let go of it)
                 source.release_input()
         finally:
             self._busy = False

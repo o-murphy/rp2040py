@@ -48,8 +48,9 @@ TARGETS = {"io": IO_KEY, "pads": PADS_KEY}
 
 def drive_state(mcu: RP2040) -> "tuple[int, int]":
     """``(raw, driven)``: bit n of each is GPIO n's externally driven level and whether anything drives it at all."""
-    raw = sum(1 << i for i in range(GPIO_PINS) if mcu.gpio[i]._raw_input_value)
-    driven = sum(1 << i for i in range(GPIO_PINS) if mcu.gpio[i]._driven)
+    states = [mcu.gpio[i].snapshot() for i in range(GPIO_PINS)]
+    raw = sum(1 << i for i, state in enumerate(states) if state["raw_input_value"])
+    driven = sum(1 << i for i, state in enumerate(states) if state["driven"])
     return raw, driven
 
 
@@ -60,9 +61,9 @@ def apply_drive_state(mcu: RP2040, raw: int, driven: int) -> None:
         want_driven = bool((driven >> i) & 1)
         want_raw = bool((raw >> i) & 1)
         if want_driven:
-            if not pin._driven or pin._raw_input_value != want_raw:
+            if not pin.driven or pin.snapshot()["raw_input_value"] != want_raw:
                 pin.set_input_value(want_raw)
-        elif pin._driven:
+        elif pin.driven:
             pin.release_input()
 
 

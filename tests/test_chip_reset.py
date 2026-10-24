@@ -122,8 +122,8 @@ def test_externally_driven_input_survives(rp2040_factory):
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.gpio[16]._driven is True
-    assert rp2040.gpio[16]._raw_input_value is True
+    assert rp2040.gpio[16].driven is True
+    assert rp2040.gpio[16].snapshot()["raw_input_value"] is True
 
 
 def test_peripheral_callbacks_and_analog_inputs_survive(rp2040_factory):

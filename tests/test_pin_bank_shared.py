@@ -22,8 +22,8 @@ def test_the_chips_pins_are_slots_of_two_banks_and_the_lists_are_the_banks_own()
     assert all(isinstance(pin, GPIOPin) for pin in chip.gpio + chip.qspi)
     assert [pin.index for pin in chip.gpio] == list(range(30)) and [pin.index for pin in chip.qspi] == list(range(6))
     assert [pin.name for pin in chip.qspi] == ["SCLK", "SS", "SD0", "SD1", "SD2", "SD3"]
-    assert all(not pin._always_output_enabled for pin in chip.gpio) and all(
-        pin._always_output_enabled for pin in chip.qspi
+    assert all(not pin.snapshot()["always_output_enabled"] for pin in chip.gpio) and all(
+        pin.snapshot()["always_output_enabled"] for pin in chip.qspi
     )
 
 
@@ -93,5 +93,5 @@ def test_a_bank_and_its_pins_obey_one_contract(pin_class, bank_class):
 def test_a_pin_without_a_bank_gets_one_of_its_own(pin_class):
     chip = RP2040()
     lone = pin_class(chip, 5, always_output_enabled=True)
-    assert lone.index == 5 and lone._always_output_enabled
+    assert lone.index == 5 and lone.snapshot()["always_output_enabled"]
     assert lone._slot == 0
