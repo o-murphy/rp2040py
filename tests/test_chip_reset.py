@@ -68,7 +68,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040 = rp2040_factory()
     rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     rp2040.spi[0].write_uint32(0x00, 0x1234)  # SSPCR0
-    rp2040.i2c[1].target_address = 0x42
+    rp2040.i2c[1].write_uint32(0x04, 0x42)  # IC_TAR
     rp2040.adc.write_uint32(0x00, 0x1)  # CS: EN
     rp2040.clocks.sys_div = 0x999
     rp2040.pio[0].instructions[0] = 0xDEAD
@@ -78,7 +78,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
 
     assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
     assert rp2040.spi[0].snapshot()["control0"] == 0
-    assert rp2040.i2c[1].target_address == 0x55
+    assert rp2040.i2c[1].snapshot()["target_address"] == 0x55
     assert rp2040.adc.snapshot()["cs"] == 0
     assert rp2040.clocks.sys_div == 0x100
     assert rp2040.pio[0].instructions[0] == 0

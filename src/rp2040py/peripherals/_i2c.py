@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.peripherals.peripheral import BasePeripheral
 from rp2040py.utils.fifo import FIFO
@@ -268,6 +268,45 @@ class RPI2C(BasePeripheral):
     @property
     def master_bits(self) -> int:
         return 10 if self.control & IC_10BITADDR_MASTER else 7
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers, the bus state machine, both FIFOs' contents and what is derived from them (the masked interrupts, the speed, the SCL periods, the address width)."""
+        return {
+            "state": int(self._state),
+            "busy": bool(self._busy),
+            "stop": bool(self._stop),
+            "pending_restart": bool(self._pending_restart),
+            "abort_pending": bool(self._abort_pending),
+            "first_byte": bool(self._first_byte),
+            "abort_source": self.abort_source,
+            "int_raw": self.int_raw,
+            "int_enable": self.int_enable,
+            "enable": self.enable,
+            "rx_threshold": self.rx_threshold,
+            "tx_threshold": self.tx_threshold,
+            "control": self.control,
+            "target_address": self.target_address,
+            "slave_address": self.slave_address,
+            "ss_clock_high_period": self.ss_clock_high_period,
+            "ss_clock_low_period": self.ss_clock_low_period,
+            "fs_clock_high_period": self.fs_clock_high_period,
+            "fs_clock_low_period": self.fs_clock_low_period,
+            "spikelen": self._spikelen,
+            "sda_hold": self.sda_hold,
+            "sda_setup": self.sda_setup,
+            "ack_general_call": self.ack_general_call,
+            "slv_data_nack_only": self.slv_data_nack_only,
+            "dma_control": self.dma_control,
+            "dma_tdlr": self.dma_tdlr,
+            "dma_rdlr": self.dma_rdlr,
+            "rx": tuple(self._rx_fifo.items),
+            "tx": tuple(self._tx_fifo.items),
+            "int_status": self.int_status,
+            "speed": int(self.speed),
+            "scl_low_period": self.scl_low_period,
+            "scl_high_period": self.scl_high_period,
+            "master_bits": self.master_bits,
+        }
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self.int_status))

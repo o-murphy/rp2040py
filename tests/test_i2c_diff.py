@@ -33,12 +33,14 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _change_the_interrupt_mask(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.i2c[0].int_enable ^= 0x10
+        i2c = candidate.chip.i2c[0]
+        i2c.write_uint32(0x30, i2c.read_uint32(0x30) ^ 0x10)  # IC_INTR_MASK
 
 
 def _change_the_state_machine(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.i2c[0]._busy = not candidate.chip.i2c[0]._busy
+        i2c = candidate.chip.i2c[0]
+        i2c.write_uint32(0x6C, i2c.read_uint32(0x6C) ^ 0x1)  # IC_ENABLE
 
 
 def _pull_a_byte_from_the_rx_fifo(candidate: Rig, step: int) -> None:
