@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, Any
 
 from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -239,6 +239,28 @@ class RPSPI(BasePeripheral):
             self.check_interrupts()
         self._fifos_updated()
         self._do_tx()
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers, the frame in flight, both FIFOs' contents and what is derived from them (the mode, the data size, the clock, the masked interrupts)."""
+        return {
+            "control0": self._control0,
+            "control1": self._control1,
+            "dma_control": self._dma_control,
+            "clock_divisor": self._clock_divisor,
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "busy": bool(self._busy),
+            "frame_active": bool(self._frame_active),
+            "reply": None if self._reply is None else int(self._reply),
+            "rx": tuple(self.rx_fifo.items),
+            "tx": tuple(self.tx_fifo.items),
+            "enabled": bool(self.enabled),
+            "data_bits": self.data_bits,
+            "master_mode": bool(self.master_mode),
+            "spi_mode": int(self.spi_mode),
+            "clock_frequency": float(self.clock_frequency),
+            "int_status": int(self.int_status),
+        }
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self.int_status))

@@ -156,35 +156,13 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, spi = self.chip, self.chip.spi[0]
-        rx, tx = spi.rx_fifo, spi.tx_fifo
         return {
             "regs": tuple(int(chip.read_uint32(SPI0_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(spi._control0),
-                int(spi._control1),
-                int(spi._dma_control),
-                int(spi._clock_divisor),
-                int(spi._int_raw),
-                int(spi._int_enable),
-                bool(spi._busy),
-                int(spi.raw_write_value),
-                bool(spi._frame_active),
-                None if spi._reply is None else int(spi._reply),
-            ),
+            "state": (tuple(sorted(spi.snapshot().items())), int(spi.raw_write_value)),
             "time": (
                 float(chip.clock.nanos),
                 bool(chip.clock.has_scheduled_alarm),
                 float(chip.clock.nanos_to_next_alarm),
-            ),
-            "rx": (bool(rx.empty), bool(rx.full), int(rx.item_count), tuple(int(v) for v in rx.items)),
-            "tx": (bool(tx.empty), bool(tx.full), int(tx.item_count), tuple(int(v) for v in tx.items)),
-            "props": (
-                bool(spi.enabled),
-                int(spi.data_bits),
-                bool(spi.master_mode),
-                int(spi.spi_mode),
-                float(spi.clock_frequency),
-                int(spi.int_status),
             ),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
         }
