@@ -66,7 +66,7 @@ def test_qspi_pads_go_back_to_their_own_reset_values_not_bank0s(rp2040_factory):
 
 def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040 = rp2040_factory()
-    rp2040.uart[0]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     rp2040.spi[0]._control0 = 0x1234
     rp2040.i2c[1].target_address = 0x42
     rp2040.adc.cs = 0xFF
@@ -76,7 +76,7 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.uart[0]._interrupt_mask == 0
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
     assert rp2040.spi[0]._control0 == 0
     assert rp2040.i2c[1].target_address == 0x55
     assert rp2040.adc.cs == 0
@@ -150,12 +150,12 @@ def test_a_watchdog_reset_that_selected_nothing_leaves_peripherals_alone(rp2040_
     processor. Firmware that wants more says so - which pico-sdk's `watchdog_reboot()` does."""
     rp2040 = rp2040_factory()
     _drive_gpio_high(rp2040, 15)
-    rp2040.uart[0]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.gpio[15].ctrl & 0x1F == FUNCTION_SIO
-    assert rp2040.uart[0]._interrupt_mask == 0xFF
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0xFF
 
 
 def test_the_core_is_reset_even_when_nothing_was_selected(rp2040_factory):
@@ -176,27 +176,27 @@ def test_psm_wdsel_resets_bit_reaches_every_peripheral(rp2040_factory):
     selecting it selects them all, even though `RESETS.WDSEL` itself stays 0."""
     rp2040 = rp2040_factory()
     _drive_gpio_high(rp2040, 15)
-    rp2040.uart[0]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     _select_everything(rp2040)
     assert rp2040.resets.wdsel == 0, "pico-sdk never writes RESETS.WDSEL - the PSM bit is the route"
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.gpio[15].ctrl & 0x1F == 0x1F
-    assert rp2040.uart[0]._interrupt_mask == 0
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
 
 
 def test_resets_wdsel_selects_individual_blocks(rp2040_factory):
     """The direct route: a guest that selects only UART0 gets only UART0 reset."""
     rp2040 = rp2040_factory()
-    rp2040.uart[0]._interrupt_mask = 0xFF
-    rp2040.uart[1]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
+    rp2040.uart[1].write_uint32(0x38, 0xFF)  # UARTIMSC
     rp2040.resets.write_uint32(0x04, RESET_UART0)
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
-    assert rp2040.uart[0]._interrupt_mask == 0
-    assert rp2040.uart[1]._interrupt_mask == 0xFF
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
+    assert rp2040.uart[1].snapshot()["interrupt_mask"] == 0xFF
 
 
 def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):

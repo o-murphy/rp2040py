@@ -103,75 +103,6 @@ cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset
         park_error(error)
 
 
-cdef class _RxFifo:
-    """The RX FIFO as the reference's `utils.fifo.FIFO(32)` shows it."""
-
-    cdef RPUART _owner
-
-    @property
-    def size(self):
-        return 32
-
-    @property
-    def item_count(self):
-        return self._owner._block.rx_count()
-
-    @property
-    def empty(self):
-        return self._owner._block.rx_empty()
-
-    @property
-    def full(self):
-        return self._owner._block.rx_full()
-
-    @property
-    def items(self):
-        return [self._owner._block.rx_at(i) for i in range(self._owner._block.rx_count())]
-
-    def push(self, value):
-        self._owner._block.rx_push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._owner._block.rx_pull()
-
-    def peek(self):
-        return self._owner._block.rx_peek()
-
-    def reset(self):
-        self._owner._block.rx_reset()
-
-
-cdef class _TxFifo:
-    """The TX FIFO as the reference's `utils.fifo.FIFO(32)` shows it."""
-
-    cdef RPUART _owner
-
-    @property
-    def size(self):
-        return 32
-
-    @property
-    def item_count(self):
-        return self._owner._block.tx_count()
-
-    @property
-    def empty(self):
-        return self._owner._block.tx_empty()
-
-    @property
-    def items(self):
-        return [self._owner._block.tx_at(i) for i in range(self._owner._block.tx_count())]
-
-    def push(self, value):
-        self._owner._block.tx_push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._owner._block.tx_pull()
-
-    def reset(self):
-        self._owner._block.tx_reset()
-
-
 cdef class RPUART(NativeBlock):
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
         cdef UartHost host
@@ -225,115 +156,31 @@ cdef class RPUART(NativeBlock):
         if self._block == &self._own:
             self._own.detach()
 
-    # --- the reference's attributes --------------------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def rx_fifo(self):
-        cdef _RxFifo view = _RxFifo.__new__(_RxFifo)
-        view._owner = self
-        return view
-
-    @property
-    def tx_fifo(self):
-        cdef _TxFifo view = _TxFifo.__new__(_TxFifo)
-        view._owner = self
-        return view
-
-    @property
-    def tx_capacity(self):
-        return self._block.tx_capacity()
-
-    @property
-    def tx_full(self):
-        return self._block.tx_full()
-
-    @property
-    def tx_trigger(self):
-        return self._block.tx_trigger()
-
-    @property
-    def _tx_shifting(self):
-        return self._block.tx_shifting()
-
-    @property
-    def _ctrl_register(self):
-        return self._block.ctrl
-
-    @_ctrl_register.setter
-    def _ctrl_register(self, value):
-        self._block.ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _line_ctrl_register(self):
-        return self._block.line_ctrl
-
-    @_line_ctrl_register.setter
-    def _line_ctrl_register(self, value):
-        self._block.line_ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_divisor(self):
-        return self._block.int_divisor
-
-    @_int_divisor.setter
-    def _int_divisor(self, value):
-        self._block.int_divisor = <uint32_t> (<int64_t> value)
-
-    @property
-    def _frac_divisor(self):
-        return self._block.frac_divisor
-
-    @_frac_divisor.setter
-    def _frac_divisor(self, value):
-        self._block.frac_divisor = <uint32_t> (<int64_t> value)
-
-    @property
-    def _interrupt_mask(self):
-        return self._block.interrupt_mask
-
-    @_interrupt_mask.setter
-    def _interrupt_mask(self, value):
-        self._block.interrupt_mask = <uint32_t> (<int64_t> value)
-
-    @property
-    def _interrupt_status(self):
-        return self._block.interrupt_status
-
-    @_interrupt_status.setter
-    def _interrupt_status(self, value):
-        self._block.interrupt_status = <uint32_t> (<int64_t> value)
-
-    @property
-    def _ifls(self):
-        return self._block.ifls
-
-    @_ifls.setter
-    def _ifls(self, value):
-        self._block.ifls = <uint32_t> (<int64_t> value)
-
-    @property
-    def _ilpr(self):
-        return self._block.ilpr
-
-    @_ilpr.setter
-    def _ilpr(self, value):
-        self._block.ilpr = <uint32_t> (<int64_t> value)
-
-    @property
-    def _dmacr(self):
-        return self._block.dmacr
-
-    @_dmacr.setter
-    def _dmacr(self, value):
-        self._block.dmacr = <uint32_t> (<int64_t> value)
-
-    @property
-    def _rsr(self):
-        return self._block.rsr
-
-    @_rsr.setter
-    def _rsr(self, value):
-        self._block.rsr = <uint32_t> (<int64_t> value)
+    def snapshot(self):
+        """The block's state in one call: the registers (public fields of the C++ block), both FIFOs' contents, the shifter and what is derived from them."""
+        cdef UartBlock* b = self._block
+        cdef uint32_t i
+        return {
+            "ctrl": b.ctrl,
+            "line_ctrl": b.line_ctrl,
+            "int_divisor": b.int_divisor,
+            "frac_divisor": b.frac_divisor,
+            "interrupt_mask": b.interrupt_mask,
+            "interrupt_status": b.interrupt_status,
+            "ifls": b.ifls,
+            "ilpr": b.ilpr,
+            "dmacr": b.dmacr,
+            "rsr": b.rsr,
+            "rx": tuple([b.rx_at(i) for i in range(b.rx_count())]),
+            "tx": tuple([b.tx_at(i) for i in range(b.tx_count())]),
+            "tx_shifting": bool(b.tx_shifting()),
+            "tx_capacity": b.tx_capacity(),
+            "tx_trigger": b.tx_trigger(),
+            "tx_full": bool(b.tx_full()),
+            "flags": b.flags(),
+        }
 
     def _update_dreq(self):
         if not self._block.update_dreq():
@@ -372,10 +219,6 @@ cdef class RPUART(NativeBlock):
         """The peripheral clock changed: re-announce the baud rate, unless the firmware has not set the divider yet (rp2040js 1.4.0)."""
         if self.baud_divider and self.on_baud_rate_change:
             self.on_baud_rate_change(self.baud_rate)
-
-    @property
-    def flags(self):
-        return self._block.flags()
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 

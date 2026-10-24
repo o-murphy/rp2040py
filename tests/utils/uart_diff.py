@@ -136,31 +136,9 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, uart = self.chip, self.chip.uart[0]
-        fifo = uart.rx_fifo
         return {
             "regs": tuple(int(chip.read_uint32(UART0_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(uart._ctrl_register),
-                int(uart._line_ctrl_register),
-                int(uart._int_divisor),
-                int(uart._frac_divisor),
-                int(uart._interrupt_mask),
-                int(uart._interrupt_status),
-                int(uart._ifls),
-                int(uart._ilpr),
-                int(uart._dmacr),
-                int(uart._rsr),
-                int(uart.raw_write_value),
-            ),
-            "rx": (bool(fifo.empty), bool(fifo.full), int(fifo.item_count), tuple(int(v) for v in fifo.items)),
-            "tx": (
-                int(uart.tx_fifo.item_count),
-                tuple(int(v) for v in uart.tx_fifo.items),
-                bool(uart._tx_shifting),
-                int(uart.tx_capacity),
-                int(uart.tx_trigger),
-                bool(uart.tx_full),
-            ),
+            "state": (tuple(sorted(uart.snapshot().items())), int(uart.raw_write_value)),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
         }
 
@@ -866,14 +844,15 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
     uart = rig.chip.uart[0]
     for op in ops:
         before = len(rig.log)
-        queued = not uart.rx_fifo.empty
-        if op[0] == "feed" and uart.rx_fifo.full:
+        s = uart.snapshot()
+        queued = bool(s["rx"])
+        if op[0] == "feed" and s["flags"] & U.RXFF:
             count("rx.full_drop")
         if op[0] == "read" and op[1] == U.UARTDR and op[2] == 0:
-            count("dr.read.empty" if uart.rx_fifo.empty else "dr.read.data")
-        if op[0] == "write" and op[1] == U.UARTDR and uart.tx_full:
+            count("dr.read.empty" if not s["rx"] else "dr.read.data")
+        if op[0] == "write" and op[1] == U.UARTDR and s["tx_full"]:
             count("tx.full_drop")
-        if op[0] == "tick" and uart._tx_shifting:
+        if op[0] == "tick" and s["tx_shifting"]:
             count("tick.mid_frame")
         if op[0] == "write" and op[1] == U.UARTICR:
             count("icr.alias" if op[3] else "icr.plain")
@@ -888,9 +867,10 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
             count("dr.write.byte")
         if op[0] == "tick" and any(e[0] == "byte" for e in rig.log[before:]):
             count("tick.byte")
-        if op[0] == "tick" and uart._interrupt_status & U.UARTTXINTR:
+        s = uart.snapshot()
+        if op[0] == "tick" and s["interrupt_status"] & U.UARTTXINTR:
             count("tick.txintr_up")
-        if uart._tx_shifting and uart.flags & U.BUSY and not uart.tx_fifo.empty:
+        if s["tx_shifting"] and s["flags"] & U.BUSY and s["tx"]:
             count("tx.busy_queue")
         if op[0] == "reset":
             count("reset.fifo_nonempty" if queued else "reset")
