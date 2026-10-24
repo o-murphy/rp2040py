@@ -63,8 +63,7 @@ def test_the_native_chip_with_the_native_sio_matches_the_pure_chip_with_the_pure
             else:
                 results.append(chip.write_uint8(address, value & 0xFF))
         assert results[0] == results[1], f"op {index} {op} @ {address:#x}: pure {results[0]!r}, native {results[1]!r}"
-        for name in ("gpio_value", "gpio_output_enable", "div_csr", "div_dividend", "div_divisor", "spin_lock"):
-            assert getattr(native.sio, name) == getattr(pure.sio, name), f"{name} after op {index}"
+        assert native.sio.snapshot() == pure.sio.snapshot(), f"SIO state after op {index}"
         assert native.core.cycles == pure.core.cycles
 
 

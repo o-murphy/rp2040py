@@ -52,11 +52,6 @@ cdef extern from "sio.hpp" namespace "rp2040core":
         WindowHandler window_handler() noexcept
 
 
-cdef class _InterpolatorView:
-    cdef RPSIO _owner
-    cdef int _index
-
-
 cdef class RPSIO:
     cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
     cdef SioBlock* _block  # the chip's (`Mcu` builds it), or `_own` for a block made directly (a stand-in chip, a test)
@@ -64,5 +59,3 @@ cdef class RPSIO:
     cdef ChipPorts _ports  # a block made directly (`_own`) reaches the chip through these
     cdef public object rp2040
     cdef public object name
-    cdef object _interp0
-    cdef object _interp1

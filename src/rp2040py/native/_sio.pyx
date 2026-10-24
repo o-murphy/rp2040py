@@ -91,102 +91,6 @@ cdef bool _ports_irq(void* chip, uint32_t line, bool level) noexcept:
     return True
 
 
-cdef class _InterpolatorView:
-    """One of the C++ interpolators with the attribute names of the pure `interpolator.Interpolator`."""
-
-    def __cinit__(self, RPSIO owner, int index):
-        self._owner = owner
-        self._index = index
-
-    @property
-    def accum0(self):
-        return self._owner._block.interp(self._index).accum0
-
-    @accum0.setter
-    def accum0(self, value):
-        self._owner._block.interp(self._index).accum0 = <int64_t> value
-
-    @property
-    def accum1(self):
-        return self._owner._block.interp(self._index).accum1
-
-    @accum1.setter
-    def accum1(self, value):
-        self._owner._block.interp(self._index).accum1 = <int64_t> value
-
-    @property
-    def base0(self):
-        return self._owner._block.interp(self._index).base0
-
-    @base0.setter
-    def base0(self, value):
-        self._owner._block.interp(self._index).base0 = <int64_t> value
-
-    @property
-    def base1(self):
-        return self._owner._block.interp(self._index).base1
-
-    @base1.setter
-    def base1(self, value):
-        self._owner._block.interp(self._index).base1 = <int64_t> value
-
-    @property
-    def base2(self):
-        return self._owner._block.interp(self._index).base2
-
-    @base2.setter
-    def base2(self, value):
-        self._owner._block.interp(self._index).base2 = <int64_t> value
-
-    @property
-    def ctrl0(self):
-        return self._owner._block.interp(self._index).ctrl0
-
-    @ctrl0.setter
-    def ctrl0(self, value):
-        self._owner._block.interp(self._index).ctrl0 = <int64_t> value
-
-    @property
-    def ctrl1(self):
-        return self._owner._block.interp(self._index).ctrl1
-
-    @ctrl1.setter
-    def ctrl1(self, value):
-        self._owner._block.interp(self._index).ctrl1 = <int64_t> value
-
-    @property
-    def result0(self):
-        return self._owner._block.interp(self._index).result0
-
-    @property
-    def result1(self):
-        return self._owner._block.interp(self._index).result1
-
-    @property
-    def result2(self):
-        return self._owner._block.interp(self._index).result2
-
-    @property
-    def smresult0(self):
-        return self._owner._block.interp(self._index).smresult0
-
-    @property
-    def smresult1(self):
-        return self._owner._block.interp(self._index).smresult1
-
-    def update(self):
-        self._owner._block.interp(self._index).update()
-
-    def writeback(self):
-        self._owner._block.interp(self._index).writeback()
-
-    def set_base01(self, value):
-        self._owner._block.interp(self._index).set_base01(<int64_t> value)
-
-    def reset(self):
-        self._owner._block.interp(self._index).reset()
-
-
 cdef class RPSIO:
     def __init__(self, rp2040, mcu_index=-1):
         cdef SioHost host
@@ -208,8 +112,6 @@ cdef class RPSIO:
             self._ports.irq = _ports_irq
             self._ports.failed = pending_flag()
             self._own.init(&self._ports, 0, host)
-        self._interp0 = _InterpolatorView(self, 0)
-        self._interp1 = _InterpolatorView(self, 1)
 
     def _warn_kind(self, kind, offset, value):
         """What the block reports (a warning, or the failure of a division by zero), worded for the logger or raised (the chip's host calls this for the block it built)."""
@@ -227,14 +129,6 @@ cdef class RPSIO:
             raise ZeroDivisionError("division by zero")
 
     # --- the pure block's attributes --------------------------------------------------------------
-
-    @property
-    def interp0(self):
-        return self._interp0
-
-    @property
-    def interp1(self):
-        return self._interp1
 
     @property
     def gpio_value(self):
@@ -268,53 +162,36 @@ cdef class RPSIO:
     def qspi_gpio_output_enable(self, value):
         self._block.qspi_gpio_output_enable = <uint32_t> (<int64_t> value)
 
-    @property
-    def div_dividend(self):
-        return self._block.core(0).div_dividend
-
-    @div_dividend.setter
-    def div_dividend(self, value):
-        self._block.core(0).div_dividend = <int64_t> value
-
-    @property
-    def div_divisor(self):
-        return self._block.core(0).div_divisor
-
-    @div_divisor.setter
-    def div_divisor(self, value):
-        self._block.core(0).div_divisor = <int64_t> value
-
-    @property
-    def div_quotient(self):
-        return self._block.core(0).div_quotient
-
-    @div_quotient.setter
-    def div_quotient(self, value):
-        self._block.core(0).div_quotient = <double> value
-
-    @property
-    def div_remainder(self):
-        return self._block.core(0).div_remainder
-
-    @div_remainder.setter
-    def div_remainder(self, value):
-        self._block.core(0).div_remainder = <int64_t> value
-
-    @property
-    def div_csr(self):
-        return self._block.core(0).div_csr
-
-    @div_csr.setter
-    def div_csr(self, value):
-        self._block.core(0).div_csr = <uint32_t> (<int64_t> value)
-
-    @property
-    def spin_lock(self):
-        return self._block.spin_lock
-
-    @spin_lock.setter
-    def spin_lock(self, value):
-        self._block.spin_lock = <uint32_t> (<int64_t> value)
+    def snapshot(self):
+        """The block's state in one call: the four GPIO words, core 0's divider, the spin locks and both interpolators (`i0.accum0` ...)."""
+        cdef SioBlock* b = self._block
+        cdef int index
+        state = {
+            "gpio_value": b.gpio_value,
+            "gpio_output_enable": b.gpio_output_enable,
+            "qspi_gpio_value": b.qspi_gpio_value,
+            "qspi_gpio_output_enable": b.qspi_gpio_output_enable,
+            "div_dividend": b.core(0).div_dividend,
+            "div_divisor": b.core(0).div_divisor,
+            "div_quotient": b.core(0).div_quotient,
+            "div_remainder": b.core(0).div_remainder,
+            "div_csr": b.core(0).div_csr,
+            "spin_lock": b.spin_lock,
+        }
+        for index in range(2):
+            state[f"i{index}.accum0"] = b.interp(index).accum0
+            state[f"i{index}.accum1"] = b.interp(index).accum1
+            state[f"i{index}.base0"] = b.interp(index).base0
+            state[f"i{index}.base1"] = b.interp(index).base1
+            state[f"i{index}.base2"] = b.interp(index).base2
+            state[f"i{index}.ctrl0"] = b.interp(index).ctrl0
+            state[f"i{index}.ctrl1"] = b.interp(index).ctrl1
+            state[f"i{index}.result0"] = b.interp(index).result0
+            state[f"i{index}.result1"] = b.interp(index).result1
+            state[f"i{index}.result2"] = b.interp(index).result2
+            state[f"i{index}.smresult0"] = b.interp(index).smresult0
+            state[f"i{index}.smresult1"] = b.interp(index).smresult1
+        return state
 
     # --- the pure block's methods ------------------------------------------------------------------
 
