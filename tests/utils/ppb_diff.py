@@ -150,33 +150,9 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, ppb, core = self.chip, self.chip.ppb, self.chip.core
-        timer = ppb.systick_timer
+        state = ppb.snapshot()
         return {
-            "systick": (
-                bool(ppb.systick_count_flag),
-                bool(ppb.systick_clk_source),
-                bool(ppb.systick_int_enable),
-                bool(ppb.systick_enable),
-                float(ppb.tick_hz),
-                int(ppb.systick_reload),
-                bool(timer.enable),
-                int(timer.mode),
-                float(ppb.clk_sys),
-                float(timer.frequency),
-                float(timer.prescaler),
-                int(timer.top),
-                int(timer.raw_counter),
-                int(timer.counter),
-                int(ppb.systick_alarm.target),
-                bool(ppb.systick_alarm.enable),
-            ),
-            "system": (
-                int(ppb.scr),
-                int(ppb.mpu_ctrl),
-                int(ppb.mpu_rnr),
-                tuple(int(word) for word in ppb.mpu_rbar),
-                tuple(int(word) for word in ppb.mpu_rasr),
-            ),
+            "state": tuple(sorted(state.items())),
             "regs": tuple(int(chip.read_uint32(PPB_BASE + offset)) for offset in SNAPSHOT_REGISTERS),
             "core": (
                 int(core.pending_interrupts),

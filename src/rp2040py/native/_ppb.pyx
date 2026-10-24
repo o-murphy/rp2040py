@@ -19,7 +19,7 @@ from rp2040py.native._cpu cimport Cpu
 from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.native._views cimport Timer32AlarmView, Timer32View
+from rp2040py.native._views cimport Timer32View
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPPPB",)
@@ -28,7 +28,6 @@ __all__ = ("RPPPB",)
 cdef class RPPPB(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         cdef Timer32View timer
-        cdef Timer32AlarmView alarm
         cdef Cpu* cpu
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -63,10 +62,6 @@ cdef class RPPPB(NativeBlock):
         timer._owner = self
         timer._timer = &self._block.timer
         self.systick_timer = timer
-        alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-        alarm._owner = self
-        alarm._alarm = &self._block.alarm
-        self.systick_alarm = alarm
 
     def _default_system_reset_request(self):
         # AIRCR.SYSRESETREQ: "Reset the core only" (datasheet 2.4.2.9)
@@ -74,73 +69,36 @@ cdef class RPPPB(NativeBlock):
         self.reset()
         self.rp2040.leave_reset()
 
-    @property
-    def scr(self):
-        return self._block.scr
-
-    @property
-    def mpu_ctrl(self):
-        return self._block.mpu_ctrl
-
-    @property
-    def mpu_rnr(self):
-        return self._block.mpu_rnr
-
-    @property
-    def mpu_rbar(self):
-        return [self._block.mpu_rbar[i] for i in range(8)]
-
-    @property
-    def mpu_rasr(self):
-        return [self._block.mpu_rasr[i] for i in range(8)]
-
     def _world_system_reset(self):
         """AIRCR.SYSRESETREQ: whatever `on_system_reset_request` is now (the chip's host calls this for the block it built)."""
         self.on_system_reset_request()
 
-    # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def systick_count_flag(self):
-        return bool(self._block.count_flag)
-
-    @systick_count_flag.setter
-    def systick_count_flag(self, value):
-        self._block.count_flag = bool(value)
-
-    @property
-    def systick_clk_source(self):
-        return bool(self._block.clk_source)
-
-    @systick_clk_source.setter
-    def systick_clk_source(self, value):
-        self._block.clk_source = bool(value)
-
-    @property
-    def systick_int_enable(self):
-        return bool(self._block.int_enable)
-
-    @systick_int_enable.setter
-    def systick_int_enable(self, value):
-        self._block.int_enable = bool(value)
-
-    @property
-    def systick_reload(self):
-        return self._block.reload
-
-    @systick_reload.setter
-    def systick_reload(self, value):
-        self._block.reload = <uint32_t> (<int64_t> value)
-
-    # --- the reference's methods ------------------------------------------------------------------
-
-    @property
-    def systick_enable(self):
-        return bool(self._block.systick_enable)
-
-    @systick_enable.setter
-    def systick_enable(self, value):
-        self._block.systick_enable = bool(value)
+    def snapshot(self):
+        """The block's state in one call: SysTick (flags, reload, the countdown and its alarm, the clocks it follows) and the system-control registers (SCR, the MPU)."""
+        cdef PpbBlock* b = self._block
+        return {
+            "systick_count_flag": bool(b.count_flag),
+            "systick_clk_source": bool(b.clk_source),
+            "systick_int_enable": bool(b.int_enable),
+            "systick_enable": bool(b.systick_enable),
+            "tick_hz": b.tick_hz(),
+            "systick_reload": b.reload,
+            "timer_enable": bool(b.timer.enable()),
+            "timer_mode": b.timer.mode_raw(),
+            "clk_sys": b.clk_sys(),
+            "timer_frequency": b.timer.frequency(),
+            "timer_prescaler": b.timer.prescaler(),
+            "timer_top": b.timer.top(),
+            "timer_raw_counter": b.timer.raw_counter(),
+            "timer_counter": b.timer.counter(),
+            "alarm_target": b.alarm.target(),
+            "alarm_enable": bool(b.alarm.enable()),
+            "scr": b.scr,
+            "mpu_ctrl": b.mpu_ctrl,
+            "mpu_rnr": b.mpu_rnr,
+            "mpu_rbar": tuple([b.mpu_rbar[i] for i in range(8)]),
+            "mpu_rasr": tuple([b.mpu_rasr[i] for i in range(8)]),
+        }
 
     def tick_changed(self, tick_hz):
         """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""

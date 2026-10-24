@@ -43,7 +43,5 @@ cdef class RPWatchdog(NativeBlock):
     cdef WatchdogBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
     cdef public object on_watchdog_trigger
-    cdef public object scratch_data
     cdef public object timer
-    cdef public object alarm
     cdef object _tick_listeners

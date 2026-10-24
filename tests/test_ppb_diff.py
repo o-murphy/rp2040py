@@ -40,7 +40,8 @@ def _advance_one_clock(candidate: Rig, step: int) -> None:
 
 def _flip_the_count_flag(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.ppb.systick_count_flag = not candidate.chip.ppb.systick_count_flag
+        ppb = candidate.chip.ppb
+        ppb.write_uint32(0x10, ppb.read_uint32(0x10) ^ 0x2)  # SYST_CSR: TICKINT
 
 
 def _change_the_pending_set(candidate: Rig, step: int) -> None:

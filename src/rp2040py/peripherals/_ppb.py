@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.irq import MAX_HARDWARE_IRQ
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -154,6 +154,33 @@ class RPPPB(BasePeripheral):
         """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""
         self.clk_sys = clk_sys
         self._retune_systick()
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: SysTick (flags, reload, the countdown and its alarm, the clocks it follows) and the system-control registers (SCR, the MPU)."""
+        timer = self.systick_timer
+        return {
+            "systick_count_flag": bool(self.systick_count_flag),
+            "systick_clk_source": bool(self.systick_clk_source),
+            "systick_int_enable": bool(self.systick_int_enable),
+            "systick_enable": bool(self.systick_enable),
+            "tick_hz": float(self.tick_hz),
+            "systick_reload": int(self.systick_reload),
+            "timer_enable": bool(timer.enable),
+            "timer_mode": int(timer.mode),
+            "clk_sys": float(self.clk_sys),
+            "timer_frequency": float(timer.frequency),
+            "timer_prescaler": float(timer.prescaler),
+            "timer_top": int(timer.top),
+            "timer_raw_counter": int(timer.raw_counter),
+            "timer_counter": int(timer.counter),
+            "alarm_target": int(self.systick_alarm.target),
+            "alarm_enable": bool(self.systick_alarm.enable),
+            "scr": int(self.scr),
+            "mpu_ctrl": int(self.mpu_ctrl),
+            "mpu_rnr": int(self.mpu_rnr),
+            "mpu_rbar": tuple(int(word) for word in self.mpu_rbar),
+            "mpu_rasr": tuple(int(word) for word in self.mpu_rasr),
+        }
 
     def tick_changed(self, tick_hz: float) -> None:
         """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""

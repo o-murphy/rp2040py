@@ -12,7 +12,7 @@ import pytest
 from rp2040py.memory_map import FLASH_START_ADDRESS
 from rp2040py.peripherals.psm import PSM_BITS_MASK, WDSEL, WDSEL_ROSC, WDSEL_XOSC
 from rp2040py.peripherals.vreg_and_chip_reset import CHIP_RESET, HAD_POR, HAD_RUN
-from rp2040py.peripherals.watchdog import CTRL, FORCE, REASON, TRIGGER
+from rp2040py.peripherals.watchdog import CTRL, FORCE, REASON, SCRATCH4, TRIGGER
 from rp2040py.reset_cause import ResetCause
 from rp2040py.rp2040 import RP2040
 from rp2040py.usb.cdc import USBCDC
@@ -100,7 +100,7 @@ def _after_a_guest_reboot() -> RP2040:
     mcu.watchdog.write_uint32(
         CTRL, TRIGGER
     )  # REASON is read only: the way to have FORCE in it is the guest's own reboot
-    mcu.watchdog.scratch_data[4] = 0x6AB73121
+    mcu.watchdog.write_uint32(SCRATCH4, 0x6AB73121)
     assert mcu.watchdog.read_uint32(REASON) & FORCE
     return mcu
 
@@ -116,7 +116,7 @@ def test_a_bare_chip_reports_the_run_pin_after_a_run_pin_reset():
     mcu.set_run_pin(low=True)
 
     assert mcu.watchdog.read_uint32(REASON) == 0, "a RUN-pin reset clears the watchdog's reason"
-    assert mcu.watchdog.scratch_data == [0] * 8
+    assert mcu.watchdog.snapshot()["scratch_data"] == (0,) * 8
     assert _chip_reset_register(mcu) == HAD_RUN, "recorded on entry, not on release"
     mcu.set_run_pin(low=False)
     assert _chip_reset_register(mcu) == HAD_RUN
@@ -138,7 +138,7 @@ def test_a_bare_chip_watchdog_reset_keeps_the_reason_and_the_chip_reset_register
     mcu.watchdog.write_uint32(CTRL, TRIGGER)
 
     assert mcu.watchdog.read_uint32(REASON) & FORCE, "the guest's own reason survives its watchdog reset"
-    assert mcu.watchdog.scratch_data[4] == 0x6AB73121
+    assert mcu.watchdog.snapshot()["scratch_data"][4] == 0x6AB73121
     assert _chip_reset_register(mcu) == HAD_RUN, "a watchdog reset leaves CHIP_RESET alone"
 
 

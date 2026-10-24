@@ -25,17 +25,6 @@ CLK_REF_CTRL = (
     0x40008000 + 0x30
 )  # CLOCKS: SRC 0 ROSC (6.5 MHz), 1 the aux source (PLL_USB: not running here), 2 XOSC (12 MHz)
 TIMER_RAWL = 0x40054000 + 0x28
-ATTRS = (
-    "_reason",
-    "_enable",
-    "_tick_enable",
-    "_tick_cycles",
-    "tick_hz",
-    "_pause_dbg0",
-    "_pause_dbg1",
-    "_pause_jtag",
-    "scratch_data",
-)
 TIMES = (1, 500, 20_000, 400_000, 5_000_000, 60_000_000)  # ns; 1 us = 2 counts at the 2 MHz countdown
 
 
@@ -116,16 +105,10 @@ class Rig:
             "regs": tuple(
                 int(self.chip.read_uint32(BASE + offset)) for offset in (W.CTRL, W.REASON, *W.SCRATCH_REGS, W.TICK)
             ),
-            "attrs": tuple(_freeze(getattr(peripheral, name)) for name in ATTRS),
+            "state": tuple(sorted(peripheral.snapshot().items())),
             "raw": int(peripheral.raw_write_value),
             "alarm": (bool(clock.has_scheduled_alarm), float(clock.nanos_to_next_alarm)),
             "time": float(clock.nanos),
-            "timer": (
-                bool(peripheral.timer.enable),
-                bool(peripheral.alarm.enable),
-                int(peripheral.alarm.target),
-                float(peripheral.timer.frequency),
-            ),
             # what counts on the tick: the TIMER's count and rate, and SysTick's rate
             "followers": (
                 int(self.chip.read_uint32(TIMER_RAWL)),

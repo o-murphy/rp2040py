@@ -15,26 +15,15 @@ from libc.stdint cimport int64_t, uint32_t
 from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.native._views cimport Timer32AlarmView, Timer32View, WordsView
+from rp2040py.native._views cimport Timer32View
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPWatchdog",)
 
 
-cdef class _AlarmView(Timer32AlarmView):
-    """The watchdog's compare alarm: the shared view, plus the `callback` the tests call by hand."""
-
-    @property
-    def callback(self):
-        """What the alarm runs at its target: REASON = TIMER, then the chip's reset."""
-        return self._owner._fire_timeout
-
-
 cdef class RPWatchdog(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         cdef Timer32View timer
-        cdef _AlarmView alarm
-        cdef WordsView words
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
             raise TypeError(
@@ -56,18 +45,10 @@ cdef class RPWatchdog(NativeBlock):
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPWatchdog is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-        words = WordsView.__new__(WordsView)
-        words._words = self._block.scratch
-        words._n = 8
-        self.scratch_data = words
         timer = Timer32View.__new__(Timer32View)
         timer._owner = self
         timer._timer = &self._block.timer
         self.timer = timer
-        alarm = _AlarmView.__new__(_AlarmView)
-        alarm._owner = self
-        alarm._alarm = &self._block.alarm
-        self.alarm = alarm
 
     def _world_trigger(self):
         """The watchdog fired (or was triggered): the chip's reset, whatever `on_watchdog_trigger` is now."""
@@ -111,61 +92,28 @@ cdef class RPWatchdog(NativeBlock):
     def tick_hz(self):
         return self._block.tick_hz
 
-    @property
-    def _reason(self):
-        return self._block.reason
+    def fire_timeout(self):
+        """What the countdown does at zero without a feed: REASON = TIMER, then the chip's reset. Tests call it by hand."""
+        self._fire_timeout()
 
-    @_reason.setter
-    def _reason(self, value):
-        self._block.reason = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _enable(self):
-        return bool(self._block.enable)
-
-    @_enable.setter
-    def _enable(self, value):
-        self._block.enable = bool(value)
-
-    @property
-    def _tick_enable(self):
-        return bool(self._block.tick_enable)
-
-    @_tick_enable.setter
-    def _tick_enable(self, value):
-        self._block.tick_enable = bool(value)
-
-    @property
-    def _tick_cycles(self):
-        return self._block.tick_cycles
-
-    @_tick_cycles.setter
-    def _tick_cycles(self, value):
-        self._block.tick_cycles = <uint32_t> (value & 0x1FF)
-
-    @property
-    def _pause_dbg0(self):
-        return bool(self._block.pause_dbg0)
-
-    @_pause_dbg0.setter
-    def _pause_dbg0(self, value):
-        self._block.pause_dbg0 = bool(value)
-
-    @property
-    def _pause_dbg1(self):
-        return bool(self._block.pause_dbg1)
-
-    @_pause_dbg1.setter
-    def _pause_dbg1(self, value):
-        self._block.pause_dbg1 = bool(value)
-
-    @property
-    def _pause_jtag(self):
-        return bool(self._block.pause_jtag)
-
-    @_pause_jtag.setter
-    def _pause_jtag(self, value):
-        self._block.pause_jtag = bool(value)
+    def snapshot(self):
+        """The block's state in one call: the registers and flags, the eight scratch words, the tick, and the countdown (its enables, target and rate)."""
+        cdef WatchdogBlock* b = self._block
+        return {
+            "reason": b.reason,
+            "enable": bool(b.enable),
+            "tick_enable": bool(b.tick_enable),
+            "tick_cycles": b.tick_cycles,
+            "tick_hz": b.tick_hz,
+            "pause_dbg0": bool(b.pause_dbg0),
+            "pause_dbg1": bool(b.pause_dbg1),
+            "pause_jtag": bool(b.pause_jtag),
+            "scratch_data": tuple([b.scratch[i] for i in range(8)]),
+            "timer_enable": bool(b.timer.enable()),
+            "alarm_enable": bool(b.alarm.enable()),
+            "alarm_target": b.alarm.target(),
+            "timer_frequency": b.timer.frequency(),
+        }
 
     def reset(self):
         """Back to power-on (a RUN-pin/power-on reset): the reset-cause bookkeeping, CTRL and TICK (see the reference, and 0089 section 1.3)."""

@@ -29,7 +29,8 @@ def _write_with_an_alias(candidate: Rig, step: int) -> None:
 
 def _change_the_scratch(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.peripheral.scratch_data[3] ^= 0x10
+        peripheral = candidate.peripheral
+        peripheral.write_uint32(0x18, peripheral.read_uint32(0x18) ^ 0x10)  # SCRATCH3
 
 
 def _move_the_clock(candidate: Rig, step: int) -> None:
