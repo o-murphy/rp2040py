@@ -252,16 +252,16 @@ def test_a_watchdog_reset_reaches_the_wdsel_gated_path(tmp_path):
 
     With no WDSEL bit set, a watchdog reset must leave the peripherals alone."""
     device = _make_device(tmp_path)
-    device.mcu.uart[0]._interrupt_mask = 0xFF
+    device.mcu.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
 
     _trigger_watchdog(device)
 
-    assert device.mcu.uart[0]._interrupt_mask == 0xFF, "watchdog reset ignored WDSEL"
+    assert device.mcu.uart[0].snapshot()["interrupt_mask"] == 0xFF, "watchdog reset ignored WDSEL"
 
     device.mcu.psm.write_uint32(0x08, 0x1FFFC)  # what pico-sdk's watchdog_reboot() writes
     _trigger_watchdog(device)
 
-    assert device.mcu.uart[0]._interrupt_mask == 0
+    assert device.mcu.uart[0].snapshot()["interrupt_mask"] == 0
 
 
 def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_path):

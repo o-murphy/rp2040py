@@ -151,6 +151,28 @@ class RPUART(BasePeripheral):
         self.on_byte: Callable[[int], None] | None = None
         self.on_baud_rate_change: Callable[[int], None] | None = None
 
+    def snapshot(self) -> dict[str, int | bool | tuple[int, ...]]:
+        """The block's state as plain values: the registers, both FIFOs' contents, the shifter and what is derived from them (the TX thresholds, the flag register)."""
+        return {
+            "ctrl": self._ctrl_register,
+            "line_ctrl": self._line_ctrl_register,
+            "int_divisor": self._int_divisor,
+            "frac_divisor": self._frac_divisor,
+            "interrupt_mask": self._interrupt_mask,
+            "interrupt_status": self._interrupt_status,
+            "ifls": self._ifls,
+            "ilpr": self._ilpr,
+            "dmacr": self._dmacr,
+            "rsr": self._rsr,
+            "rx": tuple(self.rx_fifo.items),
+            "tx": tuple(self.tx_fifo.items),
+            "tx_shifting": self._tx_shifting,
+            "tx_capacity": self.tx_capacity,
+            "tx_trigger": self.tx_trigger,
+            "tx_full": self.tx_full,
+            "flags": self.flags,
+        }
+
     def reset(self) -> None:
         """Registers and the RX FIFO, back to power-on (0089 Phase 5).
 
