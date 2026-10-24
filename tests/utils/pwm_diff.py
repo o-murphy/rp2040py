@@ -147,53 +147,21 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, pwm = self.chip, self.chip.pwm
-        channels = []
-        for channel in pwm.channels:
-            timer = channel.timer
-            channels.append(
-                (
-                    int(channel.csr),
-                    int(channel.div),
-                    int(channel.cc),
-                    int(channel.top),
-                    bool(channel.last_b_value),
-                    bool(channel.counting_up),
-                    bool(channel.cc_updated),
-                    bool(channel.top_updated),
-                    float(channel.tick_counter),
-                    int(channel.div_mode),
-                    bool(timer.enable),
-                    int(timer.mode),
-                    float(timer.prescaler),
-                    int(timer.top),
-                    int(timer.raw_counter),
-                    int(timer.counter),
-                    int(channel.alarm_a.target),
-                    int(channel.alarm_b.target),
-                    int(channel.alarm_a_rise.target),
-                    int(channel.alarm_b_rise.target),
-                    bool(channel.alarm_a.enable),
-                    bool(channel.alarm_b.enable),
-                    bool(channel.alarm_a_rise.enable),
-                    bool(channel.alarm_b_rise.enable),
-                    bool(channel.alarm_bottom.enable),
-                    -1 if channel.latched_top is None else int(channel.latched_top),
-                    int(channel.latched_cc_a),
-                    int(channel.latched_cc_b),
-                    int(channel.counter),
-                )
-            )
+        state = pwm.snapshot()
         return {
             "regs": tuple(int(chip.read_uint32(PWM_BASE + offset)) for offset in ALL_REGISTERS),
-            "channels": tuple(channels),
-            "block": (
-                int(pwm.gpio_value),
-                int(pwm.gpio_direction),
-                int(pwm._int_raw),
-                int(pwm._int_enable),
-                int(pwm._int_force),
-                int(pwm.int_status),
-                int(pwm.clock_freq),
+            "channels": tuple(tuple(sorted(channel.items())) for channel in state["channels"]),
+            "block": tuple(
+                state[name]
+                for name in (
+                    "gpio_value",
+                    "gpio_direction",
+                    "int_raw",
+                    "int_enable",
+                    "int_force",
+                    "int_status",
+                    "clock_freq",
+                )
             ),
             "pins": tuple(
                 (

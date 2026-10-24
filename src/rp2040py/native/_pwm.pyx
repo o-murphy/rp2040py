@@ -24,25 +24,18 @@ from rp2040py.native._mcu_irq cimport Mcu
 from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.native._views cimport Timer32AlarmView, Timer32View
+from rp2040py.native._views cimport Timer32View
 from rp2040py.native._window_map cimport WindowHandler
-
-from rp2040py.peripherals._pwm import PWMDivMode
 
 __all__ = ("RPPWM",)
 
 
 cdef class _Channel:
-    """One of the eight channels as the reference's `PWMChannel` shows it."""
+    """One of the eight channels as far as the rest of the chip looks at it: its `timer` (the clock tree retunes it) and its place. The channel's state is in `RPPWM.snapshot()`."""
 
     cdef RPPWM _owner
     cdef PwmChannel* _channel
     cdef public object timer
-    cdef public object alarm_a
-    cdef public object alarm_b
-    cdef public object alarm_a_rise
-    cdef public object alarm_b_rise
-    cdef public object alarm_bottom
 
     @property
     def pwm(self):
@@ -56,183 +49,11 @@ cdef class _Channel:
     def index(self):
         return self._channel.index
 
-    @property
-    def pin_a1(self):
-        return self._channel.pin_a1
-
-    @property
-    def pin_b1(self):
-        return self._channel.pin_b1
-
-    @property
-    def pin_a2(self):
-        return self._channel.pin_a2
-
-    @property
-    def pin_b2(self):
-        return self._channel.pin_b2
-
-    @property
-    def csr(self):
-        return self._channel.csr
-
-    @csr.setter
-    def csr(self, value):
-        self._channel.csr = <uint32_t> (<int64_t> value)
-
-    @property
-    def div(self):
-        return self._channel.div
-
-    @div.setter
-    def div(self, value):
-        self._channel.div = <uint32_t> (<int64_t> value)
-
-    @property
-    def cc(self):
-        return self._channel.cc
-
-    @cc.setter
-    def cc(self, value):
-        self._channel.cc = <uint32_t> (<int64_t> value)
-
-    @property
-    def top(self):
-        return self._channel.top
-
-    @top.setter
-    def top(self, value):
-        self._channel.top = <uint32_t> (<int64_t> value)
-
-    @property
-    def latched_top(self):
-        cdef int64_t value = self._channel.latched_top
-        return None if value < 0 else value
-
-    @latched_top.setter
-    def latched_top(self, value):
-        self._channel.latched_top = -1 if value is None else <int64_t> value
-
-    @property
-    def latched_cc_a(self):
-        return self._channel.latched_cc_a
-
-    @latched_cc_a.setter
-    def latched_cc_a(self, value):
-        self._channel.latched_cc_a = <uint32_t> (<int64_t> value)
-
-    @property
-    def latched_cc_b(self):
-        return self._channel.latched_cc_b
-
-    @latched_cc_b.setter
-    def latched_cc_b(self, value):
-        self._channel.latched_cc_b = <uint32_t> (<int64_t> value)
-
-    @property
-    def counter(self):
-        return self._channel.counter()
-
-    @property
-    def last_b_value(self):
-        return bool(self._channel.last_b_value)
-
-    @last_b_value.setter
-    def last_b_value(self, value):
-        self._channel.last_b_value = bool(value)
-
-    @property
-    def counting_up(self):
-        return bool(self._channel.counting_up)
-
-    @counting_up.setter
-    def counting_up(self, value):
-        self._channel.counting_up = bool(value)
-
-    @property
-    def cc_updated(self):
-        return bool(self._channel.cc_updated)
-
-    @cc_updated.setter
-    def cc_updated(self, value):
-        self._channel.cc_updated = bool(value)
-
-    @property
-    def top_updated(self):
-        return bool(self._channel.top_updated)
-
-    @top_updated.setter
-    def top_updated(self, value):
-        self._channel.top_updated = bool(value)
-
-    @property
-    def tick_counter(self):
-        return self._channel.tick_counter
-
-    @tick_counter.setter
-    def tick_counter(self, value):
-        self._channel.tick_counter = <double> value
-
-    @property
-    def div_mode(self):
-        return PWMDivMode(self._channel.div_mode_raw())
-
-    @div_mode.setter
-    def div_mode(self, value):
-        self._channel.set_div_mode_raw(<uint32_t> int(value))
-
-    @property
-    def gpio_b_value(self):
-        cdef cppbool level = False
-        if not self._channel.gpio_b_value(&level):
-            raise_if_pending()
-        return bool(level)
-
-    @property
-    def en(self):
-        return self._channel.en()
-
-    @en.setter
-    def en(self, value):
-        if not self._channel.set_en(bool(value)):
-            raise_if_pending()
-
-    def read_register(self, offset):
-        return self._channel.read_register(<uint32_t> offset)
-
-    def write_register(self, offset, value):
-        if not self._channel.write_register(<uint32_t> offset, <uint32_t> (<int64_t> value)):
-            raise_if_pending()
-
-    def reset(self):
-        if not self._channel.reset():
-            raise_if_pending()
-
-    def set_a(self, value):
-        if not self._channel.set_a(bool(value)):
-            raise_if_pending()
-
-    def set_b(self, value):
-        if not self._channel.set_b(bool(value)):
-            raise_if_pending()
-
-    def gpio_b_changed(self):
-        if not self._channel.gpio_b_changed():
-            raise_if_pending()
-
-    def update_enable(self):
-        if not self._channel.update_enable():
-            raise_if_pending()
-
-    def _update_double_buffered(self):
-        self._channel.update_double_buffered()
-
 
 cdef class RPPWM(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         cdef _Channel channel
         cdef Timer32View timer
-        cdef Timer32AlarmView alarm
         cdef uint32_t i
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -262,26 +83,6 @@ cdef class RPPWM(NativeBlock):
             timer._owner = self
             timer._timer = &self._block.channels[i].timer
             channel.timer = timer
-            alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-            alarm._owner = self
-            alarm._alarm = &self._block.channels[i].alarm_a
-            channel.alarm_a = alarm
-            alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-            alarm._owner = self
-            alarm._alarm = &self._block.channels[i].alarm_b
-            channel.alarm_b = alarm
-            alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-            alarm._owner = self
-            alarm._alarm = &self._block.channels[i].alarm_a_rise
-            channel.alarm_a_rise = alarm
-            alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-            alarm._owner = self
-            alarm._alarm = &self._block.channels[i].alarm_b_rise
-            channel.alarm_b_rise = alarm
-            alarm = Timer32AlarmView.__new__(Timer32AlarmView)
-            alarm._owner = self
-            alarm._alarm = &self._block.channels[i].alarm_bottom
-            channel.alarm_bottom = alarm
             views.append(channel)
         self.channels = views
 
@@ -304,34 +105,6 @@ cdef class RPPWM(NativeBlock):
         self._block.gpio_direction = <uint32_t> (<int64_t> value)
 
     @property
-    def _int_raw(self):
-        return self._block.int_raw
-
-    @_int_raw.setter
-    def _int_raw(self, value):
-        self._block.int_raw = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_enable(self):
-        return self._block.int_enable
-
-    @_int_enable.setter
-    def _int_enable(self, value):
-        self._block.int_enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_force(self):
-        return self._block.int_force
-
-    @_int_force.setter
-    def _int_force(self, value):
-        self._block.int_force = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_status(self):
-        return self._block.int_status()
-
-    @property
     def clock_freq(self):
         # The reference reads the live system clock; the counters were built on the value at construction.
         return self.rp2040.clk_sys
@@ -340,9 +113,54 @@ cdef class RPPWM(NativeBlock):
         """A new system clock: every counter keeps its value and continues at the new rate."""
         self._block.set_clock_freq(<double> freq)
 
-    def channel_interrupt(self, index):
-        if not self._block.channel_interrupt(<uint32_t> index):
-            raise_if_pending()
+    def snapshot(self):
+        """The block's state in one call: every channel's registers, flags, counter bookkeeping, timer and alarms, and the block's pin words, interrupt words and clock."""
+        cdef PwmChannel* c
+        cdef uint32_t i
+        channels = []
+        for i in range(8):
+            c = &self._block.channels[i]
+            channels.append({
+                "csr": c.csr,
+                "div": c.div,
+                "cc": c.cc,
+                "top": c.top,
+                "last_b_value": bool(c.last_b_value),
+                "counting_up": bool(c.counting_up),
+                "cc_updated": bool(c.cc_updated),
+                "top_updated": bool(c.top_updated),
+                "tick_counter": c.tick_counter,
+                "div_mode": c.div_mode_raw(),
+                "timer_enable": bool(c.timer.enable()),
+                "timer_mode": c.timer.mode_raw(),
+                "timer_prescaler": c.timer.prescaler(),
+                "timer_top": c.timer.top(),
+                "timer_raw_counter": c.timer.raw_counter(),
+                "timer_counter": c.timer.counter(),
+                "alarm_a_target": c.alarm_a.target(),
+                "alarm_b_target": c.alarm_b.target(),
+                "alarm_a_rise_target": c.alarm_a_rise.target(),
+                "alarm_b_rise_target": c.alarm_b_rise.target(),
+                "alarm_a_enable": bool(c.alarm_a.enable()),
+                "alarm_b_enable": bool(c.alarm_b.enable()),
+                "alarm_a_rise_enable": bool(c.alarm_a_rise.enable()),
+                "alarm_b_rise_enable": bool(c.alarm_b_rise.enable()),
+                "alarm_bottom_enable": bool(c.alarm_bottom.enable()),
+                "latched_top": c.latched_top,
+                "latched_cc_a": c.latched_cc_a,
+                "latched_cc_b": c.latched_cc_b,
+                "counter": c.counter(),
+            })
+        return {
+            "channels": tuple(channels),
+            "gpio_value": self._block.gpio_value,
+            "gpio_direction": self._block.gpio_direction,
+            "int_raw": self._block.int_raw,
+            "int_enable": self._block.int_enable,
+            "int_force": self._block.int_force,
+            "int_status": self._block.int_status(),
+            "clock_freq": self.rp2040.clk_sys,
+        }
 
     def check_interrupts(self):
         if not self._block.check_interrupts():

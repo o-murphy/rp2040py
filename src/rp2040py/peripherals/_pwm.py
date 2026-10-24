@@ -1,6 +1,6 @@
 import math
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock.clock import IClock
 from rp2040py.irq import IRQ
@@ -363,6 +363,55 @@ class RPPWM(BasePeripheral):
 
         # We also set the DMA Request (DREQ) for the channel
         self.rp2040.dma.set_dreq(DREQChannel.DREQ_PWM_WRAP0 + index)
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: every channel's registers, flags, counter bookkeeping, timer and alarms (`channels`, one dict each), and the block's pin words, interrupt words and clock."""
+        channels = []
+        for channel in self.channels:
+            timer = channel.timer
+            channels.append(
+                {
+                    "csr": channel.csr,
+                    "div": channel.div,
+                    "cc": channel.cc,
+                    "top": channel.top,
+                    "last_b_value": bool(channel.last_b_value),
+                    "counting_up": bool(channel.counting_up),
+                    "cc_updated": bool(channel.cc_updated),
+                    "top_updated": bool(channel.top_updated),
+                    "tick_counter": float(channel.tick_counter),
+                    "div_mode": int(channel.div_mode),
+                    "timer_enable": bool(timer.enable),
+                    "timer_mode": int(timer.mode),
+                    "timer_prescaler": float(timer.prescaler),
+                    "timer_top": int(timer.top),
+                    "timer_raw_counter": int(timer.raw_counter),
+                    "timer_counter": int(timer.counter),
+                    "alarm_a_target": int(channel.alarm_a.target),
+                    "alarm_b_target": int(channel.alarm_b.target),
+                    "alarm_a_rise_target": int(channel.alarm_a_rise.target),
+                    "alarm_b_rise_target": int(channel.alarm_b_rise.target),
+                    "alarm_a_enable": bool(channel.alarm_a.enable),
+                    "alarm_b_enable": bool(channel.alarm_b.enable),
+                    "alarm_a_rise_enable": bool(channel.alarm_a_rise.enable),
+                    "alarm_b_rise_enable": bool(channel.alarm_b_rise.enable),
+                    "alarm_bottom_enable": bool(channel.alarm_bottom.enable),
+                    "latched_top": -1 if channel.latched_top is None else int(channel.latched_top),
+                    "latched_cc_a": channel.latched_cc_a,
+                    "latched_cc_b": channel.latched_cc_b,
+                    "counter": channel.counter,
+                }
+            )
+        return {
+            "channels": tuple(channels),
+            "gpio_value": self.gpio_value,
+            "gpio_direction": self.gpio_direction,
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "int_force": self._int_force,
+            "int_status": self.int_status,
+            "clock_freq": self.clock_freq,
+        }
 
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.PWM_WRAP, bool(self.int_status))
