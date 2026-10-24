@@ -32,17 +32,20 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _push_a_byte_onto_the_rx_fifo(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.ssi._rx_queue.append(0x5A)
+        candidate.chip.write_uint32(
+            SSI_BASE + 0x60, 0x5A
+        )  # DR0: a byte shifted out, a byte shifted in, on the candidate alone
 
 
 def _latch_write_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.ssi._write_enabled = not candidate.chip.ssi._write_enabled
+        ssi = candidate.chip.ssi
+        ssi.write_uint32(0x08, ssi.read_uint32(0x08) ^ 1)  # SSIENR
 
 
 def _extend_the_command_in_flight(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.ssi._tx_buffer.append(0x77)
+        candidate.chip.write_uint32(SSI_BASE + 0x60, 0x77)  # DR0: one more byte of the command in flight
 
 
 @pytest.mark.parametrize(

@@ -47,7 +47,9 @@ def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):
     for value in range(9):
         spi.complete_transmit(value)  # eight fill the RX FIFO, the ninth is an overrun: ROR is raised
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & SSPRORINTR
-    chip.write_uint32(SPI0_BASE + 0x3000 + SSPICR, SSPRTINTR)  # the CLR alias, raw value RT: ROR is not among the bits written, so it stays
+    chip.write_uint32(
+        SPI0_BASE + 0x3000 + SSPICR, SSPRTINTR
+    )  # the CLR alias, raw value RT: ROR is not among the bits written, so it stays
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & SSPRORINTR
     chip.write_uint32(SPI0_BASE + 0x3000 + SSPICR, SSPRORINTR)  # the CLR alias, raw value ROR: cleared
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == 0

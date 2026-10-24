@@ -153,17 +153,7 @@ class Rig:
                 if offset != S.SSI_DR0 and offset not in S.CLEAR_ON_READ
             )
         }
-        out["ints"] = (
-            int(ssi._risr),
-            int(ssi._isr),
-            int(ssi._sticky),
-            bool(ssi._irq_level),
-            bool(ssi._dreq_tx),
-            bool(ssi._dreq_rx),
-        )
-        out["rx"] = tuple(int(b) for b in ssi._rx_queue)
-        tx = ssi._tx_buffer
-        out["command"] = (bool(ssi._write_enabled), bool(ssi._cs_asserted), len(tx), bytes(tx[:260]))
+        out["state"] = tuple(sorted(ssi.snapshot().items()))
         out["flash"] = tuple(bytes(chip.flash[a:b]) for a, b in FLASH_WINDOWS)
         return out
 

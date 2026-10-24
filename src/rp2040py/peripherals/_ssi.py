@@ -1,5 +1,5 @@
 from collections import deque
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py._gpio_pin import GPIOPinState
 from rp2040py.irq import IRQ
@@ -207,6 +207,25 @@ class RPSSI(BasePeripheral):
         self._tx_buffer = bytearray()
         self._rx_queue.clear()
         self._update()
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the enable, the held and derived interrupts and requests, the stored registers, the received bytes, and the flash command in flight (its length, its first 260 bytes, the write latch, the chip-select it saw)."""
+        return {
+            "ssienr": self._ssienr,
+            "txflr": self._txflr,
+            "stored": tuple(sorted(self._stored.items())),
+            "sticky": self._sticky,
+            "risr": self._risr,
+            "isr": self._isr,
+            "irq_level": bool(self._irq_level),
+            "dreq_tx": bool(self._dreq_tx),
+            "dreq_rx": bool(self._dreq_rx),
+            "rx": tuple(self._rx_queue),
+            "write_enabled": bool(self._write_enabled),
+            "cs_asserted": bool(self._cs_asserted),
+            "command_length": len(self._tx_buffer),
+            "command": bytes(self._tx_buffer[:260]),
+        }
 
     @property
     def _risr(self) -> int:

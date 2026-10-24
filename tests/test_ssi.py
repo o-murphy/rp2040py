@@ -234,7 +234,7 @@ def test_chip_select_already_asserted_at_reset_is_not_silently_missed(rp2040_fac
     # (see docs/BACKLOG.md).
     rp2040, ssi = _ssi(rp2040_factory)
     assert rp2040.qspi[1].value == GPIOPinState.LOW
-    assert ssi._cs_asserted
+    assert ssi.snapshot()["cs_asserted"]
 
     received = _send(rp2040, ssi, ssi_mod.CMD_READ_JEDEC_ID, 0x00, 0x00, 0x00)
 

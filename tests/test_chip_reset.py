@@ -243,17 +243,17 @@ def test_xip_and_ssi_are_gated_on_the_psm_xip_domain_not_a_resets_bit(rp2040_fac
     halves of it reset together."""
     rp2040 = rp2040_factory()
     rp2040.xip_ctrl.stream_addr = 0x1000
-    rp2040.ssi._ssienr = 1
+    rp2040.ssi.write_uint32(0x08, 1)  # SSIENR
     rp2040.resets.write_uint32(0x04, 0x01FFFFFF)  # every RESETS bit, and it must not be enough
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
     assert rp2040.xip_ctrl.stream_addr == 0x1000
-    assert rp2040.ssi._ssienr == 1
+    assert rp2040.ssi.snapshot()["ssienr"] == 1
 
     rp2040.psm.write_uint32(0x08, WDSEL_XIP)
     rp2040.reset(preserve_flash=True, from_watchdog=True)
     assert rp2040.xip_ctrl.stream_addr == 0
-    assert rp2040.ssi._ssienr == 0
+    assert rp2040.ssi.snapshot()["ssienr"] == 0
 
 
 def test_resetting_ssi_does_not_duplicate_its_chip_select_listener(rp2040_factory):
@@ -278,7 +278,7 @@ def test_resetting_ssi_re_syncs_chip_select_from_the_pin(rp2040_factory):
 
     from rp2040py.gpio_pin import GPIOPinState
 
-    assert rp2040.ssi._cs_asserted == (rp2040.qspi[1].value == GPIOPinState.LOW)
+    assert rp2040.ssi.snapshot()["cs_asserted"] == (rp2040.qspi[1].value == GPIOPinState.LOW)
 
 
 def test_xosc_resets_on_a_power_on_but_not_on_a_watchdog_reboot(rp2040_factory):

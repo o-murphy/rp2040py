@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING, NamedTuple, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.peripherals.peripheral import BasePeripheral
