@@ -1,7 +1,7 @@
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple
 
-from rp2040py.peripherals.usb import RPUSBController
+from rp2040py.usb.host_port import USBHostPort
 from rp2040py.usb.interfaces import DataDirection, DescriptorType, ISetupPacketParams, SetupRecipient, SetupType
 from rp2040py.usb.setup import (
     create_setup_packet,
@@ -123,7 +123,7 @@ def extract_endpoint_numbers(descriptors: Sequence[int]) -> EndpointNumbers:
 
 
 class USBCDC:
-    def __init__(self, usb: RPUSBController):
+    def __init__(self, usb: USBHostPort):
         self.usb = usb
         self.tx_fifo = FIFO(TX_FIFO_SIZE)
 

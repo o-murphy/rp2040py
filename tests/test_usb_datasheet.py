@@ -180,7 +180,7 @@ def test_sie_status_writes_clear_the_wc_bits_only(mcu):
     """Table 404: DATA_SEQ_ERROR..CRC_ERROR, BUS_RESET, TRANS_COMPLETE, SETUP_REC, CONNECTED, RESUME and SUSPENDED are WC; LINE_STATE, VBUS_DETECTED and VBUS_OVER_CURR are read-only; SPEED is WC
     but is the attached device's speed (the event is what the write acknowledges)."""
     usb = mcu.usb_ctrl
-    usb._sie_status = (
+    usb.raise_sie_status(
         U.SIE_SUSPENDED | U.SIE_TRANS_COMPLETE | U.SIE_VBUS_DETECTED | (U.SIELineState.J << U.SIE_LINE_STATE_SHIFT)
     )
     wreg(mcu, U.SIE_STATUS, 0xFFFFFFFF)
@@ -193,8 +193,8 @@ def test_sie_status_writes_clear_the_wc_bits_only(mcu):
 def test_reading_sof_rd_acknowledges_the_sof_interrupts(mcu):
     """Table 418: INTR.DEV_SOF and HOST_SOF are "cleared by reading SOF_RD"."""
     usb = mcu.usb_ctrl
-    usb._int_raw |= U.INTR_HOST_SOF | U.INTR_DEV_SOF
-    usb._sof_frame_number = 0x123
+    usb.raise_interrupt(U.INTR_HOST_SOF | U.INTR_DEV_SOF)
+    wreg(mcu, U.SOF_WR, 0x123)
     assert reg(mcu, U.SOF_RD) == 0x123
     assert not reg(mcu, U.INTR) & (U.INTR_HOST_SOF | U.INTR_DEV_SOF)
     wreg(mcu, U.SOF_WR, 0xFFFFFFFF)
@@ -218,8 +218,7 @@ def test_abort_done_and_stall_nak_status_raise_their_interrupts(mcu):
     assert reg(mcu, U.INTR) & U.INTR_ABORT_DONE
     wreg(mcu, U.EP_ABORT_DONE, 1 << 4)
     assert not reg(mcu, U.INTR) & U.INTR_ABORT_DONE
-    mcu.usb_ctrl._ep_status_stall_nak = 1 << 2
-    mcu.usb_ctrl._stall_nak_updated()
+    mcu.usb_ctrl.raise_stall_nak(1 << 2)
     assert reg(mcu, U.INTR) & U.INTR_EP_STALL_NAK
     wreg(mcu, U.EP_STATUS_STALL_NAK, 1 << 2)
     assert not reg(mcu, U.INTR) & U.INTR_EP_STALL_NAK

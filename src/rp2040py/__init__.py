@@ -4,10 +4,10 @@ from rp2040py.gpio_pin import GPIOPin, GPIOPinState
 from rp2040py.peripherals.i2c import RPI2C, I2CMode, I2CSpeed
 from rp2040py.peripherals.peripheral import BasePeripheral, Peripheral
 from rp2040py.peripherals.pio import RPPIO, StateMachine
-from rp2040py.peripherals.usb import RPUSBController
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
 from rp2040py.usb.cdc import USBCDC
+from rp2040py.usb.host_port import USBHostPort
 from rp2040py.usb.interfaces import (
     DataDirection,
     DescriptorType,
@@ -55,7 +55,6 @@ __all__ = (
     "LogLevel",
     "Logger",
     "Peripheral",
-    "RPUSBController",
     "SetupRecipient",
     "SetupRequest",
     "SetupType",
@@ -64,6 +63,7 @@ __all__ = (
     "StateMachine",
     "USBDescriptorType",
     "USBDevice",
+    "USBHostPort",
     "USBTransferResult",
     "USBTransferStatus",
     "create_setup_packet",

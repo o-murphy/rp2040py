@@ -221,101 +221,6 @@ cdef cppbool _device_out_trampoline(void* ctx, uint32_t endpoint, const uint8_t*
     return True
 
 
-cdef class _HalfList:
-    """One of the reference's Python lists of buffer halves (a `_buff_done[slot]` or a `_pending_reads[endpoint]`), as a live view of the block's bounded array."""
-
-    cdef RPUSBController _usb
-    cdef uint32_t _index
-    cdef bint _pending
-
-    def __len__(self):
-        return self._usb._block.pending_count(self._index) if self._pending else self._usb._block.done_count(self._index)
-
-    def __getitem__(self, position):
-        if position < 0:
-            position += len(self)
-        if position < 0 or position >= len(self):
-            raise IndexError("list index out of range")
-        if self._pending:
-            return self._usb._block.pending_at(self._index, position)
-        return self._usb._block.done_at(self._index, position)
-
-    def __iter__(self):
-        return iter([self[i] for i in range(len(self))])
-
-    def __eq__(self, other):
-        return list(self) == list(other)
-
-    def __repr__(self):
-        return repr(list(self))
-
-    def append(self, half):
-        if self._pending:
-            raise AttributeError("the OUT requests in flight are the block's own")
-        self._usb._block.done_push(self._index, <uint32_t> half)
-
-
-cdef class _HalfLists:
-    """`_buff_done` (32 slots) or `_pending_reads` (16 endpoints): a sequence of `_HalfList` views."""
-
-    cdef RPUSBController _usb
-    cdef bint _pending
-
-    def __len__(self):
-        return ENDPOINTS if self._pending else 2 * ENDPOINTS
-
-    def __getitem__(self, index):
-        cdef _HalfList view
-        if index < 0:
-            index += len(self)
-        if index < 0 or index >= len(self):
-            raise IndexError("list index out of range")
-        view = _HalfList.__new__(_HalfList)
-        view._usb = self._usb
-        view._index = index
-        view._pending = self._pending
-        return view
-
-    def __iter__(self):
-        return iter([self[i] for i in range(len(self))])
-
-
-cdef class _Words:
-    """`_buf_select` / `_two_buffer_count`: 32 small integers, readable and writable in place."""
-
-    cdef RPUSBController _usb
-    cdef bint _counts
-
-    def __len__(self):
-        return 2 * ENDPOINTS
-
-    def __getitem__(self, index):
-        if index < 0:
-            index += 2 * ENDPOINTS
-        if index < 0 or index >= 2 * ENDPOINTS:
-            raise IndexError("list index out of range")
-        return self._usb._block.two_buffer_count[index] if self._counts else self._usb._block.buf_select[index]
-
-    def __setitem__(self, index, value):
-        if index < 0:
-            index += 2 * ENDPOINTS
-        if index < 0 or index >= 2 * ENDPOINTS:
-            raise IndexError("list assignment index out of range")
-        if self._counts:
-            self._usb._block.two_buffer_count[index] = <uint32_t> (<int64_t> value)
-        else:
-            self._usb._block.buf_select[index] = <uint32_t> (<int64_t> value)
-
-    def __iter__(self):
-        return iter([self[i] for i in range(2 * ENDPOINTS)])
-
-    def __eq__(self, other):
-        return list(self) == list(other)
-
-    def __repr__(self):
-        return repr(list(self))
-
-
 cdef void usb_wire_fill(UsbHost* wire, void* chip) noexcept:
     """The host's end of the USB wire, for `McuHost.usb_wire`: the callbacks into the Python device and endpoint machinery of `chip`'s USB view (`chip._usb_wire_view`)."""
     wire.usb_enabled = _enabled_trampoline
@@ -407,233 +312,50 @@ cdef class RPUSBController(NativeBlock):
         self._device = device
         self._block.has_device = device is not None
 
-    @property
-    def _pending_setup_response(self):
-        return self._pending_response
+    def snapshot(self):
+        """The controller's state in one call: the interrupt words, the SIE, the mode, the buffer bookkeeping and the host-mode control transfer in progress."""
+        cdef UsbBlock* b = self._block
+        cdef uint32_t i, j
+        cdef uint32_t slots = 2 * ENDPOINTS
+        return {
+            "int_raw": b.int_raw,
+            "int_enable": b.int_enable,
+            "int_force": b.int_force,
+            "int_status": b.int_status(),
+            "sie_status": b.sie_status,
+            "sie_ctrl": b.sie_ctrl,
+            "connected": bool(b.connected),
+            "connect_event": bool(b.connect_event),
+            "host_connect_event": bool(b.host_connect_event),
+            "host_mode": bool(b.host_mode),
+            "sof_enabled": bool(b.sof_enabled),
+            "device_attached": self._device is not None,
+            "sof_frame_number": b.sof_frame_number,
+            "ep_status_stall_nak": b.ep_status_stall_nak,
+            "buff_done": tuple([tuple([b.done_at(i, j) for j in range(b.done_count(i))]) for i in range(slots)]),
+            "buf_select": tuple([b.buf_select[i] for i in range(slots)]),
+            "two_buffer_count": tuple([b.two_buffer_count[i] for i in range(slots)]),
+            "pending_reads": tuple([tuple([b.pending_at(i, j) for j in range(b.pending_count(i))]) for i in range(ENDPOINTS)]),
+            "expecting_status_phase": bool(b.expecting_status_phase),
+            "control_data_pid": b.control_data_pid,
+            "pending_setup_response": bytes(self._pending_response or b""),
+            "device_address": None if self._device is None else self._device.address,
+        }
 
-    @_pending_setup_response.setter
-    def _pending_setup_response(self, value):
-        self._pending_response = value
+    def raise_sie_status(self, mask):
+        """Raise SIE_STATUS bits no modelled event sets (see the reference)."""
+        self._block.sie_status |= <uint32_t> (<int64_t> mask)
+        self._sie_status_updated()
 
-    @property
-    def _addr_endp(self):
-        return self._block.addr_endp
+    def raise_stall_nak(self, mask):
+        """Raise EP_STATUS_STALL_NAK bits, which only a handshake from the host sets."""
+        self._block.ep_status_stall_nak |= <uint32_t> (<int64_t> mask)
+        self._stall_nak_updated()
 
-    @_addr_endp.setter
-    def _addr_endp(self, value):
-        self._block.addr_endp = <uint32_t> (<int64_t> value)
-
-    @property
-    def _dev_addr_ctrl(self):
-        return self._block.addr_endp
-
-    @_dev_addr_ctrl.setter
-    def _dev_addr_ctrl(self, value):
-        self._block.addr_endp = <uint32_t> (<int64_t> value) & 0x000F007F
-
-    @property
-    def _main_ctrl(self):
-        return self._block.main_ctrl
-
-    @_main_ctrl.setter
-    def _main_ctrl(self, value):
-        self._block.main_ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_raw(self):
-        return self._block.int_raw
-
-    @_int_raw.setter
-    def _int_raw(self, value):
-        self._block.int_raw = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_enable(self):
-        return self._block.int_enable
-
-    @_int_enable.setter
-    def _int_enable(self, value):
-        self._block.int_enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_force(self):
-        return self._block.int_force
-
-    @_int_force.setter
-    def _int_force(self, value):
-        self._block.int_force = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_status(self):
-        return self._block.int_status()
-
-    @property
-    def _sie_status(self):
-        return self._block.sie_status
-
-    @_sie_status.setter
-    def _sie_status(self, value):
-        self._block.sie_status = <uint32_t> (<int64_t> value)
-
-    @property
-    def _sie_ctrl(self):
-        return self._block.sie_ctrl
-
-    @_sie_ctrl.setter
-    def _sie_ctrl(self, value):
-        self._block.sie_ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _connected(self):
-        return self._block.connected
-
-    @_connected.setter
-    def _connected(self, value):
-        self._block.connected = bool(value)
-
-    @property
-    def _connect_event(self):
-        return self._block.connect_event
-
-    @_connect_event.setter
-    def _connect_event(self, value):
-        self._block.connect_event = bool(value)
-
-    @property
-    def _host_connect_event(self):
-        return self._block.host_connect_event
-
-    @_host_connect_event.setter
-    def _host_connect_event(self, value):
-        self._block.host_connect_event = bool(value)
-
-    @property
-    def _sof_frame_number(self):
-        return self._block.sof_frame_number
-
-    @_sof_frame_number.setter
-    def _sof_frame_number(self, value):
-        self._block.sof_frame_number = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_ep_addr_ctrl(self):
-        return [self._block.int_ep_addr_ctrl[i] for i in range(15)]
-
-    @property
-    def _int_ep_ctrl(self):
-        return self._block.int_ep_ctrl
-
-    @_int_ep_ctrl.setter
-    def _int_ep_ctrl(self, value):
-        self._block.int_ep_ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _usb_pwr(self):
-        return self._block.usb_pwr
-
-    @property
-    def _usb_muxing(self):
-        return self._block.usb_muxing
-
-    @property
-    def _usbphy_direct(self):
-        return self._block.usbphy_direct
-
-    @property
-    def _usbphy_direct_override(self):
-        return self._block.usbphy_direct_override
-
-    @property
-    def _usbphy_trim(self):
-        return self._block.usbphy_trim
-
-    @property
-    def _nak_poll(self):
-        return self._block.nak_poll
-
-    @property
-    def _ep_abort(self):
-        return self._block.ep_abort
-
-    @property
-    def _ep_abort_done(self):
-        return self._block.ep_abort_done
-
-    @_ep_abort_done.setter
-    def _ep_abort_done(self, value):
-        self._block.ep_abort_done = <uint32_t> (<int64_t> value)
-
-    @property
-    def _ep_stall_arm(self):
-        return self._block.ep_stall_arm
-
-    @property
-    def _ep_status_stall_nak(self):
-        return self._block.ep_status_stall_nak
-
-    @_ep_status_stall_nak.setter
-    def _ep_status_stall_nak(self, value):
-        self._block.ep_status_stall_nak = <uint32_t> (<int64_t> value)
-
-    @property
-    def _host_mode(self):
-        return self._block.host_mode
-
-    @_host_mode.setter
-    def _host_mode(self, value):
-        self._block.host_mode = bool(value)
-
-    @property
-    def _sof_enabled(self):
-        return self._block.sof_enabled
-
-    @property
-    def _expecting_status_phase(self):
-        return self._block.expecting_status_phase
-
-    @_expecting_status_phase.setter
-    def _expecting_status_phase(self, value):
-        self._block.expecting_status_phase = bool(value)
-
-    @property
-    def _control_data_pid(self):
-        return self._block.control_data_pid
-
-    @_control_data_pid.setter
-    def _control_data_pid(self, value):
-        self._block.control_data_pid = <uint32_t> (<int64_t> value)
-
-    @property
-    def _buff_done(self):
-        cdef _HalfLists view = _HalfLists.__new__(_HalfLists)
-        view._usb = self
-        view._pending = False
-        return view
-
-    @property
-    def _buff_status(self):
-        return self._block.buff_status()
-
-    @property
-    def _buf_select(self):
-        cdef _Words view = _Words.__new__(_Words)
-        view._usb = self
-        view._counts = False
-        return view
-
-    @property
-    def _two_buffer_count(self):
-        cdef _Words view = _Words.__new__(_Words)
-        view._usb = self
-        view._counts = True
-        return view
-
-    @property
-    def _pending_reads(self):
-        cdef _HalfLists view = _HalfLists.__new__(_HalfLists)
-        view._usb = self
-        view._pending = True
-        return view
+    def raise_interrupt(self, mask):
+        """Raise INTR bits for which the model has no event."""
+        self._block.int_raw |= <uint32_t> (<int64_t> mask)
+        self.check_interrupts()
 
     # --- internals the oracle and the tests drive -------------------------------------------------
 

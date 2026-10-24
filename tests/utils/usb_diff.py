@@ -176,11 +176,9 @@ class Rig:
         elif (
             kind == "poke_status"
         ):  # a SIE_STATUS bit that no modelled event sets (suspend, resume, errors): the level a future token-level host would raise
-            usb._sie_status |= op[1]
-            usb._sie_status_updated()
+            usb.raise_sie_status(op[1])
         elif kind == "poke_stall_nak":  # EP_STATUS_STALL_NAK bits, which only a handshake sets
-            usb._ep_status_stall_nak |= op[1]
-            usb._stall_nak_updated()
+            usb.raise_stall_nak(op[1])
         elif kind == "reset_device":
             usb.reset_device()
         elif kind == "reset":
@@ -199,32 +197,7 @@ class Rig:
         chip, usb = self.chip, self.chip.usb_ctrl
         out: dict[str, Any] = {
             "regs": tuple(int(chip.read_uint32(USB_BASE + offset)) for offset in SIDE_EFFECT_FREE),
-            "ints": (int(usb._int_raw), int(usb._int_enable), int(usb._int_force), int(usb.int_status)),
-            "sie": (
-                int(usb._sie_status),
-                int(usb._sie_ctrl),
-                bool(usb._connected),
-                bool(usb._connect_event),
-                bool(usb._host_connect_event),
-            ),
-            "mode": (
-                bool(usb._host_mode),
-                bool(usb._sof_enabled),
-                usb.connected_device is not None,
-                int(usb._sof_frame_number),
-            ),
-            "buffers": (
-                tuple(tuple(int(h) for h in done) for done in usb._buff_done),
-                tuple(int(s) for s in usb._buf_select),
-                tuple(int(c) for c in usb._two_buffer_count),
-                tuple(tuple(int(h) for h in pending) for pending in usb._pending_reads),
-            ),
-            "host": (
-                bool(usb._expecting_status_phase),
-                int(usb._control_data_pid),
-                bytes(usb._pending_setup_response or b""),
-                None if usb.connected_device is None else int(usb.connected_device.address),
-            ),
+            "state": tuple(sorted(usb.snapshot().items())),
             "dpram": bytes(chip.usb_dpram),
             "clock": (int(chip.clock.ticks), bool(chip.clock.has_scheduled_alarm)),
         }

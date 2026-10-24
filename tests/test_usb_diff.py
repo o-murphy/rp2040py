@@ -29,22 +29,23 @@ def _flip_a_dpram_byte(candidate: Rig, step: int) -> None:
 
 def _set_a_status_bit(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.usb_ctrl._sie_status ^= 1 << 17
+        candidate.chip.usb_ctrl.raise_sie_status(1 << 17)
 
 
 def _complete_a_buffer(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.usb_ctrl._buff_done[2].append(0)
+        candidate.chip.usb_ctrl.raise_stall_nak(1 << 3)
 
 
 def _change_the_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.usb_ctrl._int_enable ^= 0x10
+        usb = candidate.chip.usb_ctrl
+        usb.write_uint32(0x90, usb.read_uint32(0x90) ^ 0x10)  # INTE
 
 
 def _flip_a_buffer_select(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.usb_ctrl._buf_select[3] ^= 1
+        candidate.chip.usb_ctrl.raise_interrupt(1 << 4)
 
 
 def _write_a_register(candidate: Rig, step: int) -> None:

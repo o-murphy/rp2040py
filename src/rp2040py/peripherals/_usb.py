@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock.clock import IAlarm
 from rp2040py.irq import IRQ
@@ -878,6 +878,48 @@ class RPUSBController(BasePeripheral):
         self.check_interrupts()
 
     # ============ Host Mode Methods ============
+
+    def snapshot(self) -> dict[str, Any]:
+        """The controller's state as plain values: the interrupt words, the SIE, the mode, the buffer bookkeeping (done, select, two-buffer counts, OUT requests in flight) and the host-mode control transfer in progress."""
+        return {
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "int_force": self._int_force,
+            "int_status": self.int_status,
+            "sie_status": self._sie_status,
+            "sie_ctrl": self._sie_ctrl,
+            "connected": bool(self._connected),
+            "connect_event": bool(self._connect_event),
+            "host_connect_event": bool(self._host_connect_event),
+            "host_mode": bool(self._host_mode),
+            "sof_enabled": bool(self._sof_enabled),
+            "device_attached": self.connected_device is not None,
+            "sof_frame_number": self._sof_frame_number,
+            "ep_status_stall_nak": self._ep_status_stall_nak,
+            "buff_done": tuple(tuple(done) for done in self._buff_done),
+            "buf_select": tuple(self._buf_select),
+            "two_buffer_count": tuple(self._two_buffer_count),
+            "pending_reads": tuple(tuple(pending) for pending in self._pending_reads),
+            "expecting_status_phase": bool(self._expecting_status_phase),
+            "control_data_pid": self._control_data_pid,
+            "pending_setup_response": bytes(self._pending_setup_response or b""),
+            "device_address": None if self.connected_device is None else self.connected_device.address,
+        }
+
+    def raise_sie_status(self, mask: int) -> None:
+        """Raise SIE_STATUS bits no modelled event sets (suspend, resume, the error flags): what a token-level host would do."""
+        self._sie_status |= mask
+        self._sie_status_updated()
+
+    def raise_stall_nak(self, mask: int) -> None:
+        """Raise EP_STATUS_STALL_NAK bits, which only a handshake from the host sets."""
+        self._ep_status_stall_nak |= mask
+        self._stall_nak_updated()
+
+    def raise_interrupt(self, mask: int) -> None:
+        """Raise INTR bits for which the model has no event (the SOF interrupts need a host that sends start-of-frame tokens)."""
+        self._int_raw |= mask
+        self.check_interrupts()
 
     def connect_device(self, device: USBDevice) -> None:
         """Connect a simulated USB device to the host controller."""
