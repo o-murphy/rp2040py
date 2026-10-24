@@ -52,16 +52,17 @@ cdef class RPIO(NativeBlock):
             "the native block is a view of the chip's C++ `Mcu` block: RPIO is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
 
-    @property
-    def _extra(self):
-        """The proc 1 / dormant wake masks, as the reference keeps them: {dest: ([enable per pin], [force per pin])}."""
+    def snapshot(self):
+        """The proc 1 / dormant wake masks the block stores itself: the same dict as the reference's."""
         cdef uint32_t i
         return {
-            dest: (
-                [self._block.extra(dest, False, i) for i in range(self._count)],
-                [self._block.extra(dest, True, i) for i in range(self._count)],
+            "extra": tuple(
+                (
+                    tuple([self._block.extra(dest, False, i) for i in range(self._count)]),
+                    tuple([self._block.extra(dest, True, i) for i in range(self._count)]),
+                )
+                for dest in (1, 2)
             )
-            for dest in (1, 2)
         }
 
     def read_uint32(self, offset):

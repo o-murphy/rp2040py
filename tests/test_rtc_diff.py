@@ -29,7 +29,11 @@ def _write_with_an_alias(candidate: Rig, step: int) -> None:
 
 def _change_the_counter(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.peripheral.minute ^= 0x10
+        # load a different minute into the counter, through the bus, on the candidate alone: SETUP_1, then CTRL.LOAD
+        peripheral = candidate.peripheral
+        minute = (peripheral.snapshot()["minute"] ^ 0x10) & 0x3F
+        peripheral.write_uint32(0x08, (peripheral.snapshot()["setup1"] & ~(0x3F << 8)) | (minute << 8))
+        peripheral.write_uint32(0x0C, peripheral.read_uint32(0x0C) | (1 << 4))
 
 
 def _move_the_clock(candidate: Rig, step: int) -> None:

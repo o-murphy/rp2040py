@@ -234,6 +234,34 @@ class RP2040RTC(BasePeripheral):
         self._retime(True)
         self.check_interrupts()
 
+    def snapshot(self) -> dict[str, int | bool]:
+        """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `running`, the alarm match, the two counter words)."""
+        return {
+            "clkdiv_m1": self.clkdiv_m1,
+            "setup0": self.setup0,
+            "setup1": self.setup1,
+            "irq_setup0": self.irq_setup0,
+            "irq_setup1": self.irq_setup1,
+            "inte": self.inte,
+            "intf": self.intf,
+            "force_not_leap_year": self.force_not_leap_year,
+            "enable": self.enable,
+            "year": self.year,
+            "month": self.month,
+            "day": self.day,
+            "dotw": self.dotw,
+            "hour": self.hour,
+            "minute": self.minute,
+            "second": self.second,
+            "latched_date": self.latched_date,
+            "ctrl": self.ctrl,
+            "running": self.running,
+            "match_ena": self.match_ena,
+            "raw_interrupt": self.raw_interrupt,
+            "date": self.date,
+            "time": self.time,
+        }
+
     def read_uint32(self, offset: int) -> int:
         if offset == CLKDIV_M1:
             return self.clkdiv_m1

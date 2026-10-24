@@ -47,10 +47,10 @@ def test_the_force_register_raises_the_line_on_the_cpu(chip):
 
 
 def test_the_python_rtc_is_a_view_of_the_block_the_bus_reaches(chip):
-    chip.rtc.clkdiv_m1 = 46874
+    chip.rtc.write_uint32(CLKDIV_M1, 46874)
     assert chip.read_uint32(RTC + CLKDIV_M1) == 46874
     chip.write_uint32(RTC + SETUP_0, (2024 << 12) | (2 << 8) | 29)
-    assert chip.rtc.setup0 == (2024 << 12) | (2 << 8) | 29
+    assert chip.rtc.snapshot()["setup0"] == (2024 << 12) | (2 << 8) | 29
 
 
 def test_a_replaced_rtc_takes_the_window_over(chip):
