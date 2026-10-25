@@ -53,7 +53,7 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 `tests/utils/X_diff.py` + `tests/test_X_diff.py`: two chips, one generated operation stream, everything observable compared after every
 step - every register offset through the bus **and its XOR/SET/CLR aliases**, reads of unimplemented offsets (the warnings are compared),
 the block's side effects (IRQ line, DREQs, callbacks) as an ordered log, an exception on one side and not the other. Then prove it:
-agreement over several seeds, perturbations of the candidate through the public API caught at the step they are made, logic mutants
+agreement over several seeds (the comparison is `snapshot()` plus the registers read through the bus), perturbations of the candidate - **bus writes or the explicit inputs, never a back-door attribute** - caught at the step they are made, logic mutants
 of the reference (one subclass each) caught, coverage counts asserted so a green run means something. A mutant that survives is
 a hole in the generator - widen it.
 
@@ -78,7 +78,7 @@ out-of-bounds index a mutant introduces is a failure): every survivor is a gap i
 ## 5. The shell (`native/_X.pxd/.pyx/.pyi`)
 
 A `cdef class` over the block; trampolines for each host function that catch `BaseException`, `park_error()` it and return `False`;
-the reference's attributes (including the private ones tests poke, as properties with setters); `read_uint32`/`write_uint32`/
+**no attribute-per-register mirrors** - state is changed through the bus and observed through one `snapshot()` (a dict of plain values, built by the shell in one call from the C++ block's public fields, with the same keys as the reference's `snapshot()`; record 0096, the snapshot series). Keep a property only for plumbing another block or the chip reads (a frequency, a pin image, a tick hook) and an explicit input method only for what the bus cannot do (`fire_timeout()`, `raise_interrupt()`, `set_counter()`); `read_uint32`/`write_uint32`/
 `write_uint32_atomic` that `raise_if_pending()`; `_native_window()` on the *type* (the bus registers the block's own C++ functions).
 Check what the differential says the first time it runs reference against native - it will find something.
 
