@@ -71,8 +71,10 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040.i2c[1].write_uint32(0x04, 0x42)  # IC_TAR
     rp2040.adc.write_uint32(0x00, 0x1)  # CS: EN
     rp2040.clocks.write_uint32(0x40, 0x99900)  # CLK_SYS_DIV
-    rp2040.pio[0].instructions[0] = 0xDEAD
-    rp2040.pio[0].machines[0].enabled = True
+    rp2040.write_uint32(0x50200048, 0xDEAD)  # PIO0 INSTR_MEM0
+    rp2040.simulator = object()  # an owner, so the CTRL write below does not start the no-Simulator fallback loop
+    rp2040.write_uint32(0x50200000, 1)  # PIO0 CTRL: state machine 0 enabled
+    assert rp2040.pio[0].snapshot()["machines"][0]["enabled"] == 1
 
     rp2040.reset(preserve_flash=True)
 
@@ -81,8 +83,9 @@ def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     assert rp2040.i2c[1].snapshot()["target_address"] == 0x55
     assert rp2040.adc.snapshot()["cs"] == 0
     assert rp2040.clocks.snapshot()["sys_div"] == 0x100
-    assert rp2040.pio[0].instructions[0] == 0
-    assert rp2040.pio[0].machines[0].enabled is False
+    pio = rp2040.pio[0].snapshot()
+    assert pio["instructions"][0] == 0
+    assert pio["machines"][0]["enabled"] == 0
 
 
 def test_sram_and_flash_survive(rp2040_factory):

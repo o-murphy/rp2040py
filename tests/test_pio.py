@@ -709,8 +709,7 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
         simulator._execute_batch()
     simulator.stop()
 
-    machine = rp2040.pio[0].machines[0]
-    assert machine.cycles == 0  # SM0 not yet enabled - only DMA has run so far.
+    assert rp2040.pio[0].snapshot()["machines"][0]["cycles"] == 0  # SM0 not yet enabled - only DMA has run so far.
 
     # Enable SM0 - the exact MMIO write cyw43_bus_pio_spi.c's pio_sm_set_enabled(true) performs,
     # immediately followed (in real firmware) by a tight poll of PIO.FDEBUG.
@@ -721,8 +720,8 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
     # clock.tick() (which is what lets the DMA channel's pending alarm actually refill the FIFO)
     # always gets a turn between every single PIO step. Before the fix, _step_batch() ran inline
     # right here and both of these were already false.
-    assert machine.cycles == 0
-    assert not (rp2040.pio[0].fdebug & FDEBUG_TXSTALL)
+    assert rp2040.pio[0].snapshot()["machines"][0]["cycles"] == 0
+    assert not (rp2040.read_uint32(FDEBUG) & FDEBUG_TXSTALL)
 
     # Now genuinely drive it forward the way a real boot does (via _execute_batch()'s own outer
     # loop) - the whole transfer must complete correctly, not just the first FIFO's worth.
@@ -738,4 +737,6 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
 
     assert not (dma_ctrl & busy_bit)  # DMA channel finished, not stuck mid-transfer.
     assert rp2040.read_uint32(trans_count) == 0
-    assert machine.cycles > 0  # SM0 genuinely ran (not just DMA looping without a consumer).
+    assert (
+        rp2040.pio[0].snapshot()["machines"][0]["cycles"] > 0
+    )  # SM0 genuinely ran (not just DMA looping without a consumer).

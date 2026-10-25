@@ -52,10 +52,8 @@ def _counting_pio(*, clkdiv_int: int = 1, clkdiv_frac: int = 0, delay: int = 0):
     rp2040.write_uint32(SM0_INSTR, pio_mov(PIO_MOV_DEST_X, PIO_SRC_NULL, PIO_OP_INVERT))
     rp2040.write_uint32(CTRL, 1)
 
-    machine = pio.machines[0]
-
     def executed() -> int:
-        return 0xFFFFFFFF - machine.x
+        return 0xFFFFFFFF - pio.snapshot()["machines"][0]["x"]
 
     return simulator, pio, executed
 
@@ -160,11 +158,11 @@ def test_a_backlog_too_big_to_walk_through_is_written_off():
 
     pio.advance(125_000)  # the idle jump
     assert executed() == 1  # one instruction, not the 12,500 hardware would have run
-    assert pio.backlog_drops == 1  # ...and the other 12,499 written off, once
+    assert pio.snapshot()["backlog_drops"] == 1  # ...and the other 12,499 written off, once
 
     _advance_single_cycles(pio, 1000)
 
-    assert pio.backlog_drops == 1  # no further write-offs - the machine is back on schedule
+    assert pio.snapshot()["backlog_drops"] == 1  # no further write-offs - the machine is back on schedule
     assert executed() == 1 + 100  # ...and /10 paced from there, not catching up flat out
 
 
@@ -177,7 +175,7 @@ def test_ordinary_running_never_writes_off_a_backlog():
     for _ in range(300):
         pio.advance(3)  # a 3-cycle CPU instruction, repeatedly - never lands exactly on /4
 
-    assert pio.backlog_drops == 0
+    assert pio.snapshot()["backlog_drops"] == 0
     # Due at 0, 4, 8, ... 900 - each served by the first multiple of 3 at or after it.
     assert executed() == 1 + 900 // 4
 
@@ -216,7 +214,7 @@ def test_a_disabled_machine_is_rearmed_when_it_is_enabled_again():
     _advance_single_cycles(pio, 20)
 
     assert executed() == 1 + 3
-    assert pio.backlog_drops == 0
+    assert pio.snapshot()["backlog_drops"] == 0
 
 
 def test_a_stalled_machine_costs_nothing_until_something_unstalls_it():
@@ -226,19 +224,17 @@ def test_a_stalled_machine_costs_nothing_until_something_unstalls_it():
     away. `check_wait()` lowers the block's due time again the instant the stall ends."""
     simulator, pio, _executed = _counting_pio()
     rp2040 = simulator.rp2040
-    machine = pio.machines[0]
-
     # A blocking pull with an empty TX FIFO: the machine stalls on it immediately.
     # (`pio_pull()`'s second argument lands in the ISA's own BLOCK bit, so True is "block" here -
     # the parameter's name reads the other way round, see utils/pio_assembler.py.)
     rp2040.write_uint32(INSTR_MEM0, pio_jmp(0, PIO_COND_ALWAYS))
     rp2040.write_uint32(SM0_INSTR, pio_pull(False, True))
-    assert machine.waiting
+    assert pio.snapshot()["machines"][0]["waiting"]
 
     pio.advance(1000)
-    assert pio.next_due_fp > pio.cycle_fp  # nothing is due: the only machine is stalled
+    assert pio.snapshot()["next_due_fp"] > pio.snapshot()["cycle_fp"]  # nothing is due: the only machine is stalled
 
     rp2040.write_uint32(0x50200010, 0x1234)  # TXF0 - the stall's condition, from the CPU side
 
-    assert not machine.waiting
-    assert pio.next_due_fp <= pio.cycle_fp + (1 << 8)  # ...and it is due again immediately
+    assert not pio.snapshot()["machines"][0]["waiting"]
+    assert pio.snapshot()["next_due_fp"] <= pio.snapshot()["cycle_fp"] + (1 << 8)  # ...and it is due again immediately

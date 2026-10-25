@@ -55,7 +55,7 @@ def _config(chip, machine, wrap, *, execctrl=0, set_base=PIN, set_count=1, out_b
 
 
 def _level(chip):
-    return (chip.pio[0].pin_values >> PIN) & 1
+    return (chip.pio[0].snapshot()["pin_values"] >> PIN) & 1
 
 
 def _run(chip, cycles=1):
@@ -70,12 +70,12 @@ def _enable(chip, mask):
 def test_a_write_changes_only_the_pins_it_asserts(rp2040_factory):
     """3.5.6.1: "If no state machine asserts a write to a GPIO's level or direction, the value does not change." """
     chip = _chip(rp2040_factory)
-    chip.pio[0].pin_values = 1 << 9
+    chip.pio[0].pin_values_changed(1, 9, 1)  # pin 9 is already high when the machine starts
     _program(chip, [_set_pins(1), JMP(1)])
     _config(chip, 0, (0, 1))
     _enable(chip, 0b1)
     _run(chip, 4)
-    assert _level(chip) == 1 and (chip.pio[0].pin_values >> 9) & 1 == 1
+    assert _level(chip) == 1 and (chip.pio[0].snapshot()["pin_values"] >> 9) & 1 == 1
 
 
 def test_the_highest_numbered_machine_wins_a_cycle(rp2040_factory):
@@ -140,7 +140,7 @@ def test_levels_and_directions_are_collated_separately(rp2040_factory):
     _config(chip, 1, (2, 3))
     _enable(chip, 0b11)
     _run(chip, 4)
-    assert _level(chip) == 1 and (chip.pio[0].pin_directions >> PIN) & 1 == 1
+    assert _level(chip) == 1 and (chip.pio[0].snapshot()["pin_directions"] >> PIN) & 1 == 1
 
 
 def test_a_block_that_stops_shows_the_held_write_it_had_overwritten(rp2040_factory):

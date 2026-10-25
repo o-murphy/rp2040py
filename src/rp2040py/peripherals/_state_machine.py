@@ -1,9 +1,6 @@
 """Pure-Python reference implementation of `StateMachine` - the PIO peripheral's actual per-cycle
-interpreter (opcode decode, shift-register math, wait/jmp condition checks). `state_machine.py` is
-the public facade that picks this or the native `rp2040py.native._state_machine` port; callers
-should import `StateMachine` from there (or from `rp2040py`/`rp2040py.peripherals.pio`, which
-re-export it), never from here directly - same relationship `_cortex_m0_core.py` has to
-`cortex_m0_core.py`.
+interpreter (opcode decode, shift-register math, wait/jmp condition checks). It is internal to the pure-Python
+`peripherals/_pio.py` block (the native block has its machines in C++); a state machine is reached through its PIO's bus and `snapshot()`.
 """
 
 from typing import TYPE_CHECKING

@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.peripherals._state_machine import StateMachine
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -44,12 +44,24 @@ from rp2040py.peripherals.pio_registers import (
     TXF1,
     TXF2,
     TXF3,
+    WaitType,
 )
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
 
 __all__ = ("RPPIO",)
+
+# What `snapshot()` reports (the native block reports the same names).
+SNAPSHOT_BLOCK_FIELDS = (
+    "irq", "fdebug", "tx_stall", "rx_stall", "input_sync_bypass", "pin_values", "pin_directions", "old_pin_values", "old_pin_directions",
+    "cycle_fp", "next_due_fp", "resolve_due_fp", "backlog_drops", "stopped", "irq0_int_enable", "irq0_int_force", "irq1_int_enable", "irq1_int_force",
+)  # fmt: skip
+SNAPSHOT_MACHINE_FIELDS = (
+    "x", "y", "pc", "input_shift_reg", "input_shift_count", "output_shift_reg", "output_shift_count", "cycles", "enabled", "waiting",
+    "wait_type", "wait_index", "wait_polarity", "wait_delay", "next_due_fp", "due_rearmed", "exec_valid", "update_pc", "exec_opcode",
+    "out_pin_values", "out_pin_direction", "div_fp", "exec_ctrl", "shift_ctrl", "pin_ctrl",
+)  # fmt: skip
 
 # "No enabled, unstalled machine has anything to do" - larger than any cycle count a simulated
 # RP2040 can reach (2**54 system clocks at 125 MHz is ~4.5 years of simulated time, and this is
@@ -464,6 +476,28 @@ class RPPIO(BasePeripheral):
         self.irq1_int_enable = 0
         self.irq1_int_force = 0
         self.check_interrupts()
+
+    def snapshot(self) -> dict[str, Any]:
+        """Everything the block holds, as plain values in one call (the inspection port of docs/records/0096): the block's registers and pacing state, the instruction memory,
+        and per machine its state, config words, held `OUT_STICKY` write and both FIFOs (oldest first)."""
+        out: dict[str, Any] = {name: int(getattr(self, name)) for name in SNAPSHOT_BLOCK_FIELDS}
+        out["instructions"] = tuple(int(word) for word in self.instructions)
+        out["machines"] = tuple(
+            {
+                **{name: int(getattr(machine, name)) for name in SNAPSHOT_MACHINE_FIELDS},
+                "held_write": tuple(int(v) for v in (machine.held_write or ())),
+                "tx": tuple(int(v) for v in machine.tx_fifo.items),
+                "rx": tuple(int(v) for v in machine.rx_fifo.items),
+            }
+            for machine in self.machines
+        )
+        return out
+
+    def check_pin_waits(self, pin: int) -> None:
+        """A pin's input level changed: wakes the enabled machines waiting on it with WAIT PIN."""
+        for machine in self.machines:
+            if machine.enabled and machine.waiting and machine.wait_type == WaitType.PIN and machine.wait_index == pin:
+                machine.check_wait()
 
     def check_interrupts(self) -> None:
         first_irq = self.first_irq

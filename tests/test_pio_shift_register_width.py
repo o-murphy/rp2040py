@@ -7,40 +7,40 @@ on whichever implementation the facade gives and on the pure one.
 """
 
 import pytest
+from utils.pio_diff import Rig
 
-from rp2040py.peripherals import _pio, _state_machine
-from rp2040py.rp2040 import RP2040
-from rp2040py.utils.pio_assembler import PIO_DEST_NULL, PIO_SRC_NULL, pio_in, pio_out
+from rp2040py.utils.pio_assembler import (
+    PIO_DEST_NULL,
+    PIO_MOV_DEST_ISR,
+    PIO_OP_INVERT,
+    PIO_SRC_NULL,
+    pio_in,
+    pio_mov,
+    pio_out,
+)
 
+PIO0 = 0x50200000
+TXF0, SM0_SHIFTCTRL, SM0_INSTR = 0x10, 0xD0, 0xD8
+PULL = 0x8080
 LEFT_SHIFT = 0  # SHIFTCTRL.IN_SHIFTDIR / OUT_SHIFTDIR = 0: shift left
-
-
-def _machine(kind: str):
-    chip = RP2040()
-    if kind == "pure":
-        original = _pio.StateMachine
-        _pio.StateMachine = _state_machine.StateMachine  # the facade would hand the pure PIO the native class
-        try:
-            pio = _pio.RPPIO(chip, "PIO0", 7, 0)
-        finally:
-            _pio.StateMachine = original
-        return pio.machines[0]
-    return chip.pio[0].machines[0]
 
 
 @pytest.mark.parametrize("kind", ["default", "pure"])
 def test_out_shifting_left_keeps_the_output_shift_register_32_bits_wide(kind):
-    machine = _machine(kind)
-    machine.shift_ctrl = LEFT_SHIFT
-    machine.output_shift_reg = 0xFFFFFFFF
-    machine.execute_instruction(pio_out(PIO_DEST_NULL, 8))
-    assert machine.output_shift_reg == 0xFFFFFF00
+    chip = Rig(kind).chip
+    chip.write_uint32(PIO0 + SM0_SHIFTCTRL, LEFT_SHIFT)
+    chip.write_uint32(PIO0 + TXF0, 0xFFFFFFFF)
+    chip.write_uint32(PIO0 + SM0_INSTR, PULL)  # the OSR holds 0xFFFFFFFF
+    chip.write_uint32(PIO0 + SM0_INSTR, pio_out(PIO_DEST_NULL, 8))
+    assert chip.pio[0].snapshot()["machines"][0]["output_shift_reg"] == 0xFFFFFF00
 
 
 @pytest.mark.parametrize("kind", ["default", "pure"])
 def test_in_shifting_left_keeps_the_input_shift_register_32_bits_wide(kind):
-    machine = _machine(kind)
-    machine.shift_ctrl = LEFT_SHIFT
-    machine.input_shift_reg = 0xFFFFFFFF
-    machine.execute_instruction(pio_in(PIO_SRC_NULL, 8))
-    assert machine.input_shift_reg == 0xFFFFFF00
+    chip = Rig(kind).chip
+    chip.write_uint32(PIO0 + SM0_SHIFTCTRL, LEFT_SHIFT)
+    chip.write_uint32(
+        PIO0 + SM0_INSTR, pio_mov(PIO_MOV_DEST_ISR, PIO_SRC_NULL, PIO_OP_INVERT)
+    )  # the ISR holds 0xFFFFFFFF
+    chip.write_uint32(PIO0 + SM0_INSTR, pio_in(PIO_SRC_NULL, 8))
+    assert chip.pio[0].snapshot()["machines"][0]["input_shift_reg"] == 0xFFFFFF00

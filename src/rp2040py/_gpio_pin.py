@@ -4,7 +4,6 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from rp2040py._pin_bank import GPIOPinBank
-from rp2040py.peripherals.pio_registers import WaitType
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -412,14 +411,7 @@ class GPIOPin:
         if self.function_select == FUNCTION_PWM:
             self.rp2040.pwm.gpio_on_input(self.index)
         for pio in self.rp2040.pio:
-            for machine in pio.machines:
-                if (
-                    machine.enabled
-                    and machine.waiting
-                    and machine.wait_type == WaitType.PIN
-                    and machine.wait_index == self.index
-                ):
-                    machine.check_wait()
+            pio.check_pin_waits(self.index)
 
     def pad_changed(self) -> None:
         """The pad register was written: if that moved the level the interrupt logic sees (IE, or a pull on a floating pin), it is an input change."""

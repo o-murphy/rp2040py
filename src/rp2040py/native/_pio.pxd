@@ -115,12 +115,10 @@ cdef extern from "pio.hpp" namespace "rp2040core":
 
 cdef class RPPIO(NativeBlock):
     cdef PioBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public list machines
     cdef public object dreq_rx
     cdef public object dreq_tx
     cdef public unsigned int first_irq
     cdef public unsigned int index
-    cdef object _instructions
     cdef object _run_task
 
     cdef _warn(self, msg)

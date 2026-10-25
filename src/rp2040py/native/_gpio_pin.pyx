@@ -47,12 +47,6 @@ from rp2040py.native._pin cimport (
 
 from rp2040py._gpio_pin import GPIOPinState
 
-# WaitType from pio_registers (its real home), NOT the peripherals.pio facade: the facade pulls in
-# native._pio, and native._pio cimports GPIOPin from this module - importing WaitType via the facade
-# would make _gpio_pin depend on _pio and turn that one-way cimport into a fragile circular runtime
-# import. Sourcing WaitType directly keeps _gpio_pin free of any _pio dependency.
-from rp2040py.peripherals.pio_registers import WaitType
-
 _logger = logging.getLogger(__name__)
 
 # Indexed by GPIOPinState integer value (LOW=0, HIGH=1, INPUT=2, PULL_UP=3, PULL_DOWN=4,
@@ -196,14 +190,7 @@ cdef class GPIOPinBank:
         for pio_index, pio in enumerate(rp.pio):
             if not (pio_mask >> pio_index) & 1:
                 continue
-            for machine in pio.machines:
-                if (
-                    machine.enabled
-                    and machine.waiting
-                    and machine.wait_type == WaitType.PIN
-                    and machine.wait_index == pin_index
-                ):
-                    machine.check_wait()
+            pio.check_pin_waits(pin_index)
 
     def __len__(self):
         return self._bank.count()

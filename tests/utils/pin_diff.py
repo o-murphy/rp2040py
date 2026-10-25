@@ -80,7 +80,9 @@ class _PioProbe:
     def __init__(self) -> None:
         self.pin_directions = 0
         self.pin_values = 0
-        self.machines: list = []
+
+    def check_pin_waits(self, pin: int) -> None:
+        pass
 
 
 class Rig:

@@ -1,9 +1,7 @@
 """Register offsets, bit-flag constants, and tiny stateless helpers for the RP2040's PIO
-peripheral - shared by both `RPPIO` (`pio.py`) and `StateMachine` (`state_machine.py`'s facade
-over `_state_machine.py`/`native/_state_machine.pyx`). Split out into its own module (not just
-defined in `pio.py`) specifically to avoid a circular import: `pio.py` needs to import
-`StateMachine` from the facade, and `StateMachine`'s own implementation needs these same register/
-bit constants - if they lived in `pio.py`, `_state_machine.py` importing them back would form a
+peripheral - shared by the PIO block (`_pio.py`) and the pure-Python `StateMachine` (`_state_machine.py`). Split out into its own module
+to avoid a circular import: `_pio.py` imports `StateMachine`, and `StateMachine` needs these same register/
+bit constants - if they lived in `_pio.py`, `_state_machine.py` importing them back would form a
 cycle. Pure constants/helpers only, no classes, so both sides can depend on it safely.
 """
 

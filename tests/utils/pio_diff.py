@@ -42,16 +42,6 @@ SNAPSHOT_REGISTERS = (
     *(R.SM0_CLKDIV + SM_STRIDE * m + (o - R.SM0_CLKDIV) for m in range(4) for o in SM_OFFSETS),
 )  # fmt: skip
 
-MACHINE_FIELDS = (
-    "x", "y", "pc", "input_shift_reg", "input_shift_count", "output_shift_reg", "output_shift_count", "cycles", "enabled", "waiting",
-    "wait_type", "wait_index", "wait_polarity", "wait_delay", "next_due_fp", "due_rearmed", "exec_valid", "update_pc", "exec_opcode",
-    "out_pin_values", "out_pin_direction", "div_fp", "exec_ctrl", "shift_ctrl", "pin_ctrl",
-)  # fmt: skip
-BLOCK_FIELDS = (
-    "irq", "fdebug", "tx_stall", "rx_stall", "input_sync_bypass", "pin_values", "pin_directions", "old_pin_values", "old_pin_directions",
-    "cycle_fp", "next_due_fp", "resolve_due_fp", "backlog_drops", "stopped", "irq0_int_enable", "irq0_int_force", "irq1_int_enable", "irq1_int_force",
-)  # fmt: skip
-
 
 class _DreqRecorder:
     """Stands in for the chip's DMA: the DMA is a recorder here (the real one would act on the DREQs and on the FIFOs, which is a different block's behaviour)."""
@@ -164,13 +154,15 @@ class Rig:
         out: dict[str, Any] = {}
         for index, block in enumerate(chip.pio):
             out[f"pio{index}.regs"] = tuple(self.read(index, offset) for offset in SNAPSHOT_REGISTERS)
-            out[f"pio{index}.block"] = tuple(int(getattr(block, name)) for name in BLOCK_FIELDS)
-            out[f"pio{index}.instructions"] = tuple(int(word) for word in block.instructions)
-            for number, machine in enumerate(block.machines):
-                out[f"pio{index}.sm{number}"] = tuple(int(getattr(machine, name)) for name in MACHINE_FIELDS)
-                out[f"pio{index}.sm{number}.held"] = tuple(int(v) for v in (machine.held_write or ()))
-                out[f"pio{index}.sm{number}.tx"] = tuple(int(v) for v in machine.tx_fifo.items)
-                out[f"pio{index}.sm{number}.rx"] = tuple(int(v) for v in machine.rx_fifo.items)
+            state = block.snapshot()
+            machines = state.pop("machines")
+            out[f"pio{index}.instructions"] = state.pop("instructions")
+            out[f"pio{index}.block"] = tuple(state.values())
+            for number, machine in enumerate(machines):
+                out[f"pio{index}.sm{number}.held"] = machine.pop("held_write")
+                out[f"pio{index}.sm{number}.tx"] = machine.pop("tx")
+                out[f"pio{index}.sm{number}.rx"] = machine.pop("rx")
+                out[f"pio{index}.sm{number}"] = tuple(machine.values())
         out["pins"] = tuple(
             (int(pin.ctrl), int(pin.input_value), int(pin.output_value), int(pin.output_enable), int(pin.status))
             for pin in chip.gpio

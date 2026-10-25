@@ -96,10 +96,10 @@ def test_replacing_a_block_re_points_the_pins_without_being_asked():
     assert chip.gpio[4].value.name == "HIGH"
     # a PIO stand-in that drives GPIO6 high
     chip.write_uint32(IO + 8 * 6 + 4, 6)  # GPIO6: PIO0
-    standin = types.SimpleNamespace(pin_directions=1 << 6, pin_values=1 << 6, machines=[])
+    standin = types.SimpleNamespace(pin_directions=1 << 6, pin_values=1 << 6, check_pin_waits=lambda pin: None)
     chip.pio[0] = standin
     assert chip.gpio[6].value.name == "HIGH"
-    chip.pio = [types.SimpleNamespace(pin_directions=0, pin_values=0, machines=[])] * 2
+    chip.pio = [types.SimpleNamespace(pin_directions=0, pin_values=0, check_pin_waits=lambda pin: None)] * 2
     assert chip.gpio[6].raw_output_enable is False
     # a PWM stand-in on GPIO8
     chip.write_uint32(IO + 8 * 8 + 4, 4)  # GPIO8: PWM

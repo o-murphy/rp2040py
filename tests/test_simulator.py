@@ -259,11 +259,11 @@ def test_a_pio_behind_many_short_idle_jumps_keeps_pace_with_a_clock_that_is_not_
 
     alarm = chip.clock.create_alarm(_on_alarm)
     alarm.schedule_ticks(period_ticks)
-    start = chip.pio[0].cycle_fp
+    start = chip.pio[0].snapshot()["cycle_fp"]
     simulator.stopped = False
     simulator._execute_batch()
     simulator.stop()
-    cycles = (chip.pio[0].cycle_fp - start) >> 8
+    cycles = (chip.pio[0].snapshot()["cycle_fp"] - start) >> 8
     expected = chip.clock.ticks / (1e9 / 133e6 * 16)
     assert chip.clock.ticks == period_ticks * jumps
     assert expected - 1.5 < cycles <= expected + 1  # (it was 4 % short: 4000 of 4157)
