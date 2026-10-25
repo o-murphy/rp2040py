@@ -1,7 +1,7 @@
 from rp2040py.gdb.gdb_connection import GDBConnection
 from rp2040py.gdb.gdb_server import GDBServer
 from rp2040py.gpio_pin import GPIOPin, GPIOPinState
-from rp2040py.peripherals.i2c import RPI2C, I2CMode, I2CSpeed
+from rp2040py.peripherals.i2c import I2CMode, I2CSpeed
 from rp2040py.peripherals.peripheral import BasePeripheral, Peripheral
 from rp2040py.rp2040 import RP2040
 from rp2040py.simulator import Simulator
@@ -37,7 +37,6 @@ from rp2040py.utils.logging import ConsoleLogger, Logger, LogLevel
 __all__ = (
     "FIFO",
     "RP2040",
-    "RPI2C",
     "USBCDC",
     "BasePeripheral",
     "ConsoleLogger",

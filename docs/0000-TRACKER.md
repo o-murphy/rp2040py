@@ -56,7 +56,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### In progress / Proposed
 
-- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phases 0-4 and the gate G1-G8 done; Phase 5b under way (see its progress log), then Phase 6 beyond the PoC ([0103]), Phase 7; the second core is [0104]
+- [ ] [0096] a C++ MCU core, statically linked through Cython, WASM host last | phases 0-4 and the gate G1-G8 done; Phase 5b under way (the `snapshot()` series is closed - every block, see its progress log; open: `attach_peripheral` + the single firmware primitive, the tier-1/2 conformance test), then Phase 6 beyond the PoC ([0103]), Phase 7; the second core is [0104]
 - [ ] [0106] routing the UART, SPI and I2C functions to the pads | proposed, nothing built - found by `extmod_hardware`; Wokwi routes by FUNCSEL over bit-level models; layer vs pin-bank sources is open
 - [ ] [0105] the time architecture: an audit of the clock, the tick generators and who counts what | audit done, TIMER/PIO fixes landed; `Timer32` and PIO-from-clock still proposed
 - [ ] [0104] the second core: seams, architecture, core 1 in the C++ core and the reference | P0-P2 done, core 1 on by default, `thread/` 24 of 33, dual-core CoreMark demo; open: per-core GPIO IRQs, GDB/wasm
