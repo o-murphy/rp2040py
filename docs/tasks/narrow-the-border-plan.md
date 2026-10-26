@@ -86,3 +86,23 @@ one commit, and a step that makes any mutant or perturbation of any twin oracle 
 - **Breaking change policy**: the block setters are public in practice (`chip.dma = ...` is documented in the 1.0.0b1 CHANGELOG as a feature). Removing the replace-a-built-in part needs a CHANGELOG line and,
   given the project is in a beta line, probably no deprecation cycle - to confirm.
 - **`attach_peripheral`** (tier-1 requirement 3) is the supported form of "my own register block"; today it is `peripherals[address] = block`. Naming it is a separate, small step that can come before step 7.
+
+## Where it stands (2026-10-26, after step 6; the handoff for the next session)
+
+Steps 0-6 are done and pushed on `refactor/native-shell-boilerplate` (last commit `64b7f50`; CI green on every commit up to and including step 5 `75a458a`, step 6 was still running when this was written - check it first). `McuHost` is **17 slots**: the 16 of the end list in "Where it ends" (`warn`, `uart_byte`, `uart_baud`, `spi_transmit`, `i2c_start/connect/write/read/stop`, `adc_read`, `adc_channel_value`, `pin_changed`, `usb_wire`, `usb_reset`, `bus_reset`, and the merged `reset_requested`) plus `pio_started`.
+
+**Next, in order:**
+1. Check CI on `64b7f50`.
+2. **Step 7 - the final `McuHost`:** write the list down (the 16, and what `pio_started` becomes), update the C ABI sketch of [0102](../records/0102-c-abi-for-the-core.md) to exactly that list, add a progress-log entry in [0096](../records/0096-cpp-mcu-core.md), the tracker row, `core-block-recipe.md` (no host seams for replacing blocks), and a CHANGELOG line that names the whole set of removed setters as one breaking change.
+3. **`pio_started`:** the "no owning `Simulator`" fallback (an asyncio task started from inside a CTRL register write). Proposal in "Open" above: ask the owner once, at attach time. To be designed and agreed before it is touched.
+4. **Step 8 - wasm** to the 16 slots (what `rp2040_wasm.cpp` lacks: SPI, I2C, ADC, pin events), with the twin oracle as the check where the module can be driven.
+
+**Small cleanups left on the way (none blocks a step):**
+- the `_bound_tree` / `_rejoin_the_python_tree` / `_leave_the_python_clock` fallbacks in the XOSC, ROSC, PLL and DMA shells, and the `isinstance(dma, RPDMA)` branch in `RPClocks.rebind_consumers` (no replaced block exists any more);
+- `RP2040._bind_pin_sources` and `_pin_wiring.bind_pin_sources`, which only re-bind what the `Mcu` bound already;
+- the default of `reset_requested` (`_default_watchdog_trigger`) still runs in Python; running the cascade in the core needs C++ to know whether a handler is installed;
+- the operations of the twin oracles that still call a block (`peripheral.reset()`) and the neighbour doubles that remain (the DMA oracle's bus probe); see "Migration status" in [twin-backend-testing.md](twin-backend-testing.md).
+
+**Not started, and waiting for the maintainer:** opening the pull request from `refactor/native-shell-boilerplate` into `main` (the branch has been rebased onto the merged PR #66 by the maintainer; the series is large: ~25 blocks on `snapshot()`, the shared `NativeBlock`, the border plan steps 0-6).
+
+**Observers added on this road** (all on both chips, all leave the consumer working): `chip.dreq_tap`, `chip.pwm_input_tap`, `chip.clock_tree_tap`, `watchdog.add_tick_listener` (on `WatchdogBlock::tick_tap`), next to the existing `chip.set_interrupt` assignment.
