@@ -26,8 +26,8 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _rosc as P
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 ROSC_BASE = 0x40060000
 ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
@@ -63,12 +63,10 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._lfsr = 0xACE1
-        if kind == "pure":
-            self._replace_the_rosc(P.RPROSC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_rosc(factory)
         self._tap()

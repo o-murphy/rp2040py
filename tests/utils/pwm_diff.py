@@ -29,8 +29,8 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _pwm as P
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 PWM_BASE = 0x40050000
 IO_BANK0 = 0x40014000
@@ -63,13 +63,11 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         # the chip's own PWM starts with its timers running (its reset comes with the chip's); stop it so that a replaced one leaves no alarm behind
         self.chip.pwm.reset()
-        if kind == "pure":
-            self._replace_the_pwm(P.RPPWM)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_pwm(factory)
         self._tap()

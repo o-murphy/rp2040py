@@ -33,8 +33,8 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.rp2040 import RP2040
 from utils.clock_tree import set_clk_sys
+from utils.twin import new_chip
 
 DMA_BASE = 0x50000000
 PROBE_BASE = 0x50400000  # an unused window (XIP_AUX on the chip), handed to the probe
@@ -106,7 +106,7 @@ class Probe:
     PIO TX FIFO does in answer to a DMA write; everything else just goes to the log. A read returns a number that changes with every read, so a copy
     from the probe is distinguishable from one of constants."""
 
-    def __init__(self, chip: RP2040, log: list) -> None:
+    def __init__(self, chip: Any, log: list) -> None:
         self.chip, self.log = chip, log
         self.reads = 0
         self.last_write = 0
@@ -138,16 +138,7 @@ class Rig:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self.chip = RP2040()
-        if kind == "pure":
-            from rp2040py.peripherals import _dma
-
-            # The DREQs the chip's peripherals asserted at construction (a UART/SPI TX FIFO is ready from the start) went to the DMA built with the chip;
-            # the replacement starts from the same levels, as a DMA reset leaves them (_dma.RPDMA.reset).
-            levels = dict.fromkeys(self.chip.dma.snapshot()["dreq"], True)
-            self.chip.dma = _dma.RPDMA(self.chip, "DMA")
-            self.chip.dma.dreq.update(levels)
-            self.chip.peripherals[DMA_BASE >> 12] = BusView(self.chip.dma)
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._mark = 0
         self.probe = Probe(self.chip, self.log)

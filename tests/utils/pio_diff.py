@@ -27,7 +27,7 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import pio_registers as R
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 PIO_BASES = (0x50200000, 0x50300000)
 PIO_IRQ0 = (int(IRQ.PIO0_IRQ0), int(IRQ.PIO1_IRQ0))
@@ -61,13 +61,11 @@ class Rig:
 
     def __init__(self, kind: str, modules: "tuple[Any, Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         # A (fake) owner for the chip, so a CTRL write does not run the "no Simulator" fallback that steps the block inline: the stimulus calls advance() itself,
         # as the batch loop does.
         self.chip.simulator = object()
-        if kind == "pure":
-            self._replace_pios_with_the_pure_python_ones()
-        elif kind == "mutant":
+        if kind == "mutant":
             assert modules is not None
             self._replace_pios_with_the_pure_python_ones(*modules)
         self.log: list[tuple] = []

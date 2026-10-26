@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _adc as P
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ADC_BASE = 0x4004C000
 NVIC_ISPR = 0xE000E200
@@ -53,14 +53,12 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.pending: list[int] = []  # channels a deferred device has been asked for and has not completed
         self.depth = 0
         self.counter = 0
-        if kind == "pure":
-            self._replace_the_adc(P.RPADC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_adc(factory)
         self._tap()

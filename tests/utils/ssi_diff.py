@@ -31,7 +31,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _ssi as S
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 SSI_BASE = 0x18000000
 FLASH_WINDOWS = ((0x0, 0x40000), (0xFFE000, 0x1000000))  # the first 256 KiB and the last 8 KiB of the 16 MiB flash
@@ -64,9 +64,7 @@ class Rig:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self.chip = RP2040()
-        if kind == "pure":
-            self._replace_the_ssi(S.RPSSI)
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._tap()
 

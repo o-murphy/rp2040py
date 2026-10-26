@@ -17,6 +17,7 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _rtc as R
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x4005C000
@@ -97,13 +98,7 @@ class Rig:
     C++ *chip* (``native/_rp2040.RP2040``); no block is moved from one into the other. Only a mutant swaps a block, and inside the pure chip."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
-        if kind == "default":
-            from rp2040py.native._rp2040 import (
-                RP2040 as Chip,  # imported here: a build without the extension never reaches an oracle
-            )
-        else:
-            from rp2040py._rp2040 import RP2040 as Chip
-        self.chip = Chip()
+        self.chip = new_chip(kind)
         self.chip.write_uint32(
             0x40024000, (0xFAB << 12) | 0xAA0
         )  # xosc_init(): clk_rtc has no clock from a stopped crystal

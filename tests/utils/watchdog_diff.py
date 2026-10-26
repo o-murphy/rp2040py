@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _watchdog as W
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x40058000
@@ -40,12 +40,10 @@ class Rig:
     """One chip plus the log of every warning and every call of the reset handler."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.raising = False
-        if kind == "pure":
-            self._replace_the_block(W.RPWatchdog)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_block(factory)
         self._tap()

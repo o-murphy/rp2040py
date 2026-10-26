@@ -28,7 +28,7 @@ from typing import Any
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _i2c as I
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 I2C0_BASE = 0x40044000
 NVIC_ISPR = 0xE000E200
@@ -71,12 +71,10 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.counter = 0  # drives the auto devices' answers: identical on both rigs because they see identical streams
-        if kind == "pure":
-            self._replace_the_i2c(I.RPI2C)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_i2c(factory)
         self._tap()

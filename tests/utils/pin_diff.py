@@ -27,8 +27,8 @@ from typing import Any
 from rp2040py import _gpio_pin as G
 from rp2040py import _pin_bank as G_bank
 from rp2040py.irq import IRQ
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 IO_BANK0, IO_QSPI, PADS_BANK0, PADS_QSPI, SIO = 0x40014000, 0x40018000, 0x4001C000, 0x40020000, 0xD0000000
 ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
@@ -96,15 +96,14 @@ class Rig:
         bank_module: Any = None,
     ) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         chip = self.chip
         chip.pwm = _PwmProbe(self.log)
         chip.pio = [_PioProbe(), _PioProbe()]
-        if kind in ("pure", "mutant"):
-            pin_class = G.GPIOPin if kind == "pure" else factory
-            assert pin_class is not None
-            self._replace_the_pins(pin_class, windows, bank_module or G_bank)
+        if kind == "mutant":
+            assert factory is not None
+            self._replace_the_pins(factory, windows, bank_module or G_bank)
         self._tap()
 
     def _replace_the_pins(

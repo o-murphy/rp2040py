@@ -27,7 +27,7 @@ from typing import Any
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _spi as P
 from rp2040py.peripherals.dma import DREQChannel
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 SPI0_BASE = 0x4003C000
 NVIC_ISPR = 0xE000E200
@@ -59,13 +59,11 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.pending: list[int] = []  # bytes a deferred device has been handed and not yet completed
         self.next_rx = 0
-        if kind == "pure":
-            self._replace_the_spi(P.RPSPI)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_spi(factory)
         self._tap()

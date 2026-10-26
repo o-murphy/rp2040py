@@ -17,7 +17,7 @@ from typing import Any
 from rp2040py.peripherals import _busctrl as B
 from rp2040py.peripherals import _syscfg as S
 from rp2040py.peripherals import _vreg_and_chip_reset as V
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BLOCKS: dict[str, dict[str, Any]] = {
@@ -66,11 +66,9 @@ class Rig:
     def __init__(self, block: str, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.block = block
         self.spec = BLOCKS[block]
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
-        if kind == "pure":
-            self._replace_the_block(self.spec["cls"])
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_block(factory)
         self._tap()

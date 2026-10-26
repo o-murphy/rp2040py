@@ -93,6 +93,18 @@ What the pilot corrected in this note:
   perturbations (`peripheral.warn`, a block `write_uint32`). They work on both chips, which is why the pilot is green, but they are block-level calls and not tier 1/2.
 - **The 32-bit CI jobs** hold two chips instead of one per oracle rig (the pure chip plus the native one); the `conftest` collection after each test already exists for that.
 
+## Migration status (2026-10-26)
+
+`tests/utils/twin.py` holds the one shared piece, `new_chip(kind)`: `"default"` is the C++ chip, `"pure"` and `"mutant"` the pure-Python chip. **Moved to the model, all green with every
+mutant and perturbation caught as before:** rtc, rosc, adc, ident, small_blocks, psm_xosc_resets, ppb, watchdog, pwm, ssi, clocks, i2c, spi, uart, dma, pio, pin (17 oracles; the change
+in each is the constructor of its `Rig`, plus removing the `pure` replacement). `usb_diff` and `xip_diff` already built a pure chip for their reference.
+
+**What is still not the model, in every migrated oracle** (works on both chips, so it is green, but is a next step):
+- *neighbours stood in for*: the ADC, PWM, SSI, PIO oracles still assign `chip.dma` a DREQ recorder, the pin oracle assigns `chip.pio` / `chip.pwm` probes, the DMA oracle attaches a probe
+  block on the bus - symmetric on both chips, but not the real neighbour; a DREQ tap replaces the recorders (see "The event log needs a public port");
+- *block-level calls*: the `reset` ops (`peripheral.reset()`), a few perturbations (`peripheral.warn`, a block `write_uint32`), the PIO's `advance()`, the plumbing the oracles read;
+- *private attributes of the chip* the rigs touch (`chip.peripherals[...]`, `chip.rtc = block` in the mutant path - inside the pure chip, so allowed).
+
 ## Open questions
 
 - Which public call advances time identically on both chips (the pure chip's `Simulator` path vs the native batch loop)? The two batch loops are themselves under test
