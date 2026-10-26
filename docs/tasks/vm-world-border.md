@@ -68,14 +68,28 @@ Not in `McuHost`, but it is the same border, and it is the other half of the con
 2. **Group 2 leaves the product.** No block is substituted at run time and the oracles stop substituting (they compare whole twin chips), so these slots, the `set_*_world` switches and the
    `_native_*_address` seams in the shell have no user left; they are deleted, not relocated. `watchdog_tick` is split: the C++ chip tells its own consumers, and a world-facing
    `add_tick_listener`-style event stays in Group 1 only if a device really uses it (to be checked - nothing in `external/` does, as far as grepped on 2026-10-25).
-3. **Group 3 moves inside.** A watchdog or SYSRESETREQ reset is the core's decision: it runs the cascade itself (it is already in C++) and tells the world *that it happened* (an event, like
-   `bus_reset`), instead of calling a Python function that calls back into C++. A user who wants to intercept a reset keeps a hook (`on_watchdog_trigger` /
-   `on_system_reset_request` as today), but the default no longer takes the Python round trip. `pio_started` stays a host concern but leaves the register write (the owner is asked once,
+3. **Group 3 becomes one world event.** A watchdog or SYSRESETREQ reset is requested by the core, which tells the host *that and why* (`reset_requested(cause)`, like `bus_reset`); the default
+   is the core running its cascade itself (already in C++) without the Python round trip, and a host that has reset side effects (the USB device, the console: `BaseDevice` does) installs its
+   own handler. See "Answers" below for why the host cannot be left out. `pio_started` stays a host concern but leaves the register write (the owner is asked once,
    when it attaches, not on every CTRL write).
 4. **GPIO is the one door for devices.** `pin_changed` + `gpio[i]` is the border for external devices; anything a device does with a pin goes through `gpio[i]` (value, state,
    `add_listener`, `set_input_value`, `release_input`) and a bus register write, never through `pad_value` / `ctrl` / `driven` mirrors (those stay the IO and PADS blocks' coupling).
 5. **Firmware has one primitive:** the flash buffer and `load_bootrom` (0096, "Firmware is several things on purpose"). Everything else (UF2, HEX, littlefs images, the Kaluma program) is
    backend-independent Python on top of those two.
+
+## Answers to the open questions (read from the code, 2026-10-26)
+
+1. **The reset hooks.** `on_watchdog_trigger` is a real product hook, not only a default: `device/base_device.py` installs `_on_watchdog_trigger` on every board it builds, and that is what makes a
+   firmware's `machine.reset()` / `machine.bootloader()` (and mpremote's `reset` / `bootloader`) work - it calls `hard_reset(cause=WATCHDOG)`, which resets the chip *and* the host-side console and
+   the USB device. `on_system_reset_request` (AIRCR.SYSRESETREQ) is used only by its default and by tests. Consequence for the proposal: **the reset is not purely the core's decision.** The core can run the
+   cascade, but the host has side effects that belong to a reset (drop the USB device, reset the CDC console), so "a reset was requested, and why" must stay a **world event** (one slot, a cause
+   code, the default running the cascade in the core), not vanish into the core. Group 3's `system_reset_request` and `watchdog_trigger` therefore merge into a single Group-1 slot, `reset_requested(cause)`.
+2. **`add_tick_listener`** is used only by tests (`test_mcu_rtc`, `utils/mmio_trace.py`, the watchdog oracle); nothing in `src/` outside the two watchdog blocks calls it. `watchdog_tick`
+   is a Group-2 slot (it tells a TIMER / PPB the host replaced) and goes with them; the listener list is a test facility.
+3. **Group 2 in the product.** No code in `src/` outside the two chip files (`_rp2040.py`, `native/_rp2040.pyx`) assigns a block to a chip (`chip.pio = ...`, `chip.dma = ...`,
+   `peripherals[...] = ...` appear only in docstrings). The setters on `native/_rp2040.pyx` that re-point the C++ core at a replacement (`set_*_world`, the `dma` setter's hook, `_native_*_address`)
+   have exactly one kind of user: the oracles and tests that swap blocks. With the oracles on whole twin chips they have no caller left except `chip.dma =` (a recorder or a DMA stand-in in a few
+   tests) and `chip.set_interrupt =` (the IRQ tap, which stays as a public tier-2 port).
 
 ## Open questions (to answer before a plan is written)
 
