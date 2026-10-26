@@ -82,14 +82,11 @@ class Rig:
     def _tap(self) -> None:
         chip, log = self.chip, self.log
 
-        class _Dma:
-            def set_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 1))
+        # The observer of the requests that reach the chip's (real) DMA: it sees the order of them and the DMA still gets each one.
+        def dreq_tap(number: int, asserted: bool) -> None:
+            log.append(("dreq", chip.clock.nanos, int(number), int(asserted)))
 
-            def clear_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 0))
-
-        chip.dma = _Dma()  # type: ignore[assignment]  # the PWM looks `rp2040.dma` up on every wrap
+        chip.dreq_tap = dreq_tap
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:

@@ -502,6 +502,11 @@ class RPDMA(BasePeripheral):
         }
 
     def set_dreq(self, dreq_channel: int) -> None:
+        tap = getattr(
+            self.rp2040, "dreq_tap", None
+        )  # an observer of the requests that reach this DMA (the C++ block's twin); it does not take them away
+        if tap is not None:
+            tap(int(dreq_channel), True)
         if not self.dreq.get(dreq_channel, False):
             self.dreq[dreq_channel] = True
             for channel in self.channels:
@@ -509,6 +514,9 @@ class RPDMA(BasePeripheral):
                     channel.schedule_transfer()
 
     def clear_dreq(self, dreq_channel: int) -> None:
+        tap = getattr(self.rp2040, "dreq_tap", None)
+        if tap is not None:
+            tap(int(dreq_channel), False)
         self.dreq[dreq_channel] = False
 
     def get_timer(self, treq: int) -> float:

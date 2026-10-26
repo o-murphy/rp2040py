@@ -623,6 +623,17 @@ cdef bool _tree_hook(void* ctx) noexcept:
 cdef dict _DREQ_BY_NUMBER = {int(channel): channel for channel in DREQChannel}
 
 
+cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
+    # The observer of `RP2040.dreq_tap`: sees a request on its way to the chip's DMA, which still gets it.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._dreq_tap(int(number), asserted)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
 cdef bool _dreq_hook(void* ctx, uint32_t number, bool asserted) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -1271,6 +1282,27 @@ cdef class RP2040:
             self._mcu.attach_dma(NULL)
             self._mcu.set_dreq_hook(_dreq_hook, <void*> self)
         self._rebind_clock_sinks()
+        self._install_dreq_tap()
+
+    @property
+    def dreq_tap(self):
+        """An observer of the DMA requests that reach the chip's DMA: `f(number, asserted)`, called for every request, the redundant ones too, before the DMA gets it (the DMA still does). `None` takes it away.
+        Same on the pure-Python chip; it is how a test or a debugger sees the order of the requests without standing in for the DMA."""
+        return self._dreq_tap
+
+    @dreq_tap.setter
+    def dreq_tap(self, value) -> None:
+        self._dreq_tap = value
+        self._install_dreq_tap()
+
+    cdef _install_dreq_tap(self):
+        # Only the chip's own native DMA has the C++ tap; a stand-in for the DMA (a recorder) receives the requests itself and has no use for it.
+        if type(self._dma) is RPDMA:
+            if self._dreq_tap is None:
+                (<RPDMA> self._dma)._block.dreq_tap = NULL
+            else:
+                (<RPDMA> self._dma)._block.dreq_tap = _dreq_tap_hook
+                (<RPDMA> self._dma)._block.dreq_tap_ctx = <void*> self
 
     @property
     def rtc(self):

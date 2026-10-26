@@ -187,7 +187,14 @@ public:
     }
 
     // A peripheral's DREQ line going active. Channels waiting on it are woken only on the rising edge.
+    // An observer of the requests that reach this DMA, called first on every `set_dreq` / `clear_dreq` (also the redundant ones - the reference's call pattern), without taking them away from the DMA:
+    // the port a test or a debugger uses to see the order of the requests while the real DMA acts on them. False from the tap: the host has parked its error.
+    using DreqTap = bool (*)(void* ctx, uint32_t number, bool asserted);
+    DreqTap dreq_tap = nullptr;
+    void* dreq_tap_ctx = nullptr;
+
     bool set_dreq(uint32_t number) noexcept {
+        if (dreq_tap != nullptr && !dreq_tap(dreq_tap_ctx, number, true)) return false;
         if (number >= 64) return true;
         if (dreq(number)) return true;
         dreq_ |= uint64_t{1} << number;
@@ -200,6 +207,7 @@ public:
         return true;
     }
     void clear_dreq(uint32_t number) noexcept {
+        if (dreq_tap != nullptr) dreq_tap(dreq_tap_ctx, number, false);  // a failing tap has parked its error: the caller's next failure check raises it
         if (number < 64) dreq_ &= ~(uint64_t{1} << number);
     }
 

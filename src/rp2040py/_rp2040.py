@@ -129,6 +129,8 @@ class RP2040:
         # (RPPPB, RPWatchdog, RPADC, RPPWM, RPPIO, RPUSBController, RPDMA) call
         # self.clock.create_alarm(...) from their own __init__.
         self.clock = clock if clock is not None else SimulationClock()
+        # An observer of the DMA requests that reach the chip's DMA, `f(number, asserted)` (the native chip has the same property): it sees every request before the DMA gets it.
+        self.dreq_tap: Callable[[int, bool], None] | None = None
 
         # A plain list, not Uint32Array (same rationale as CortexM0Core.registers - see
         # docs/PORTING.md's performance section): bootrom is on the hot read_uint32 path (real

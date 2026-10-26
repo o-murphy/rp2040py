@@ -39,7 +39,7 @@ An operation is only one of the tier-1/2 interface:
 - firmware in (the flash buffer, the bootrom) and time forward (see below);
 - observation: `snapshot()` of every block, the results of reads (including a read's side effects) and exceptions, and the ordered **event log**.
 
-### The event log needs a public port
+### The event log needs a public port (DREQ: built 2026-10-26, `chip.dreq_tap`)
 
 Today the order of interrupt lines, DREQs, pin changes and warnings comes from replacing `chip.set_interrupt`, `chip.dma` and the logger. In the new model the chip offers a **trace port**
 (tier 2, same on both backends): an event stream of `irq(line, level)`, `dreq(number, level)`, plus what already leaves through the border (`pin_changed`, bytes and transactions of the devices,
@@ -100,8 +100,9 @@ mutant and perturbation caught as before:** rtc, rosc, adc, ident, small_blocks,
 in each is the constructor of its `Rig`, plus removing the `pure` replacement). `usb_diff` and `xip_diff` already built a pure chip for their reference.
 
 **What is still not the model, in every migrated oracle** (works on both chips, so it is green, but is a next step):
-- *neighbours stood in for*: the ADC, PWM, SSI, PIO oracles still assign `chip.dma` a DREQ recorder, the pin oracle assigns `chip.pio` / `chip.pwm` probes, the DMA oracle attaches a probe
-  block on the bus - symmetric on both chips, but not the real neighbour; a DREQ tap replaces the recorders (see "The event log needs a public port");
+- *neighbours stood in for*: the pin oracle assigns `chip.pio` / `chip.pwm` probes and the DMA oracle attaches a probe block on the bus - symmetric on both chips, but not the real neighbour.
+  **The DREQ recorders are gone** (adc, pwm, spi, ssi, uart, pio): they observe through `chip.dreq_tap` and the real DMA acts on the requests (`DmaBlock::dreq_tap` in C++, the same call in `RPDMA` in Python;
+  `tests/test_dreq_tap.py`). All 477 tests of those six oracles stayed green with the real DMA in place;
 - *block-level calls*: the `reset` ops (`peripheral.reset()`), a few perturbations (`peripheral.warn`, a block `write_uint32`), the PIO's `advance()`, the plumbing the oracles read;
 - *private attributes of the chip* the rigs touch (`chip.peripherals[...]`, `chip.rtc = block` in the mutant path - inside the pure chip, so allowed).
 

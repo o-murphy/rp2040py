@@ -14,6 +14,7 @@ from rp2040py.native._window_map cimport WindowHandler
 cdef extern from "dma.hpp" namespace "rp2040core":
 
     ctypedef double (*DmaClockFn)(void* ctx)
+    ctypedef cppbool (*DmaDreqTap)(void* ctx, uint32_t number, cppbool asserted)
 
     cdef cppclass DmaChannel:
         int index
@@ -39,6 +40,8 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         DmaChannel channels[12]
         uint32_t int_raw
         double transfer_ns
+        DmaDreqTap dreq_tap
+        void* dreq_tap_ctx
         DmaBlock() noexcept
         void detach() noexcept
         uint32_t int_status0() noexcept
