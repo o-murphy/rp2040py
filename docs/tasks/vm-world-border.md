@@ -101,6 +101,10 @@ Not in `McuHost`, but it is the same border, and it is the other half of the con
 - Where do the *wasm* host's slots stop (0103 already answers the device-mode USB wire itself and imports nothing): is the Group-1 list above what a browser host would provide, or a subset?
 - Measured, not designed: the cost of `pin_changed` and the clock alarms of Python devices per change (the hot crossing; 0096, "Not decided").
 
+## The plan
+
+The steps, their gates and the tests that still swap blocks are in [narrow-the-border-plan.md](narrow-the-border-plan.md).
+
 ## Not in scope
 
 No change of `McuHost`, of the shells, of the C ABI or of the Python API follows from this note. What is decided here, once agreed, is a list; the plan (which slots move when, what an oracle
