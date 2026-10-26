@@ -34,8 +34,6 @@ from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
 from rp2040py.native._gpio_pin import GPIOPin, GPIOPinBank
-from rp2040py.native._gpio_pin import GPIOPinBank as _NativeGPIOPinBank
-from rp2040py.native._pin_wiring import bind_pin_sources
 from rp2040py.irq import IRQ
 from rp2040py.memory_map import (
     APB_START_ADDRESS,
@@ -682,9 +680,6 @@ cdef class RP2040:
             0x50300: self.pio[1],
         }
 
-        # The pins read the native SIO / PIO / PWM registers directly (no Python call per level evaluation)
-        self._bind_pin_sources()
-
         # Debugging
         self.on_break = self._default_on_break
         # Set via the `simulator` property below, by the owning Simulator's own __init__ - see
@@ -885,13 +880,6 @@ cdef class RP2040:
         raise_if_pending()
         return word
 
-    def _bind_pin_sources(self):
-        """Points the chip's native pin banks at the registers of the native SIO / PIO / PWM blocks, where there are such (core/pin.hpp's direct sources); callable again whenever one is replaced."""
-        for bank in (getattr(self, "_gpio_bank", None), getattr(self, "_qspi_bank", None)):
-            if isinstance(bank, _NativeGPIOPinBank):  # a pure-Python bank (an oracle's reference pins) reads the blocks itself
-                bind_pin_sources(bank, self)
-
-    # The pins read the registers of these three blocks directly (see `_bind_pin_sources`), so replacing one has to re-point them: every way of replacing is a property or a list that does it.
     @property
     def pwm(self):
         return self._pwm_block
@@ -946,7 +934,6 @@ cdef class RP2040:
     cdef _adopt_sio(self, value):
         self._sio = value
         self._mcu.bus.set_sio(self._direct_handler(value, True))
-        self._bind_pin_sources()
 
     @property
     def ppb(self):

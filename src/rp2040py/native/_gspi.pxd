@@ -37,4 +37,3 @@ cdef class GspiShifter:
     cdef object _cs
     cdef bint _attached
 
-    cdef _bind_sources(self, GPIOPin pin)
