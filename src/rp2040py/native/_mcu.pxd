@@ -44,7 +44,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
     ctypedef double (*McuMonotonicFn)(void* chip) noexcept
     ctypedef bool (*McuIrqHook)(void* ctx, uint32_t irq, bool level) noexcept
     ctypedef void (*McuWarnFn)(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept
-    ctypedef bool (*McuDreqHook)(void* ctx, uint32_t number, bool asserted) noexcept
 
     cdef const uint32_t kMcuBlockRtc
     cdef const uint32_t kMcuBlockTbman
@@ -128,8 +127,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool core1_running() noexcept
         void set_irq_hook(McuIrqHook hook, void* ctx) noexcept
         bool set_dreq(uint32_t number, bool asserted) noexcept
-        void attach_dma(DmaBlock* dma) noexcept
-        void set_dreq_hook(McuDreqHook hook, void* ctx) noexcept
         bool owns_clock() noexcept
         void request_stop(bool stop) noexcept
         bool stop_requested() noexcept

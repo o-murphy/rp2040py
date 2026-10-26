@@ -314,7 +314,6 @@ public:
         own_dma_.init(&bus, clock_, &ports_, kMcuBlockDma, kIrqDma[0], dm);  // (DMA_IRQ_1 is the next line)
         own_dma_.bind_clock(clocks_clk_sys, &clocks_, clocks_.clk_sys());
         bus.windows.attach(kDmaBase, own_dma_.window_handler());
-        attach_dma(&own_dma_);
 
         // The two PIOs: their lines (IRQ0 and the next one), their requests and their pins are the chip's own; the pins are the GPIO bank's (or the host's, for a bank the host holds), and a warning
         // goes to the host under the block's id. The batch loop steps them (`host_.pio_advance`). Built after the DMA: a block publishes its FIFOs' requests when it starts.
@@ -565,16 +564,11 @@ public:
         irq_slow_ = (hook != nullptr || cpu1_running_) ? 1 : 0;
     }
 
-    // The DMA requests (step 2c). Every block with a DREQ calls this (directly, through the adapters below, once its shell has bound it) and it reaches the DMA block the host
-    // attached - unless a hook is over it (a test double that records the requests, a DMA that is not the native one): the hook then gets the request *instead of* the DMA, as a
-    // replaced `rp2040.dma` always did. With neither, a request goes nowhere (a chip without a DMA). False: waking a channel failed (the host has parked its error).
-    // The attached block must outlive its attachment: the host re-attaches (or detaches, with null) whenever it replaces the DMA. Until the DMA is a member of this class (3a) it is the host's.
-    using DreqHook = bool (*)(void* ctx, uint32_t number, bool asserted);
+    // The DMA requests (step 2c). Every block with a DREQ calls this (directly, through the adapters below, once its shell has bound it) and it reaches the chip's own DMA block. To see the requests on
+    // their way, put a tap on the DMA block (`DmaBlock::dreq_tap`). False: waking a channel failed (the host has parked its error).
     bool set_dreq(uint32_t number, bool asserted) noexcept {
-        if (dreq_hook_ != nullptr) return dreq_hook_(dreq_hook_ctx_, number, asserted);
-        if (dma_ == nullptr) return true;
-        if (asserted) return dma_->set_dreq(number);
-        dma_->clear_dreq(number);
+        if (asserted) return own_dma_.set_dreq(number);
+        own_dma_.clear_dreq(number);
         return true;
     }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
@@ -624,11 +618,6 @@ public:
     UsbBlock& usb() noexcept { return usb_; }
     SsiBlock& ssi() noexcept { return ssi_; }
     XipBlock& xip() noexcept { return xip_; }
-    void attach_dma(DmaBlock* dma) noexcept { dma_ = dma; }
-    void set_dreq_hook(DreqHook hook, void* ctx) noexcept {
-        dreq_hook_ = hook;
-        dreq_hook_ctx_ = ctx;
-    }
 
     // The run flags. `request_stop()` may be called from any thread; the loop leaves at its next iteration and `run()` then reports `kStopRequested`. `real_io` is nonzero while
     // some device waits on the *real* world (a relayed DNS reply, a TCP connect in flight): an idle jump is then capped and ends the batch, so simulated time cannot outrun the
@@ -1012,7 +1001,7 @@ private:
     PpbBlock ppb_;
     PpbBlock ppb1_;  // core 1's
     WatchdogBlock watchdog_;
-    DmaBlock own_dma_;  // (`dma_` is the block the requests go to: this one, unless the host attached another)
+    DmaBlock own_dma_;
     AdcBlock adc_;
     UartBlock uart_[2];
     SpiBlock spi_[2];
@@ -1021,9 +1010,6 @@ private:
     McuHost host_world_;
     IrqHook irq_hook_ = nullptr;
     void* irq_hook_ctx_ = nullptr;
-    DmaBlock* dma_ = nullptr;
-    DreqHook dreq_hook_ = nullptr;
-    void* dreq_hook_ctx_ = nullptr;
     volatile uint8_t stop_ = 0;
     volatile uint8_t real_io_ = 0;
     BatchHost host_;

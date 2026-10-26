@@ -351,6 +351,42 @@ cdef bool _w_reset_requested(void* ctx, uint32_t cause) noexcept:
     return True
 
 
+cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
+    # The observer of `RP2040.dreq_tap`: sees a request on its way to the chip's DMA, which still gets it.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._dreq_tap(int(number), asserted)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
+_TREE_DOMAINS = ("sys", "peri", "ref", "rtc")
+
+
+cdef bool _clock_tree_tap_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
+    # The observer of `RP2040.clock_tree_tap`: sees every announcement of the clock tree before its consumers do.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._clock_tree_tap(_TREE_DOMAINS[domain], hz, old)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
+cdef bool _pwm_input_tap_hook(void* ctx, uint32_t index) noexcept:
+    # The observer of `RP2040.pwm_input_tap`: sees a pin telling the PWM an input moved; the PWM still gets it.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._pwm_input_tap(int(index))
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
 cdef bool _w_i2c_start(void* ctx, uint32_t instance, bool repeated) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -443,59 +479,6 @@ cdef bool _w_adc_channel_value(void* ctx, uint32_t channel, int64_t* value) noex
     cdef RP2040 chip = <RP2040> ctx
     try:
         value[0] = <int64_t> chip.adc._world_channel_value(<object> channel)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef dict _DREQ_BY_NUMBER = {int(channel): channel for channel in DREQChannel}
-
-
-cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
-    # The observer of `RP2040.dreq_tap`: sees a request on its way to the chip's DMA, which still gets it.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip._dreq_tap(int(number), asserted)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-_TREE_DOMAINS = ("sys", "peri", "ref", "rtc")
-
-
-cdef bool _clock_tree_tap_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
-    # The observer of `RP2040.clock_tree_tap`: sees every announcement of the clock tree before its consumers do.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip._clock_tree_tap(_TREE_DOMAINS[domain], hz, old)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _pwm_input_tap_hook(void* ctx, uint32_t index) noexcept:
-    # The observer of `RP2040.pwm_input_tap`: sees a pin telling the PWM an input moved; the PWM still gets it.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip._pwm_input_tap(int(index))
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _dreq_hook(void* ctx, uint32_t number, bool asserted) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        channel = _DREQ_BY_NUMBER.get(number, number)
-        if asserted:
-            chip._dma.set_dreq(channel)
-        else:
-            chip._dma.clear_dreq(channel)
     except BaseException as error:
         park_error(error)
         return False
@@ -631,7 +614,8 @@ cdef class RP2040:
         for _qspi_pin, _pad_reset in zip(self.qspi, QSPI_PAD_RESET_VALUES):
             _qspi_pin.reset(io=False, pad_reset=_pad_reset)
 
-        self.dma = RPDMA(self, "DMA", 0)
+        self._dma = RPDMA(self, "DMA", 0)
+        self._install_dreq_tap()
         self._pio_blocks = [
             RPPIO(self, "PIO0", IRQ.PIO0_IRQ0, 0),
             RPPIO(self, "PIO1", IRQ.PIO1_IRQ0, 1),
@@ -1027,20 +1011,6 @@ cdef class RP2040:
     @property
     def dma(self):
         return self._dma
-
-    @dma.setter
-    def dma(self, value) -> None:
-        self._dma = value
-        # The DMA requests of the blocks go to `Mcu::set_dreq` (core/mcu.hpp). The chip's own native DMA is attached to it, so a request reaches its C++ block with no Python in
-        # between; anything else (a recorder, a test double, a pure-Python DMA) gets the requests through a hook, instead of the DMA, as it always did.
-        if type(value) is RPDMA:
-            self._mcu.set_dreq_hook(NULL, NULL)
-            self._mcu.attach_dma((<RPDMA> value)._block)
-        else:
-            self._mcu.attach_dma(NULL)
-            self._mcu.set_dreq_hook(_dreq_hook, <void*> self)
-        self._rebind_clock_sinks()
-        self._install_dreq_tap()
 
     @property
     def dreq_tap(self):

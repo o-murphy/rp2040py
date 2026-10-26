@@ -25,7 +25,6 @@ static bool alarm_fail(void*) noexcept { return false; }
 
 static uint8_t flash_image[65536];
 static uint8_t usb_dpram[4096];
-static DmaBlock dma_probe;  // (never initialised: only its DREQ bits are read)
 
 int main() {
     Mcu mcu;
@@ -178,12 +177,7 @@ int main() {
     // the absolute DREQ number.
     {
         Mcu m;
-        Clock clock;
-        DmaHost dma_host;
-        DmaBlock dma;
-        dma.init(&m.bus, &clock, nullptr, 0, 0, dma_host);  // (a block on its own: no ports)
-        CHECK(m.set_dreq(5, true) && !dma.dreq(5));  // no DMA attached: nowhere to go, not a failure
-        m.attach_dma(&dma);
+        DmaBlock& dma = m.dma();  // the requests go to the chip's own DMA block
         CHECK(m.set_dreq(5, true) && dma.dreq(5));
         CHECK(m.set_dreq(5, false) && !dma.dreq(5));
 
@@ -195,28 +189,26 @@ int main() {
         CHECK(mcu_dreq_pair(&pair, false, true) && dma.dreq(21));
         CHECK(mcu_dreq_pair(&pair, true, false) && !dma.dreq(20) && dma.dreq(21));
 
+        // The observer (`DmaBlock::dreq_tap`): called first for every request, the DMA still gets it; a failing tap fails the request.
         struct Seen {
             int n = 0;
             uint32_t number = 0;
             bool asserted = false;
             bool result = true;
         } seen;
-        m.set_dreq_hook(
-            [](void* ctx, uint32_t number, bool asserted) noexcept {
-                Seen* x = static_cast<Seen*>(ctx);
-                ++x->n;
-                x->number = number;
-                x->asserted = asserted;
-                return x->result;
-            },
-            &seen);
-        CHECK(m.set_dreq(12, true) && seen.n == 1 && seen.number == 12 && seen.asserted && !dma.dreq(12));  // the hook got it instead of the DMA
+        dma.dreq_tap = [](void* ctx, uint32_t number, bool asserted) noexcept {
+            Seen* x = static_cast<Seen*>(ctx);
+            ++x->n;
+            x->number = number;
+            x->asserted = asserted;
+            return x->result;
+        };
+        dma.dreq_tap_ctx = &seen;
+        CHECK(m.set_dreq(12, true) && seen.n == 1 && seen.number == 12 && seen.asserted && dma.dreq(12));  // the observer saw it and the DMA got it
         seen.result = false;
         CHECK(!m.set_dreq(13, true));  // its failure is the caller's
-        m.set_dreq_hook(nullptr, nullptr);
-        CHECK(m.set_dreq(12, true) && seen.n == 2 && dma.dreq(12));
-        m.attach_dma(nullptr);
-        CHECK(m.set_dreq(14, true) && !dma.dreq(14));
+        dma.dreq_tap = nullptr;
+        CHECK(m.set_dreq(14, true) && seen.n == 2 && dma.dreq(14));
     }
 
     // The RTC, built by the chip (record 0096, 3a): `build()` initialises it on the chip's clock, maps its window and binds its line - all without a shell. The host only answers for
@@ -370,8 +362,8 @@ int main() {
             CHECK((m.cpu.pending_interrupts & (1u << (20 + u))) != 0);
             m.bus.write32(base + 0x48, 1u << 1);  // UARTDMACR: TXDMAE
         }
-        CHECK(m.set_dreq(40, true) && !dma_probe.dreq(20) && !dma_probe.dreq(22));  // (no DMA attached yet: nowhere to go)
-        m.attach_dma(&dma_probe);
+        DmaBlock& dma_probe = m.dma();  // the requests go to the chip's own DMA block
+        CHECK(m.set_dreq(40, true));
         for (uint32_t u = 0; u < 2; ++u) m.bus.write32(bases[2 + u] + 0x48, 0), m.bus.write32(bases[2 + u] + 0x48, 1u << 1);
         CHECK(dma_probe.dreq(20) && dma_probe.dreq(22) && !dma_probe.dreq(21));
         for (uint32_t i = 0; i < 2; ++i) {  // SPI: the TX request
@@ -387,7 +379,6 @@ int main() {
         CHECK((m.cpu.pending_interrupts & (1u << 18)) != 0);
         m.bus.write32(bases[1] + 0x1C, 1);  // ADC.INTF: forces ADC_IRQ_FIFO
         CHECK((m.cpu.pending_interrupts & (1u << 22)) != 0);
-        m.attach_dma(nullptr);
 
         // The clock tree and the oscillators (group 3): built by the same call, and the tree is the chip's own - the UART's bit time comes from its clk_peri, not from the host.
         const uint32_t tree[5] = {0x40008000, 0x40028000, 0x4002C000, 0x40024000, 0x40060000};
@@ -425,7 +416,6 @@ int main() {
         CHECK((m.cpu.pending_interrupts & (1u << 11)) != 0);
         m.bus.write32(0x50000000 + 0x418, 1);  // DMA.INTF1: forces DMA_IRQ_1 (12)
         CHECK((m.cpu.pending_interrupts & (1u << 12)) != 0);
-        m.attach_dma(&m.dma());  // (the earlier checks detached it)
         CHECK(m.set_dreq(3, true) && m.dma().dreq(3));  // the chip's own DMA is the one the requests go to
         m.bus.write32(0x40058000 + 0x00, 1u << 31);  // WATCHDOG.CTRL.TRIGGER: the chip's reset is the host's
         CHECK(world.triggers == 1);
