@@ -51,4 +51,3 @@ cdef class RPROSC(NativeBlock):
     cdef public object clock
     cdef object _random_bit
     cdef object _rng
-    cdef object _bound_tree  # the native clock tree this block tells directly (None: it tells the chip through Python)

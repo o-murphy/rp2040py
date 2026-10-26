@@ -67,5 +67,3 @@ cdef class RPDMA(NativeBlock):
     cdef DmaBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
     cdef object _channels
-    cdef object _unsubscribe_clock
-    cdef object _bound_tree  # the native clock tree the block reads clk_sys from (None: it asks the chip, through the Python listener and callback)

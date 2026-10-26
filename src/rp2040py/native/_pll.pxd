@@ -33,4 +33,3 @@ cdef extern from "pll.hpp" namespace "rp2040core":
 
 cdef class RPPLL(NativeBlock):
     cdef PllBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef object _bound_tree  # the native clock tree this PLL takes its reference from (None: it asks the chip through Python)

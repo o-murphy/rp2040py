@@ -23,20 +23,11 @@ from libcpp cimport bool as cppbool
 from rp2040py.native._bus cimport Bus
 from rp2040py.native._mcu_irq cimport Mcu
 from rp2040py.native._native_block cimport NativeBlock, register_ops
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPDMA",)
-
-
-cdef double _clk_sys_trampoline(void* ctx) noexcept:
-    cdef RPDMA dma = <RPDMA> ctx
-    try:
-        return <double> dma.rp2040.clk_sys
-    except BaseException as error:
-        park_error(error)
-        return 0.0
 
 
 cdef class _Channel:
@@ -103,12 +94,10 @@ cdef class RPDMA(NativeBlock):
             # the chip's C++ `Mcu` has built this block already and bound it to the tree and the bus - this object is the Python view of it
             self._block = <DmaBlock*> <size_t> rp2040._native_dma_address()
             self._ops = register_ops(self._block)
-            self._unsubscribe_clock = None
         else:
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPDMA is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-        self._bound_tree = None
         self._channels = []
         cdef _Channel view
         for i in range(12):
@@ -116,25 +105,6 @@ cdef class RPDMA(NativeBlock):
             view._owner = self
             view._channel = &self._block.channels[i]
             self._channels.append(view)
-
-    def _clk_sys_changed(self, clk_sys, old_clk_sys):
-        self._block.transfer_ns = 1e9 / <double> clk_sys
-
-    def _leave_the_python_clock(self, tree):
-        """The native clock tree `tree` has taken over `clk_sys` (`RPClocks.rebind_consumers()` binds the block to it): the listener that kept the cycle time current is not needed any more.
-        The block keeps `tree` alive, since it reads the tree's C++ object."""
-        self._bound_tree = tree
-        if self._unsubscribe_clock is not None:
-            self._unsubscribe_clock()
-            self._unsubscribe_clock = None
-
-    def _rejoin_the_python_clock(self, tree):
-        """`tree` is going away (the chip's clock tree was replaced): back to asking the chip - the callback and the listener - if the block was reading that tree."""
-        if self._bound_tree is not tree:
-            return
-        self._bound_tree = None
-        self._block.bind_clock(_clk_sys_trampoline, <void*> self, <double> self.rp2040.clk_sys)
-        self._unsubscribe_clock = self.rp2040.add_clock_listener(self._clk_sys_changed)
 
     # --- the reference's attributes --------------------------------------------------------------
 

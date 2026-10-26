@@ -94,7 +94,6 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         void detach() noexcept
         Clock* clock() noexcept
         double clock_freq() noexcept
-        void set_clock_freq(double freq) noexcept
         int64_t raw_write_value() noexcept
         uint32_t int_status() noexcept
         cppbool check_interrupts() noexcept

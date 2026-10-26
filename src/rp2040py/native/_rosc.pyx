@@ -22,17 +22,6 @@ from rp2040py.native._register_warning import register_warning
 __all__ = ("RPROSC",)
 
 
-cdef cppbool _frequency_trampoline(void* ctx, double hz) noexcept:
-    cdef RPROSC block = <RPROSC> ctx
-    try:
-        block.rp2040.rosc_freq = hz
-        block.rp2040.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef cppbool _bit_trampoline(void* ctx, uint32_t* bit) noexcept:
     cdef RPROSC block = <RPROSC> ctx
     try:
@@ -66,13 +55,6 @@ cdef class RPROSC(NativeBlock):
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPROSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def _rejoin_the_python_tree(self, tree):
-        """`tree` is going away (the chip's clock tree was replaced): tell the chip through Python again, if this block was telling that tree."""
-        if self._bound_tree is not tree:
-            return
-        self._bound_tree = None
-        self._block.bind_frequency_listener(_frequency_trampoline, <void*> self)
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

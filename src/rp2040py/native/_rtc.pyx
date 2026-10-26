@@ -91,11 +91,6 @@ cdef class RP2040RTC(NativeBlock):
         if not self._block.check_interrupts():
             raise_if_pending()
 
-    def second_elapsed(self):
-        """A second has gone by (the clock's alarm runs it; the tests call it by hand)."""
-        if not self._block.second_elapsed():
-            raise_if_pending()
-
     def reset(self):
         """`RESETS.RESET_RTC`: every register 0, the counter 0, the divider stopped (see the reference)."""
         if not self._block.reset():

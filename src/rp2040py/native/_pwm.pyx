@@ -109,10 +109,6 @@ cdef class RPPWM(NativeBlock):
         # The reference reads the live system clock; the counters were built on the value at construction.
         return self.rp2040.clk_sys
 
-    def set_clock_freq(self, freq):
-        """A new system clock: every counter keeps its value and continues at the new rate."""
-        self._block.set_clock_freq(<double> freq)
-
     def snapshot(self):
         """The block's state in one call: every channel's registers, flags, counter bookkeeping, timer and alarms, and the block's pin words, interrupt words and clock."""
         cdef PwmChannel* c

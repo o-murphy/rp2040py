@@ -111,22 +111,18 @@ cdef class RPClocks(NativeBlock):
         if isinstance(xosc, RPXOSC):
             self._block.bind_xosc((<RPXOSC> xosc)._block)
             (<RPXOSC> xosc)._block.bind_stable_listener(clocks_retune, <void*> self._block)
-            (<RPXOSC> xosc)._bound_tree = self
         else:
             self._block.bind_xosc(NULL)
         if isinstance(rosc, RPROSC):
             self._block.bind_rosc((<RPROSC> rosc)._block)
             (<RPROSC> rosc)._block.bind_frequency_listener(clocks_retune_hz, <void*> self._block)
-            (<RPROSC> rosc)._bound_tree = self
         else:
             self._block.bind_rosc(NULL)
         for pll in (self._pll_sys, self._pll_usb):
             (<RPPLL> pll)._block.bind_reference(clocks_xosc_hz, <void*> self._block)
-            (<RPPLL> pll)._bound_tree = self
         if isinstance(dma, RPDMA):
             # the DMA reads clk_sys from the tree and the tree keeps its cycle time current: the Python listener it registered for that is not needed any more
             (<RPDMA> dma)._block.bind_clock(clocks_clk_sys, <void*> self._block, self._block.clk_sys())
-            (<RPDMA> dma)._leave_the_python_clock(self)
             ok = ok and self._block.add_sys_sink(dma_sys_sink, <void*> (<RPDMA> dma)._block)
         ok = ok and self._block.add_sys_sink(_listeners_sink, <void*> self)
         ok = ok and self._block.add_peri_sink(_peri_sink, <void*> self)

@@ -10,24 +10,10 @@ a register write (`changed`: the chip's `update_clocks()`). Their failures are p
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._native_block cimport NativeBlock, register_ops
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPPLL",)
-
-XOSC_STATUS = 0x04
-XOSC_STATUS_STABLE = 1 << 31
-
-
-cdef double _ref_trampoline(void* ctx) noexcept:
-    # `xosc_hz()` of the reference: the crystal's frequency while the XOSC block is stable, nothing otherwise.
-    cdef RPPLL block = <RPPLL> ctx
-    try:
-        rp2040 = block.rp2040
-        return <double> rp2040.xosc_freq if rp2040.xosc.read_uint32(XOSC_STATUS) & XOSC_STATUS_STABLE else 0.0
-    except BaseException as error:
-        park_error(error)
-        return 0.0
 
 
 cdef class RPPLL(NativeBlock):
@@ -42,13 +28,6 @@ cdef class RPPLL(NativeBlock):
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPPLL is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def _rejoin_the_python_tree(self, tree):
-        """`tree` is going away (the chip's clock tree was replaced): ask the chip through Python for the reference again, if the PLL was asking that tree."""
-        if self._bound_tree is not tree:
-            return
-        self._bound_tree = None
-        self._block.bind_reference(_ref_trampoline, <void*> self)
 
     @property
     def refdiv(self):

@@ -12,22 +12,11 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._native_block cimport NativeBlock, register_ops
-from rp2040py.native._pending cimport park_error, raise_if_pending
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._register_warning import register_warning
 
 __all__ = ("RPXOSC",)
-
-
-cdef cppbool _stable_trampoline(void* ctx) noexcept:
-    # The crystal started or stopped: the clock tree is re-derived (nothing is clocked from XOSC while it is stopped)
-    cdef RPXOSC block = <RPXOSC> ctx
-    try:
-        block.rp2040.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
 
 
 cdef class RPXOSC(NativeBlock):
@@ -43,13 +32,6 @@ cdef class RPXOSC(NativeBlock):
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPXOSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def _rejoin_the_python_tree(self, tree):
-        """`tree` is going away (the chip's clock tree was replaced): tell the chip through Python again, if this block was telling that tree."""
-        if self._bound_tree is not tree:
-            return
-        self._bound_tree = None
-        self._block.bind_stable_listener(_stable_trampoline, <void*> self)
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""

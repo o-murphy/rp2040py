@@ -46,7 +46,6 @@ cdef extern from "rtc.hpp" namespace "rp2040core":
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
-        cppbool second_elapsed() noexcept
         WindowHandler window_handler() noexcept
 
 cdef class RP2040RTC(NativeBlock):
