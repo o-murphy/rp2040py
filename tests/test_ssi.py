@@ -328,14 +328,9 @@ def _watch(rp2040):
     """Records what the SSI tells the chip: the interrupt lines and the DMA requests."""
     events = []
 
-    class _Dma:
-        def set_dreq(self, channel):
-            events.append(("dreq", int(channel), 1))
-
-        def clear_dreq(self, channel):
-            events.append(("dreq", int(channel), 0))
-
-    rp2040.dma = _Dma()
+    rp2040.dreq_tap = lambda number, asserted: events.append(
+        ("dreq", int(number), int(asserted))
+    )  # (the real DMA gets the requests as well)
     original = rp2040.set_interrupt
 
     def set_interrupt(irq, value):

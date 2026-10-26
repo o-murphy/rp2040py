@@ -89,14 +89,9 @@ def test_the_dma_requests_follow_the_joined_fifos(rp2040_factory):
     chip = rp2040_factory()
     events = []
 
-    class _Dma:
-        def set_dreq(self, channel):
-            events.append((int(channel), 1))
-
-        def clear_dreq(self, channel):
-            events.append((int(channel), 0))
-
-    chip.dma = _Dma()
+    chip.dreq_tap = lambda number, asserted: events.append(
+        (int(number), int(asserted))
+    )  # (the real DMA gets the requests as well)
     tx, rx = int(DREQ_TX0[0]), int(DREQ_RX0[0])
     _w(chip, SM0_SHIFTCTRL, FJOIN_TX)
     assert (tx, 1) in events and (rx, 0) in events  # TX has room, RX is "empty": no request

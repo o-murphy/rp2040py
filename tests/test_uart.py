@@ -60,14 +60,9 @@ def _fresh(rp2040_factory):
     rp2040 = rp2040_factory()
     dreqs: list[tuple[int, bool]] = []
 
-    class _Dma:
-        def set_dreq(self, channel):
-            dreqs.append((channel, True))
-
-        def clear_dreq(self, channel):
-            dreqs.append((channel, False))
-
-    rp2040.dma = _Dma()
+    rp2040.dreq_tap = lambda number, asserted: dreqs.append(
+        (number, asserted)
+    )  # (the real DMA gets the requests as well)
     return RPUART(rp2040, "UART", 0, IUARTDMAChannels(rx=7, tx=8)), dreqs
 
 

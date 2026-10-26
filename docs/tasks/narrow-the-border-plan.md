@@ -38,10 +38,28 @@ Result: 16 slots (15 + `reset_requested`), down from 28, plus `pio_started` if i
 | `utils/mmio_trace.py`, `utils/pin_trace.py` | record every SIO / PPB access by standing a recorder in for the block | **rebuild on a trace port** (tier 2: one tap on the bus window, same on both chips) or restrict to the pure chip - decide when the first user needs it |
 | `test_mcu_rtc.py`, `test_timer_parity.py`, `test_batch_parity.py`, `test_peripheral_windows.py`, `test_rp2040.py`, `utils/*_diff.py` (mutants) | `peripherals[...] = ...` | each to be told apart: a user block at a free address (**stays**), a mutant inside the pure chip (**stays**), a replacement of a built-in on the C++ chip (**goes**) |
 
+## Inventory (step 0, done 2026-10-26): every `peripherals[...] = ...` and block assignment outside the two chip files
+
+**Replacing a built-in block on the C++ chip - goes with step 2-6** (each file named with the step that frees it):
+- `test_mcu_rtc.py:67` (a stand-in RTC at 0x4005C, to see the C++ chip hand work to a Python RTC) - step 4/5: becomes a test of the *core's host contract* or is deleted with the RTC seam;
+- `test_batch_parity.py:159` (`Angry()` at the TIMER's address, a failing peripheral inside the batch loop) - **keep the intent, change the address**: a failing block at a free address that the program touches tests the same
+  failure parking without replacing a built-in;
+- `test_timer_parity.py:55,214,248` (a pure or native TIMER swapped into a chip, and a wrapper of it) - step 4: a twin parity (both chips' own TIMER) replaces it; `tick_changed` is the one input it needs and stays;
+- `test_peripheral_windows.py:109,113,130` (`TIMER_KEY` swapped for a stand-in and back) - the other 15 uses are a block at a **free** address (`FREE_KEY`, `OTHER_KEY`), which is `attach_peripheral` and **stays**; the three TIMER ones go;
+- `test_dma_time.py:55-60` (pure PLLs and clocks built into a chip) - step 4;
+- `test_sio_bus.py:104,119`, `test_bus_host.py:77,100` (`chip.sio` / `chip.ppb` swapped) - step 0 verdict: these test the *bus-to-host contract* of the C++ core; move them to a core-level test that drives `Mcu` directly (or `tests/cpp`), not through the chip setters;
+- the oracles' own `utils/*_diff.py` lines (`chip.peripherals[... >> 12] = new`) are **mutants inside the pure chip** and stay.
+
+**Recorders standing in for the DMA - step 1, done 2026-10-26:** `test_adc.py`, `test_uart.py`, `test_ssi.py`, `test_pio_fjoin.py` now observe through `chip.dreq_tap`; `test_dreq_direct.py` was reshaped (the replace-the-DMA and give-it-back cases are gone, the observer cases - sees the request, sees the clear, can be taken away, a failing one surfaces - are in). 65 tests green on both builds. The only `chip.dma = ...` left in `tests/` is `dma_diff.py`'s own DMA under test (a mutant inside the pure chip) and `pwm_cpp_vectors.py`'s stand-in chip.
+
+**Tracing tools - decide at step 3/4:** `utils/mmio_trace.py:154-158`, `utils/pin_trace.py:153-154` put a recorder in front of a block (SIO, PPB, any `peripherals[key]`); users: `test_mmio_trace.py`, `test_pin_trace.py`. They are "a tap on the bus window", which the core can offer once.
+
+**Stays:** user blocks at free addresses (`attach_peripheral`), `chip.set_interrupt = ...` (the IRQ tap; 10 test files), `chip.dreq_tap`, every mutant built into a pure chip.
+
 ## The steps (leaf first; the reset last)
 
-0. **Inventory commit** - no code: the table above checked file by file, the list of the replacement-only setters/slots frozen. *Gate: none.*
-1. **Convert the recorders** (`test_adc`, `test_uart`, `test_ssi`, `test_pio_fjoin`, `test_dreq_direct`) to `dreq_tap`. *Gate: those files green on both builds.*
+0. *(done)* Inventory above.
+1. *(done)* **Convert the recorders** (`test_adc`, `test_uart`, `test_ssi`, `test_pio_fjoin`, `test_dreq_direct`) to `dreq_tap`. *Gate: those files green on both builds.*
 2. **PWM / PIO / SSI "world" flags**: delete `set_pwm_world`, `set_pio_world`, `set_ssi_world`, the host branches they guard, `ssi_baudr`, and the `pwm` / `pio` / `ssi` setters' re-pointing. *Gate: the pwm, pio, ssi twin oracles with all mutants; boot CI.*
 3. **Pin banks**: delete `set_pin_bank_world`, `pin_source`, `pin_inputs`, `pin_update`, `pin_input_changed`, the `_gpio_bank` / `_qspi_bank` setters; `pin_changed` stays. `test_pin_bank` swap test goes; the pin oracle's `chip.pio` / `chip.pwm` probes (symmetric neighbour doubles, assigned on the C++ chip) need a replacement first - **either real PIO/PWM there, or the probes only on the pure chip's side of a pin-bank unit test** (to decide at this step). *Gate: pin oracle; boot CI; the CYW43 scan (the pin hot path).*
 4. **Clock tree**: delete `set_tree_hook`, `xosc_hz`, `rosc_hz`, `clk_sys`, the `xosc` / `rosc` / `clocks` / `clk_peri` / `xosc_freq` / `rosc_freq` re-pointing, `bind_tree_sinks` host branches. *Gate: clocks, rosc, psm_xosc_resets oracles; `test_clocks*`; boot CI.*
