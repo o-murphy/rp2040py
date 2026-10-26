@@ -11,14 +11,27 @@ The API is the reference's: `scratch_data` (a view of the eight words), `timer` 
 """
 
 from libc.stdint cimport int64_t, uint32_t
+from libcpp cimport bool as cppbool
 
 from rp2040py.native._native_block cimport NativeBlock, register_ops
-from rp2040py.native._pending cimport raise_if_pending
+from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._views cimport Timer32View
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPWatchdog",)
+
+
+cdef cppbool _tick_tap(void* ctx, double tick_hz) noexcept:
+    # The listeners of `add_tick_listener`: they hear the tick before the TIMER and SysTick follow it.
+    cdef RPWatchdog watchdog = <RPWatchdog> ctx
+    try:
+        for listener in list(watchdog._tick_listeners):
+            listener(tick_hz)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
 
 
 cdef class RPWatchdog(NativeBlock):
@@ -54,15 +67,6 @@ cdef class RPWatchdog(NativeBlock):
         """The watchdog fired (or was triggered): the chip's reset, whatever `on_watchdog_trigger` is now."""
         self.on_watchdog_trigger()
 
-    def _world_tick(self, tick_hz):
-        """The tick changed. The `Mcu` has told its own TIMER and SysTick; a TIMER or PPB the host replaced is told here, and then the host's listeners."""
-        for name in ("timer", "ppb"):
-            consumer = getattr(self.rp2040, name, None)
-            if consumer is not None and not getattr(consumer, "_from_mcu", False):
-                consumer.tick_changed(tick_hz)
-        for listener in list(self._tick_listeners):
-            listener(tick_hz)
-
     def _default_watchdog_trigger(self):
         """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this hook: reset the chip (see the reference)."""
         self.rp2040.enter_reset(from_watchdog=True)
@@ -76,10 +80,14 @@ cdef class RPWatchdog(NativeBlock):
     def add_tick_listener(self, listener):
         """Calls `listener(tick_hz)` whenever the tick changes (0: stopped), after the TIMER and SysTick have been told. Returns the function that unsubscribes it."""
         self._tick_listeners.append(listener)
+        self._block.tick_tap = _tick_tap
+        self._block.tick_tap_ctx = <void*> self
 
         def unsubscribe():
             if listener in self._tick_listeners:
                 self._tick_listeners.remove(listener)
+            if not self._tick_listeners:
+                self._block.tick_tap = NULL
 
         return unsubscribe
 

@@ -107,15 +107,11 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*i2c_read)(void* ctx, uint32_t instance, bool ack) noexcept
         bool (*i2c_stop)(void* ctx, uint32_t instance) noexcept
         bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept
-        void (*system_reset_request)(void* ctx) noexcept
-        bool (*watchdog_trigger)(void* ctx) noexcept
-        bool (*watchdog_tick)(void* ctx, double tick_hz) noexcept
         bool (*adc_read)(void* ctx, uint32_t channel) noexcept
         const UsbHost* usb_wire
-        bool (*reset_block)(void* ctx, uint32_t block) noexcept
         bool (*usb_reset)(void* ctx) noexcept
         bool (*bus_reset)(void* ctx) noexcept
-        bool (*record_cause)(void* ctx, uint32_t flag) noexcept
+        bool (*reset_requested)(void* ctx, uint32_t cause) noexcept
         bool (*pio_started)(void* ctx, uint32_t index) noexcept
         bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) noexcept
 
@@ -161,8 +157,8 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         void set_usb_dpram(uint8_t* data) noexcept
         void set_memory(const McuMemory& memory) noexcept
         void set_flash(uint8_t* data, uint32_t size) noexcept
-        bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
-        bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
+        bool reset(bool from_watchdog, bool preserve_flash) noexcept
+        bool enter_reset_code(uint32_t cause) noexcept
         void leave_reset() noexcept
         PwmBlock& pwm() noexcept
         PpbBlock& ppb() noexcept

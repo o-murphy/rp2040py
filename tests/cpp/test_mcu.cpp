@@ -230,7 +230,6 @@ int main() {
             int resets = 0, triggers = 0, ticks = 0;
             int pin_changes = 0;
             int bus_resets = 0, usb_resets = 0, usb_enabled = 0;
-            uint64_t reset_blocks = 0;
             uint32_t pin_bank = 99, pin_number = 99;
             int pin_new = -1, pin_old = -1;
             double last_tick = -1.0;
@@ -255,10 +254,6 @@ int main() {
             w->uart_value = byte;
             return true;
         };
-        host.reset_block = [](void* ctx, uint32_t block) {
-            static_cast<World*>(ctx)->reset_blocks |= uint64_t{1} << block;
-            return true;
-        };
         host.bus_reset = [](void* ctx) {
             ++static_cast<World*>(ctx)->bus_resets;
             return true;
@@ -276,15 +271,13 @@ int main() {
             w->pin_old = old_state;
             return true;
         };
-        host.system_reset_request = [](void* ctx) { ++static_cast<World*>(ctx)->resets; };
-        host.watchdog_trigger = [](void* ctx) {
-            ++static_cast<World*>(ctx)->triggers;
-            return true;
-        };
-        host.watchdog_tick = [](void* ctx, double hz) {
+        host.reset_requested = [](void* ctx, uint32_t cause) {
             World* w = static_cast<World*>(ctx);
-            ++w->ticks;
-            w->last_tick = hz;
+            if (cause == McuHost::kResetRequestSysResetReq) {
+                ++w->resets;
+            } else {
+                ++w->triggers;
+            }
             return true;
         };
         host.spi_transmit = [](void* ctx, uint32_t instance, uint32_t value) {
@@ -436,10 +429,17 @@ int main() {
         CHECK(m.set_dreq(3, true) && m.dma().dreq(3));  // the chip's own DMA is the one the requests go to
         m.bus.write32(0x40058000 + 0x00, 1u << 31);  // WATCHDOG.CTRL.TRIGGER: the chip's reset is the host's
         CHECK(world.triggers == 1);
+        m.watchdog().tick_tap = [](void* ctx, double hz) {  // an observer of the tick (the port a test uses to hear it)
+            World* w = static_cast<World*>(ctx);
+            ++w->ticks;
+            w->last_tick = hz;
+            return true;
+        };
+        m.watchdog().tick_tap_ctx = &world;
         m.watchdog().clk_ref_changed(12e6);
         m.bus.write32(0x40058000 + 0x2C, 12 | (1u << 9));  // WATCHDOG.TICK: 12 cycles of clk_ref, enabled -> 1 MHz
         CHECK(m.timer().tick_hz() == 1e6 && m.ppb().tick_hz() == 1e6);  // the TIMER and SysTick follow it in C++ ...
-        CHECK(world.ticks >= 1 && world.last_tick == 1e6);              // ... and then the host hears of it
+        CHECK(world.ticks >= 1 && world.last_tick == 1e6);              // ... and the observer heard of it
         CHECK(m.ppb(1).tick_hz() == 1e6);  // core 1's SysTick is fed the tick as well (the watchdog tells each core's PPB)
 
         // The second core's seams (record 0104, P0): present, inactive, and reached only through the bus's `initiator`.
@@ -709,11 +709,6 @@ int main() {
             CHECK(flash_image[5] == static_cast<uint8_t>(5 * 7 + 3));
             CHECK(m.reset(false, false));
             CHECK(flash_image[5] == 0xFF && flash_image[sizeof flash_image - 1] == 0xFF);
-            // a block the host holds is the host's to reset: its bit in `world` sends it there and the Mcu's own is left alone
-            dirty();
-            world.reset_blocks = 0;
-            CHECK(m.reset(false, true, uint64_t{1} << kMcuBlockPwm));
-            CHECK(world.reset_blocks == (uint64_t{1} << kMcuBlockPwm) && m.bus.read32(kPwmCh0Top) == 7 && m.bus.read32(kUart0Ibrd) == 0);
             // the cause: a watchdog reset leaves REASON / SCRATCH and CHIP_RESET alone, anything else clears the watchdog's and records HAD_RUN / HAD_POR - after the reset - and tells the USB link either way
             dirty();
             const int buses = world.bus_resets;

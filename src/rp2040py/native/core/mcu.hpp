@@ -88,19 +88,17 @@ struct McuHost {
     // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (SIO's, a PIO's, the PWM's), which the `Mcu` reads itself; a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
     // an input level that moved reaches the PWM and the PIOs' waits inside.
     bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) = nullptr;
-    void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
-    bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
-    bool (*watchdog_tick)(void* ctx, double tick_hz) = nullptr;                         // the tick changed (0: stopped), after the TIMER and SysTick have followed it
+    // A reset was asked for, and why: `kResetRequestSysResetReq` (AIRCR.SYSRESETREQ; without a host the core alone is reset) or `kResetRequestWatchdog` (the watchdog fired or was triggered; without a host
+    // nothing happens). The host decides what a reset is - the chip's cascade (`enter_reset` / `leave_reset`) and whatever side effects it has on its own end (a USB device, a console). False: the host has parked its error.
+    static constexpr uint32_t kResetRequestSysResetReq = 0, kResetRequestWatchdog = 1;
+    bool (*reset_requested)(void* ctx, uint32_t cause) = nullptr;
     // The host's end of the USB wire (the device at the other end of the link: its setup / IN / OUT handling, the endpoint transfers and the notifications of `core/usb.hpp`'s `UsbHost`). Optional: with
     // none, the controller has nothing connected. Read once, by `build()`; the line, the warning and the failure flag of that struct are the chip's, not the host's.
     const UsbHost* usb_wire = nullptr;
-    // The reset cascade (`Mcu::reset`). A block the host has replaced (named in the `world` mask the host passes) is the host's to reset: `reset_block(block)`. `usb_reset` comes before the USB block's own
-    // reset (the host drops the device and the transfers it queued), `bus_reset` is the USB link seeing the chip reset (the device's `on_reset`), `record_cause` is a host's own VREG_AND_CHIP_RESET block
-    // being told the cause flag. All optional.
-    bool (*reset_block)(void* ctx, uint32_t block) = nullptr;
+    // The reset cascade (`Mcu::reset`): `usb_reset` comes before the USB block's own reset (the host drops the device and the transfers it queued), `bus_reset` is the USB link seeing the chip reset (the
+    // device's `on_reset`). Both optional.
     bool (*usb_reset)(void* ctx) = nullptr;
     bool (*bus_reset)(void* ctx) = nullptr;
-    bool (*record_cause)(void* ctx, uint32_t flag) = nullptr;
     bool (*pio_started)(void* ctx, uint32_t index) = nullptr;                           // CTRL started a stopped PIO: the host runs its "no owning Simulator" fallback (the asyncio task of `run()`)
     bool (*adc_read)(void* ctx, uint32_t channel) = nullptr;                            // a conversion was requested; the device answers by pushing a sample
     bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) = nullptr;   // the analog value of a channel
@@ -434,12 +432,12 @@ public:
     // ---- the reset cascade (record 0096, step 3b; the pure-Python chip's `reset()` / `enter_reset()` / `leave_reset()` are its reference) ----
     // `RESETS` and `PSM` decide what a watchdog reset covers (datasheet 2.13.5, 2.14.3; record 0089): `from_watchdog` reads PSM.WDSEL and RESETS.WDSEL (RESETS.WDSEL is all ones when PSM.WDSEL selects the
     // RESETS controller itself, which holds every peripheral in reset); any other reset covers everything. SRAM and the ROM survive every path, the flash everywhere but a first reset (`preserve_flash` false).
-    // The core and the PPB are reset on every path (the one deliberate broadening, record 0096 F3). `world` has a bit (1 << McuBlock) for every block the host has put its own over: the host resets it.
-    // The two WDSEL words are arguments for a host whose PSM / RESETS are its own; the overload without them reads the ones the `Mcu` holds.
+    // The core and the PPB are reset on every path (the one deliberate broadening, record 0096 F3).
+    // The two WDSEL words are the ones the `Mcu`'s PSM and RESETS blocks hold.
     static constexpr uint32_t kPsmWdselSio = 0x4000, kPsmWdselXip = 0x1000, kPsmWdselResets = 0x8, kPsmWdselClocks = 0x4, kPsmWdselXosc = 0x2, kPsmWdselRosc = 0x1;
     static constexpr uint32_t kPsmBitsMask = 0x1FFFF, kResetsBitsMask = 0x01FFFFFF;
-    bool reset(bool from_watchdog, bool preserve_flash, uint64_t world = 0) noexcept { return reset(from_watchdog, preserve_flash, psm_.wdsel, resets_.wdsel, world); }
-    bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept {
+    bool reset(bool from_watchdog, bool preserve_flash) noexcept {
+        uint32_t psm_wdsel = psm_.wdsel, resets_wdsel = resets_.wdsel;
         if (from_watchdog) {
             psm_wdsel &= kPsmBitsMask;
             // "if a peripheral in the power-on state machine has the WDSEL bit set, every peripheral after it in the power-on sequence will also be reset" (datasheet 2.13.4): the bits of PSM.WDSEL
@@ -454,9 +452,9 @@ public:
         cpu1_running_ = false;
         irq_slow_ = irq_hook_ != nullptr ? 1 : 0;
         cpu1.reset_state();  // (core 1 is not running: its state goes back to power-on without a vector fetch)
-        if (!reset_step(kMcuBlockPpb, world)) return false;
-        if ((psm_wdsel & kPsmWdselSio) != 0 && !reset_step(kMcuBlockSio, world)) return false;
-        if ((psm_wdsel & kPsmWdselClocks) != 0 && !reset_step(kMcuBlockClocks, world)) return false;
+        if (!reset_step(kMcuBlockPpb)) return false;
+        if ((psm_wdsel & kPsmWdselSio) != 0 && !reset_step(kMcuBlockSio)) return false;
+        if ((psm_wdsel & kPsmWdselClocks) != 0 && !reset_step(kMcuBlockClocks)) return false;
         // the pins' registers go with their IO / PADS block (a pin bank the host holds is reset by the host with it)
         static constexpr struct { uint32_t bit; McuBlock block; } kGated[] = {
             {1u << 5, kMcuBlockIoBank0}, {1u << 8, kMcuBlockPadsBank0}, {1u << 6, kMcuBlockIoQspi}, {1u << 9, kMcuBlockPadsQspi}, {1u << 14, kMcuBlockPwm}, {1u << 2, kMcuBlockDma},
@@ -465,12 +463,12 @@ public:
             {1u << 1, kMcuBlockBusctrl}, {1u << 18, kMcuBlockSyscfg},
         };  // RESETS bit -> block, in the order the reference resets them (SYSINFO and TBMAN hold no instance state)
         for (const auto& gate : kGated) {
-            if ((resets_wdsel & gate.bit) != 0 && !reset_step(gate.block, world)) return false;
+            if ((resets_wdsel & gate.bit) != 0 && !reset_step(gate.block)) return false;
         }
-        if ((psm_wdsel & kPsmWdselXosc) != 0 && !reset_step(kMcuBlockXosc, world)) return false;
-        if ((psm_wdsel & kPsmWdselRosc) != 0 && !reset_step(kMcuBlockRosc, world)) return false;
+        if ((psm_wdsel & kPsmWdselXosc) != 0 && !reset_step(kMcuBlockXosc)) return false;
+        if ((psm_wdsel & kPsmWdselRosc) != 0 && !reset_step(kMcuBlockRosc)) return false;
         if ((psm_wdsel & kPsmWdselXip) != 0) {  // the XIP domain is a PSM bit: both halves reset together
-            if (!reset_step(kMcuBlockXip, world) || !reset_step(kMcuBlockSsi, world)) return false;
+            if (!reset_step(kMcuBlockXip) || !reset_step(kMcuBlockSsi)) return false;
         }
         if (!preserve_flash && flash_ != nullptr) {
             std::memset(flash_, 0xFF, flash_size_);  // erased flash reads 0xFF; 16 MB, so not a byte loop
@@ -479,18 +477,16 @@ public:
     }
     // Into reset: the reset (flash kept), the USB link told (the device is off the bus either way, whatever WDSEL selected), then the cause recorded - after, so the wider reset cannot wipe it. A watchdog
     // reset is the absence of bookkeeping (REASON and SCRATCH survive, CHIP_RESET is left alone); anything else resets the watchdog and records HAD_RUN / HAD_POR.
-    bool enter_reset(McuResetCause cause, uint64_t world = 0) noexcept { return enter_reset(cause, psm_.wdsel, resets_.wdsel, world); }
-    bool enter_reset(McuResetCause cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept {
-        if (!reset(cause == kMcuResetWatchdog, true, psm_wdsel, resets_wdsel, world)) return false;
+    bool enter_reset(McuResetCause cause) noexcept {
+        if (!reset(cause == kMcuResetWatchdog, true)) return false;
         if (host_world_.bus_reset != nullptr && !host_world_.bus_reset(host_world_.ctx)) return false;
         if (cause == kMcuResetWatchdog) return true;
-        if (!reset_step(kMcuBlockWatchdog, world)) return false;
+        if (!reset_step(kMcuBlockWatchdog)) return false;
         const uint32_t flag = cause == kMcuResetRunPin ? vreg_regs::HAD_RUN : vreg_regs::HAD_POR;
-        if ((world >> kMcuBlockVreg & 1u) != 0) return host_world_.record_cause == nullptr || host_world_.record_cause(host_world_.ctx, flag);
         vreg_.record_reset_cause(flag);
         return true;
     }
-    bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept { return enter_reset(static_cast<McuResetCause>(cause), psm_wdsel, resets_wdsel, world); }
+    bool enter_reset_code(uint32_t cause) noexcept { return enter_reset(static_cast<McuResetCause>(cause)); }
     // Out of reset: the core at the flash's entry point, where the boot ROM would have left it (the ROM image is optional for a host, record 0096 F2).
     void leave_reset() noexcept { cpu.registers[15] = kFlashStart; }
     static constexpr uint32_t kFlashStart = 0x10000000, kFlashEnd = 0x14000000, kRamStart = 0x20000000, kDpramStart = 0x50100000;
@@ -718,9 +714,8 @@ public:
     }
 
 private:
-    // One block of the cascade: the host's if it holds that block (`world`), the `Mcu`'s own otherwise.
-    bool reset_step(McuBlock block, uint64_t world) noexcept {
-        if ((world >> block & 1u) != 0) return host_world_.reset_block == nullptr || host_world_.reset_block(host_world_.ctx, block);
+    // One block of the cascade.
+    bool reset_step(McuBlock block) noexcept {
         switch (block) {
             case kMcuBlockPpb: ppb_.reset(); ppb1_.reset(); return true;
             case kMcuBlockSio: sio_.reset(); return true;
@@ -889,23 +884,23 @@ private:
     }
     static void ppb_reset_request(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        if (m->host_world_.system_reset_request != nullptr) {
-            m->host_world_.system_reset_request(m->host_world_.ctx);
+        if (m->host_world_.reset_requested != nullptr) {
+            (void)m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestSysResetReq);
         } else {
             (void)m->cpu.reset();  // "Reset the core only" (datasheet 2.4.2.9)
         }
     }
     static bool watchdog_trigger(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.watchdog_trigger == nullptr || m->host_world_.watchdog_trigger(m->host_world_.ctx);
+        return m->host_world_.reset_requested == nullptr || m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestWatchdog);
     }
-    // The watchdog's tick moved: the TIMER and SysTick count on it, then the host's listeners hear of it.
+    // The watchdog's tick moved: the TIMER and SysTick count on it.
     static bool watchdog_tick(void* chip, double tick_hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         m->timer_.tick_changed(tick_hz);
         m->ppb_.tick_changed(tick_hz);
         m->ppb1_.tick_changed(tick_hz);
-        return m->host_world_.watchdog_tick == nullptr || m->host_world_.watchdog_tick(m->host_world_.ctx, tick_hz);
+        return true;
     }
     static bool rosc_changed(void* chip, double) noexcept { return tree_changed(chip); }
     static bool sysinfo_rom_version(void* chip, uint32_t* version) noexcept {

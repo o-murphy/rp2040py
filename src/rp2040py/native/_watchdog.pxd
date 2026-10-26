@@ -15,7 +15,11 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
     ctypedef cppbool (*WatchdogTriggerFn)(void* ctx)
     ctypedef cppbool (*WatchdogTickFn)(void* ctx, double tick_hz)
 
+    ctypedef cppbool (*WatchdogTickTap)(void* ctx, double tick_hz)
+
     cdef cppclass WatchdogBlock:
+        WatchdogTickTap tick_tap
+        void* tick_tap_ctx
         Timer32 timer
         Timer32PeriodicAlarm alarm
         uint32_t scratch[8]
