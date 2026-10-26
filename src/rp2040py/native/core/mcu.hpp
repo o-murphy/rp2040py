@@ -87,10 +87,9 @@ struct McuHost {
     bool (*i2c_stop)(void* ctx, uint32_t instance) = nullptr;                           // ... to produce a STOP; each answers with the block's `complete_*()`
     // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (`source`: SIO's, a PIO's, the PWM's - read by the host only for a block the
     // chip does not hold itself); a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
-    // an input level that moved reaches the PWM and the PIOs' waits inside; for a PWM or a PIO the host has replaced (`pwm`, bits of `pio_mask`) it is the host's to tell (`pin_input_changed`).
+    // an input level that moved reaches the PWM and the PIOs' waits inside.
     bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) = nullptr;
     bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) = nullptr;
-    bool (*pin_input_changed)(void* ctx, uint32_t bank, uint32_t pin, bool pwm, uint32_t pio_mask) = nullptr;
     // The pin banks the host has put its own over (an oracle's reference pins): SIO's reads of the pins' inputs and its updates of the pins then go to the host, which asks them of its banks.
     bool (*pin_inputs)(void* ctx, uint32_t bank, uint32_t* value) = nullptr;
     bool (*pin_update)(void* ctx, uint32_t bank, uint32_t pin_mask) = nullptr;
@@ -607,8 +606,6 @@ public:
         pins_world_[bank & 1] = world;
         if (bank == 0) bind_pio_pins();
     }
-    // `world` true: the PWM / this PIO is the host's own (a reference an oracle swapped in), so a pin input that moved is told to the host for it, not to the `Mcu`'s block.
-    void set_pwm_world(bool world) noexcept { pwm_world_ = world; }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
     // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
     // reported to the XIP block once it is built; the SRAM at 0x20000000; the DPRAM at 0x50100000, a completed word write reported to the host's `dpram_written`). Call once, before `build()`;
@@ -656,7 +653,6 @@ public:
     UsbBlock& usb() noexcept { return usb_; }
     SsiBlock& ssi() noexcept { return ssi_; }
     XipBlock& xip() noexcept { return xip_; }
-    void set_pio_world(uint32_t index, bool world) noexcept { pio_world_[index & 1] = world; }
     void attach_dma(DmaBlock* dma) noexcept { dma_ = dma; }
     void set_dreq_hook(DreqHook hook, void* ctx) noexcept {
         dreq_hook_ = hook;
@@ -912,31 +908,18 @@ private:
         const McuHost& w = i->mcu->host_world_;
         return w.pin_changed == nullptr || w.pin_changed(w.ctx, i->index, pin, new_state, old_state);
     }
-    // An input level moved: the PWM (if the pin's function is PWM) and the PIO machines waiting on this pin react - inside for the blocks the `Mcu` holds, through the host for the ones it replaced.
+    // An input level moved: the PWM (if the pin's function is PWM) and the PIO machines waiting on this pin react.
     static bool pin_input_changed(void* ctx, uint32_t pin, bool function_is_pwm) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         Mcu* m = i->mcu;
-        bool pwm_left = false;
-        if (function_is_pwm) {
-            if (m->pwm_world_) {
-                pwm_left = true;
-            } else if (!m->pwm_.gpio_on_input(pin)) {
-                return false;
-            }
-        }
-        uint32_t pio_left = 0;
+        if (function_is_pwm && !m->pwm_.gpio_on_input(pin)) return false;
         for (uint32_t p = 0; p < kPioBlocks; ++p) {
-            if (m->pio_world_[p]) {
-                pio_left |= 1u << p;
-                continue;
-            }
             for (uint32_t k = 0; k < kPioMachines; ++k) {
                 PioMachine& machine = m->pio_[p].machines[k];
                 if (machine.enabled && machine.waiting && machine.wait_type == kPioWaitPin && machine.wait_index == pin && !machine.check_wait()) return false;
             }
         }
-        const McuHost& w = m->host_world_;
-        return (!pwm_left && pio_left == 0) || w.pin_input_changed == nullptr || w.pin_input_changed(w.ctx, i->index, pin, pwm_left, pio_left);
+        return true;
     }
     // A pin's IRQ value changed (either bank): IO_BANK0's line follows "any GPIO pin's IRQ value" - the QSPI bank's changes re-evaluate the same line, as they always did.
     static bool pin_io_interrupt(void* ctx) noexcept {
@@ -1069,8 +1052,6 @@ private:
     McuInstance bank_ctx_[2];
     TimerBlock timer_;
     bool pins_world_[2] = {false, false};
-    bool pwm_world_ = false;
-    bool pio_world_[2] = {false, false};
     PwmBlock pwm_;
     McuInstance pio_ctx_[2];
     SsiBlock ssi_;

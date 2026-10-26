@@ -51,6 +51,7 @@ cdef class RP2040:
     cdef object _watchdog
     cdef object _dma
     cdef object _dreq_tap
+    cdef object _pwm_input_tap
     cdef object _clocks
     cdef object _xosc
     cdef object _rosc
@@ -74,6 +75,7 @@ cdef class RP2040:
 
     cdef void _attach_memory_regions(self)
     cdef _install_dreq_tap(self)
+    cdef _install_pwm_input_tap(self)
     cdef WindowHandler _direct_handler(self, object block, bint is_sio)
 
     # `address`/`value` typed `long long` (not left as plain `object`, the implicit default for

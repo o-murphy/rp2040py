@@ -254,7 +254,14 @@ public:
 
     // A pin whose function is PWM changed its input level. A pin that is an output (its bit of the direction word is set) ignores it; rp2040js and the reference used to drop every edge
     // while the whole word was nonzero (`and` for `&`).
+    // An observer of the pins' calls, called first for every one (also for an output pin, which then ignores it): the port a test or a debugger uses to see which pins told the PWM of an input
+    // change, without standing in for the PWM. False from the tap: the host has parked its error.
+    using InputTap = bool (*)(void* ctx, uint32_t index);
+    InputTap input_tap = nullptr;
+    void* input_tap_ctx = nullptr;
+
     bool gpio_on_input(uint32_t index) noexcept {
+        if (input_tap != nullptr && !input_tap(input_tap_ctx, index)) return false;
         if (gpio_direction & (1u << index)) return true;
         for (PwmChannel& channel : channels) {
             if (channel.pin_b1 == static_cast<int64_t>(index) || channel.pin_b2 == static_cast<int64_t>(index)) {

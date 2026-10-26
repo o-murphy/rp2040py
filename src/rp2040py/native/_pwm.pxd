@@ -42,6 +42,7 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
 
     ctypedef cppbool (*PwmPinChangedFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PwmPinReadFn)(void* ctx, uint32_t pin, cppbool* level)
+    ctypedef cppbool (*PwmInputTap)(void* ctx, uint32_t index)
 
     cdef cppclass PwmChannel:
         Timer32 timer
@@ -101,6 +102,8 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         cppbool gpio_set(int64_t index, cppbool value) noexcept
         cppbool gpio_set_dir(int64_t index, cppbool output) noexcept
         cppbool gpio_read(int64_t index, cppbool* level) noexcept
+        PwmInputTap input_tap
+        void* input_tap_ctx
         cppbool gpio_on_input(uint32_t index) noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept

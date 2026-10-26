@@ -62,29 +62,6 @@ BLOCKS = (
 )
 
 
-class _PwmProbe:
-    """Stands in for the PWM: the two source registers pins read, and the hook an input change calls."""
-
-    def __init__(self, log: list) -> None:
-        self.gpio_direction = 0
-        self.gpio_value = 0
-        self._log = log
-
-    def gpio_on_input(self, index: int) -> None:
-        self._log.append(("pwm.input", index))
-
-
-class _PioProbe:
-    """Stands in for one PIO: the two source registers pins read; no state machines, so no pin waits."""
-
-    def __init__(self) -> None:
-        self.pin_directions = 0
-        self.pin_values = 0
-
-    def check_pin_waits(self, pin: int) -> None:
-        pass
-
-
 class Rig:
     """One chip plus the timestamped log of everything that left its pins."""
 
@@ -98,9 +75,6 @@ class Rig:
         self.kind = kind
         self.chip = new_chip(kind)
         self.log: list[tuple] = []
-        chip = self.chip
-        chip.pwm = _PwmProbe(self.log)
-        chip.pio = [_PioProbe(), _PioProbe()]
         if kind == "mutant":
             assert factory is not None
             self._replace_the_pins(factory, windows, bank_module or G_bank)
@@ -142,6 +116,9 @@ class Rig:
 
     def _tap(self) -> None:
         chip, log = self.chip, self.log
+        chip.pwm_input_tap = lambda index: log.append(
+            ("pwm.input", index)
+        )  # the real PWM; the observer sees the pins' calls
         # Every rig starts from pins whose announced state is reconciled with their power-on registers
         for pins in (chip.gpio, chip.qspi):
             for pin in pins:
@@ -189,7 +166,11 @@ class Rig:
         elif kind == "pwm":
             chip.pwm.gpio_direction, chip.pwm.gpio_value = op[1] & 0x3FFFFFFF, op[2] & 0x3FFFFFFF
         elif kind == "pio":
-            chip.pio[op[1]].pin_directions, chip.pio[op[1]].pin_values = op[2] & 0x3FFFFFFF, op[3] & 0x3FFFFFFF
+            block = chip.pio[
+                op[1]
+            ]  # the real PIO: its pin image is set the way a state machine's pin write sets it (the pins read it lazily)
+            block.pin_directions_changed(op[2] & 0x3FFFFFFF, 0, GPIO_PINS)
+            block.pin_values_changed(op[3] & 0x3FFFFFFF, 0, GPIO_PINS)
         elif kind == "pin_reset":
             self._pins(op[1])[op[2]].reset(io=bool(op[3]), pads=bool(op[4]))
         elif kind == "io_reset":

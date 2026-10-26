@@ -434,6 +434,11 @@ class RPPWM(BasePeripheral):
         return self.rp2040.gpio[index].input_value
 
     def gpio_on_input(self, index: int) -> None:
+        tap = getattr(
+            self.rp2040, "pwm_input_tap", None
+        )  # an observer of the pins' calls (the C++ block's twin); it does not stand in for the PWM
+        if tap is not None:
+            tap(index)
         # A pin that is an output ignores what happens on its input. rp2040js tests `gpioDirection && 1 << index`, a logical AND that is true whenever the word is nonzero - after a reset
         # it never is zero, so no B-input edge was ever seen; it means `&` (this pin's bit), which record 0096 (Phase 4) made the reference do.
         if self.gpio_direction & (1 << index):

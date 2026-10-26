@@ -60,7 +60,7 @@ from rp2040py.reset_cause import ResetCause
 from rp2040py.native._pio import RPPIO
 from rp2040py.native._ppb import RPPPB
 from rp2040py.native._psm import RPPSM
-from rp2040py.native._pwm import RPPWM
+from rp2040py.native._pwm cimport RPPWM
 from rp2040py.native._reset import RPReset
 from rp2040py.native._rtc import RP2040RTC
 from rp2040py.native._spi import RPSPI
@@ -391,16 +391,6 @@ cdef bool _w_pin_changed(void* ctx, uint32_t bank, uint32_t pin, int new_state, 
     return True
 
 
-cdef bool _w_pin_input_changed(void* ctx, uint32_t bank, uint32_t pin, bool pwm, uint32_t pio_mask) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        _bank_of(chip, bank)._world_input(pin, pwm, pio_mask)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_pin_inputs(void* ctx, uint32_t bank, uint32_t* value) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -624,6 +614,17 @@ cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
     return True
 
 
+cdef bool _pwm_input_tap_hook(void* ctx, uint32_t index) noexcept:
+    # The observer of `RP2040.pwm_input_tap`: sees a pin telling the PWM an input moved; the PWM still gets it.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._pwm_input_tap(int(index))
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
 cdef bool _dreq_hook(void* ctx, uint32_t number, bool asserted) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -704,7 +705,6 @@ cdef class RP2040:
         world.uart_baud = _w_uart_baud
         world.pin_source = _w_pin_source
         world.pin_changed = _w_pin_changed
-        world.pin_input_changed = _w_pin_input_changed
         world.pin_inputs = _w_pin_inputs
         world.pin_update = _w_pin_update
         world.system_reset_request = _w_system_reset_request
@@ -1140,14 +1140,6 @@ cdef class RP2040:
 
     def _bind_pin_sources(self):
         """Points the chip's native pin banks at the registers of the native SIO / PIO / PWM blocks, where there are such (core/pin.hpp's direct sources); callable again whenever one is replaced."""
-        # A PWM or a PIO that is the host's own (not the `Mcu`'s) is told of a pin input that moved by the host, not inside (`Mcu::set_pwm_world` / `set_pio_world`).
-        pwm_block = self._pwm_block  # (a cdef field: not reachable by getattr)
-        if pwm_block is not None:
-            self._mcu.set_pwm_world(not getattr(pwm_block, "_from_mcu", False))
-        pio_blocks = self._pio_blocks
-        if pio_blocks is not None:
-            for index in range(2):
-                self._mcu.set_pio_world(index, not (index < len(pio_blocks) and getattr(pio_blocks[index], "_from_mcu", False)))
         for bank in (getattr(self, "_gpio_bank", None), getattr(self, "_qspi_bank", None)):
             if isinstance(bank, _NativeGPIOPinBank):  # a pure-Python bank (an oracle's reference pins) reads the blocks itself
                 bind_pin_sources(bank, self)
@@ -1162,6 +1154,27 @@ cdef class RP2040:
         self._pwm_block = value
         self._bind_pin_sources()
         self._rebind_clock_sinks()
+        self._install_pwm_input_tap()
+
+    @property
+    def pwm_input_tap(self):
+        """An observer of the pins' calls that tell the PWM an input moved: `f(pin)`, called for every one before the PWM handles it (the PWM still does). `None` takes it away.
+        Same on the pure-Python chip; how a test or a debugger sees which pins told the PWM, without standing in for it."""
+        return self._pwm_input_tap
+
+    @pwm_input_tap.setter
+    def pwm_input_tap(self, value) -> None:
+        self._pwm_input_tap = value
+        self._install_pwm_input_tap()
+
+    cdef _install_pwm_input_tap(self):
+        # Only the chip's own native PWM has the C++ tap; a stand-in for the PWM receives the calls itself.
+        if type(self._pwm_block) is RPPWM:
+            if self._pwm_input_tap is None:
+                (<RPPWM> self._pwm_block)._block.input_tap = NULL
+            else:
+                (<RPPWM> self._pwm_block)._block.input_tap = _pwm_input_tap_hook
+                (<RPPWM> self._pwm_block)._block.input_tap_ctx = <void*> self
 
     @property
     def pio(self):
