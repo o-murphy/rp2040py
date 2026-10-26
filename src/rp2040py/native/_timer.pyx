@@ -80,10 +80,6 @@ cdef class RPTimer(NativeBlock):
 
     # --- BasePeripheral's surface -----------------------------------------------------------------
 
-    @property
-    def int_status(self):
-        return self._block.int_status()
-
     def write_uint32(self, offset, value):
         # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
         cdef int result = self._block.write32(<uint32_t> offset, <int64_t> value, self._block.raw_write_value())
@@ -96,8 +92,8 @@ cdef class RPTimer(NativeBlock):
         """The watchdog's tick is now `tick_hz` (0: stopped): the count continues at the new rate, or freezes (see core/timer.hpp)."""
         self._block.tick_changed(<double> tick_hz)
 
-    @property
-    def tick_hz(self):
-        return self._block.tick_hz()
+    def snapshot(self):
+        """What the TIMER holds that its registers do not show: the tick it counts on and the interrupt lines it drives (everything else is read over the bus)."""
+        return {"tick_hz": self._block.tick_hz(), "int_status": self._block.int_status()}
 
     # --- the native bus protocol ------------------------------------------------------------------

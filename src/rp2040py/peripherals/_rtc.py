@@ -234,7 +234,7 @@ class RP2040RTC(BasePeripheral):
         self._retime(True)
         self.check_interrupts()
 
-    def snapshot(self) -> dict[str, int | bool]:
+    def snapshot(self) -> dict[str, int | float | bool]:
         """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `running`, the alarm match, the two counter words)."""
         return {
             "clkdiv_m1": self.clkdiv_m1,
@@ -256,6 +256,7 @@ class RP2040RTC(BasePeripheral):
             "latched_date": self.latched_date,
             "ctrl": self.ctrl,
             "running": self.running,
+            "second_nanos": self.second_nanos() if self.running else 0.0,
             "match_ena": self.match_ena,
             "raw_interrupt": self.raw_interrupt,
             "date": self.date,

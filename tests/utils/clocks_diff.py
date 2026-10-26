@@ -161,8 +161,8 @@ class Rig:
             "consumers": (
                 float(chip.ppb.clk_sys),
                 float(chip.watchdog.tick_hz),
-                bool(chip.rtc.running),
-                float(chip.rtc.second_nanos()) if chip.rtc.running else 0.0,
+                bool(chip.rtc.snapshot()["running"]),
+                float(chip.rtc.snapshot()["second_nanos"]),
             ),
             "raw": (int(clocks.raw_write_value), int(chip.pll_sys.raw_write_value), int(chip.pll_usb.raw_write_value)),
             "time": float(chip.clock.nanos),

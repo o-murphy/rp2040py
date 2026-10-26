@@ -110,7 +110,7 @@ class Rig:
             # what counts on the tick: the TIMER's count and rate, and SysTick's rate
             "followers": (
                 int(self.chip.read_uint32(TIMER_RAWL)),
-                float(self.chip.timer.tick_hz),
+                float(self.chip.timer.snapshot()["tick_hz"]),
                 float(self.chip.ppb.tick_hz),
             ),
         }

@@ -9,7 +9,7 @@ def test_word_length_based_on_uartlcr_h(rp2040_factory):
     rp2040 = rp2040_factory()
     uart = RPUART(rp2040, "UART", 0, IUARTDMAChannels(rx=0, tx=0))
     uart.write_uint32(OFFSET_UARTLCR_H, 0x70)
-    assert uart.word_length == 8
+    assert (uart.snapshot()["line_ctrl"] >> 5) & 0x3 == 0x3  # WLEN = 0b11: 8 bits per character
 
 
 def test_baud_rate_based_on_uartibrd_uartfbrd(rp2040_factory):

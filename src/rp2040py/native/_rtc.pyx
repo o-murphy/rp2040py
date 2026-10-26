@@ -45,11 +45,6 @@ cdef class RP2040RTC(NativeBlock):
             "the native block is a view of the chip's C++ `Mcu` block: RP2040RTC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
 
-    @property
-    def running(self):
-        """The counter is counting (the chip's clock tree and the clocks oracle read it)."""
-        return bool(self._block.running())
-
     def snapshot(self):
         """The block's state in one call: the stored registers and counter fields (public fields of the C++ block) and what is derived from them."""
         cdef RtcBlock* b = self._block
@@ -73,6 +68,7 @@ cdef class RP2040RTC(NativeBlock):
             "latched_date": b.latched_date,
             "ctrl": b.ctrl(),
             "running": bool(b.running()),
+            "second_nanos": b.second_nanos() if b.running() else 0.0,
             "match_ena": bool(b.match_ena()),
             "raw_interrupt": bool(b.raw_interrupt()),
             "date": b.date(),
@@ -83,9 +79,6 @@ cdef class RP2040RTC(NativeBlock):
         """clk_rtc is now `clk_rtc` Hz (called by `update_clocks`; 0: the generator is stopped): the second follows it."""
         if not self._block.clk_rtc_changed(<double> clk_rtc):
             raise_if_pending()
-
-    def second_nanos(self):
-        return self._block.second_nanos()
 
     def check_interrupts(self):
         if not self._block.check_interrupts():

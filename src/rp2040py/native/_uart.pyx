@@ -26,15 +26,10 @@ from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.peripherals._uart import _WORD_LENGTH_BY_LCR_WLEN, _baud_rate, _bit_ns
+from rp2040py.peripherals._uart import _baud_rate, _bit_ns
 from rp2040py.native._register_warning import warn_register
 
 __all__ = ("RPUART",)
-
-cdef uint32_t FEN = 1 << 4
-cdef uint32_t UARTEN = 1 << 0
-cdef uint32_t TXE = 1 << 8
-cdef uint32_t RXE = 1 << 9
 
 
 cdef cppbool _ports_irq(void* chip, uint32_t line, cppbool level) noexcept:
@@ -185,27 +180,6 @@ cdef class RPUART(NativeBlock):
     def _update_dreq(self):
         if not self._block.update_dreq():
             raise_if_pending()
-
-    @property
-    def enabled(self):
-        return bool(self._block.ctrl & UARTEN)
-
-    @property
-    def tx_enabled(self):
-        return bool(self._block.ctrl & TXE)
-
-    @property
-    def rx_enabled(self):
-        return bool(self._block.ctrl & RXE)
-
-    @property
-    def fifos_enabled(self):
-        return bool(self._block.line_ctrl & FEN)
-
-    @property
-    def word_length(self):
-        """Number of bits per UART character"""
-        return _WORD_LENGTH_BY_LCR_WLEN[(self._block.line_ctrl >> 5) & 0x3]
 
     @property
     def baud_divider(self):

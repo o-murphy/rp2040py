@@ -179,7 +179,7 @@ def test_the_watchdog_tick_reaches_the_timer_and_systick_and_then_the_hosts_list
     chip.watchdog.add_tick_listener(heard.append)
     chip.watchdog.clk_ref_changed(12e6)
     chip.write_uint32(0x40058000 + 0x2C, 12 | (1 << 9))  # WATCHDOG.TICK: 12 cycles of clk_ref, enabled
-    assert chip.timer.tick_hz == 1e6 and chip.ppb.tick_hz == 1e6
+    assert chip.timer.snapshot()["tick_hz"] == 1e6 and chip.ppb.tick_hz == 1e6
     assert heard == [1e6]
 
 

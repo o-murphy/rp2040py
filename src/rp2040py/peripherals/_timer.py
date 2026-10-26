@@ -125,6 +125,10 @@ class RPTimer(BasePeripheral):
         """The watchdog's tick as this block was last told (0: not running)."""
         return self._tick_hz
 
+    def snapshot(self) -> dict[str, int | float]:
+        """What the TIMER holds that its registers do not show: the tick it counts on and the interrupt lines it drives (everything else is read over the bus)."""
+        return {"tick_hz": self.tick_hz, "int_status": self.int_status}
+
     def _frozen(self) -> bool:
         """The count does not advance: PAUSE is set, or the watchdog's tick is not running ("The Watchdog tick must be running for the timer to start counting", datasheet 4.6.4)."""
         return self._paused or self._tick_hz == 0.0
