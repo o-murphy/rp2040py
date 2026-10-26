@@ -75,6 +75,7 @@ cdef class RP2040:
 
     cdef void _attach_memory_regions(self)
     cdef _install_dreq_tap(self)
+    cdef _adopt_sio(self, value)
     cdef _install_pwm_input_tap(self)
     cdef WindowHandler _direct_handler(self, object block, bint is_sio)
 

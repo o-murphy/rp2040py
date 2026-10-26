@@ -702,7 +702,7 @@ cdef class RP2040:
         self._clock_listeners = set()
 
         self.ppb = RPPPB(self, "PPB", 0)
-        self.sio = RPSIO(self, 0)
+        self._adopt_sio(RPSIO(self, 0))
         if os.environ.get("RP2040PY_CORE1", "1").lower() in ("0", "off", "false", "no"):  # the CLI's --no-core1 sets it: the second core is on unless asked to be off
             self.set_core1_enabled(False)
 
@@ -1141,8 +1141,7 @@ cdef class RP2040:
     def sio(self):
         return self._sio
 
-    @sio.setter
-    def sio(self, value) -> None:
+    cdef _adopt_sio(self, value):
         self._sio = value
         self._mcu.bus.set_sio(self._direct_handler(value, True))
         self._bind_pin_sources()
@@ -1151,6 +1150,7 @@ cdef class RP2040:
     def ppb(self):
         return self._ppb
 
+    # (still assignable: the clocks oracle spies on what the tree tells the PPB; it goes with the clock tree's seams, step 4 of docs/tasks/narrow-the-border-plan.md)
     @ppb.setter
     def ppb(self, value) -> None:
         self._ppb = value
