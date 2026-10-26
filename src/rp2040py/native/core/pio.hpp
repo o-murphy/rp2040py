@@ -55,13 +55,11 @@ constexpr uint32_t kPioMaxExecChain = 1024;
 
 using PioPinUpdateFn = bool (*)(void* ctx, uint32_t pin);                // a pin that is not a C++ one: gpio[pin].check_for_updates()
 using PioPinInputFn = bool (*)(void* ctx, uint32_t pin, bool* level);    // ... and its input_value
-using PioStartedFn = bool (*)(void* ctx);                                // CTRL started a stopped block: the host runs the "no owning Simulator" fallback
 
-// The edges of the block that are the host's own (a pin of a bank the host holds, the "no Simulator" start); the lines, the requests and the warnings are the chip's `ChipPorts`.
+// The edges of the block that are the host's own (a pin of a bank the host holds); the lines, the requests and the warnings are the chip's `ChipPorts`.
 struct PioHost {
     PioPinUpdateFn pin_update = nullptr;
     PioPinInputFn pin_input = nullptr;
-    PioStartedFn started = nullptr;
     void* ctx = nullptr;
 };
 
@@ -590,7 +588,6 @@ private:
         const uint32_t should_run = value & 0xF;
         if (stopped != 0 && should_run != 0) {
             stopped = 0;
-            RP2040PY_PIO_TRY(host_.started == nullptr || host_.started(host_.ctx));
         }
         if (should_run == 0) {
             stopped = 1;

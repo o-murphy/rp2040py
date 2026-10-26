@@ -142,7 +142,7 @@ class Simulator:
         # ShutdownRequest instance some particular caller happened to create.
         self.shutdown_request = ShutdownRequest()
         # The "engine room": exactly one asyncio event loop, for this Simulator's whole lifetime -
-        # execute(), RPPIO.run() (peripherals/pio.py) and everything reachable from
+        # execute() and everything reachable from
         # execute_instruction()'s bus dispatch (USBCDC, GDB command execution) only ever run here.
         # Usually the caller's own loop now (via bind_loop() - docs/MAIN_THREAD_ASYNCIO_BACKLOG.md's
         # "Target shape"), not a dedicated background thread this Simulator spins up itself - that
@@ -434,7 +434,7 @@ class Simulator:
     def stop(self) -> None:
         # A plain bool set/read is already atomic in CPython - safe to call from any thread
         # (the engine-room loop's own on_break callback, a GDB connection handler, the CLI's main
-        # thread, ...) without further coordination. execute()/RPPIO.run() notice it on their next
+        # thread, ...) without further coordination. execute() notices it on its next
         # loop iteration; no task cancellation needed, matching how this always worked (one extra
         # already-scheduled batch may still run - benign staleness, not corruption).
         self.stopped = True

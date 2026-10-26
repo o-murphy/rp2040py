@@ -11,9 +11,9 @@ struct to the slots a host that only attaches devices needs, the same list for t
 | `warn`, `uart_byte`, `uart_baud`, `spi_transmit`, `i2c_start/connect/write/read/stop`, `adc_read`, `adc_channel_value`, `pin_changed`, `usb_wire`, `usb_reset`, `bus_reset` | **stay** (the world, 15 slots) |
 | `system_reset_request` + `watchdog_trigger` | **merge** into one slot, `reset_requested(cause)`; the default runs the cascade in the core; `BaseDevice` installs its own (USB device + console side effects) |
 | `pin_source`, `pin_inputs`, `pin_update`, `pin_input_changed`, `xosc_hz`, `rosc_hz`, `clk_sys`, `ssi_baudr`, `reset_block`, `record_cause`, `watchdog_tick` | **delete** (block swapping; 11 slots) |
-| `pio_started` | **open**: the "no owning `Simulator`" fallback is a host concern called from inside a CTRL register write; it should leave the write (see "Open") |
+| `pio_started` | **deleted (2026-10-26)**: not a world slot but a request to the host to run a fallback; a start by CTRL now only marks the block as running, and whoever advances the clock steps it |
 
-Result: 16 slots (15 + `reset_requested`), down from 28, plus `pio_started` if it survives.
+Result: 16 slots (15 + `reset_requested`), down from 28; `pio_started` is deleted too.
 
 ## What the swapping looks like in the code (what gets deleted)
 
@@ -106,3 +106,7 @@ Steps 0-6 are done and pushed on `refactor/native-shell-boilerplate` (last commi
 **Not started, and waiting for the maintainer:** opening the pull request from `refactor/native-shell-boilerplate` into `main` (the branch has been rebased onto the merged PR #66 by the maintainer; the series is large: ~25 blocks on `snapshot()`, the shared `NativeBlock`, the border plan steps 0-6).
 
 **Observers added on this road** (all on both chips, all leave the consumer working): `chip.dreq_tap`, `chip.pwm_input_tap`, `chip.clock_tree_tap`, `watchdog.add_tick_listener` (on `WatchdogBlock::tick_tap`), next to the existing `chip.set_interrupt` assignment.
+
+## Update (2026-10-26, after step 7): `pio_started` is deleted - `McuHost` is 16 slots
+
+Measured first: with the fallback switched off on both backends, only three tests of `tests/test_pio.py` failed (a state machine started by CTRL, its address read at once); nothing in production depended on it (a `Simulator` steps the running PIOs itself). Removed: `McuHost::pio_started`, `PioHost::started`, `RPPIO._world_started`, `RPPIO.run()`, `RPPIO._step_batch()`, `RPPIO._run_task` on both backends; the three tests step PIO0 with `run_pio(cpu)`. The "Open" and "Next" items about `pio_started` above are therefore closed; what is left is **step 8 (wasm to the 16 slots)** and the small cleanups.

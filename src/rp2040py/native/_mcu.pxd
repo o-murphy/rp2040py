@@ -111,7 +111,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*usb_reset)(void* ctx) noexcept
         bool (*bus_reset)(void* ctx) noexcept
         bool (*reset_requested)(void* ctx, uint32_t cause) noexcept
-        bool (*pio_started)(void* ctx, uint32_t index) noexcept
         bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) noexcept
 
     cdef cppclass Mcu:

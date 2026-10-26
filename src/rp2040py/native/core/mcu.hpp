@@ -99,7 +99,6 @@ struct McuHost {
     // device's `on_reset`). Both optional.
     bool (*usb_reset)(void* ctx) = nullptr;
     bool (*bus_reset)(void* ctx) = nullptr;
-    bool (*pio_started)(void* ctx, uint32_t index) = nullptr;                           // CTRL started a stopped PIO: the host runs its "no owning Simulator" fallback (the asyncio task of `run()`)
     bool (*adc_read)(void* ctx, uint32_t channel) = nullptr;                            // a conversion was requested; the device answers by pushing a sample
     bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) = nullptr;   // the analog value of a channel
 };
@@ -323,7 +322,6 @@ public:
             PioHost ph;
             ph.pin_update = pio_pin_update;
             ph.pin_input = pio_pin_input;
-            ph.started = pio_started;
             ph.ctx = &pio_ctx_[i];
             (void)pio_[i].init(&ports_, i == 0 ? kMcuBlockPio0 : kMcuBlockPio1, ph, i == 0 ? kIrqPio0 : kIrqPio1, i);
             bus.windows.attach(i == 0 ? kPio0Base : kPio1Base, pio_[i].window_handler());
@@ -778,11 +776,6 @@ private:
     static bool pio_pin_input(void* ctx, uint32_t pin, bool* level) noexcept {
         *level = (sio_inputs(static_cast<const McuInstance*>(ctx)->mcu, 0) >> pin & 1u) != 0;
         return true;
-    }
-    static bool pio_started(void* ctx) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        const McuHost& w = i->mcu->host_world_;
-        return w.pio_started == nullptr || w.pio_started(w.ctx, i->index);
     }
     // The PIOs read and update the GPIO bank's pins directly.
     void bind_pio_pins() noexcept {

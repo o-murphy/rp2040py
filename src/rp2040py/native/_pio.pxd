@@ -15,7 +15,6 @@ cdef extern from "pio.hpp" namespace "rp2040core":
 
     ctypedef cppbool (*PioPinUpdateFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PioPinInputFn)(void* ctx, uint32_t pin, cppbool* level)
-    ctypedef cppbool (*PioStartedFn)(void* ctx)
 
     cdef cppclass PioFifo:
         uint32_t buffer[8]
@@ -119,7 +118,6 @@ cdef class RPPIO(NativeBlock):
     cdef public object dreq_tx
     cdef public unsigned int first_irq
     cdef public unsigned int index
-    cdef object _run_task
 
     cdef _warn(self, msg)
     cpdef check_changed_pins(self)

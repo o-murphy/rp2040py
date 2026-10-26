@@ -455,16 +455,6 @@ cdef bool _w_bus_reset(void* ctx) noexcept:
     return True
 
 
-cdef bool _w_pio_started(void* ctx, uint32_t index) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.pio[index]._world_started()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_adc_read(void* ctx, uint32_t channel) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -557,7 +547,6 @@ cdef class RP2040:
         world.i2c_read = _w_i2c_read
         world.i2c_stop = _w_i2c_stop
         world.adc_read = _w_adc_read
-        world.pio_started = _w_pio_started
         usb_wire_fill(&usb_wire, <void*> self)
         world.usb_wire = &usb_wire
         world.usb_reset = _w_usb_reset

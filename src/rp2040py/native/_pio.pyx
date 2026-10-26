@@ -8,13 +8,11 @@ When the chip adopts this object (`RP2040.peripherals[0x50200] = pio`) it regist
 (see `_native_window`), so a register access never touches Python, and the batch loop steps the block through `advance()` as one C++ call.
 
 The chip's C++ `Mcu` builds the block (record 0096, step 3a): its lines, its DREQs, its window and its pins are wired there, so this object is only the Python view of it. What the
-`Mcu` hands to Python is the logger (`_warn_kind`) and the "no `Simulator` owns the chip" fallback of CTRL (`_world_started`, the asyncio task of `run()`).
+`Mcu` hands to Python is the logger (`_warn_kind`).
 
 The machines, the FIFOs and the instruction memory are not exposed object by object: everything a firmware does goes through the bus (`SMx_INSTR`, `INSTR_MEM`, the FIFO registers),
 and everything a test or a tool wants to *see* comes out of `snapshot()` in one call. What stays on the object is the plumbing the rest of the chip needs (the pin images, `advance()`, `stop()`).
 """
-import asyncio
-
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._native_block cimport NativeBlock, register_ops
@@ -51,7 +49,6 @@ cdef class RPPIO(NativeBlock):
         self.index = index
         self.dreq_rx = DREQ_RX1 if index else DREQ_RX0
         self.dreq_tx = DREQ_TX1 if index else DREQ_TX0
-        self._run_task = None
 
     cdef _warn(self, msg):
         self.rp2040.logger.warning(self.name, msg)
@@ -64,15 +61,6 @@ cdef class RPPIO(NativeBlock):
             self.error(f"Write to invalid state machine register: {a}")
         else:
             self._warn(register_warning(kind, a, b))
-
-    def _world_started(self):
-        """A CTRL write started a stopped block. Only run the first batch synchronously inline when no Simulator owns this RP2040
-        (docs/records/0043-pio-dma-first-batch-race.md / 0037) - a real Simulator's own _execute_batch() steps every non-stopped RPPIO once per CPU
-        instruction instead, so clock.tick() runs between every PIO step and a DMA-fed FIFO can't be outrun."""
-        if self.rp2040.simulator is None:
-            self._step_batch()
-        if not self._block.stopped and self.rp2040.simulator is None:
-            self._run_task = asyncio.get_running_loop().create_task(self.run())
 
     def write_uint32_atomic(self, offset, value, atomic_type):
         if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
@@ -111,8 +99,7 @@ cdef class RPPIO(NativeBlock):
         """The whole block back to power-on (0089 Phase 5): instruction memory, the four state machines, the IRQ flags and the pacing state.
 
         Instruction memory is cleared deliberately - `PIO_INSTR_MEM` is RAM on real silicon and does not survive a reset, which is exactly why
-        firmware re-uploads its programs on the way back up. `_run_task` is left alone: it only exists on the no-owning-`Simulator` fallback
-        path, where it is the caller's loop, not chip state."""
+        firmware re-uploads its programs on the way back up."""
         if not self._block.reset():
             raise_if_pending()
 
@@ -191,17 +178,6 @@ cdef class RPPIO(NativeBlock):
     cpdef step(self):
         """One system clock - the no-owning-Simulator entry point."""
         self.advance(1)
-
-    def _step_batch(self):
-        cdef int i = 0
-        while i < 1000 and not self._block.stopped:
-            self.advance(1)
-            i += 1
-
-    async def run(self):
-        while not self._block.stopped:
-            await asyncio.sleep(0)
-            self._step_batch()
 
     def stop(self):
         self._block.stop()
