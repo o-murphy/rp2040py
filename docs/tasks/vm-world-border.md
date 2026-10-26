@@ -5,6 +5,15 @@ snapshot series closing ([0096](../records/0096-cpp-mcu-core.md), progress log 2
 border*, and *one* interface for GPIO / external devices. It is the input to the C ABI of [0102](../records/0102-c-abi-for-the-core.md): whatever is in this border is what a wasm host, a cffi binding and
 the Cython shell all have to provide.
 
+## The principle (stated by the maintainer, 2026-10-26)
+
+The C++ core is **the** implementation; every host - Cython, wasm (JS), Dart, Rust, ... - is a thin binding that provides the same border, and **external devices are written in the host's own
+language**. The pure-Python backend is its twin and reference, not a second product: no block of one backend runs inside the other, in production or in tests. The border therefore has to be
+language-neutral (function pointers + `ctx`, numbers instead of strings, parked errors, no wall clock in the core), and the same list for every host.
+
+**Order: first the testing model, then the narrowing.** The twin backends are compared as whole chips ([twin-backend-testing.md](twin-backend-testing.md)); only when the oracles stand on that
+model is it safe to remove the slots below. Group 2 is then *removed from the product* (it exists only because the oracles swap blocks), not moved into a separate test interface.
+
 ## What the border is today
 
 From the C++ side the border is one struct, `McuHost` in `native/core/mcu.hpp`: 28 function pointers, the `usb_wire` struct (`UsbHost`), a `ctx` and the parked-error flag. Every slot is optional.
@@ -33,7 +42,7 @@ C++ blocks would otherwise handle themselves:
 clock tree, SSI), `reset_block`, `record_cause` (a host's own block reset by the cascade), and `watchdog_tick` (its C++ half tells the C++ TIMER and SysTick itself;
 the Python half, `_world_tick`, tells a *replaced* TIMER / PPB, and then the user's `add_tick_listener` callbacks - so one slot is both a replacement seam and a small world hook).
 
-This is where the border is wider than the world needs. It is a testing / mixing facility that became part of the contract; it is also what makes a C ABI large.
+This is where the border is wider than the world needs. It is a testing facility (the oracles swap pure-Python blocks into a native chip; no product mixes backends) that became part of the contract; it is also what makes a C ABI large. It goes away once the oracles compare whole twin chips.
 
 ### Group 3 - the engine's own policy that is routed through Python (4 slots)
 
@@ -56,8 +65,8 @@ Not in `McuHost`, but it is the same border, and it is the other half of the con
 
 1. **The border is Group 1 plus the push-in list above.** That is the public contract, the same on the native chip, the pure-Python chip and under wasm, and it is what the C ABI of 0102 exports.
    About 15 callbacks instead of 28.
-2. **Group 2 leaves the border.** It becomes a separate, explicitly internal test/mixing interface (working name `McuHostTest`: not part of the C ABI, not exported to wasm), so that the
-   oracles and the mixed chip keep working but a host that only attaches devices never sees it. `watchdog_tick` is split: the C++ chip tells its own consumers, and a world-facing
+2. **Group 2 leaves the product.** No block is substituted at run time and the oracles stop substituting (they compare whole twin chips), so these slots, the `set_*_world` switches and the
+   `_native_*_address` seams in the shell have no user left; they are deleted, not relocated. `watchdog_tick` is split: the C++ chip tells its own consumers, and a world-facing
    `add_tick_listener`-style event stays in Group 1 only if a device really uses it (to be checked - nothing in `external/` does, as far as grepped on 2026-10-25).
 3. **Group 3 moves inside.** A watchdog or SYSRESETREQ reset is the core's decision: it runs the cascade itself (it is already in C++) and tells the world *that it happened* (an event, like
    `bus_reset`), instead of calling a Python function that calls back into C++. A user who wants to intercept a reset keeps a hook (`on_watchdog_trigger` /
