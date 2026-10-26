@@ -229,18 +229,6 @@ class _PeripheralTable(dict):
         return self
 
 
-class _PinSourceList(list):
-    """`RP2040.pio`: a list that tells the chip when one of its blocks is replaced, so the pins' direct sources follow (`RP2040._bind_pin_sources`)."""
-
-    def __init__(self, items, owner):
-        super().__init__(items)
-        self._owner = owner
-
-    def __setitem__(self, index, value):
-        super().__setitem__(index, value)
-        self._owner._bind_pin_sources()
-
-
 cdef bool _irq_hook(void* ctx, uint32_t irq, bool level) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -385,29 +373,6 @@ cdef bool _w_pin_changed(void* ctx, uint32_t bank, uint32_t pin, int new_state, 
     cdef RP2040 chip = <RP2040> ctx
     try:
         _bank_of(chip, bank)._world_changed(pin, new_state, old_state)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _w_pin_inputs(void* ctx, uint32_t bank, uint32_t* value) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        value[0] = <uint32_t> (<long long> _bank_of(chip, bank).input_values())
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _w_pin_update(void* ctx, uint32_t bank, uint32_t pin_mask) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        pins = chip.qspi if bank else chip.gpio
-        for index in range(len(pins)):
-            if index < 32 and pin_mask & ((<uint32_t> 1) << index):
-                pins[index].check_for_updates()
     except BaseException as error:
         park_error(error)
         return False
@@ -705,8 +670,6 @@ cdef class RP2040:
         world.uart_baud = _w_uart_baud
         world.pin_source = _w_pin_source
         world.pin_changed = _w_pin_changed
-        world.pin_inputs = _w_pin_inputs
-        world.pin_update = _w_pin_update
         world.system_reset_request = _w_system_reset_request
         world.watchdog_trigger = _w_watchdog_trigger
         world.watchdog_tick = _w_watchdog_tick
@@ -752,14 +715,15 @@ cdef class RP2040:
             ),
         ]
         self.i2c = [RPI2C(self, "I2C0", IRQ.I2C0, 0), RPI2C(self, "I2C1", IRQ.I2C1, 1)]
-        self.pwm = RPPWM(self, "PWM_BASE", 0)
+        self._pwm_block = RPPWM(self, "PWM_BASE", 0)
+        self._install_pwm_input_tap()
         self.adc = RPADC(self, "ADC", 0)
 
         # The chip's pins are slots of two banks (30 GPIO pins, 6 QSPI pins). The native ones share two C++ banks: the IO_BANK0 / IO_QSPI / PADS windows work on them directly, and the
         # chip asks the bank for what is a property of all its pins at once (`gpio_values`, the IO_BANK0 interrupt line). The facade hands out the pure-Python pins and banks instead when
         # the native ones are switched off (RP2040PY_SKIP_CYTHON=1): the same interface, the pure-Python windows go with them. `gpio` / `qspi` are the banks' own pin lists.
-        self._gpio_bank = GPIOPinBank(self, 30, False, 0, 0)
-        self._qspi_bank = GPIOPinBank(self, 6, True, 0, 1)
+        self._gpio_bank_object = GPIOPinBank(self, 30, False, 0, 0)
+        self._qspi_bank_object = GPIOPinBank(self, 6, True, 0, 1)
         self.gpio = self._gpio_bank.shells
         for i in range(30):
             GPIOPin(self, i, bank=self._gpio_bank)
@@ -778,7 +742,7 @@ cdef class RP2040:
             _qspi_pin.reset(io=False, pad_reset=_pad_reset)
 
         self.dma = RPDMA(self, "DMA", 0)
-        self.pio = [
+        self._pio_blocks = [
             RPPIO(self, "PIO0", IRQ.PIO0_IRQ0, 0),
             RPPIO(self, "PIO1", IRQ.PIO1_IRQ0, 1),
         ]
@@ -1149,13 +1113,6 @@ cdef class RP2040:
     def pwm(self):
         return self._pwm_block
 
-    @pwm.setter
-    def pwm(self, value) -> None:
-        self._pwm_block = value
-        self._bind_pin_sources()
-        self._rebind_clock_sinks()
-        self._install_pwm_input_tap()
-
     @property
     def pwm_input_tap(self):
         """An observer of the pins' calls that tell the PWM an input moved: `f(pin)`, called for every one before the PWM handles it (the PWM still does). `None` takes it away.
@@ -1179,11 +1136,6 @@ cdef class RP2040:
     @property
     def pio(self):
         return self._pio_blocks
-
-    @pio.setter
-    def pio(self, value) -> None:
-        self._pio_blocks = _PinSourceList(value, self)
-        self._bind_pin_sources()
 
     @property
     def sio(self):
@@ -1487,25 +1439,14 @@ cdef class RP2040:
     def _native_i2c_address(self, index):
         return <size_t> &self._mcu.i2c(<uint32_t> index)
 
-    # The chip's two pin banks: the `Mcu`'s own (views of its C++ banks) or a host's (an oracle's reference banks). SIO reads the pins' inputs and updates the pins in C++ for the first kind and asks the
-    # host for the second.
+    # The chip's two pin banks: the `Mcu`'s own (views of its C++ banks).
     @property
     def _gpio_bank(self):
         return self._gpio_bank_object
 
-    @_gpio_bank.setter
-    def _gpio_bank(self, bank) -> None:
-        self._gpio_bank_object = bank
-        self._mcu.set_pin_bank_world(0, not getattr(bank, "_from_mcu", False))
-
     @property
     def _qspi_bank(self):
         return self._qspi_bank_object
-
-    @_qspi_bank.setter
-    def _qspi_bank(self, bank) -> None:
-        self._qspi_bank_object = bank
-        self._mcu.set_pin_bank_world(1, not getattr(bank, "_from_mcu", False))
 
     @property
     def clk_peri(self):

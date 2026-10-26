@@ -90,9 +90,6 @@ struct McuHost {
     // an input level that moved reaches the PWM and the PIOs' waits inside.
     bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) = nullptr;
     bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) = nullptr;
-    // The pin banks the host has put its own over (an oracle's reference pins): SIO's reads of the pins' inputs and its updates of the pins then go to the host, which asks them of its banks.
-    bool (*pin_inputs)(void* ctx, uint32_t bank, uint32_t* value) = nullptr;
-    bool (*pin_update)(void* ctx, uint32_t bank, uint32_t pin_mask) = nullptr;
     void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
     bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
     bool (*watchdog_tick)(void* ctx, double tick_hz) = nullptr;                         // the tick changed (0: stopped), after the TIMER and SysTick have followed it
@@ -601,11 +598,6 @@ public:
         tree_hook_ = hook;
         tree_hook_ctx_ = ctx;
     }
-    // `world` true: this bank is the host's (not the `Mcu`'s own), so SIO asks the host for its inputs and tells it of its updates.
-    void set_pin_bank_world(uint32_t bank, bool world) noexcept {
-        pins_world_[bank & 1] = world;
-        if (bank == 0) bind_pio_pins();
-    }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
     // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
     // reported to the XIP block once it is built; the SRAM at 0x20000000; the DPRAM at 0x50100000, a completed word write reported to the host's `dpram_written`). Call once, before `build()`;
@@ -754,8 +746,6 @@ private:
             case kMcuBlockPadsQspi: {
                 const uint32_t bank = (block == kMcuBlockIoQspi || block == kMcuBlockPadsQspi) ? 1 : 0;
                 const bool pads = block == kMcuBlockPadsBank0 || block == kMcuBlockPadsQspi;
-                // A pin bank the host holds is the host's to reset along with the block (its pins are the host's objects).
-                if (pins_world_[bank]) return host_world_.reset_block == nullptr || host_world_.reset_block(host_world_.ctx, block);
                 // PADS_QSPI does not share BANK0's reset value: GPIO_QSPI_SS's pull-up is what holds the flash deselected and what makes BOOTSEL readable (record 0050); SCLK, SS, SD0-SD3.
                 static constexpr uint32_t kQspiPad[6] = {0x56, 0x5A, 0x52, 0x52, 0x52, 0x52};
                 PinBank& b = pins(bank);
@@ -825,10 +815,10 @@ private:
         const McuHost& w = i->mcu->host_world_;
         return w.pio_started == nullptr || w.pio_started(w.ctx, i->index);
     }
-    // The PIOs read and update the GPIO bank's pins directly; over a bank the host holds they go through the host instead.
+    // The PIOs read and update the GPIO bank's pins directly.
     void bind_pio_pins() noexcept {
         for (int p = 0; p < kPioBlocks; ++p) {
-            for (uint32_t pin = 0; pin < 30; ++pin) pio_[p].bind_pin(pin, pins_world_[0] ? nullptr : &gpio_bank_, pin);
+            for (uint32_t pin = 0; pin < 30; ++pin) pio_[p].bind_pin(pin, &gpio_bank_, pin);
         }
     }
     // The SSI's and XIP_CTRL's hosts.
@@ -856,11 +846,6 @@ private:
         return true;
     }
     static uint32_t sio_inputs(Mcu* m, uint32_t bank) noexcept {
-        uint32_t value = 0;
-        if (m->pins_world_[bank]) {
-            if (m->host_world_.pin_inputs != nullptr) (void)m->host_world_.pin_inputs(m->host_world_.ctx, bank, &value);
-            return value;
-        }
         return m->pins(bank).input_values();
     }
     static uint32_t sio_gpio_in(void* chip) noexcept { return sio_inputs(static_cast<Mcu*>(chip), 0); }
@@ -868,7 +853,6 @@ private:
     static bool sio_update_pins(void* chip, uint32_t pin_mask, bool qspi) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         const uint32_t b = qspi ? 1 : 0;
-        if (m->pins_world_[b]) return m->host_world_.pin_update == nullptr || m->host_world_.pin_update(m->host_world_.ctx, b, pin_mask);
         PinBank& bank = m->pins(b);
         for (uint32_t i = 0; i < bank.count() && i < 32; ++i) {
             if ((pin_mask & (1u << i)) != 0 && !bank.check_for_updates(i)) return false;
@@ -1051,7 +1035,6 @@ private:
     PadsBlock pads_bank0_, pads_qspi_;
     McuInstance bank_ctx_[2];
     TimerBlock timer_;
-    bool pins_world_[2] = {false, false};
     PwmBlock pwm_;
     McuInstance pio_ctx_[2];
     SsiBlock ssi_;

@@ -109,8 +109,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*i2c_stop)(void* ctx, uint32_t instance) noexcept
         bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) noexcept
         bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept
-        bool (*pin_inputs)(void* ctx, uint32_t bank, uint32_t* value) noexcept
-        bool (*pin_update)(void* ctx, uint32_t bank, uint32_t pin_mask) noexcept
         void (*system_reset_request)(void* ctx) noexcept
         bool (*watchdog_trigger)(void* ctx) noexcept
         bool (*watchdog_tick)(void* ctx, double tick_hz) noexcept
@@ -181,7 +179,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         XoscBlock& xosc() noexcept
         RoscBlock& rosc() noexcept
         void set_crystal_hz(double hz) noexcept
-        void set_pin_bank_world(uint32_t bank, bool world) noexcept
         void set_tree_hook(McuTreeHook hook, void* ctx) noexcept
         TimerBlock& timer() noexcept
         AdcBlock& adc() noexcept
