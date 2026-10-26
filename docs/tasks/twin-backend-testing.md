@@ -77,6 +77,22 @@ per block). Cost: the oracles that used a recorder or a probe get *more* surface
    not a separate piece of work.
 6. Only then [vm-world-border.md](vm-world-border.md): narrowing `McuHost` and the shells, with the twin oracles as the check that nothing observable changed.
 
+## Pilot result (2026-10-26, RTC)
+
+`tests/utils/rtc_diff.py` moved to the model with a change of its `Rig` only (about twenty lines): the reference is `_rp2040.RP2040()`, the candidate `native._rp2040.RP2040()`, no block is moved
+from one chip into the other; a mutant still replaces the block, inside the pure chip. The generators, the comparison, the coverage counters and the tests are untouched. **`tests/test_rtc_diff.py`:
+101 passed** (ten seeds of 3,000 steps, all 90 logic mutants caught, the four perturbations caught at their step, the coverage counts met) - the oracle is as strong as before and now compares
+two whole chips, with the real clock, bus and clock tree on each side.
+
+What the pilot corrected in this note:
+
+- **The trace port is not new work for the interrupt line.** `chip.set_interrupt` can be assigned on both chips (on the native chip it is a property: the lines go to the function, see the
+  CHANGELOG of 1.0.0b1), and the RTC rig's tap already used it on the native chip. What is still open is the DREQ log: today a rig replaces `chip.dma` with a recorder, which with real DMAs on
+  both chips is not needed (the DREQs act), but the *order* of requests is then only visible through the DMA's own snapshot - a DREQ tap is needed for the DMA, PIO, UART, SPI and ADC oracles.
+- **A few operations still reach into the block**, and are the next to be moved to the bus: the `reset` op (`peripheral.reset()`; the public way is the RESETS block) and three of the
+  perturbations (`peripheral.warn`, a block `write_uint32`). They work on both chips, which is why the pilot is green, but they are block-level calls and not tier 1/2.
+- **The 32-bit CI jobs** hold two chips instead of one per oracle rig (the pure chip plus the native one); the `conftest` collection after each test already exists for that.
+
 ## Open questions
 
 - Which public call advances time identically on both chips (the pure chip's `Simulator` path vs the native batch loop)? The two batch loops are themselves under test

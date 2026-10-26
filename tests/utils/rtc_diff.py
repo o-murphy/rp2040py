@@ -17,7 +17,6 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _rtc as R
-from rp2040py.rp2040 import RP2040
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x4005C000
@@ -92,20 +91,27 @@ class Boom(Exception):
 
 
 class Rig:
-    """One chip plus the log of every warning and every call of the interrupt line."""
+    """One whole chip plus the log of every warning and every call of the interrupt line.
+
+    The twin-backend model (docs/tasks/twin-backend-testing.md): the reference is the pure-Python *chip* (``_rp2040.RP2040``: its own clock, core, pins and blocks) and the candidate is the
+    C++ *chip* (``native/_rp2040.RP2040``); no block is moved from one into the other. Only a mutant swaps a block, and inside the pure chip."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
-        self.chip = RP2040()
+        if kind == "default":
+            from rp2040py.native._rp2040 import (
+                RP2040 as Chip,  # imported here: a build without the extension never reaches an oracle
+            )
+        else:
+            from rp2040py._rp2040 import RP2040 as Chip
+        self.chip = Chip()
         self.chip.write_uint32(
             0x40024000, (0xFAB << 12) | 0xAA0
         )  # xosc_init(): clk_rtc has no clock from a stopped crystal
         self.log: list[tuple] = []
         self.raising = False
-        if kind == "pure":
-            self._replace_the_block(R.RP2040RTC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
-            self._replace_the_block(factory)
+            self._replace_the_block(factory)  # inside the pure chip: a test of the test, not of the product
         self._tap()
 
     def _replace_the_block(self, factory: Callable[..., Any]) -> None:
