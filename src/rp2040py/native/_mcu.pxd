@@ -118,7 +118,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         double (*xosc_hz)(void* ctx) noexcept
         double (*rosc_hz)(void* ctx) noexcept
         bool (*adc_read)(void* ctx, uint32_t channel) noexcept
-        bool (*ssi_baudr)(void* ctx, double* value) noexcept
         bool (*clk_sys)(void* ctx, double* hz) noexcept
         const UsbHost* usb_wire
         bool (*reset_block)(void* ctx, uint32_t block) noexcept
@@ -170,7 +169,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         void set_usb_dpram(uint8_t* data) noexcept
         void set_memory(const McuMemory& memory) noexcept
         void set_flash(uint8_t* data, uint32_t size) noexcept
-        void set_ssi_world(bool world) noexcept
         bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
         bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
         void leave_reset() noexcept

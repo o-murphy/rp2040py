@@ -97,8 +97,7 @@ struct McuHost {
     void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
     bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
     bool (*watchdog_tick)(void* ctx, double tick_hz) = nullptr;                         // the tick changed (0: stopped), after the TIMER and SysTick have followed it
-    // The flash path. An SSI the host has replaced is asked for its BAUDR (`ssi_baudr`) by the XIP stream's pace; with a clock tree the host has put over the chip's, `clk_sys` is the host's. Both optional.
-    bool (*ssi_baudr)(void* ctx, double* value) = nullptr;
+    // The flash path: with a clock tree the host has put over the chip's, `clk_sys` is the host's. Optional.
     bool (*clk_sys)(void* ctx, double* hz) = nullptr;
     // The host's end of the USB wire (the device at the other end of the link: its setup / IN / OUT handling, the endpoint transfers and the notifications of `core/usb.hpp`'s `UsbHost`). Optional: with
     // none, the controller has nothing connected. Read once, by `build()`; the line, the warning and the failure flag of that struct are the chip's, not the host's.
@@ -610,11 +609,6 @@ public:
     }
     // `world` true: the PWM / this PIO is the host's own (a reference an oracle swapped in), so a pin input that moved is told to the host for it, not to the `Mcu`'s block.
     void set_pwm_world(bool world) noexcept { pwm_world_ = world; }
-    // `world` true: the SSI is the host's own: this one leaves the chip-select pin (two blocks applying every command to the one flash would double it) and the XIP stream asks the host for BAUDR.
-    void set_ssi_world(bool world) noexcept {
-        ssi_world_ = world;
-        bind_ssi_cs();
-    }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
     // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
     // reported to the XIP block once it is built; the SRAM at 0x20000000; the DPRAM at 0x50100000, a completed word write reported to the host's `dpram_written`). Call once, before `build()`;
@@ -851,15 +845,13 @@ private:
     }
     static bool xip_baudr(void* chip, double* value) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        const McuHost& w = m->host_world_;
-        if (m->ssi_world_) return w.ssi_baudr == nullptr || w.ssi_baudr(w.ctx, value);
         *value = static_cast<double>(m->ssi_.baudr() & 0xFFFFu);
         return true;
     }
-    // The SSI listens to QSPI_SS (slot 1 of the QSPI bank) directly - unless the host has replaced the SSI, which then listens to the pin on its own.
+    // The SSI listens to QSPI_SS (slot 1 of the QSPI bank) directly.
     void bind_ssi_cs() noexcept {
         ssi_.detach();
-        if (!ssi_world_) (void)ssi_.bind_cs(&qspi_bank_, 1);
+        (void)ssi_.bind_cs(&qspi_bank_, 1);
     }
     // The PWM's host: its line and requests, and the pins it drives and reads (the GPIO bank).
     static bool pwm_pin_changed(void* chip, uint32_t pin) noexcept { return sio_update_pins(chip, 1u << pin, false); }
@@ -1090,7 +1082,6 @@ private:
     XipBlock xip_;
     uint8_t* flash_ = nullptr;
     uint32_t flash_size_ = 0;
-    bool ssi_world_ = false;
     SioBlock sio_;
     PpbBlock ppb_;
     PpbBlock ppb1_;  // core 1's

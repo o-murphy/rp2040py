@@ -559,16 +559,6 @@ cdef bool _w_record_cause(void* ctx, uint32_t flag) noexcept:
     return True
 
 
-cdef bool _w_ssi_baudr(void* ctx, double* value) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        value[0] = <double> (chip.ssi.read_uint32(0x14) & 0xFFFF)  # SSI.BAUDR
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_clk_sys(void* ctx, double* hz) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -730,7 +720,6 @@ cdef class RP2040:
         world.i2c_stop = _w_i2c_stop
         world.adc_read = _w_adc_read
         world.pio_started = _w_pio_started
-        world.ssi_baudr = _w_ssi_baudr
         usb_wire_fill(&usb_wire, <void*> self)
         world.usb_wire = &usb_wire
         world.reset_block = _w_reset_block
@@ -821,7 +810,7 @@ cdef class RP2040:
         self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
         self.syscfg = RP2040SysCfg(self, "SYSCFG")
         self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
-        self.ssi = RPSSI(self, "SSI")
+        self._ssi_object = RPSSI(self, "SSI")
         self.xosc = RPXOSC(self, "XOSC_BASE", 0)
         self.io_bank0 = RPIO(self, "IO_BANK0_BASE", None, 0)
         self.io_qspi = RPIO(self, "IO_QSPI_BASE", self.qspi, 1)
@@ -830,7 +819,7 @@ cdef class RP2040:
         self.peripherals = {
             0x14000: self.xip_ctrl,
             0x50400: RPXIPAux(self, "XIP_AUX_BASE"),
-            0x18000: self.ssi,
+            0x18000: self._ssi_object,
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: self.syscfg,
             0x40008: self.clocks,
@@ -1532,15 +1521,10 @@ cdef class RP2040:
     def _native_xip_address(self):
         return <size_t> &self._mcu.xip()
 
-    # The SSI is the `Mcu`'s own, or a host's (an oracle's reference): the `Mcu`'s listens to the chip-select pin and gives the XIP stream its BAUDR; a host's does both itself.
+    # The SSI is the `Mcu`'s own: it listens to the chip-select pin and gives the XIP stream its BAUDR.
     @property
     def ssi(self):
         return self._ssi_object
-
-    @ssi.setter
-    def ssi(self, block) -> None:
-        self._ssi_object = block
-        self._mcu.set_ssi_world(not getattr(block, "_from_mcu", False))
 
     def _native_pwm_address(self):
         return <size_t> &self._mcu.pwm()
