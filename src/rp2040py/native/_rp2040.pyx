@@ -359,16 +359,6 @@ cdef object _bank_of(RP2040 chip, uint32_t bank):
     return chip._gpio_bank if bank == 0 else chip._qspi_bank
 
 
-cdef bool _w_pin_source(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        value[0] = <uint32_t> _bank_of(chip, bank)._world_source(source)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_pin_changed(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -668,7 +658,6 @@ cdef class RP2040:
         world.failed = pending_flag()
         world.uart_byte = _w_uart_byte
         world.uart_baud = _w_uart_baud
-        world.pin_source = _w_pin_source
         world.pin_changed = _w_pin_changed
         world.system_reset_request = _w_system_reset_request
         world.watchdog_trigger = _w_watchdog_trigger

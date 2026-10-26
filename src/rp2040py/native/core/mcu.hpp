@@ -85,10 +85,8 @@ struct McuHost {
     bool (*i2c_write)(void* ctx, uint32_t instance, uint32_t value) = nullptr;          // ... to take a byte ...
     bool (*i2c_read)(void* ctx, uint32_t instance, bool ack) = nullptr;                 // ... to give a byte ...
     bool (*i2c_stop)(void* ctx, uint32_t instance) = nullptr;                           // ... to produce a STOP; each answers with the block's `complete_*()`
-    // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (`source`: SIO's, a PIO's, the PWM's - read by the host only for a block the
-    // chip does not hold itself); a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
+    // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (SIO's, a PIO's, the PWM's), which the `Mcu` reads itself; a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
     // an input level that moved reaches the PWM and the PIOs' waits inside.
-    bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) = nullptr;
     bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) = nullptr;
     void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
     bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
@@ -248,7 +246,6 @@ public:
         for (uint32_t b = 0; b < 2; ++b) {
             bank_ctx_[b] = {this, b};
             PinHost ph;
-            ph.source = pin_source;
             ph.on_change = pin_change;
             ph.io_interrupt = pin_io_interrupt;
             ph.input_changed = pin_input_changed;
@@ -881,12 +878,6 @@ private:
         m->core(m->bus.initiator).cycles += cycles;  // the initiating core pays (always core 0 until core 1 runs)
     }
     // The pin banks' host: `ctx` is a `McuInstance` (the bank).
-    static bool pin_source(void* ctx, uint32_t source, uint32_t* out) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        const McuHost& w = i->mcu->host_world_;
-        *out = 0;
-        return w.pin_source == nullptr || w.pin_source(w.ctx, i->index, source, out);
-    }
     static bool pin_change(void* ctx, uint32_t pin, int new_state, int old_state) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;

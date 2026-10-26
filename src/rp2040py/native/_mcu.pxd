@@ -107,7 +107,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*i2c_write)(void* ctx, uint32_t instance, uint32_t value) noexcept
         bool (*i2c_read)(void* ctx, uint32_t instance, bool ack) noexcept
         bool (*i2c_stop)(void* ctx, uint32_t instance) noexcept
-        bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) noexcept
         bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept
         void (*system_reset_request)(void* ctx) noexcept
         bool (*watchdog_trigger)(void* ctx) noexcept
