@@ -47,7 +47,7 @@ from rp2040py.memory_map import (
 )
 from rp2040py.native._adc import RPADC
 from rp2040py.native._busctrl import RPBUSCTRL
-from rp2040py.native._clocks import RPClocks
+from rp2040py.native._clocks cimport RPClocks
 from rp2040py.native._pll import RPPLL
 from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.native._i2c import RPI2C
@@ -397,25 +397,6 @@ cdef bool _w_watchdog_tick(void* ctx, double tick_hz) noexcept:
     return True
 
 
-cdef double _w_xosc_hz(void* ctx) noexcept:
-    # The crystal's output while a host's own XOSC block (not the chip's) is in place: the board's crystal while that block says it is stable.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        return <double> chip.xosc_freq if chip.xosc.read_uint32(XOSC_STATUS) & XOSC_STATUS_STABLE else 0.0
-    except BaseException as error:
-        park_error(error)
-        return 0.0
-
-
-cdef double _w_rosc_hz(void* ctx) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        return <double> chip.rosc_freq
-    except BaseException as error:
-        park_error(error)
-        return 0.0
-
-
 cdef bool _w_i2c_start(void* ctx, uint32_t instance, bool repeated) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -504,16 +485,6 @@ cdef bool _w_record_cause(void* ctx, uint32_t flag) noexcept:
     return True
 
 
-cdef bool _w_clk_sys(void* ctx, double* hz) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        hz[0] = <double> chip.clk_sys
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_pio_started(void* ctx, uint32_t index) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -544,17 +515,6 @@ cdef bool _w_adc_channel_value(void* ctx, uint32_t channel, int64_t* value) noex
     return True
 
 
-cdef bool _tree_hook(void* ctx) noexcept:
-    # A tree the host put over the chip's own (an oracle's reference): the oscillators and the PLLs tell the chip, which re-derives through whichever tree it has now.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef dict _DREQ_BY_NUMBER = {int(channel): channel for channel in DREQChannel}
 
 
@@ -563,6 +523,20 @@ cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
         chip._dreq_tap(int(number), asserted)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
+_TREE_DOMAINS = ("sys", "peri", "ref", "rtc")
+
+
+cdef bool _clock_tree_tap_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
+    # The observer of `RP2040.clock_tree_tap`: sees every announcement of the clock tree before its consumers do.
+    cdef RP2040 chip = <RP2040> ctx
+    try:
+        chip._clock_tree_tap(_TREE_DOMAINS[domain], hz, old)
     except BaseException as error:
         park_error(error)
         return False
@@ -662,8 +636,6 @@ cdef class RP2040:
         world.system_reset_request = _w_system_reset_request
         world.watchdog_trigger = _w_watchdog_trigger
         world.watchdog_tick = _w_watchdog_tick
-        world.xosc_hz = _w_xosc_hz
-        world.rosc_hz = _w_rosc_hz
         world.spi_transmit = _w_spi_transmit
         world.i2c_start = _w_i2c_start
         world.i2c_connect = _w_i2c_connect
@@ -678,7 +650,6 @@ cdef class RP2040:
         world.usb_reset = _w_usb_reset
         world.bus_reset = _w_bus_reset
         world.record_cause = _w_record_cause
-        world.clk_sys = _w_clk_sys
         world.adc_channel_value = _w_adc_channel_value
         self._mcu.build(world)
 
@@ -690,7 +661,7 @@ cdef class RP2040:
         self.rosc_freq = 6.5 * MHZ
         self._clock_listeners = set()
 
-        self.ppb = RPPPB(self, "PPB", 0)
+        self._adopt_ppb(RPPPB(self, "PPB", 0))
         self._adopt_sio(RPSIO(self, 0))
         if os.environ.get("RP2040PY_CORE1", "1").lower() in ("0", "off", "false", "no"):  # the CLI's --no-core1 sets it: the second core is on unless asked to be off
             self.set_core1_enabled(False)
@@ -736,7 +707,7 @@ cdef class RP2040:
             RPPIO(self, "PIO1", IRQ.PIO1_IRQ0, 1),
         ]
         self.usb_ctrl = RPUSBController(self, "USB")
-        self.watchdog = RPWatchdog(self, "WATCHDOG_BASE", 0)
+        self._watchdog = RPWatchdog(self, "WATCHDOG_BASE", 0)
         # Named, not just an entry in `peripherals` below: BaseDevice.hard_reset() has to
         # record *which* reset just happened in CHIP_RESET (0089 Phase 1), the same way it
         # reaches self.watchdog for REASON - a dict lookup by base address would work but
@@ -758,16 +729,18 @@ cdef class RP2040:
         self.pads_bank0 = RPPADS(self, "PADS_BANK0_BASE", "bank0", 0)
         self.pads_qspi = RPPADS(self, "PADS_QSPI_BASE", "qspi", 1)
         self.timer = RPTimer(self, "TIMER_BASE", 0)
-        self.rtc = RP2040RTC(self, "RTC_BASE")
-        self.clocks = RPClocks(self, "CLOCKS_BASE", 0)  # after the PLLs and the blocks it drives (PPB, PWM, watchdog, RTC): the native tree points at their C++ blocks
+        self._rtc = RP2040RTC(self, "RTC_BASE")
+        self._clocks = RPClocks(self, "CLOCKS_BASE", 0)  # after the PLLs and the blocks it drives (PPB, PWM, watchdog, RTC): the native tree points at their C++ blocks
         self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
         self.syscfg = RP2040SysCfg(self, "SYSCFG")
         self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
         self._ssi_object = RPSSI(self, "SSI")
-        self.xosc = RPXOSC(self, "XOSC_BASE", 0)
+        self._xosc = RPXOSC(self, "XOSC_BASE", 0)
         self.io_bank0 = RPIO(self, "IO_BANK0_BASE", None, 0)
         self.io_qspi = RPIO(self, "IO_QSPI_BASE", self.qspi, 1)
-        self.rosc = RPROSC(self, "ROSC_BASE", 0)
+        self._rosc = RPROSC(self, "ROSC_BASE", 0)
+        self._rebind_clock_sinks()  # the tree points at the oscillators too, which are built after it
+        self._install_clock_tree_tap()
 
         self.peripherals = {
             0x14000: self.xip_ctrl,
@@ -1103,6 +1076,25 @@ cdef class RP2040:
         return self._pwm_block
 
     @property
+    def clock_tree_tap(self):
+        """An observer of what the clock tree announces: `f(domain, hz, old)` with `domain` one of "sys", "peri", "ref", "rtc", called before the consumers of that domain are told (they still are). `old` is the
+        previous value for "sys" and "peri", 0.0 for the other two. `None` takes it away. Same on the pure-Python chip; how a test or a debugger sees what the tree told, in what order."""
+        return self._clock_tree_tap
+
+    @clock_tree_tap.setter
+    def clock_tree_tap(self, value) -> None:
+        self._clock_tree_tap = value
+        self._install_clock_tree_tap()
+
+    cdef _install_clock_tree_tap(self):
+        if type(self._clocks) is RPClocks:
+            if self._clock_tree_tap is None:
+                (<RPClocks> self._clocks)._block.tap = NULL
+            else:
+                (<RPClocks> self._clocks)._block.tap = _clock_tree_tap_hook
+                (<RPClocks> self._clocks)._block.tap_ctx = <void*> self
+
+    @property
     def pwm_input_tap(self):
         """An observer of the pins' calls that tell the PWM an input moved: `f(pin)`, called for every one before the PWM handles it (the PWM still does). `None` takes it away.
         Same on the pure-Python chip; how a test or a debugger sees which pins told the PWM, without standing in for it."""
@@ -1139,51 +1131,26 @@ cdef class RP2040:
     def ppb(self):
         return self._ppb
 
-    # (still assignable: the clocks oracle spies on what the tree tells the PPB; it goes with the clock tree's seams, step 4 of docs/tasks/narrow-the-border-plan.md)
-    @ppb.setter
-    def ppb(self, value) -> None:
+    cdef _adopt_ppb(self, value):
         self._ppb = value
         self._mcu.bus.set_ppb(self._direct_handler(value, False))
-        self._rebind_clock_sinks()
 
     # The clock tree tells these five (with the DMA) of a change directly when they are native blocks (core/clock_sinks.hpp), so replacing one has to re-point the tree: every way of replacing is a property.
     @property
     def watchdog(self):
         return self._watchdog
 
-    @watchdog.setter
-    def watchdog(self, value) -> None:
-        self._watchdog = value
-        self._rebind_clock_sinks()
-
     @property
     def clocks(self):
         return self._clocks
-
-    @clocks.setter
-    def clocks(self, value) -> None:
-        old = self._clocks
-        self._clocks = value
-        if old is not None and old is not value and hasattr(old, "release_consumers"):
-            old.release_consumers()  # (the blocks it drove go back to asking the chip, and it stops telling them)
 
     @property
     def xosc(self):
         return self._xosc
 
-    @xosc.setter
-    def xosc(self, value) -> None:
-        self._xosc = value
-        self._rebind_clock_sinks()
-
     @property
     def rosc(self):
         return self._rosc
-
-    @rosc.setter
-    def rosc(self, value) -> None:
-        self._rosc = value
-        self._rebind_clock_sinks()
 
     @property
     def xosc_freq(self):
@@ -1250,11 +1217,6 @@ cdef class RP2040:
     @property
     def rtc(self):
         return self._rtc
-
-    @rtc.setter
-    def rtc(self, value) -> None:
-        self._rtc = value
-        self._rebind_clock_sinks()
 
     def _rebind_clock_sinks(self):
         clocks = self._clocks  # (None while the chip is being built)
@@ -1496,13 +1458,6 @@ cdef class RP2040:
 
     def _native_rosc_address(self):
         return <size_t> &self._mcu.rosc()
-
-    def _native_tree(self, native):
-        """Which tree the oscillators and the PLLs tell: the `Mcu`'s own (`native`), or the chip's Python `update_clocks()` (a tree that replaced it)."""
-        if native:
-            self._mcu.set_tree_hook(NULL, NULL)
-        else:
-            self._mcu.set_tree_hook(_tree_hook, <void*> self)
 
     def _native_tbman_address(self):
         """The address of the TBMAN block the `Mcu` built, for the shell that is its Python view."""

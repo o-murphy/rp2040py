@@ -16,9 +16,12 @@ cdef extern from "clocks.hpp" namespace "rp2040core":
 
     ctypedef double (*ClockHzFn)(void* ctx)
     ctypedef cppbool (*ClockSinkFn)(void* ctx, double hz, double old)
+    ctypedef cppbool (*ClockTap)(void* ctx, uint32_t domain, double hz, double old)
 
     cdef cppclass ClocksBlock:
         ClocksBlock() noexcept
+        ClockTap tap
+        void* tap_ctx
         void detach() noexcept
         void clear_sinks() noexcept
         void bind_xosc(const XoscBlock* block) noexcept

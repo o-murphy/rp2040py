@@ -74,7 +74,7 @@ struct McuHost {
     void* ctx = nullptr;
     const int* failed = nullptr;
 
-    // The devices the world attaches to the peripherals, and the oscillators a host may have swapped for its own (`xosc_hz` / `rosc_hz`: the output in Hz, 0 while not running). Every one is optional: with none, a bus has no device on it (an I2C that NACKs every
+    // The devices the world attaches to the peripherals, Every one is optional: with none, a bus has no device on it (an I2C that NACKs every
     // address, an SPI that reads back 0, an ADC that converts what the default device gives), a UART's bytes go nowhere. `instance` is the UART / SPI / I2C number.
     // False from any of them: the host has parked its error (as everywhere), and the block's access fails with it.
     bool (*uart_byte)(void* ctx, uint32_t instance, uint32_t byte) = nullptr;           // a transmitted byte
@@ -91,8 +91,6 @@ struct McuHost {
     void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
     bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
     bool (*watchdog_tick)(void* ctx, double tick_hz) = nullptr;                         // the tick changed (0: stopped), after the TIMER and SysTick have followed it
-    // The flash path: with a clock tree the host has put over the chip's, `clk_sys` is the host's. Optional.
-    bool (*clk_sys)(void* ctx, double* hz) = nullptr;
     // The host's end of the USB wire (the device at the other end of the link: its setup / IN / OUT handling, the endpoint transfers and the notifications of `core/usb.hpp`'s `UsbHost`). Optional: with
     // none, the controller has nothing connected. Read once, by `build()`; the line, the warning and the failure flag of that struct are the chip's, not the host's.
     const UsbHost* usb_wire = nullptr;
@@ -104,8 +102,6 @@ struct McuHost {
     bool (*bus_reset)(void* ctx) = nullptr;
     bool (*record_cause)(void* ctx, uint32_t flag) = nullptr;
     bool (*pio_started)(void* ctx, uint32_t index) = nullptr;                           // CTRL started a stopped PIO: the host runs its "no owning Simulator" fallback (the asyncio task of `run()`)
-    double (*xosc_hz)(void* ctx) = nullptr;                                             // only while the host has put its own crystal block over the chip's
-    double (*rosc_hz)(void* ctx) = nullptr;                                             // ... or its own ring oscillator
     bool (*adc_read)(void* ctx, uint32_t channel) = nullptr;                            // a conversion was requested; the device answers by pushing a sample
     bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) = nullptr;   // the analog value of a channel
 };
@@ -228,8 +224,6 @@ public:
         ro.ctx = this;
         rosc_.init(clock_, &ports_, kMcuBlockRosc, ro);
         ClocksHost ch;
-        ch.xosc_hz = tree_xosc_hz;  // (read only while a host's own oscillator block stands in for the chip's)
-        ch.rosc_hz = tree_rosc_hz;
         ch.ctx = this;
         clocks_.init(clock_, &ports_, kMcuBlockClocks, ch, &pll_[0], &pll_[1]);
         for (int i = 0; i < 2; ++i) pll_[i].bind_reference(clocks_xosc_hz, &clocks_);
@@ -587,14 +581,6 @@ public:
         dma_->clear_dreq(number);
         return true;
     }
-    // The clock tree. The crystal is the board's (12 MHz on a Pico): a parameter of the world. A change of an oscillator or of a PLL re-derives the tree, unless the host has put its own tree over
-    // this one (a reference swapped in by an oracle): `set_tree_hook()` then gets the notice instead.
-    using TreeHook = bool (*)(void* ctx);
-    void set_crystal_hz(double hz) noexcept { clocks_.set_crystal_hz(hz); }
-    void set_tree_hook(TreeHook hook, void* ctx) noexcept {
-        tree_hook_ = hook;
-        tree_hook_ctx_ = ctx;
-    }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
     // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
     // reported to the XIP block once it is built; the SRAM at 0x20000000; the DPRAM at 0x50100000, a completed word write reported to the host's `dpram_written`). Call once, before `build()`;
@@ -667,6 +653,8 @@ public:
     void set_clk_changed_flag(const volatile uint8_t* flag) noexcept { host_.clk_changed = flag; }
     void set_monotonic(double (*monotonic)(void* chip)) noexcept { host_.monotonic = monotonic != nullptr ? monotonic : no_time; }
 
+    // The clock tree. The crystal is the board's (12 MHz on a Pico): a parameter of the world. A change of an oscillator or of a PLL re-derives the tree.
+    void set_crystal_hz(double hz) noexcept { clocks_.set_crystal_hz(hz); }
     // The clock tree tells its consumers when a rate changes: SysTick, the PWM counters and the DMA (`clk_sys`), the watchdog's tick (`clk_ref`) and the RTC (`clk_rtc`), then the flag below. Registered by
     // `build()` in the reference's order (`update_clocks()`); a shell that puts its own consumer over one of them (an oracle's reference) clears the lists and registers its own.
     void bind_tree_sinks() noexcept {
@@ -797,7 +785,7 @@ private:
     static bool ports_dreq(void* chip, uint32_t number, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(number, asserted); }
     static bool tree_changed(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        return m->tree_hook_ != nullptr ? m->tree_hook_(m->tree_hook_ctx_) : m->clocks_.retune();
+        return m->clocks_.retune();
     }
     // SIO's host: the pins' effective inputs, the pins whose SIO-driven state moved, and the cycles SIO charges the CPU.
     // The PIOs' host: `chip` is the `Mcu` for the line and the requests (the PIO passes absolute numbers), a `McuInstance` for the rest.
@@ -821,8 +809,6 @@ private:
     // The SSI's and XIP_CTRL's hosts.
     static bool xip_clk_sys(void* chip, double* hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        const McuHost& w = m->host_world_;
-        if (m->tree_hook_ != nullptr && w.clk_sys != nullptr) return w.clk_sys(w.ctx, hz);
         *hz = m->clocks_.clk_sys();
         return true;
     }
@@ -921,14 +907,6 @@ private:
         m->ppb1_.tick_changed(tick_hz);
         return m->host_world_.watchdog_tick == nullptr || m->host_world_.watchdog_tick(m->host_world_.ctx, tick_hz);
     }
-    static double tree_xosc_hz(void* chip) noexcept {
-        Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.xosc_hz != nullptr ? m->host_world_.xosc_hz(m->host_world_.ctx) : 0.0;
-    }
-    static double tree_rosc_hz(void* chip) noexcept {
-        Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.rosc_hz != nullptr ? m->host_world_.rosc_hz(m->host_world_.ctx) : 0.0;
-    }
     static bool rosc_changed(void* chip, double) noexcept { return tree_changed(chip); }
     static bool sysinfo_rom_version(void* chip, uint32_t* version) noexcept {
         *version = static_cast<Mcu*>(chip)->bus.read8(kRomVersionAddress);
@@ -1010,8 +988,6 @@ private:
     PllBlock pll_[2];
     XoscBlock xosc_;
     RoscBlock rosc_;
-    TreeHook tree_hook_ = nullptr;
-    void* tree_hook_ctx_ = nullptr;
     RtcBlock rtc_;
     ChipPorts ports_;  // the lines every block shares (core_host.hpp): the host's `warn` with the block's id, and the failure flag
     TbmanBlock tbman_;

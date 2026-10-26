@@ -65,40 +65,6 @@ class Boom(Exception):
     """What a failing host listener raises."""
 
 
-class _Spy:
-    """Forwards everything to the real consumer and records the call the clock tree makes of it."""
-
-    def __init__(self, target: Any, rig: "Rig", name: str) -> None:
-        object.__setattr__(self, "_target", target)
-        object.__setattr__(self, "_rig", rig)
-        object.__setattr__(self, "_name", name)
-
-    def __getattr__(self, attribute: str) -> Any:
-        return getattr(self._target, attribute)
-
-    def __setattr__(self, attribute: str, value: Any) -> None:
-        setattr(self._target, attribute, value)
-
-    def _record(self, *args: Any) -> None:
-        self._rig.log.append(("sink", float(self._rig.chip.clock.nanos), self._name, *args))
-
-    def clk_ref_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_ref_changed(hz)
-
-    def clk_rtc_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_rtc_changed(hz)
-
-    def clk_sys_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_sys_changed(hz)
-
-    def clk_peri_changed(self) -> Any:
-        self._record()
-        return self._target.clk_peri_changed()
-
-
 class Rig:
     """One chip plus the log of every warning and every call the clock tree makes."""
 
@@ -131,10 +97,10 @@ class Rig:
                     ("log", float(chip.clock.nanos), _m, str(name), str(message))
                 ),
             )
-        chip.watchdog = _Spy(chip.watchdog, self, "watchdog")
-        chip.rtc = _Spy(chip.rtc, self, "rtc")
-        chip.ppb = _Spy(chip.ppb, self, "ppb")
-        chip.uart = [_Spy(uart, self, f"uart{index}") for index, uart in enumerate(chip.uart)]
+        # What the clock tree announces, in order: the observer sees each announcement before the consumers of that domain, which still get it
+        chip.clock_tree_tap = lambda domain, hz, old: log.append(
+            ("tree", float(chip.clock.nanos), domain, float(hz), float(old))
+        )
 
         def listener(clk_sys: float, old: float) -> None:
             log.append(("listener", float(chip.clock.nanos), float(clk_sys), float(old), self.raising))
@@ -201,9 +167,6 @@ class Rig:
             "raw": (int(clocks.raw_write_value), int(chip.pll_sys.raw_write_value), int(chip.pll_usb.raw_write_value)),
             "time": float(chip.clock.nanos),
         }
-
-
-_C_CONSUMERS = ("ppb", "watchdog", "rtc")
 
 
 class Divergence:
@@ -382,10 +345,6 @@ def run_pair(
             return Divergence(step, op, f"result {result_a!r}/{error_a} vs {result_b!r}/{error_b}")
         new_a, new_b = a.log[log_a:], b.log[log_b:]
         log_a, log_b = len(a.log), len(b.log)
-        if a.kind == "default" or b.kind == "default":
-            # The default tree tells SysTick, the watchdog and the RTC from C++ without a Python call to spy on: their calls are compared by what they did ("consumers" in the snapshot), not as a log
-            new_a = [entry for entry in new_a if not (entry[0] == "sink" and entry[2] in _C_CONSUMERS)]
-            new_b = [entry for entry in new_b if not (entry[0] == "sink" and entry[2] in _C_CONSUMERS)]
         if new_a != new_b:
             return Divergence(step, op, f"log: {new_a[:6]} vs {new_b[:6]}")
         snapshot_a, snapshot_b = a.snapshot(), b.snapshot()
@@ -412,7 +371,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         if error:
             count("exception")
         for entry in rig.log[before:]:
-            count(entry[0] if entry[0] != "sink" else f"sink.{entry[2]}")
+            count(entry[0] if entry[0] != "tree" else f"tree.{entry[2]}")
         if (rig.chip.clk_sys, rig.chip.clk_peri) != clk:
             count("clock changed")
         if rig.chip.pll_sys.frequency and rig.chip.pll_usb.frequency:

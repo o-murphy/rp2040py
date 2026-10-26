@@ -133,6 +133,8 @@ class RP2040:
         self.dreq_tap: Callable[[int, bool], None] | None = None
         # An observer of the pins' calls that tell the PWM an input moved, `f(pin)` (the native chip has the same property).
         self.pwm_input_tap: Callable[[int], None] | None = None
+        # An observer of what the clock tree announces, `f(domain, hz, old)` with `domain` "sys", "peri", "ref" or "rtc" (the native chip has the same property).
+        self.clock_tree_tap: Callable[[str, float, float], None] | None = None
 
         # A plain list, not Uint32Array (same rationale as CortexM0Core.registers - see
         # docs/PORTING.md's performance section): bootrom is on the hot read_uint32 path (real

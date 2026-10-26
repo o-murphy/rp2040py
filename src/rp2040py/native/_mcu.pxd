@@ -44,7 +44,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
     ctypedef double (*McuMonotonicFn)(void* chip) noexcept
     ctypedef bool (*McuIrqHook)(void* ctx, uint32_t irq, bool level) noexcept
     ctypedef void (*McuWarnFn)(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept
-    ctypedef bool (*McuTreeHook)(void* ctx) noexcept
     ctypedef bool (*McuDreqHook)(void* ctx, uint32_t number, bool asserted) noexcept
 
     cdef const uint32_t kMcuBlockRtc
@@ -111,10 +110,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         void (*system_reset_request)(void* ctx) noexcept
         bool (*watchdog_trigger)(void* ctx) noexcept
         bool (*watchdog_tick)(void* ctx, double tick_hz) noexcept
-        double (*xosc_hz)(void* ctx) noexcept
-        double (*rosc_hz)(void* ctx) noexcept
         bool (*adc_read)(void* ctx, uint32_t channel) noexcept
-        bool (*clk_sys)(void* ctx, double* hz) noexcept
         const UsbHost* usb_wire
         bool (*reset_block)(void* ctx, uint32_t block) noexcept
         bool (*usb_reset)(void* ctx) noexcept
@@ -178,7 +174,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         XoscBlock& xosc() noexcept
         RoscBlock& rosc() noexcept
         void set_crystal_hz(double hz) noexcept
-        void set_tree_hook(McuTreeHook hook, void* ctx) noexcept
         TimerBlock& timer() noexcept
         AdcBlock& adc() noexcept
         UartBlock& uart(uint32_t i) noexcept

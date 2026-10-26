@@ -102,6 +102,13 @@ public:
     void detach() noexcept { cancel_alarm(&fc_alarm_); }
 
 
+    // An observer of every announcement of the tree, called first, before the sinks of that domain, without taking anything away from them: the port a test or a debugger uses to see what the tree told its
+    // consumers and in what order. `domain` is one of the `kTap...` values; `old` is the previous value for `sys` and `peri`, 0 for `ref` and `rtc`. False from the tap: the host has parked its error.
+    static constexpr uint32_t kTapSys = 0, kTapPeri = 1, kTapRef = 2, kTapRtc = 3;
+    using Tap = bool (*)(void* ctx, uint32_t domain, double hz, double old);
+    Tap tap = nullptr;
+    void* tap_ctx = nullptr;
+
     // The sinks, called in the order they were added. False: the list is full.
     // Forgets every sink (the host re-registers them when a consumer is replaced).
     void clear_sinks() noexcept { n_sys_ = n_peri_ = n_ref_ = n_rtc_ = 0; }
@@ -337,15 +344,19 @@ private:
     bool set_clk_sys(double hz) noexcept {
         const double old = clk_sys_;
         clk_sys_ = hz;
+        if (tap != nullptr && !tap(tap_ctx, kTapSys, hz, old)) return false;
         return tell(sys_sinks_, n_sys_, hz, old);
     }
     bool set_clk_peri(double hz) noexcept {
         const double old = clk_peri_;
         clk_peri_ = hz;
+        if (tap != nullptr && !tap(tap_ctx, kTapPeri, hz, old)) return false;
         return tell(peri_sinks_, n_peri_, hz, old);
     }
     bool notify_ref_and_rtc() noexcept {
+        if (tap != nullptr && !tap(tap_ctx, kTapRef, ref_freq(), 0.0)) return false;
         if (!tell(ref_sinks_, n_ref_, ref_freq(), 0.0)) return false;  // the watchdog's tick (the TIMER's and SysTick's reference) derives from clk_ref
+        if (tap != nullptr && !tap(tap_ctx, kTapRtc, rtc_freq(), 0.0)) return false;
         return tell(rtc_sinks_, n_rtc_, rtc_freq(), 0.0);              // the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
     }
 

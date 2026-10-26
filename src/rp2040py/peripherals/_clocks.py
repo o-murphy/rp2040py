@@ -555,9 +555,17 @@ class RPClocks(BasePeripheral):
             super().write_uint32(offset, value)
 
 
+def _tap(rp2040: "RP2040", domain: str, hz: float, old: float) -> None:
+    """The clock tree's observer (`RP2040.clock_tree_tap`), told before the consumers of `domain`."""
+    tap = getattr(rp2040, "clock_tree_tap", None)
+    if tap is not None:
+        tap(domain, hz, old)
+
+
 def _set_clk_sys(rp2040: "RP2040", clk_sys: float) -> None:
     old_clk_sys = rp2040.clk_sys
     rp2040.clk_sys = clk_sys
+    _tap(rp2040, "sys", clk_sys, old_clk_sys)
     rp2040.ppb.clk_sys_changed(clk_sys)
     ppb1 = getattr(
         rp2040, "ppb1", None
@@ -572,7 +580,9 @@ def _set_clk_sys(rp2040: "RP2040", clk_sys: float) -> None:
 
 
 def _set_clk_peri(rp2040: "RP2040", clk_peri: float) -> None:
+    old_clk_peri = rp2040.clk_peri
     rp2040.clk_peri = clk_peri
+    _tap(rp2040, "peri", clk_peri, old_clk_peri)
     for uart in rp2040.uart:
         uart.clk_peri_changed()
 
@@ -593,9 +603,11 @@ def update_clocks(rp2040: "RP2040") -> None:
     clk_peri = rp2040.clocks.peri_freq
     if clk_peri and clk_peri != rp2040.clk_peri:
         _set_clk_peri(rp2040, clk_peri)
+    _tap(rp2040, "ref", rp2040.clocks.ref_freq, 0.0)
     rp2040.watchdog.clk_ref_changed(
         rp2040.clocks.ref_freq
     )  # the watchdog's tick (the TIMER's and SysTick's reference) is derived from clk_ref
+    _tap(rp2040, "rtc", rp2040.clocks.rtc_freq, 0.0)
     rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)  # the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
 
 
@@ -609,5 +621,7 @@ def reset_clock_tree(rp2040: "RP2040") -> None:
         _set_clk_sys(rp2040, DEFAULT_CLK)
     if rp2040.clk_peri != DEFAULT_CLK:
         _set_clk_peri(rp2040, DEFAULT_CLK)
+    _tap(rp2040, "ref", rp2040.clocks.ref_freq, 0.0)
     rp2040.watchdog.clk_ref_changed(rp2040.clocks.ref_freq)
+    _tap(rp2040, "rtc", rp2040.clocks.rtc_freq, 0.0)
     rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)
