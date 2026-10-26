@@ -87,7 +87,7 @@ one commit, and a step that makes any mutant or perturbation of any twin oracle 
   given the project is in a beta line, probably no deprecation cycle - to confirm.
 - **`attach_peripheral`** (tier-1 requirement 3) is the supported form of "my own register block"; today it is `peripherals[address] = block`. Naming it is a separate, small step that can come before step 7.
 
-## Where it stands (2026-10-26, after step 6; the handoff for the next session)
+## Where it stands (2026-10-26, after step 7 (documents) - the handoff below was written after step 6; the handoff for the next session)
 
 Steps 0-6 are done and pushed on `refactor/native-shell-boilerplate` (last commit `64b7f50`; CI green on every commit up to and including step 5 `75a458a`, step 6 was still running when this was written - check it first). `McuHost` is **17 slots**: the 16 of the end list in "Where it ends" (`warn`, `uart_byte`, `uart_baud`, `spi_transmit`, `i2c_start/connect/write/read/stop`, `adc_read`, `adc_channel_value`, `pin_changed`, `usb_wire`, `usb_reset`, `bus_reset`, and the merged `reset_requested`) plus `pio_started`.
 

@@ -64,6 +64,9 @@ a hole in the generator - widen it.
 - A `XHost` of plain function pointers + `void* ctx` + `const int* failed`. Everything outside the block is reached through it. Report an
   unimplemented register as `RegWarn` data, never as a string. A host call that fails makes the block return `false` at once, leaving
   exactly the state the reference's exception would have left.
+  The host struct is for the **world** only (a device on a bus, a pin listener, a console, a reset request): it has no slot that lets
+  the host stand its own object in for a chip block, and a new block adds none ([the border plan](../tasks/narrow-the-border-plan.md)).
+  The chip's blocks are never replaced; the two backends are compared as whole chips (`tests/utils/twin.py`).
 - `WindowHandler window_handler() { return BlockWindow<XBlock>::handler(this); }`.
 - Keep the reference's quirks and say so in the header comment, each one pinned by the oracle or the C++ checks. A real bug of the
   reference is *not* fixed in the port: fix it in its own commit first (and ask), then port (section A, step 5).
