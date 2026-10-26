@@ -186,10 +186,10 @@ def mutant_rig(name: str) -> Rig:
             return super().spi_mode
 
         @property
-        def master_mode(self) -> bool:
+        def _master_mode(self) -> bool:
             if name == "master_mode_inverted":
                 return bool(self._control0 & P.MS)
-            return super().master_mode
+            return super()._master_mode
 
         @property
         def clock_frequency(self) -> float:
@@ -264,17 +264,17 @@ def mutant_rig(name: str) -> Rig:
         def _frame_ns(self) -> float:
             bit = P._bit_ns(self.rp2040.clk_peri, self._clock_divisor, (self._control0 >> P.SCR_SHIFT) & P.SCR_MASK)
             if name == "frame_one_bit":
-                return bit if self.master_mode else 0.0
+                return bit if self._master_mode else 0.0
             if name == "frame_slave_timed":
                 return bit * self.data_bits
             if name == "frame_ignores_scr":
                 return (
                     P._bit_ns(self.rp2040.clk_peri, self._clock_divisor, 0) * self.data_bits
-                    if self.master_mode
+                    if self._master_mode
                     else 0.0
                 )
             if name == "frame_dss_plus_one":
-                return bit * (self.data_bits + 1) if self.master_mode else 0.0
+                return bit * (self.data_bits + 1) if self._master_mode else 0.0
             return super()._frame_ns()
 
         def complete_transmit(self, rx_value: int) -> None:

@@ -150,7 +150,7 @@ class RPSPI(BasePeripheral):
         return self._int_raw & self._int_enable
 
     @property
-    def enabled(self) -> bool:
+    def _enabled(self) -> bool:
         return bool(self._control1 & SSE)
 
     @property
@@ -159,7 +159,7 @@ class RPSPI(BasePeripheral):
         return ((self._control0 >> DSS_SHIFT) & DSS_MASK) + 1
 
     @property
-    def master_mode(self) -> bool:
+    def _master_mode(self) -> bool:
         return not (self._control1 & MS)  # MS is SSPCR1 bit 2 (see 'SSPCR1 bits' above); this used to test SSPCR0
 
     @property
@@ -176,7 +176,7 @@ class RPSPI(BasePeripheral):
 
     def _frame_ns(self) -> float:
         """How long the word that just left the TX FIFO is on the wire: `data_bits` bit-clock periods. A slave (SSPCR1.MS) is clocked from outside, and an unconfigured bit clock has no time: both are instant."""
-        if not self.master_mode:
+        if not self._master_mode:
             return 0.0
         return (
             _bit_ns(self.rp2040.clk_peri, self._clock_divisor, (self._control0 >> SCR_SHIFT) & SCR_MASK)
@@ -254,9 +254,9 @@ class RPSPI(BasePeripheral):
             "reply": None if self._reply is None else int(self._reply),
             "rx": tuple(self.rx_fifo.items),
             "tx": tuple(self.tx_fifo.items),
-            "enabled": bool(self.enabled),
+            "enabled": bool(self._enabled),
             "data_bits": self.data_bits,
-            "master_mode": bool(self.master_mode),
+            "master_mode": bool(self._master_mode),
             "spi_mode": int(self.spi_mode),
             "clock_frequency": float(self.clock_frequency),
             "int_status": int(self.int_status),

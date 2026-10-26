@@ -692,27 +692,27 @@ class MutantPLL(P.RPPLL):
         super().__init__(rp2040, name)
 
     @property
-    def refdiv(self) -> int:
+    def _refdiv(self) -> int:
         if self._mutant == "pll_refdiv_zero_is_zero" and not self.cs & P.PLL_CS_REFDIV_MASK:
             return 0
-        return super().refdiv
+        return super()._refdiv
 
     @property
-    def reference(self) -> float:
+    def _reference(self) -> float:
         if self._mutant == "pll_refdiv_zero_is_zero" and not self.cs & P.PLL_CS_REFDIV_MASK:
             return 0.0
-        return super().reference
+        return super()._reference
 
     @property
-    def locked(self) -> bool:
+    def _locked(self) -> bool:
         mutant = self._mutant
         if mutant == "pll_lock_always":
             return True
         if mutant == "pll_lock_ignores_vcopd":
-            return not self.pwr & P.PLL_PWR_PD and self.reference > 0
+            return not self.pwr & P.PLL_PWR_PD and self._reference > 0
         if mutant == "pll_lock_ignores_reference":
             return not self.pwr & (P.PLL_PWR_PD | P.PLL_PWR_VCOPD)
-        return super().locked
+        return super()._locked
 
     @property
     def frequency(self) -> float:
@@ -726,9 +726,9 @@ class MutantPLL(P.RPPLL):
             self.pwr = pwr & ~P.PLL_PWR_POSTDIVPD
         try:
             if mutant == "pll_bypass_divides_by_postdiv" and cs & P.PLL_CS_BYPASS and not pwr & P.PLL_PWR_PD:
-                return self.reference / ((self.postdiv1 or 1) * (self.postdiv2 or 1))
+                return self._reference / ((self._postdiv1 or 1) * (self._postdiv2 or 1))
             if mutant == "pll_bypass_not_divided_by_refdiv" and cs & P.PLL_CS_BYPASS and not pwr & P.PLL_PWR_PD:
-                return self.reference * (self.refdiv or 1)
+                return self._reference * (self._refdiv or 1)
             if (
                 mutant == "pll_bypass_needs_vco"
                 and cs & P.PLL_CS_BYPASS
@@ -738,7 +738,7 @@ class MutantPLL(P.RPPLL):
             if (
                 mutant == "pll_postdiv_zero_is_zero"
                 and not cs & P.PLL_CS_BYPASS
-                and (self.postdiv1 == 0 or self.postdiv2 == 0)
+                and (self._postdiv1 == 0 or self._postdiv2 == 0)
             ):
                 return 0.0
             return super().frequency
