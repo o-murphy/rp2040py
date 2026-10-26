@@ -103,7 +103,15 @@ in each is the constructor of its `Rig`, plus removing the `pure` replacement). 
 - *neighbours stood in for*: the pin oracle assigns `chip.pio` / `chip.pwm` probes and the DMA oracle attaches a probe block on the bus - symmetric on both chips, but not the real neighbour.
   **The DREQ recorders are gone** (adc, pwm, spi, ssi, uart, pio): they observe through `chip.dreq_tap` and the real DMA acts on the requests (`DmaBlock::dreq_tap` in C++, the same call in `RPDMA` in Python;
   `tests/test_dreq_tap.py`). All 477 tests of those six oracles stayed green with the real DMA in place;
-- *block-level calls*: the `reset` ops (`peripheral.reset()`), a few perturbations (`peripheral.warn`, a block `write_uint32`), the PIO's `advance()`, the plumbing the oracles read;
+- *block-level calls* (looked at 2026-10-26, and mostly **not** a problem):
+  - **Perturbations** may use any lever on the candidate: their job is to damage it (`peripheral.warn`, `core.pending_interrupts ^= 4`, `flash[0] ^= 1`, a block's own `write_uint32`), and they are not part of
+    the contract. What mattered was not keeping setters in the native shells only for them, and that is done (the snapshot series). The device-side calls among them (`complete_adc_read`,
+    `complete_write`, `complete_transmit`, `raise_*`) are tier-1 / tier-2 anyway.
+  - **The `reset` ops** (`peripheral.reset()`, `chip.pio[i].reset()`, ...) have no bus path: `RESETS.RESET` only stores its bits ("the model does not gate a peripheral on its RESET bit", `_reset.py`),
+    and the chip-level `reset()` resets everything. Both chips offer the same per-block `reset()` and it is what the cascade calls, so the ops stay as tier-2 plumbing; the cascade itself is covered
+    chip-wide by `chip_diff`. Giving the bus a path (the RESETS bits really holding a block in reset, as on silicon) is a behaviour change with consequences for firmware boot (`reset_block` /
+    `unreset_block` would start wiping what was configured) and needs its own record; it is not part of this migration.
+  - the PIO's `advance()` is the plumbing the batch loop uses, on both chips;
 - *private attributes of the chip* the rigs touch (`chip.peripherals[...]`, `chip.rtc = block` in the mutant path - inside the pure chip, so allowed).
 
 ## Open questions
