@@ -223,7 +223,7 @@ def test_a_chip_reset_puts_the_clock_tree_back_to_its_defaults_and_retunes_what_
     chip.reset(**WATCHDOG_RESET_ALL)
     assert chip.clk_sys == 125 * MHZ and chip.clk_peri == 125 * MHZ
     assert seen == [(125 * MHZ, 200 * MHZ)]
-    assert chip.ppb.clk_sys == 125 * MHZ
+    assert chip.ppb.snapshot()["clk_sys"] == 125 * MHZ
     # SysTick's CLKSOURCE is back to 0: the reference clock, the watchdog's tick. The reset put CLK_REF back on the ring oscillator (6.5 MHz) while the watchdog - which a
     # watchdog reset does not reset - still divides by the 12 cycles the firmware set, so the tick is no longer 1 MHz: the same as on silicon until the firmware reconfigures it.
     assert chip.ppb.systick_timer.frequency == 6.5 * MHZ / 12

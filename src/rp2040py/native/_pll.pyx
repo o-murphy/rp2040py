@@ -30,34 +30,6 @@ cdef class RPPLL(NativeBlock):
         )
 
     @property
-    def refdiv(self):
-        return self._block.refdiv()
-
-    @property
-    def fbdiv(self):
-        return self._block.fbdiv()
-
-    @property
-    def postdiv1(self):
-        return self._block.postdiv1()
-
-    @property
-    def postdiv2(self):
-        return self._block.postdiv2()
-
-    @property
-    def reference(self):
-        value = self._block.reference()
-        raise_if_pending()
-        return value
-
-    @property
-    def locked(self):
-        value = bool(self._block.locked())
-        raise_if_pending()
-        return value
-
-    @property
     def frequency(self):
         value = self._block.frequency()
         raise_if_pending()

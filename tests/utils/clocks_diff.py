@@ -159,8 +159,8 @@ class Rig:
             "pwm": tuple(float(channel.timer.frequency) for channel in chip.pwm.channels),
             # what the C++ consumers were told (the default tree calls them directly, so no spy sees it): SysTick's clk_sys, the watchdog's tick, the RTC's second
             "consumers": (
-                float(chip.ppb.clk_sys),
-                float(chip.watchdog.tick_hz),
+                float(chip.ppb.snapshot()["clk_sys"]),
+                float(chip.watchdog.snapshot()["tick_hz"]),
                 bool(chip.rtc.snapshot()["running"]),
                 float(chip.rtc.snapshot()["second_nanos"]),
             ),

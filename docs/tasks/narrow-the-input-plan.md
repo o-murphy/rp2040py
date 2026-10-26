@@ -110,3 +110,13 @@ Done: **RTC** (`running`, `second_nanos` - `second_nanos` is a new `snapshot()` 
 
 **Step 2a, the pure side (same day, the maintainer's decision "hide the getters of the pure Python too").** The getters that left the native shells are private on the pure-Python blocks as well (`_running`, `_second_nanos`, `_int_status`, `_enabled`, `_tx_enabled`, `_rx_enabled`, `_fifos_enabled`, `_word_length`; the TIMER's `tick_hz` property is dropped, its `_tick_hz` was the attribute behind it), so both chips show the same public surface for these three blocks: the bus, `snapshot()`, and what the shell itself uses. The oracles' mutants that overrode a getter (`rtc_diff`'s `running_ignores_clock` / `running_ignores_enable` / the `second_nanos` ones, `uart_diff`'s `self.enabled`...) were renamed with them; the first run caught that by failing - two mutants no longer changed anything - which is the oracle doing its job. Full oracle run: 3,536 tests.
 
+## Step 2b - done (2026-10-26): PPB, watchdog, PLL and SPI getters, and the rules that fell out
+
+Removed from the native shells (readers moved to `snapshot()`, which already had the values): `RPPPB.tick_hz`, `RPPPB.clk_sys`, `RPWatchdog.tick_hz`; `RPPLL.refdiv`, `fbdiv`, `postdiv1`, `postdiv2`, `reference`, `locked` (nobody read them but the oracle's mutants of the pure block); `RPSPI.enabled`, `RPSPI.master_mode` (`test_spi` reads the snapshot). Full oracle run: 3,536 tests, both suites.
+
+**What stays, and why (the rules this block-by-block pass settled on):**
+1. A getter **the shell itself uses** stays (the UART's `baud_rate` / `baud_divider`, the SPI's `spi_mode` / `clock_frequency` inside its snapshot).
+2. A getter **a device or the product reads** stays: it is the device-facing contract (tier 1 of the 0096 note) - the SPI's `data_bits` and `clock_frequency` (the ST7735S and the e-paper display time their transfers by them), the I2C's `speed`, `scl_low_period`, `scl_high_period`, `master_bits` (the shell's own comment: "what a device on the bus reads of the configuration"), `frequency` of the PLLs and the ROSC (the clock tree and the oracles read it).
+3. A **settable parameter** is an input, not an observation: the ADC's `num_channels` and `sample_time`.
+4. **Plain attributes** of the pure blocks (`ppb.tick_hz`, `ppb.clk_sys`, `watchdog.tick_hz`) are not renamed: they are state, not getters, and the oracles' mutants patch the pure source by text; only the native shells lose the views. The pure getters that were properties (RTC, TIMER, UART) were made private in step 2a. Whether the pure PLL's and SPI's getters (`refdiv`... `enabled`, `master_mode`) are made private too is the same mechanical pass as 2a and is still to do.
+

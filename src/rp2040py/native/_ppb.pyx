@@ -104,17 +104,9 @@ cdef class RPPPB(NativeBlock):
         """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""
         self._block.tick_changed(<double> tick_hz)
 
-    @property
-    def tick_hz(self):
-        return self._block.tick_hz()
-
     def clk_sys_changed(self, clk_sys):
         """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""
         self._block.clk_sys_changed(<double> clk_sys)
-
-    @property
-    def clk_sys(self):
-        return self._block.clk_sys()
 
     def reset(self):
         """SysTick back to stopped, reload and counter 0xFFFFFF (0089 Phase 5)."""

@@ -96,10 +96,6 @@ cdef class RPWatchdog(NativeBlock):
         if not self._block.clk_ref_changed(<double> clk_ref):
             raise_if_pending()
 
-    @property
-    def tick_hz(self):
-        return self._block.tick_hz
-
     def fire_timeout(self):
         """What the countdown does at zero without a feed: REASON = TIMER, then the chip's reset. Tests call it by hand."""
         self._fire_timeout()

@@ -31,11 +31,11 @@ def test_an_rx_overrun_raises_the_interrupt_line_at_once(rp2040_factory):
 def test_master_mode_is_sspcr1s_ms_bit_not_sspcr0s(rp2040_factory):
     chip = rp2040_factory()
     spi = chip.spi[0]
-    assert spi.master_mode  # reset: MS clear is master
+    assert spi.snapshot()["master_mode"]  # reset: MS clear is master
     chip.write_uint32(SPI0_BASE + SSPCR0, 1 << 2)  # bit 2 of SSPCR0 is part of the data size, not the mode
-    assert spi.master_mode
+    assert spi.snapshot()["master_mode"]
     chip.write_uint32(SPI0_BASE + SSPCR1, 1 << 2)  # SSPCR1.MS: slave
-    assert not spi.master_mode
+    assert not spi.snapshot()["master_mode"]
 
 
 def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):

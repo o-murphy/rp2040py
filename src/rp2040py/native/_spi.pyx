@@ -14,7 +14,7 @@ Python. A device that finishes later (the ST7735S, the e-paper) calls `complete_
 inside `on_transmit`: the block is re-entered from its own host callback, as the reference is.
 
 The API is the reference's: the registers' private attributes (readable and writable), `rx_fifo`/`tx_fifo` (views with the reference FIFO's attribute
-names), `int_status`, `enabled`, `data_bits`, `master_mode`, `spi_mode`, `clock_frequency`, `complete_transmit`, `check_interrupts`, `reset`, plus
+names), `int_status`, `data_bits`, `spi_mode`, `clock_frequency`, `complete_transmit`, `check_interrupts`, `reset`, plus
 `BasePeripheral`'s surface. Unlike the DMA it does not need the chip's bus, but a word's time on the wire is an alarm of the chip's C++ clock, so it needs the native `SimulationClock` (as the UART and the ADC do).
 """
 
@@ -117,17 +117,9 @@ cdef class RPSPI(NativeBlock):
     # --- what a device on the bus reads of the configuration ---------------------------------------
 
     @property
-    def enabled(self):
-        return bool(self._block.enabled())
-
-    @property
     def data_bits(self):
         """Data size in bits: 4 to 16 bits"""
         return self._block.data_bits()
-
-    @property
-    def master_mode(self):
-        return not (self._block.control1 & MS)  # SSPCR1.MS, bit 2
 
     @property
     def spi_mode(self):

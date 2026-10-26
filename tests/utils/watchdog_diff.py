@@ -111,7 +111,7 @@ class Rig:
             "followers": (
                 int(self.chip.read_uint32(TIMER_RAWL)),
                 float(self.chip.timer.snapshot()["tick_hz"]),
-                float(self.chip.ppb.tick_hz),
+                float(self.chip.ppb.snapshot()["tick_hz"]),
             ),
         }
 
