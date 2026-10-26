@@ -108,7 +108,7 @@ class RP2040RTC(BasePeripheral):
     def ctrl(self) -> int:
         return (
             (CTRL_FORCE_NOTLEAPYEAR if self.force_not_leap_year else 0)
-            | (CTRL_RTC_ACTIVE if self.running else 0)
+            | (CTRL_RTC_ACTIVE if self._running else 0)
             | (CTRL_RTC_ENABLE if self.enable else 0)
         )
 
@@ -119,7 +119,7 @@ class RP2040RTC(BasePeripheral):
         self._retime(False)
 
     @property
-    def running(self) -> bool:
+    def _running(self) -> bool:
         """The counter is counting: enabled, and clk_rtc runs."""
         return self.enable and self._clk_rtc > 0
 
@@ -165,17 +165,17 @@ class RP2040RTC(BasePeripheral):
         self._clk_rtc = clk_rtc
         self._retime(True)
 
-    def second_nanos(self) -> float:
+    def _second_nanos(self) -> float:
         """One second of the counter in simulated nanoseconds: (CLKDIV_M1 + 1) periods of clk_rtc."""
         return (self.clkdiv_m1 + 1) * 1e9 / self._clk_rtc
 
     def _retime(self, restart: bool) -> None:
-        """The divider runs while `running`; `restart` begins a new second (a load, a change of rate or of divider), otherwise a second already under way is left alone."""
-        if not self.running:
+        """The divider runs while `_running`; `restart` begins a new second (a load, a change of rate or of divider), otherwise a second already under way is left alone."""
+        if not self._running:
             self._alarm.cancel()
             self._alarm_pending = False
         elif restart or not self._alarm_pending:
-            self._alarm.schedule(self.second_nanos())
+            self._alarm.schedule(self._second_nanos())
             self._alarm_pending = True
 
     def _on_second(self) -> None:
@@ -235,7 +235,7 @@ class RP2040RTC(BasePeripheral):
         self.check_interrupts()
 
     def snapshot(self) -> dict[str, int | float | bool]:
-        """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `running`, the alarm match, the two counter words)."""
+        """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `_running`, the alarm match, the two counter words)."""
         return {
             "clkdiv_m1": self.clkdiv_m1,
             "setup0": self.setup0,
@@ -255,8 +255,8 @@ class RP2040RTC(BasePeripheral):
             "second": self.second,
             "latched_date": self.latched_date,
             "ctrl": self.ctrl,
-            "running": self.running,
-            "second_nanos": self.second_nanos() if self.running else 0.0,
+            "running": self._running,
+            "second_nanos": self._second_nanos() if self._running else 0.0,
             "match_ena": self.match_ena,
             "raw_interrupt": self.raw_interrupt,
             "date": self.date,

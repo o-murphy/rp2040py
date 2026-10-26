@@ -178,9 +178,9 @@ def mutant_rig(name: str) -> Rig:
             if name == "tx_capacity_ignores_fen":
                 return U.TX_FIFO_DEPTH
             if name == "tx_capacity_16":
-                return 16 if self.fifos_enabled else 1
+                return 16 if self._fifos_enabled else 1
             if name == "tx_capacity_two_without_fen":
-                return U.TX_FIFO_DEPTH if self.fifos_enabled else 2
+                return U.TX_FIFO_DEPTH if self._fifos_enabled else 2
             return super().tx_capacity
 
         @property
@@ -188,11 +188,11 @@ def mutant_rig(name: str) -> Rig:
             if name == "tx_trigger_ignores_fen":
                 return U._TX_TRIGGER_BY_SEL.get(self._ifls & 0x7, 16)
             if name == "tx_trigger_table_off":
-                return {0: 4, 1: 8, 2: 15, 3: 24, 4: 28}.get(self._ifls & 0x7, 16) if self.fifos_enabled else 0
+                return {0: 4, 1: 8, 2: 15, 3: 24, 4: 28}.get(self._ifls & 0x7, 16) if self._fifos_enabled else 0
             if name == "tx_trigger_reserved_zero":
-                return {0: 4, 1: 8, 2: 16, 3: 24, 4: 28}.get(self._ifls & 0x7, 0) if self.fifos_enabled else 0
+                return {0: 4, 1: 8, 2: 16, 3: 24, 4: 28}.get(self._ifls & 0x7, 0) if self._fifos_enabled else 0
             if name == "tx_trigger_reads_rx_field":
-                return {0: 4, 1: 8, 2: 16, 3: 24, 4: 28}.get((self._ifls >> 3) & 0x7, 16) if self.fifos_enabled else 0
+                return {0: 4, 1: 8, 2: 16, 3: 24, 4: 28}.get((self._ifls >> 3) & 0x7, 16) if self._fifos_enabled else 0
             return super().tx_trigger
 
         def _char_ns(self) -> float:
@@ -216,9 +216,9 @@ def mutant_rig(name: str) -> Rig:
                 return super()._tx_pump()
             moved = False
             while not self._tx_shifting and not self.tx_fifo.empty:
-                if name != "p_ignores_enable" and not self.enabled:
+                if name != "p_ignores_enable" and not self._enabled:
                     break
-                if name != "p_ignores_txe" and not self.tx_enabled:
+                if name != "p_ignores_txe" and not self._tx_enabled:
                     break
                 before = self.tx_fifo.item_count
                 byte = self.tx_fifo.pull()
@@ -286,10 +286,10 @@ def mutant_rig(name: str) -> Rig:
 
         def _update_dreq(self) -> None:
             if name == "dreq_tx_ignores_full":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
                 rx = (
-                    self.enabled
-                    and self.rx_enabled
+                    self._enabled
+                    and self._rx_enabled
                     and bool(self._dmacr & U.DMACR_RXDMAE)
                     and not self.rx_fifo.empty
                     and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
@@ -299,14 +299,14 @@ def mutant_rig(name: str) -> Rig:
                 return
             if name == "dreq_tx_when_not_empty":
                 tx = (
-                    self.enabled
-                    and self.tx_enabled
+                    self._enabled
+                    and self._tx_enabled
                     and bool(self._dmacr & U.DMACR_TXDMAE)
                     and self.tx_fifo.item_count < self.tx_capacity - 1
                 )
                 rx = (
-                    self.enabled
-                    and self.rx_enabled
+                    self._enabled
+                    and self._rx_enabled
                     and bool(self._dmacr & U.DMACR_RXDMAE)
                     and not self.rx_fifo.empty
                     and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
@@ -315,36 +315,42 @@ def mutant_rig(name: str) -> Rig:
                 (self.rp2040.dma.set_dreq if rx else self.rp2040.dma.clear_dreq)(self.dreq.rx)
                 return
             if name == "dreq_tx_ignores_dmacr":
-                tx = self.enabled and self.tx_enabled
-                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
-            elif name == "dreq_tx_ignores_txe":
-                tx = self.enabled and bool(self._dmacr & U.DMACR_TXDMAE)
-                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
-            elif name == "dreq_rx_ignores_dmacr":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
-                rx = self.enabled and self.rx_enabled and not self.rx_fifo.empty
-            elif name == "dreq_rx_when_empty":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
-                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE)
-            elif name == "dreq_rx_ignores_rxe":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
-                rx = self.enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
-            elif name == "dreq_ignores_dmaonerr":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
-                rx = self.enabled and self.rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
-            elif name == "dreq_swapped_channels":
-                tx = self.enabled and self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                tx = self._enabled and self._tx_enabled
                 rx = (
-                    self.enabled
-                    and self.rx_enabled
+                    self._enabled and self._rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+                )
+            elif name == "dreq_tx_ignores_txe":
+                tx = self._enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = (
+                    self._enabled and self._rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+                )
+            elif name == "dreq_rx_ignores_dmacr":
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self._enabled and self._rx_enabled and not self.rx_fifo.empty
+            elif name == "dreq_rx_when_empty":
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self._enabled and self._rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE)
+            elif name == "dreq_rx_ignores_rxe":
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = self._enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+            elif name == "dreq_ignores_dmaonerr":
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = (
+                    self._enabled and self._rx_enabled and bool(self._dmacr & U.DMACR_RXDMAE) and not self.rx_fifo.empty
+                )
+            elif name == "dreq_swapped_channels":
+                tx = self._enabled and self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                rx = (
+                    self._enabled
+                    and self._rx_enabled
                     and bool(self._dmacr & U.DMACR_RXDMAE)
                     and not self.rx_fifo.empty
                     and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
                 )
             elif name == "dreq_ignores_uarten":
-                tx = self.tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
+                tx = self._tx_enabled and bool(self._dmacr & U.DMACR_TXDMAE)
                 rx = (
-                    self.rx_enabled
+                    self._rx_enabled
                     and bool(self._dmacr & U.DMACR_RXDMAE)
                     and not self.rx_fifo.empty
                     and not (self._dmacr & U.DMACR_DMAONERR and self._interrupt_status & U.UART_ERROR_INTERRUPTS)
@@ -366,18 +372,18 @@ def mutant_rig(name: str) -> Rig:
                 self.check_interrupts()
                 self._update_dreq()
                 return
-            if name == "feed_ignores_rxe" and self.enabled:
+            if name == "feed_ignores_rxe" and self._enabled:
                 self.rx_fifo.push(value)
                 self._interrupt_status |= U.UARTRXINTR
                 self.check_interrupts()
                 self._update_dreq()
                 return
-            if name == "overrun_no_status" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+            if name == "overrun_no_status" and self._enabled and self._rx_enabled and self.rx_fifo.full:
                 return
-            if name == "overrun_no_interrupt" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+            if name == "overrun_no_interrupt" and self._enabled and self._rx_enabled and self.rx_fifo.full:
                 self._rsr |= U.RSR_OE
                 return
-            if name == "overrun_pushes" and self.enabled and self.rx_enabled and self.rx_fifo.full:
+            if name == "overrun_pushes" and self._enabled and self._rx_enabled and self.rx_fifo.full:
                 self._rsr |= U.RSR_OE
                 self._interrupt_status |= U.UARTOEINTR
                 self.rx_fifo.pull()
@@ -416,7 +422,7 @@ def mutant_rig(name: str) -> Rig:
 
         def write_uint32(self, offset: int, value: int) -> None:
             if offset == U.UARTDR and name in ("tx_full_overwrites", "tx_no_clear_above", "tx_write_when_full_pushes"):
-                if self.enabled and self.tx_enabled:
+                if self._enabled and self._tx_enabled:
                     if name == "tx_full_overwrites" and self.tx_full:
                         self.tx_fifo.pull()
                     if not self.tx_full or name == "tx_write_when_full_pushes":
@@ -428,7 +434,7 @@ def mutant_rig(name: str) -> Rig:
                     self._update_dreq()
                 return
             if offset == U.UARTDR and name == "dr_write_no_refresh":
-                if self.enabled and self.tx_enabled:
+                if self._enabled and self._tx_enabled:
                     if not self.tx_full:
                         self.tx_fifo.push(value & 0xFF)
                         if self.tx_fifo.item_count > self.tx_trigger:
@@ -437,7 +443,7 @@ def mutant_rig(name: str) -> Rig:
                     self.check_interrupts()
                 return
             if offset == U.UARTDR and name == "dr_write_masked_9":
-                if self.enabled and self.tx_enabled:
+                if self._enabled and self._tx_enabled:
                     if not self.tx_full:
                         self.tx_fifo.push(value & 0x1FF)
                     self._tx_pump()
@@ -520,14 +526,14 @@ def mutant_rig(name: str) -> Rig:
                 self.check_interrupts()
                 return
             if offset == U.UARTDR and name == "dr_write_ignores_txe":
-                if self.enabled:
+                if self._enabled:
                     if self.on_byte:
                         self.on_byte(value & 0xFF)
                     self._interrupt_status |= U.UARTTXINTR
                     self.check_interrupts()
                 return
             if offset == U.UARTDR and name == "loopback_ignored":
-                if self.enabled and self.tx_enabled:
+                if self._enabled and self._tx_enabled:
                     if self.on_byte:
                         self.on_byte(value & 0xFF)
                     self._interrupt_status |= U.UARTTXINTR

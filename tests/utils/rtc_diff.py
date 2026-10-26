@@ -369,7 +369,7 @@ def mutant_rig(name: str) -> Rig:
             base.ctrl.fset(self, value)  # type: ignore[attr-defined]
 
         @property  # type: ignore[misc]
-        def running(self) -> bool:
+        def _running(self) -> bool:
             if name == "running_ignores_clock":
                 return self.enable
             if name == "running_ignores_enable":
@@ -455,12 +455,12 @@ def mutant_rig(name: str) -> Rig:
             if name == "load_dotw_ignored":
                 self.dotw = 0
 
-        def second_nanos(self) -> float:
+        def _second_nanos(self) -> float:
             if name == "second_ignores_clkdiv":
                 return 1e9 / self._clk_rtc
             if name == "second_clkdiv_without_plus_one":
                 return max(self.clkdiv_m1, 1) * 1e9 / self._clk_rtc
-            return super().second_nanos()
+            return super()._second_nanos()
 
         def clk_rtc_changed(self, clk_rtc: float) -> None:
             if name == "clk_rtc_change_keeps_phase":
@@ -472,9 +472,9 @@ def mutant_rig(name: str) -> Rig:
             super().clk_rtc_changed(clk_rtc)
 
         def _retime(self, restart: bool) -> None:
-            if name == "disable_does_not_stop" and not self.running and self._alarm_pending:
+            if name == "disable_does_not_stop" and not self._running and self._alarm_pending:
                 return
-            if name == "restart_on_every_ctrl_write" and restart is False and self.running:
+            if name == "restart_on_every_ctrl_write" and restart is False and self._running:
                 restart = True
             super()._retime(restart)
 

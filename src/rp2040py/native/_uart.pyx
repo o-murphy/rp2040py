@@ -13,7 +13,7 @@ shift register is an alarm of the chip's C++ clock, so a character's time on the
 
 The API is the reference's: the registers' private attributes (`_ctrl_register`, `_line_ctrl_register`, `_int_divisor`, `_frac_divisor`,
 `_interrupt_mask`, `_interrupt_status`, readable and writable - `tests/test_chip_reset.py` pokes them), `rx_fifo` (a view with the reference
-FIFO's attribute names), `flags`, `enabled`/`tx_enabled`/`rx_enabled`/`fifos_enabled`, `word_length`, `baud_divider`, `baud_rate`,
+FIFO's attribute names), `flags`, `baud_divider`, `baud_rate`,
 `feed_byte`, `check_interrupts`, `reset`, `on_byte`/`on_baud_rate_change`, `tx_fifo` (a view), `tx_full`/`tx_capacity`/`tx_trigger`, plus `BasePeripheral`'s surface (name,
 rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/...). Unlike the DMA it does not need the chip's bus.
 """

@@ -117,17 +117,12 @@ class RPTimer(BasePeripheral):
             self.rp2040.set_interrupt(irq, False)
 
     @property
-    def int_status(self) -> int:
+    def _int_status(self) -> int:
         return (self._int_raw & self._int_enable) | self._int_force
-
-    @property
-    def tick_hz(self) -> float:
-        """The watchdog's tick as this block was last told (0: not running)."""
-        return self._tick_hz
 
     def snapshot(self) -> dict[str, int | float]:
         """What the TIMER holds that its registers do not show: the tick it counts on and the interrupt lines it drives (everything else is read over the bus)."""
-        return {"tick_hz": self.tick_hz, "int_status": self.int_status}
+        return {"tick_hz": self._tick_hz, "int_status": self._int_status}
 
     def _frozen(self) -> bool:
         """The count does not advance: PAUSE is set, or the watchdog's tick is not running ("The Watchdog tick must be running for the timer to start counting", datasheet 4.6.4)."""
@@ -211,7 +206,7 @@ class RPTimer(BasePeripheral):
         if offset == INTF:
             return self._int_force
         if offset == INTS:
-            return self.int_status
+            return self._int_status
 
         if offset == ARMED:
             result = 0
@@ -315,7 +310,7 @@ class RPTimer(BasePeripheral):
         self._check_interrupts()
 
     def _check_interrupts(self) -> None:
-        int_status = self.int_status
+        int_status = self._int_status
         for i in range(len(self.alarms)):
             self.rp2040.set_interrupt(TIMER_INTERRUPTS[i], bool(int_status & (1 << i)))
 
