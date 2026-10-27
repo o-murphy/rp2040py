@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native"
-CLASSES = {"control", "accessor", "port", "input", "config", "register", "state", "reset", "construct", "test"}
+CLASSES = {"control", "accessor", "port", "input", "config", "register", "reset", "construct", "test"}
 
 _ROOT = r"(?:self\._block|self\._mcu|rp2040\._mcu|chip\._mcu|self\._own|self\._core|\(<\w+> \w+\)\._block|\(<\w+> self\.\w+\)\._block|\w+\._block)"
 
@@ -66,14 +66,14 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("pin_directions_changed pin_values_changed", "input"),
         _c("advance stop", "control"),
         _c("write32 write_atomic", "register"),
-        _c("machines pin_directions pin_values stopped", "state"),
+        _c("machines pin_directions pin_values stopped", "test"),
         _c("reset", "reset"),
     ),
     "_pll": _c("frequency", "config"),
-    "_ppb": _merge(_c("timer", "state"), _c("clk_sys_changed tick_changed", "plumbing"), _c("reset", "reset")),
+    "_ppb": _merge(_c("timer", "test"), _c("clk_sys_changed tick_changed", "plumbing"), _c("reset", "reset")),
     "_pwm": _merge(
         _c("gpio_on_input", "input"),
-        _c("channels gpio_direction gpio_value", "state"),
+        _c("channels gpio_direction gpio_value", "test"),
         _c("reset", "reset"),
     ),
     "_rosc": _merge(
@@ -93,7 +93,7 @@ SURFACE: dict[str, dict[str, str]] = {
     "_rtc": _merge(_c("clk_rtc_changed", "plumbing"), _c("reset", "reset")),
     "_simulator": _merge(_c("pio_block", "accessor"), _c("begin_batch run set_monotonic use_clock", "control")),
     "_sio": _merge(
-        _c("gpio_output_enable gpio_value qspi_gpio_output_enable qspi_gpio_value", "state"),
+        _c("gpio_output_enable gpio_value qspi_gpio_output_enable qspi_gpio_value", "test"),
         _c("read_wide window_handler write32", "register"),
         _c("update_hardware_divider", "plumbing"),
         _c("init", "construct"),
@@ -134,7 +134,7 @@ SURFACE: dict[str, dict[str, str]] = {
     "_watchdog": _merge(
         _c("fire_timeout", "control"),
         _c("tick_tap tick_tap_ctx", "port"),
-        _c("timer", "state"),
+        _c("timer", "test"),
         _c("clk_ref_changed", "plumbing"),
         _c("reset", "reset"),
     ),

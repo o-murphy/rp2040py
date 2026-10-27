@@ -63,16 +63,6 @@ cdef tuple _STATES = (
 
 # --- the C++ pin's host: what only Python can answer ----------------------------------------------------------------------
 
-cdef cppbool _source_trampoline(void* ctx, uint32_t source, uint32_t* out) noexcept:
-    cdef GPIOPinBank owner = <GPIOPinBank> ctx
-    try:
-        out[0] = <uint32_t> owner._world_source(source)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef cppbool _change_trampoline(void* ctx, uint32_t pin_index, int new_state, int old_state) noexcept:
     cdef GPIOPinBank owner = <GPIOPinBank> ctx
     try:
@@ -133,7 +123,6 @@ cdef class GPIOPinBank:
             self._bank = <PinBank*> <size_t> rp2040._native_pins_address(mcu_bank)
             return
         self._bank = &self._own
-        host.source = _source_trampoline
         host.on_change = _change_trampoline
         mcu = native_mcu(rp2040)
         if mcu != NULL and first == 0 and count == 30:
@@ -154,28 +143,6 @@ cdef class GPIOPinBank:
             raise_if_pending()
 
     # What the C++ bank asks of the world, as methods: the trampolines above call them for a bank made directly, and the chip's host calls them for the bank the `Mcu` holds.
-    def _world_source(self, source):
-        rp = self.rp2040
-        if source == kSrcSioOe:
-            return <unsigned int> rp.sio.gpio_output_enable
-        if source == kSrcSioValue:
-            return <unsigned int> rp.sio.gpio_value
-        if source == kSrcPio0Oe:
-            return <unsigned int> rp.pio[0].pin_directions
-        if source == kSrcPio0Value:
-            return <unsigned int> rp.pio[0].pin_values
-        if source == kSrcPio1Oe:
-            return <unsigned int> rp.pio[1].pin_directions
-        if source == kSrcPio1Value:
-            return <unsigned int> rp.pio[1].pin_values
-        if source == kSrcSioQspiOe:
-            return <unsigned int> rp.sio.qspi_gpio_output_enable
-        if source == kSrcSioQspiValue:
-            return <unsigned int> rp.sio.qspi_gpio_value
-        if source == kSrcPwmDirection:
-            return <unsigned int> rp.pwm.gpio_direction
-        return <unsigned int> rp.pwm.gpio_value  # kSrcPwmValue
-
     def _world_changed(self, pin_index, new_state, old_state):
         cdef GPIOPin pin = <GPIOPin> self.shells[pin_index - self.first]
         value = _STATES[new_state]
