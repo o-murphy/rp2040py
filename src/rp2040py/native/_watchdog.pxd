@@ -46,6 +46,6 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
 cdef class RPWatchdog(NativeBlock):
     cdef WatchdogBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
-    cdef public object on_watchdog_trigger
+    cdef object _on_watchdog_trigger
     cdef public object timer
     cdef object _tick_listeners

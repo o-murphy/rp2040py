@@ -483,6 +483,8 @@ public:
         vreg_.record_reset_cause(flag);
         return true;
     }
+    // Installs (or, with nullptr, takes away) the host's hook for a reset request; with none the chip resets itself.
+    void set_reset_requested(bool (*fn)(void* ctx, uint32_t cause)) noexcept { host_world_.reset_requested = fn; }
     bool enter_reset_code(uint32_t cause) noexcept { return enter_reset(static_cast<McuResetCause>(cause)); }
     // Out of reset: the core at the flash's entry point, where the boot ROM would have left it (the ROM image is optional for a host, record 0096 F2).
     void leave_reset() noexcept { cpu.registers[15] = kFlashStart; }
@@ -876,17 +878,24 @@ private:
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         return i->mcu->set_interrupt(kIrqIoBank0, i->mcu->gpio_bank_.any_irq_value());
     }
+    // A reset was asked for. With a host hook installed (`set_reset_requested`) the host decides what it is; without one the chip does it itself - that is the default and what a host that has nothing
+    // to add gets for free: SYSRESETREQ resets the core and the PPB and restarts at the flash's entry point, the watchdog resets the chip (`enter_reset`, cause WATCHDOG) and leaves reset.
     static void ppb_reset_request(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         if (m->host_world_.reset_requested != nullptr) {
             (void)m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestSysResetReq);
         } else {
             (void)m->cpu.reset();  // "Reset the core only" (datasheet 2.4.2.9)
+            m->ppb_.reset();
+            m->leave_reset();
         }
     }
     static bool watchdog_trigger(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.reset_requested == nullptr || m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestWatchdog);
+        if (m->host_world_.reset_requested != nullptr) return m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestWatchdog);
+        if (!m->enter_reset(kMcuResetWatchdog)) return false;
+        m->leave_reset();
+        return true;
     }
     // The watchdog's tick moved: the TIMER and SysTick count on it.
     static bool watchdog_tick(void* chip, double tick_hz) noexcept {

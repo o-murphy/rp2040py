@@ -71,7 +71,6 @@ class BaseDevice:
         # reasonably set it to a plain string) - load_uf2() itself wants a real PathLike.
         load_uf2(Path(board.image), self.mcu)
         self.cdc = USBCDC(self.mcu.usb_ctrl)
-        self.mcu.watchdog.on_watchdog_trigger = self._on_watchdog_trigger
         # The second trigger installed downward onto an MCU-owned hook, same shape as the line
         # above (0089's D3): an `ExternalDevice` only ever gets `attach(rp2040)`, so without this
         # a RESET button could reach `mcu.reset()` but never `cdc.reset()` - a restarted chip

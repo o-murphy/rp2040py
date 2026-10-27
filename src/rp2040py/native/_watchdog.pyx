@@ -47,7 +47,7 @@ cdef class RPWatchdog(NativeBlock):
         self.rp2040 = rp2040
         self.name = name
         self.clock = clock
-        self.on_watchdog_trigger = self._default_watchdog_trigger
+        self._on_watchdog_trigger = self._default_watchdog_trigger
         self._tick_listeners = []
         self._from_mcu = mcu_index >= 0
         if mcu_index >= 0:
@@ -63,9 +63,18 @@ cdef class RPWatchdog(NativeBlock):
         timer._timer = &self._block.timer
         self.timer = timer
 
+    @property
+    def on_watchdog_trigger(self):
+        return self._on_watchdog_trigger
+
+    @on_watchdog_trigger.setter
+    def on_watchdog_trigger(self, hook):
+        self._on_watchdog_trigger = hook
+        self.rp2040._reset_hooks_changed()
+
     def _world_trigger(self):
         """The watchdog fired (or was triggered): the chip's reset, whatever `on_watchdog_trigger` is now."""
-        self.on_watchdog_trigger()
+        self._on_watchdog_trigger()
 
     def _default_watchdog_trigger(self):
         """The guest asked for a reset (TRIGGER, or a timeout) and nothing was installed over this hook: reset the chip (see the reference)."""

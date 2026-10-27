@@ -48,7 +48,7 @@ cdef class RPPPB(NativeBlock):
         self.clock = clock
         self._core = rp2040.core
         cpu = <Cpu*> (<size_t> native_cpu_address())
-        self.on_system_reset_request = self._default_system_reset_request
+        self._on_system_reset_request = self._default_system_reset_request
         self._from_mcu = mcu_index >= 0
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already and wired it (its window, its lines, the clock tree, the watchdog's tick) - this object is the Python view of it
@@ -69,9 +69,18 @@ cdef class RPPPB(NativeBlock):
         self.reset()
         self.rp2040.leave_reset()
 
+    @property
+    def on_system_reset_request(self):
+        return self._on_system_reset_request
+
+    @on_system_reset_request.setter
+    def on_system_reset_request(self, hook):
+        self._on_system_reset_request = hook
+        self.rp2040._reset_hooks_changed()
+
     def _world_system_reset(self):
         """AIRCR.SYSRESETREQ: whatever `on_system_reset_request` is now (the chip's host calls this for the block it built)."""
-        self.on_system_reset_request()
+        self._on_system_reset_request()
 
     def snapshot(self):
         """The block's state in one call: SysTick (flags, reload, the countdown and its alarm, the clocks it follows) and the system-control registers (SCR, the MPU)."""

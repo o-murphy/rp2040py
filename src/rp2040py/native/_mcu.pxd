@@ -134,6 +134,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         uint8_t* stop_address() noexcept
         uint8_t* real_io_address() noexcept
         PioBlock* pio_block(int index) noexcept
+        void set_reset_requested(bool (*fn)(void* ctx, uint32_t cause) noexcept) noexcept
         void build(const McuHost& host) noexcept
         RtcBlock& rtc() noexcept
         TbmanBlock& tbman() noexcept

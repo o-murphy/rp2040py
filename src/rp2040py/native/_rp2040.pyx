@@ -563,7 +563,6 @@ cdef class RP2040:
         world.usb_wire = &usb_wire
         world.usb_reset = _w_usb_reset
         world.bus_reset = _w_bus_reset
-        world.reset_requested = _w_reset_requested
         world.adc_channel_value = _w_adc_channel_value
         self._mcu.build(world)
 
@@ -738,6 +737,17 @@ cdef class RP2040:
         if not self._mcu.enter_reset_code(_CAUSE_CODES[cause]):
             raise_if_pending()
         raise_if_pending()
+
+    def _reset_hooks_changed(self):
+        """A block's hook for a reset request was set: with both on their defaults the core resets the chip itself (no host hook); with one of them replaced, the host's hook is asked."""
+        custom = (
+            self.watchdog.on_watchdog_trigger != self.watchdog._default_watchdog_trigger
+            or self.ppb.on_system_reset_request != self.ppb._default_system_reset_request
+        )
+        if custom:
+            self._mcu.set_reset_requested(_w_reset_requested)
+        else:
+            self._mcu.set_reset_requested(NULL)
 
     def leave_reset(self) -> None:
         """Release the chip: point the core at flash's entry point, where the bootrom would have

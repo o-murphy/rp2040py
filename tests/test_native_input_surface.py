@@ -89,7 +89,7 @@ SURFACE: dict[str, dict[str, str]] = {
             "accessor",
         ),
         _c(
-            "bind_uart_peri_sinks build core1_running enter_reset_code leave_reset reset set_core1_enabled set_interrupt_unhooked set_irq_hook set_memory use_clock",
+            "bind_uart_peri_sinks build core1_running enter_reset_code leave_reset reset set_core1_enabled set_interrupt_unhooked set_irq_hook set_memory set_reset_requested use_clock",
             "control",
         ),
         _c("after_tap after_tap_ctx dreq_tap dreq_tap_ctx input_tap input_tap_ctx tap tap_ctx", "port"),

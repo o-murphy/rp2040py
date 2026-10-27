@@ -712,6 +712,19 @@ int main() {
             m.leave_reset();
             CHECK(m.cpu.registers[15] == 0x10000000);
         }
+
+        // With no hook of the host's the chip resets itself (the default): the watchdog's TRIGGER is `enter_reset(WATCHDOG)` + `leave_reset()`, AIRCR.SYSRESETREQ the core and the PPB; the host is not asked.
+        {
+            m.set_reset_requested(nullptr);
+            const int asked = world.resets + world.triggers, buses = world.bus_resets;
+            m.cpu.registers[15] = 0x20000000;
+            m.bus.write32(0x40058000 + 0x00, 1u << 31);  // WATCHDOG.CTRL.TRIGGER
+            CHECK(m.cpu.registers[15] == 0x10000000 && world.bus_resets == buses + 1);
+            m.cpu.registers[15] = 0x20000000;
+            m.bus.write32(0xE000ED0C, 0x05FA0004);  // AIRCR: VECTKEY | SYSRESETREQ
+            CHECK(m.cpu.registers[15] == 0x10000000);
+            CHECK(world.resets + world.triggers == asked);
+        }
     }
 
     if (failures == 0) std::printf("test_mcu: ok\n");

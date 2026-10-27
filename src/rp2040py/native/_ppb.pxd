@@ -46,5 +46,5 @@ cdef class RPPPB(NativeBlock):
     cdef PpbBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
     cdef public object systick_timer
-    cdef public object on_system_reset_request
+    cdef object _on_system_reset_request
     cdef object _core  # keeps the core (and so the `Cpu` the block points into) alive
