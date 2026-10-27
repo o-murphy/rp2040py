@@ -240,8 +240,14 @@ def test_a_pio_behind_many_short_idle_jumps_keeps_pace_with_a_clock_that_is_not_
 ):
     """133 MHz is 120.30 ticks per cycle. The idle jump hands the PIO the cycles it covers, and flooring each jump on its own dropped the fraction every time (8 of 8.31 cycles for a 1000-tick jump:
     the PIO ran 4 % slow against the clock). The fraction is now carried, as the CPU's own time carries it (record 0105, finding 2)."""
-    # The pure-Python loop gives a batch up after 5 ms of wall time; on a slow runner (Windows CI) that ends this one before its 500 jumps, and the carry is per batch. The test is about the carry.
+    # Both loops give a batch up after 5 ms of wall time; on a slow runner (Windows CI) that ends this one before its 500 jumps, and the carry is per batch. The test is about the carry.
     monkeypatch.setattr(_execute_batch_module, "_BATCH_YIELD_BUDGET_SECONDS", 1e9)
+    try:
+        from rp2040py.native import _simulator as native_simulator
+    except ImportError:  # (the pure-Python build)
+        pass
+    else:
+        monkeypatch.setattr(native_simulator, "BATCH_YIELD_BUDGET_SECONDS", 1e9)
     chip = RP2040()
     chip.clk_sys = 133e6
     simulator = Simulator(rp2040=chip)
