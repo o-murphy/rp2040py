@@ -181,7 +181,7 @@ def test_psm_wdsel_resets_bit_reaches_every_peripheral(rp2040_factory):
     _drive_gpio_high(rp2040, 15)
     rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     _select_everything(rp2040)
-    assert rp2040.resets.wdsel == 0, "pico-sdk never writes RESETS.WDSEL - the PSM bit is the route"
+    assert rp2040.resets.snapshot()["wdsel"] == 0, "pico-sdk never writes RESETS.WDSEL - the PSM bit is the route"
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
@@ -211,7 +211,7 @@ def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.sio.gpio_output_enable == 0
-    assert WDSEL_RESETS & rp2040.psm.wdsel == 0, "only SIO was selected"
+    assert WDSEL_RESETS & rp2040.psm.snapshot()["wdsel"] == 0, "only SIO was selected"
 
 
 def test_the_remaining_register_blocks_reset_too(rp2040_factory):

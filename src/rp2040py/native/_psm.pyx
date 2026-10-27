@@ -31,11 +31,6 @@ cdef class RPPSM(NativeBlock):
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPPSM is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-    @property
-    def wdsel(self):
-        """Which power-manager domains a *watchdog* reset resets - read by `RP2040.reset()` on the watchdog path (0089's D5)."""
-        return self._block.wdsel
-
     def snapshot(self):
         cdef uint32_t w[3]
         self._block.snapshot(w)

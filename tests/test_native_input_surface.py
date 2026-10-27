@@ -53,7 +53,6 @@ SURFACE: dict[str, dict[str, str]] = {
     "_gpio_pin": _c("init", "construct"),
     "_gspi": _merge(
         _c("attach detach", "construct"),
-        _c("bits_in_word responding selected shift_register", "state"),
         _c("reset", "reset"),
     ),
     "_i2c": _merge(
@@ -72,13 +71,11 @@ SURFACE: dict[str, dict[str, str]] = {
     ),
     "_pll": _c("frequency", "config"),
     "_ppb": _merge(_c("timer", "state"), _c("clk_sys_changed tick_changed", "plumbing"), _c("reset", "reset")),
-    "_psm": _c("wdsel", "state"),
     "_pwm": _merge(
         _c("gpio_on_input", "input"),
         _c("channels gpio_direction gpio_value", "state"),
         _c("reset", "reset"),
     ),
-    "_reset": _c("wdsel", "state"),
     "_rosc": _merge(
         _c("bind_random_source", "input"), _c("frequency hz", "config"), _c("read", "register"), _c("reset", "reset")
     ),
@@ -123,14 +120,13 @@ SURFACE: dict[str, dict[str, str]] = {
     ),
     "_usb": _merge(
         _c(
-            "connect_device disconnect_device dpram_updated finish_read finish_write reset_device schedule_read send_setup_packet set_connected ep_status_stall_nak int_raw sie_status",
+            "connect_device disconnect_device dpram_updated finish_read finish_write reset_device schedule_read send_setup_packet set_connected has_device ep_status_stall_nak int_raw sie_status",
             "input",
         ),
         _c(
             "host_reaction_microseconds host_transaction_delay_microseconds read_delay_microseconds write_delay_microseconds",
             "config",
         ),
-        _c("has_device", "state"),
         _c("check_interrupts sie_status_updated stall_nak_updated", "plumbing"),
         _c("reset", "reset"),
     ),
@@ -155,9 +151,9 @@ SURFACE: dict[str, dict[str, str]] = {
 # watchdog's timeout): class "test", not on the host's list.
 _TEST_STIMULI = {
     "_busctrl": "set_perf_counter",
-    "_ppb": "clk_sys_changed tick_changed",
+    "_ppb": "clk_sys_changed tick_changed timer",
     "_timer": "tick_changed",
-    "_watchdog": "clk_ref_changed fire_timeout",
+    "_watchdog": "clk_ref_changed fire_timeout timer",
     "_rtc": "clk_rtc_changed",
     "_sio": "update_hardware_divider",
     "_usb": "check_interrupts sie_status_updated stall_nak_updated int_raw sie_status ep_status_stall_nak",

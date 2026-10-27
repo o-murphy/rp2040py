@@ -85,18 +85,3 @@ cdef class GspiShifter:
         """`GSPIBus.power_off()`'s share of the bit-level state: CS deasserted, nothing shifted, no response."""
         self._core.reset()
 
-    @property
-    def selected(self):
-        return bool(self._core.selected())
-
-    @property
-    def bits_in_word(self):
-        return self._core.bits_in_word()
-
-    @property
-    def shift_register(self):
-        return self._core.shift_register()
-
-    @property
-    def responding(self):
-        return bool(self._core.responding())

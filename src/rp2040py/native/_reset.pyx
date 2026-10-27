@@ -31,11 +31,6 @@ cdef class RPReset(NativeBlock):
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPReset is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-    @property
-    def wdsel(self):
-        """Which peripheral blocks a *watchdog* reset resets directly (see the reference)."""
-        return self._block.wdsel
-
     def snapshot(self):
         cdef uint32_t w[2]
         self._block.snapshot(w)
