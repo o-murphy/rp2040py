@@ -12,9 +12,10 @@ Classes - what a host would have to be given:
   config     a parameter the world sets or a device reads of the configuration                              (an export)
   register   the bus view of a block (`read` / `write32` / `write_atomic` / `window_handler`)               (the bus, one export)
   state      a read of a block's state that is not in its snapshot (a pin image, a flag)                    (to be moved into `snapshot()` or dropped)
-  plumbing   the shell talking to its own block (`check_interrupts`, `*_updated`, `tick_changed`, ...)      (not a border: to leave the shell, into the core)
   reset      a block's own `reset()`                                                                         (the chip's cascade does it; kept for the oracles)
   construct  creating / detaching the block                                                                 (the chip builds its blocks)
+  test       a stimulus the oracles and the tests apply directly to one block (the clock tree's notices, the USB's `raise_*`, the XIP counters): not a host input; kept in the shell
+             because the oracles need them, and not on the host's list (to go when an oracle can drive the same thing through the chip)
 """
 
 import re
@@ -23,7 +24,7 @@ from pathlib import Path
 import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native"
-CLASSES = {"control", "accessor", "port", "input", "config", "register", "state", "plumbing", "reset", "construct"}
+CLASSES = {"control", "accessor", "port", "input", "config", "register", "state", "reset", "construct", "test"}
 
 _ROOT = r"(?:self\._block|self\._mcu|rp2040\._mcu|chip\._mcu|self\._own|self\._core|\(<\w+> \w+\)\._block|\(<\w+> self\.\w+\)\._block|\w+\._block)"
 
@@ -67,7 +68,6 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("advance stop", "control"),
         _c("write32 write_atomic", "register"),
         _c("machines pin_directions pin_values stopped", "state"),
-        _c("check_changed_pins irq_updated notify_due recompute_due", "plumbing"),
         _c("reset", "reset"),
     ),
     "_pll": _c("frequency", "config"),
@@ -118,7 +118,6 @@ SURFACE: dict[str, dict[str, str]] = {
     "_uart": _merge(
         _c("feed_byte", "input"),
         _c("frac_divisor int_divisor", "config"),
-        _c("update_dreq", "plumbing"),
         _c("detach init", "construct"),
         _c("reset", "reset"),
     ),
@@ -132,7 +131,7 @@ SURFACE: dict[str, dict[str, str]] = {
             "config",
         ),
         _c("has_device", "state"),
-        _c("abort_done_updated buff_status_updated check_interrupts sie_status_updated stall_nak_updated", "plumbing"),
+        _c("check_interrupts sie_status_updated stall_nak_updated", "plumbing"),
         _c("reset", "reset"),
     ),
     "_vreg_and_chip_reset": _c("record_reset_cause set_psm_restart_flag", "control"),
@@ -144,12 +143,30 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("reset", "reset"),
     ),
     "_xip_ctrl": _merge(
-        _c("access pop_stream_fifo write_access ctr_acc ctr_hit", "input"),
+        _c("ctr_acc ctr_hit", "input"),
         _c("aux_window_handler write", "register"),
         _c("reset", "reset"),
     ),
     "_xosc": _c("reset", "reset"),
 }
+
+
+# What only the oracles and the tests apply to a block directly, whatever the shell's own code makes of it (the clock tree's notices to its consumers, the USB's `raise_*` hooks, the XIP counters, the
+# watchdog's timeout): class "test", not on the host's list.
+_TEST_STIMULI = {
+    "_busctrl": "set_perf_counter",
+    "_ppb": "clk_sys_changed tick_changed",
+    "_timer": "tick_changed",
+    "_watchdog": "clk_ref_changed fire_timeout",
+    "_rtc": "clk_rtc_changed",
+    "_sio": "update_hardware_divider",
+    "_usb": "check_interrupts sie_status_updated stall_nak_updated int_raw sie_status ep_status_stall_nak",
+    "_xip_ctrl": "ctr_acc ctr_hit",
+}
+for _shell, _names in _TEST_STIMULI.items():
+    for _name in _names.split():
+        assert _name in SURFACE[_shell], (_shell, _name)
+        SURFACE[_shell][_name] = "test"
 
 
 def _without_snapshot(text: str) -> str:

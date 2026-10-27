@@ -91,8 +91,6 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         uint32_t cpu_should_handle() noexcept
         uint32_t int_status() noexcept
         cppbool check_interrupts() noexcept
-        cppbool buff_status_updated() noexcept
-        cppbool abort_done_updated() noexcept
         cppbool stall_nak_updated() noexcept
         cppbool sie_status_updated() noexcept
         cppbool set_connected(cppbool value) noexcept

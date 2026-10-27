@@ -247,7 +247,7 @@ class RPPIO(BasePeripheral):
                     machine.restart()
                 if value & (1 << (8 + index)):
                     machine.clk_div_restart()
-            self.recompute_due()
+            self._recompute_due()
             should_run = value & 0xF
             if self.stopped and should_run:
                 self.stopped = False
@@ -271,14 +271,14 @@ class RPPIO(BasePeripheral):
 
         elif offset == IRQ:
             self.irq &= ~self.raw_write_value
-            self.irq_updated()
+            self._irq_updated()
 
         elif offset == INPUT_SYNC_BYPASS:
             self.input_sync_bypass = value
 
         elif offset == IRQ_FORCE:
             self.irq |= value & 0xFF  # IRQ_FORCE and IRQ have eight bits (3.7: 7:0, the rest reserved)
-            self.irq_updated()
+            self._irq_updated()
 
         elif offset in (
             FSTAT,
@@ -374,8 +374,8 @@ class RPPIO(BasePeripheral):
         if self.resolve_due_fp != NEVER_DUE:
             self.pin_values, self.pin_directions = self.held_image()
             self.resolve_due_fp = NEVER_DUE
-            self.recompute_due()
-            self.check_changed_pins()
+            self._recompute_due()
+            self._check_changed_pins()
 
     def schedule_resolve(self) -> None:
         """After a cycle's collation: if a held write was overwritten (by a higher-numbered machine's write, or by its own machine's side-set) the image falls back to the held
@@ -443,12 +443,12 @@ class RPPIO(BasePeripheral):
         self.rp2040.set_interrupt(first_irq, bool(self.irq0_int_status))
         self.rp2040.set_interrupt(first_irq + 1, bool(self.irq1_int_status))
 
-    def irq_updated(self) -> None:
+    def _irq_updated(self) -> None:
         for machine in self.machines:
             machine.check_wait()
         self._check_interrupts()
 
-    def check_changed_pins(self) -> None:
+    def _check_changed_pins(self) -> None:
         changed_pins = (self.old_pin_directions ^ self.pin_directions) | (self.old_pin_values ^ self.pin_values)
         if changed_pins:
             self.old_pin_directions = self.pin_directions
@@ -468,7 +468,7 @@ class RPPIO(BasePeripheral):
                     gpio[gpio_index].check_for_updates()
                 remaining &= remaining - 1
 
-    def recompute_due(self) -> None:
+    def _recompute_due(self) -> None:
         """Recomputes `next_due_fp` - the earliest cycle any state machine has something to do -
         from scratch. Called after anything that can change a machine's schedule other than the
         machine executing an instruction: enable/restart, a CLKDIV write, a stall beginning."""
@@ -478,7 +478,7 @@ class RPPIO(BasePeripheral):
                 next_due_fp = machine.next_due_fp
         self.next_due_fp = min(next_due_fp, self.resolve_due_fp)
 
-    def notify_due(self, due_fp: int) -> None:
+    def _notify_due(self, due_fp: int) -> None:
         """A machine just re-armed itself out of band - i.e. `check_wait()` unstalled it from an
         MMIO write, a GPIO edge or an IRQ, not from inside `advance()`. Only ever lowers
         `next_due_fp`, so the machine gets picked up on the very next `advance()` rather than
@@ -522,7 +522,7 @@ class RPPIO(BasePeripheral):
             # A held write was overwritten for one cycle and that cycle is over: back to the held image, and the pins hear it before this cycle's writes
             self.pin_values, self.pin_directions = self.held_image()
             self.resolve_due_fp = NEVER_DUE
-            self.check_changed_pins()
+            self._check_changed_pins()
         routing = self.pin_routing()
         self.in_cycle = routing
         try:
@@ -532,8 +532,8 @@ class RPPIO(BasePeripheral):
         if routing or self.pin_routing():
             self.collate()
             self.schedule_resolve()
-        self.recompute_due()
-        self.check_changed_pins()
+        self._recompute_due()
+        self._check_changed_pins()
 
     def _step_due_machines(self, cycle_fp: int) -> None:
         for machine in self.machines:

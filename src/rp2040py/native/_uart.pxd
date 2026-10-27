@@ -59,7 +59,6 @@ cdef extern from "uart.hpp" namespace "rp2040core":
         void tx_reset() noexcept
         uint32_t flags() noexcept
         cppbool enabled() noexcept
-        cppbool update_dreq() noexcept
         cppbool check_interrupts() noexcept
         cppbool feed_byte(uint32_t value) noexcept
         cppbool reset() noexcept

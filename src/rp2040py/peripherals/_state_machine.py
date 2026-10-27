@@ -370,7 +370,7 @@ class StateMachine:
         if not pio.in_cycle:  # a write outside a stepped cycle (SMx_INSTR, a woken machine): its own cycle
             pio.collate()
             pio.schedule_resolve()
-            pio.recompute_due()
+            pio._recompute_due()
 
     def set_out_pin_dirs(self, value: int, enable: bool = True) -> None:
         self.out_pin_direction = value
@@ -537,10 +537,10 @@ class StateMachine:
                 irq = irq_index(arg & 0x1F, self.index)
                 if clear:
                     self.pio.irq &= ~(1 << irq)
-                    self.pio.irq_updated()
+                    self.pio._irq_updated()
                 else:
                     self.pio.irq |= 1 << irq
-                    self.pio.irq_updated()
+                    self.pio._irq_updated()
                     if wait:
                         self.wait(WaitType.IRQ, False, irq)
 
@@ -697,7 +697,7 @@ class StateMachine:
             self.clock_div_int = value >> 16
             # CLKDIV_INT == 0 divides by 65536 (RP2040 datasheet 3.5.5), not by zero.
             self.div_fp = ((self.clock_div_int or 65536) << 8) | self.clock_div_frac
-            self.pio.recompute_due()
+            self.pio._recompute_due()
         elif absolute_offset == SM0_EXECCTRL:
             # bits 6:5 are reserved and 31 (EXEC_STALLED) is read only
             self.exec_ctrl = ((value & EXECCTRL_WRITE_MASK) | (self.exec_ctrl & 0x80000000)) & 0xFFFFFFFF
@@ -718,7 +718,7 @@ class StateMachine:
             self.execute_instruction(value & 0xFFFF)
             if self.waiting:
                 self.exec_ctrl |= EXECCTRL_EXEC_STALLED
-            self.pio.recompute_due()
+            self.pio._recompute_due()
         elif absolute_offset == SM0_PINCTRL:
             self.pin_ctrl = value
         else:
@@ -847,4 +847,4 @@ class StateMachine:
             wait_delay = max(wait_delay, 0)
             self.next_due_fp = self.pio.cycle_fp + (1 + wait_delay) * self.div_fp
             self.due_rearmed = True
-            self.pio.notify_due(self.next_due_fp)
+            self.pio._notify_due(self.next_due_fp)

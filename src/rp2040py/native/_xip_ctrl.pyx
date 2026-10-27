@@ -92,19 +92,6 @@ cdef class RPXIPCtrl(NativeBlock):
 
     # --- the bus protocol ----------------------------------------------------------------------------
 
-    def access(self, address):
-        self._block.access(<uint32_t> address)
-        raise_if_pending()
-
-    def write_access(self, address):
-        self._block.write_access(<uint32_t> address)
-        raise_if_pending()
-
-    def pop_stream_fifo(self):
-        cdef uint32_t word = self._block.pop_stream_fifo()
-        raise_if_pending()
-        return word
-
 cdef class RPXIPAux:
     """`XIP_AUX` (`0x50400000`): "a simple bus interface providing access only to the streaming FIFO" - a window onto the XIP block's FIFO."""
 

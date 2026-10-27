@@ -177,10 +177,6 @@ cdef class RPUART(NativeBlock):
             "flags": b.flags(),
         }
 
-    def _update_dreq(self):
-        if not self._block.update_dreq():
-            raise_if_pending()
-
     @property
     def baud_divider(self):
         return self._block.int_divisor + self._block.frac_divisor / 64.0  # a double: with cdivision the integer operands would divide as integers

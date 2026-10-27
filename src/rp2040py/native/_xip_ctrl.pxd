@@ -35,11 +35,8 @@ cdef extern from "xip_ctrl.hpp" namespace "rp2040core":
         cppbool reset() noexcept
         cppbool flush_ready() noexcept
         uint32_t stat() noexcept
-        void access(uint32_t address) noexcept
-        void write_access(uint32_t address) noexcept
         uint32_t sram_read(uint32_t address) noexcept
         void sram_write(uint32_t address, uint32_t value) noexcept
-        uint32_t pop_stream_fifo() noexcept
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept

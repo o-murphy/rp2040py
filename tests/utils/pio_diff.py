@@ -398,7 +398,7 @@ MUTATIONS: dict[str, tuple[str, str, str, int]] = {
     "no_resolve_after_an_overwrite": ("pio", "            self.resolve_due_fp = self.cycle_fp + (1 << 8)\n        else:", "            self.resolve_due_fp = NEVER_DUE\n        else:", 1),
     "resolve_two_cycles_late": ("pio", "            self.resolve_due_fp = self.cycle_fp + (1 << 8)\n        else:", "            self.resolve_due_fp = self.cycle_fp + (2 << 8)\n        else:", 1),
     "resolve_not_a_due_time": ("pio", "        self.next_due_fp = min(next_due_fp, self.resolve_due_fp)\n", "        self.next_due_fp = next_due_fp\n", 1),
-    "resolve_unheard_by_the_pins": ("pio", "            self.resolve_due_fp = NEVER_DUE\n            self.check_changed_pins()\n", "            self.resolve_due_fp = NEVER_DUE\n", 1),
+    "resolve_unheard_by_the_pins": ("pio", "            self.resolve_due_fp = NEVER_DUE\n            self._check_changed_pins()\n", "            self.resolve_due_fp = NEVER_DUE\n", 1),
     "sticky_never_routes": ("pio", "            machine.held_write is not None or machine.exec_ctrl & EXECCTRL_OUT_STICKY for machine in self.machines", "            machine.held_write is not None for machine in self.machines", 1),
     "stop_leaves_the_overwrite_pending": ("pio", "                self.stopped = True\n                self.settle_held_writes()\n", "                self.stopped = True\n", 1),
     "pio_reset_keeps_the_resolve_time": ("pio", "        self.in_cycle = False\n        self.resolve_due_fp = NEVER_DUE\n        self.irq0_int_enable = 0", "        self.in_cycle = False\n        self.irq0_int_enable = 0", 1),

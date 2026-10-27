@@ -109,10 +109,10 @@ def _run_batch(simulator: "Simulator", tick_batch: int, changed: list[bool]) -> 
     # `_has_runnable_machine()` scan this replaced. That scan existed because a machine sitting in
     # `waiting=True` gains nothing from being re-`step()`'d every single instruction: every
     # StateMachine wait type (IRQ, PIN, RX_FIFO, TX_FIFO/OUT) already has its own targeted,
-    # event-driven re-check elsewhere (RPPIO.irq_updated(), GPIOPin._apply_input_value(),
+    # event-driven re-check elsewhere (RPPIO._irq_updated(), GPIOPin._apply_input_value(),
     # StateMachine.read_fifo()/write_fifo()), and those flip `waiting` back to False the instant
     # whatever it's blocked on actually changes. Found live, not theorized: profiling a real CYW43
-    # boot after this file's own first version landed showed RPPIO.step()/check_changed_pins() as
+    # boot after this file's own first version landed showed RPPIO.step()/_check_changed_pins() as
     # ~55% of profiled time in a 20s window (14.3M calls) - PIO1's SM0 sat permanently
     # `waiting=True` after a stalled gSPI transaction (see 0027's own write-up) yet `pio.stopped`
     # stays False (a real hardware SM doesn't need to be explicitly disabled just because it's

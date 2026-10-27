@@ -368,14 +368,6 @@ cdef class RPUSBController(NativeBlock):
         if not self._block.stall_nak_updated():
             raise_if_pending()
 
-    def _abort_done_updated(self):
-        if not self._block.abort_done_updated():
-            raise_if_pending()
-
-    def _buff_status_updated(self):
-        if not self._block.buff_status_updated():
-            raise_if_pending()
-
     def _set_connected(self, connected):
         if not self._block.set_connected(bool(connected)):
             raise_if_pending()

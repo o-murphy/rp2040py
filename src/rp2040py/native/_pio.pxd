@@ -92,13 +92,9 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         uint32_t irq0_int_status() noexcept
         uint32_t irq1_int_status() noexcept
         cppbool check_interrupts() noexcept
-        cppbool irq_updated() noexcept
         cppbool gpio_values(uint32_t* out) noexcept
         void pin_values_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept
         void pin_directions_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept
-        cppbool check_changed_pins() noexcept
-        void recompute_due() noexcept
-        void notify_due(int64_t due_fp) noexcept
         cppbool advance(int64_t cycles) noexcept
         cppbool run_due() noexcept
         uint32_t read(uint32_t offset) noexcept
@@ -120,8 +116,5 @@ cdef class RPPIO(NativeBlock):
     cdef public unsigned int index
 
     cdef _warn(self, msg)
-    cpdef check_changed_pins(self)
-    cpdef recompute_due(self)
-    cpdef notify_due(self, long long due_fp)
     cpdef advance(self, long long cycles)
     cpdef step(self)

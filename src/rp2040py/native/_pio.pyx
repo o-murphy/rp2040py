@@ -149,22 +149,6 @@ cdef class RPPIO(NativeBlock):
                 if not m.check_wait():
                     raise_if_pending()
 
-    def irq_updated(self):
-        if not self._block.irq_updated():
-            raise_if_pending()
-
-    cpdef check_changed_pins(self):
-        if not self._block.check_changed_pins():
-            raise_if_pending()
-
-    cpdef recompute_due(self):
-        """Earliest cycle any machine has something to do, from scratch."""
-        self._block.recompute_due()
-
-    cpdef notify_due(self, long long due_fp):
-        """A machine re-armed itself out of band - only ever lowers next_due_fp."""
-        self._block.notify_due(due_fp)
-
     cpdef advance(self, long long cycles):
         """Advance this PIO block by `cycles` system clocks - the paced entry point `_execute_batch()` calls per CPU instruction. At most one
         instruction per machine per call, which docs/records/0043 depends on (see docs/records/0063 for the pacing)."""
