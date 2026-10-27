@@ -810,6 +810,9 @@ _BENCH_DONE = "bench-done"
 _BENCH_WORKLOAD = "exec('for i in range(30000): pass'); print('bench-' + 'done')"
 
 
+_IDLE_HOPS = 1000  # consecutive alarms that leave a sleeping core asleep before the bench calls the firmware idle
+
+
 def _bench_firmware(
     image: PathLike,
     littlefs: PathLike | None,
@@ -946,16 +949,21 @@ def _bench_firmware(
     step_batch = 1_000_000
     executed = 0
     idle_steps = 0
+    slept_in_a_row = 0
     idle = False
     while not tracker.found and not idle and (time.perf_counter() - start) < timeout:
         for _ in range(step_batch):
             if rp2040.core.waiting:
-                if not clock.has_scheduled_alarm:
-                    idle = True  # asleep with nothing scheduled: nothing will ever wake it, so ending here beats spinning to the timeout
+                # Asleep with nothing scheduled, or for _IDLE_HOPS alarms in a row that woke nothing (the RTC's second ticks for ever once a firmware has started it, and wakes no one): nothing
+                # will ever run again, so ending here beats spinning to the timeout.
+                if not clock.has_scheduled_alarm or slept_in_a_row >= _IDLE_HOPS:
+                    idle = True
                     break
                 idle_steps += 1  # the core sleeps (WFE/WFI): not an instruction, only a trip round this loop
+                slept_in_a_row += 1
                 clock.tick(clock.nanos_to_next_alarm)
             else:
+                slept_in_a_row = 0
                 cycles = rp2040.core.execute_instruction()
                 clock.tick(
                     cycles * 1e9 / rp2040.clk_sys
