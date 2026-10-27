@@ -99,7 +99,7 @@ class Rig:
         elif kind == "read":
             return int(chip.read_uint32(base + op[2] + op[1]))
         elif kind == "reset":
-            self.peripheral.reset()
+            self.chip.reset()
         elif kind == "count":
             self.peripheral.set_perf_counter(op[1], op[2])  # what a bus fabric that counted would do
         elif kind == "nmi":

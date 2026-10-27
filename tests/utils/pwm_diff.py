@@ -131,7 +131,7 @@ class Rig:
         ):  # a probe: the block's direction word set from outside. After a reset it is never zero (the A pins stay outputs), which the B-input path is gated on
             chip.pwm.gpio_direction = op[1]
         elif kind == "reset":
-            chip.pwm.reset()
+            chip.reset()
         elif kind == "check":
             return int(chip.read_uint32(PWM_BASE + P.INTS))  # the interrupt status, through the bus
         else:

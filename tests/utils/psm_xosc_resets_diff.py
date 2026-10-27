@@ -108,7 +108,7 @@ class Rig:
         elif kind == "read":
             return int(chip.read_uint32(base + op[2] + op[1]))
         elif kind == "reset":
-            self.peripheral.reset()
+            self.chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

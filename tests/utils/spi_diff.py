@@ -138,7 +138,7 @@ class Rig:
         elif kind == "check":
             return int(chip.read_uint32(SPI0_BASE + P.SSPMIS))  # the interrupt status, through the bus
         elif kind == "reset":
-            spi.reset()
+            chip.reset()
         elif kind == "clk":
             chip.clk_peri = op[1]
         elif kind == "tick":

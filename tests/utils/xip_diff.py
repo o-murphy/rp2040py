@@ -115,7 +115,7 @@ class Rig:
         elif kind == "tick":
             chip.clock.tick(op[1])
         elif kind == "reset":
-            chip.xip_ctrl.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

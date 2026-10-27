@@ -187,7 +187,7 @@ class Rig:
         elif kind == "peek":
             return int(chip.read_uint32(op[1]))
         elif kind == "reset":
-            chip.dma.reset()
+            chip.reset()
         elif kind == "clk":
             set_clk_sys(
                 chip, op[1]

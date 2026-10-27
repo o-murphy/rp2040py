@@ -184,7 +184,7 @@ class Rig:
         elif kind == "check":
             return int(chip.read_uint32(I2C0_BASE + I.IC_INTR_STAT))  # the interrupt status, through the bus
         elif kind == "reset":
-            i2c.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

@@ -116,7 +116,7 @@ class Rig:
         elif kind == "check":
             return int(chip.read_uint32(UART0_BASE + U.UARTIMIS))  # the interrupt status, through the bus
         elif kind == "reset":
-            uart.reset()
+            chip.reset()
         elif kind == "callbacks":
             self.attach_callbacks(op[1], op[2])
         elif kind == "clk":

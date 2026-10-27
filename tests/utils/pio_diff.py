@@ -129,7 +129,7 @@ class Rig:
             chip.gpio[pin].pad_value |= 0x40  # input enable
             chip.gpio[pin].check_for_updates()
         elif kind == "reset":
-            chip.pio[op[1]].reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

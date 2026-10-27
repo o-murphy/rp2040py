@@ -82,7 +82,7 @@ class Rig:
         elif kind == "rom":
             self.set_rom_version(op[1])
         elif kind == "reset":
-            self.peripheral.reset()
+            self.chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

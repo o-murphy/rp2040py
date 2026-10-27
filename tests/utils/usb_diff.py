@@ -182,7 +182,7 @@ class Rig:
         elif kind == "reset_device":
             usb.reset_device()
         elif kind == "reset":
-            usb.reset()
+            chip.reset()
         elif kind == "connect":
             usb.connect_device(FakeDevice(self.log))
         elif kind == "disconnect":

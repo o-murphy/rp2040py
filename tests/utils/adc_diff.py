@@ -145,7 +145,7 @@ class Rig:
         elif kind == "check":
             return int(chip.read_uint32(ADC_BASE + P.INTS))  # the interrupt status, through the bus
         elif kind == "reset":
-            adc.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

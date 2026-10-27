@@ -139,7 +139,7 @@ class Rig:
         elif kind == "service":  # the core takes a pending exception (or not)
             return bool(chip.core.check_for_interrupts())
         elif kind == "reset":
-            chip.ppb.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
