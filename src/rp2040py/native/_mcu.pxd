@@ -156,6 +156,7 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool reset(bool from_watchdog, bool preserve_flash) noexcept
         bool enter_reset_code(uint32_t cause) noexcept
         void leave_reset() noexcept
+        void bind_uart_peri_sinks() noexcept
         PwmBlock& pwm() noexcept
         PpbBlock& ppb() noexcept
         PpbBlock& ppb(uint8_t core) noexcept

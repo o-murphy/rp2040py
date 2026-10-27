@@ -43,19 +43,6 @@ cdef cppbool _sys_sink(void* ctx, double hz, double old) noexcept:
     return True
 
 
-cdef cppbool _peri_sink(void* ctx, double hz, double old) noexcept:
-    cdef RPClocks block = <RPClocks> ctx
-    try:
-        rp2040 = block.rp2040
-        rp2040.clk_peri = hz
-        for uart in rp2040.uart:
-            uart.clk_peri_changed()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef class RPClocks(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         pll_sys = rp2040.pll_sys  # the chip builds the PLLs first: the tree points at their C++ blocks
@@ -111,7 +98,9 @@ cdef class RPClocks(NativeBlock):
             # the DMA reads clk_sys from the tree and the tree keeps its cycle time current: the Python listener it registered for that is not needed any more
             (<RPDMA> dma)._block.bind_clock(clocks_clk_sys, <void*> self._block, self._block.clk_sys())
             ok = ok and self._block.add_sys_sink(dma_sys_sink, <void*> (<RPDMA> dma)._block)
-        ok = ok and self._block.add_peri_sink(_peri_sink, <void*> self)
+        bind_uart_sinks = getattr(rp2040, "_bind_uart_peri_sinks", None)  # (a stand-in chip of a test has none)
+        if bind_uart_sinks is not None:
+            bind_uart_sinks()
         ok = ok and self._block.add_ref_sink(watchdog_ref_sink, <void*> (<RPWatchdog> watchdog)._block)
         ok = ok and self._block.add_rtc_sink(rtc_rtc_sink, <void*> (<RP2040RTC> rtc)._block)
         if not ok:

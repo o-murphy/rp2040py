@@ -875,6 +875,10 @@ cdef class RP2040:
             raise_if_pending()
         raise_if_pending()
 
+    def _bind_uart_peri_sinks(self):
+        """Puts the UARTs back on the peripheral clock's sinks (the C++ ones: they announce the baud rate again when `clk_peri` changes); called by the clock tree's shell after it has rebuilt the lists."""
+        self._mcu.bind_uart_peri_sinks()
+
     def update_clocks(self):
         """Re-derives `clk_sys`/`clk_peri` from the PLL and CLOCKS registers and retunes what runs from them (see `peripherals.clocks.update_clocks`)."""
         self.clocks.update()

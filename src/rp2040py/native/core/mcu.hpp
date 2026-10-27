@@ -649,6 +649,13 @@ public:
         (void)clocks_.add_sys_sink(sys_changed_sink, this);
         (void)clocks_.add_ref_sink(watchdog_ref_sink, &watchdog_);
         (void)clocks_.add_rtc_sink(rtc_rtc_sink, &rtc_);
+        bind_uart_peri_sinks();
+    }
+    // The UARTs derive their baud rate from `clk_peri`: when it changes they announce the rate again (through the same `uart_baud` slot a write of IBRD / FBRD uses), unless the firmware has not set
+    // a divider yet. Added to the peri sinks in the order of the UARTs.
+    void bind_uart_peri_sinks() noexcept {
+        (void)clocks_.add_peri_sink(uart_peri_sink, &instance_[0]);
+        (void)clocks_.add_peri_sink(uart_peri_sink, &instance_[1]);
     }
     // Runs at the rate the clock tree has now: one instruction costs one `clk_sys` cycle, and a batch ends when `clk_sys` changes (so the next call starts at the new rate). What a wrapper calls in a loop
     // when it has no clock tree of its own to follow (the Python `Simulator` does it itself, with its own flag, and calls `run()`).
@@ -911,6 +918,12 @@ private:
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;
         return w.uart_baud == nullptr || w.uart_baud(w.ctx, i->index);
+    }
+    static bool uart_peri_sink(void* ctx, double, double) noexcept {  // clk_peri changed: re-announce the baud rate if a divider is set
+        const McuInstance* i = static_cast<const McuInstance*>(ctx);
+        const UartBlock& u = i->mcu->uart_[i->index];
+        if (u.int_divisor == 0 && u.frac_divisor == 0) return true;
+        return uart_baud(ctx);
     }
     static bool uart_bit_ns(void* ctx, double* nanos) noexcept {  // 16 x divisor bit-clocks of clk_peri per bit; 0 while the divisor or the clock is zero
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
