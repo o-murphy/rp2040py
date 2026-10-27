@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0b2] - 2026-10-27
+
 ### Changed
 - **Native shells: the last plumbing wrappers are gone** ([record 0096](docs/records/0096-cpp-mcu-core.md), `docs/tasks/narrow-the-input-plan.md`, step 5a-2): the PIO's `irq_updated`, `check_changed_pins`, `recompute_due`, `notify_due`, the UART's `_update_dreq`, the USB's `_abort_done_updated`, `_buff_status_updated` and the XIP's `access`, `write_access`, `pop_stream_fifo` (no caller outside the shells and the pure blocks); the pure PIO's four are private. The pin test has a class `test` for the stimuli only the oracles apply, and the class `plumbing` is empty.
 - **Native shells: read-only state getters and the pins' host-source fallback are gone** ([record 0096](docs/records/0096-cpp-mcu-core.md), `docs/tasks/narrow-the-input-plan.md`, steps 5b-1/5b-2): the `wdsel` properties of the PSM and RESETS shells (now `snapshot()["wdsel"]`), the gSPI shifter's `selected`, `bits_in_word`, `shift_register`, `responding`, and `GPIOPinBank._world_source` (the chip binds every pin source by address). The pin test's class `state` is empty; the pin images are class `test`. The per-block `reset()` entries (called only by the oracles) join the class `test` too (step 5c); no code change. The ten *config* names that were only the shells reading their own blocks are class `own` (step 5e); the host's list is 75 names.
@@ -1893,7 +1895,8 @@ end.
   measurements). Combined effect versus the initial port: real MicroPython + littlefs boot time
   dropped from minutes to seconds under CPython, and to single-digit seconds under PyPy.
 
-[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v1.0.0b1...HEAD
+[Unreleased]: https://github.com/o-murphy/rp2040py/compare/v1.0.0b2...HEAD
+[1.0.0b2]: https://github.com/o-murphy/rp2040py/compare/v1.0.0b1...v1.0.0b2
 [1.0.0b1]: https://github.com/o-murphy/rp2040py/compare/v0.3.6...v1.0.0b1
 [0.3.6]: https://github.com/o-murphy/rp2040py/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/o-murphy/rp2040py/compare/v0.3.4...v0.3.5
