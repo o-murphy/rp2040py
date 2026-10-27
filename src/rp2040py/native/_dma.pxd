@@ -50,7 +50,6 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         uint32_t timer(int index) noexcept
         uint64_t dreq_mask() noexcept
         cppbool dreq(uint32_t number) noexcept
-        double get_timer(uint32_t treq, cppbool* ok) noexcept
         cppbool set_dreq(uint32_t number) noexcept
         void clear_dreq(uint32_t number) noexcept
         cppbool check_interrupts() noexcept
@@ -66,4 +65,3 @@ cdef extern from "dma.hpp" namespace "rp2040core":
 cdef class RPDMA(NativeBlock):
     cdef DmaBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
-    cdef object _channels

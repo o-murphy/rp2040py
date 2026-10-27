@@ -10,8 +10,8 @@ peripheral that is native too never touches Python. What stays Python is the edg
 (`rp2040.set_interrupt`), `rp2040.clk_sys` (asked only when a pacing timer is actually running) and the logger, reached through
 trampolines whose failures are parked in the shared slot of `_pending.pyx` and re-raised by whoever called in.
 
-The API is the reference's: `channels` (views of the C++ channels: `index`, `active`, `start`, `abort`, `schedule_transfer` and the channel's registers), `snapshot()` (the whole state in one call),
-`set_dreq/clear_dreq`, `get_timer`, `check_interrupts`, `reset`, plus `BasePeripheral`'s surface (name, rp2040, clock, read_uint32, write_uint32, write_uint32_atomic, raw_write_value, warn/...).
+The API is the reference's: `snapshot()` (the whole state in one call, every channel included),
+`set_dreq/clear_dreq`, `check_interrupts`, `reset`, plus `BasePeripheral`'s surface (name, rp2040, clock, read_uint32, write_uint32, write_uint32_atomic, raw_write_value, warn/...).
 
 A DMA needs the native chip (its bus) and the native `SimulationClock` (its alarms are nodes of the C++ clock); a native
 `RP2040` always has both.
@@ -28,51 +28,6 @@ from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 
 __all__ = ("RPDMA",)
-
-
-cdef class _Channel:
-    """A view of one C++ channel with the reference channel's attribute names (`_ctrl`, `_read_addr`, ...) and methods."""
-
-    cdef RPDMA _owner
-    cdef DmaChannel* _channel
-
-    @property
-    def dma(self):
-        return self._owner
-
-    @property
-    def rp2040(self):
-        return self._owner.rp2040
-
-    @property
-    def index(self):
-        return self._channel.index
-
-    @property
-    def active(self):
-        return self._channel.active()
-
-    def start(self):
-        if not self._channel.start():
-            raise_if_pending()
-
-    def schedule_transfer(self):
-        if not self._channel.schedule_transfer():
-            raise_if_pending()
-
-    def abort(self):
-        self._channel.abort()
-
-    def read_uint32(self, offset):
-        return self._channel.read(<uint32_t> offset)
-
-    def write_uint32(self, offset, value):
-        if not self._channel.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def reset(self):
-        if not self._channel.reset():
-            raise_if_pending()
 
 
 cdef class RPDMA(NativeBlock):
@@ -98,19 +53,8 @@ cdef class RPDMA(NativeBlock):
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPDMA is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-        self._channels = []
-        cdef _Channel view
-        for i in range(12):
-            view = _Channel.__new__(_Channel)
-            view._owner = self
-            view._channel = &self._block.channels[i]
-            self._channels.append(view)
 
     # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def channels(self):
-        return self._channels
 
     def snapshot(self):
         """The controller's state in one call: every channel's registers and internals, the asserted DREQs, the raw interrupt word and the two statuses."""
@@ -153,14 +97,6 @@ cdef class RPDMA(NativeBlock):
         cdef int64_t number = dreq_channel
         if number >= 0:
             self._block.clear_dreq(<uint32_t> number)
-
-    def get_timer(self, treq):
-        """The number of microseconds for a cycle of the given DMA timer, or 0 if the timer is disabled."""
-        cdef cppbool ok
-        cdef double result = self._block.get_timer(<uint32_t> treq, &ok)
-        if not ok:
-            raise_if_pending()
-        return result
 
     def check_interrupts(self):
         if not self._block.check_interrupts():

@@ -126,3 +126,7 @@ Removed from the native shells (readers moved to `snapshot()`, which already had
 
 **ADC**: `num_channels` and `sample_time` are settable parameters, `start_adc_read` / `complete_adc_read` / `default_adc_read` are the world's inputs; there is no observation getter to remove. **PWM**: the native shell's `gpio_set`, `gpio_set_dir`, `gpio_read` and `clock_freq` had no caller in `src/`, `tests/`, the oracles or the scripts (the pure channels call the pure block's methods, and only the pure clock tree reads `clock_freq`), so they are removed, with their `.pxd` declarations; on the pure block the three methods are private (`_gpio_set`, `_gpio_set_dir`, `_gpio_read`; the one mutant that patches a call by text, `b_value_and`, was updated). Kept: `gpio_value` / `gpio_direction` (pin images: the pins read them, the tests and the pin oracle drive them) and `gpio_on_input`. Full oracle run: 3,536 tests.
 
+## Step 2d - done (2026-10-27): DMA
+
+Removed from the native shell: the `_Channel` view class and `RPDMA.channels` (about 40 lines; the only readers were `test_dma.py`, which now asks the snapshot - `cpu.dma.snapshot()["channels"][i][-1]` is `active` - and the oracle's own subclasses), and `RPDMA.get_timer` (its callers were the pure channel and the oracle's pure subclass). On the pure block `channels` / `get_timer` are `_channels` / `_get_timer`; the oracle's `Controller` / `Channel` subclasses follow. Kept: `set_dreq` / `clear_dreq` (the other blocks' requests, class I), `snapshot`, `check_interrupts`. Full oracle run: 3,536 tests.
+

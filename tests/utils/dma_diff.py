@@ -266,7 +266,7 @@ def mutant_rig(name: str) -> Rig:
                 return
             super().set_dreq(dreq_channel)
 
-        def get_timer(self, treq: int) -> float:
+        def _get_timer(self, treq: int) -> float:
             timers = {
                 _dma.TREQ.TIMER0: self._timer0,
                 _dma.TREQ.TIMER1: self._timer1,
@@ -284,7 +284,7 @@ def mutant_rig(name: str) -> Rig:
             if name == "timer_rate_uncapped" and treq in timers:  # a period shorter than one clock cycle
                 dividend, divisor = timers[treq] >> 16, timers[treq] & 0xFFFF
                 return 0 if divisor == 0 or dividend == 0 else ((divisor / dividend) * 1e6) / self.rp2040.clk_sys
-            return super().get_timer(treq)
+            return super()._get_timer(treq)
 
         def read_uint32(self, offset: int) -> int:
             if name == "abort_read_warns" and offset == _dma.CHAN_ABORT:
@@ -299,7 +299,7 @@ def mutant_rig(name: str) -> Rig:
     rig = Rig("pure")
     levels = dict.fromkeys(rig.chip.dma.snapshot()["dreq"], True)
     dma = Controller(rig.chip, "DMA")
-    dma.channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
+    dma._channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
     dma.dreq.update(levels)
     rig.chip.dma = dma
     rig.chip.peripherals[DMA_BASE >> 12] = BusView(dma)
@@ -567,7 +567,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         if last:
             count("finished.quiet" if ctrl & _dma.IRQ_QUIET else "finished.irq")
             if self._chain_to != self.index:
-                count("chain.valid" if self._chain_to < len(self.dma.channels) else "chain.invalid")
+                count("chain.valid" if self._chain_to < len(self.dma._channels) else "chain.invalid")
 
     def start(self: Any) -> None:
         count(
@@ -585,7 +585,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
             count("schedule.permanent")
         elif dma.dreq.get(self._treq_value, False):
             count("schedule.dreq_asserted")
-        elif dma.get_timer(self._treq_value):
+        elif dma._get_timer(self._treq_value):
             count("schedule.paced")
         else:
             count("schedule.stalled")
