@@ -133,7 +133,7 @@ class Rig:
         elif kind == "reset":
             chip.pwm.reset()
         elif kind == "check":
-            chip.pwm.check_interrupts()
+            return int(chip.read_uint32(PWM_BASE + P.INTS))  # the interrupt status, through the bus
         else:
             raise ValueError(f"unknown op {op!r}")
         return None

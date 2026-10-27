@@ -98,8 +98,4 @@ cdef class RPDMA(NativeBlock):
         if number >= 0:
             self._block.clear_dreq(<uint32_t> number)
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     # --- the native bus protocol ------------------------------------------------------------------

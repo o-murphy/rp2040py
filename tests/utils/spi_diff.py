@@ -136,7 +136,7 @@ class Rig:
                 self.pending.pop(0)
             spi.complete_transmit(op[1])
         elif kind == "check":
-            spi.check_interrupts()
+            return int(chip.read_uint32(SPI0_BASE + P.SSPMIS))  # the interrupt status, through the bus
         elif kind == "reset":
             spi.reset()
         elif kind == "clk":
@@ -335,7 +335,7 @@ def mutant_rig(name: str) -> Rig:
                 self._int_raw = (self._int_raw | P.SSPTXINTR) if tx_low else (self._int_raw & ~P.SSPTXINTR)
                 self._int_raw = (self._int_raw | P.SSPRXINTR) if rx_high else (self._int_raw & ~P.SSPRXINTR)
                 if self.int_status != prev_status:
-                    self.check_interrupts()
+                    self._check_interrupts()
                 self._update_dma_tx()
                 self._update_dma_rx()
                 return
@@ -367,19 +367,19 @@ def mutant_rig(name: str) -> Rig:
                 return
             if offset == P.SSPICR and name == "icr_decoded_value":
                 self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR))
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPICR and name == "icr_clears_all":
                 self._int_raw = 0
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPICR and name == "icr_clears_tx":
                 self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR | P.SSPTXINTR))
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPIMSC and name == "imsc_unmasked":
                 self._int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPCR0 and name == "cr0_unmasked":
                 self._control0 = value

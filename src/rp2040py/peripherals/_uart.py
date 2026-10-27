@@ -293,10 +293,10 @@ class RPUART(BasePeripheral):
         self._tx_shifting = False
         self._tx_emit(self._tx_byte)
         self._tx_pump()
-        self.check_interrupts()
+        self._check_interrupts()
         self._update_dreq()
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self._interrupt_status & self._interrupt_mask))
 
     def _update_dreq(self) -> None:
@@ -327,7 +327,7 @@ class RPUART(BasePeripheral):
             self.rx_fifo.push(value)
             # The RX interrupt is not held back until a trigger level (UARTIFLS): see the note on `_ifls`
             self._interrupt_status |= UARTRXINTR
-        self.check_interrupts()
+        self._check_interrupts()
         self._update_dreq()
 
     def read_uint32(self, offset: int) -> int:
@@ -337,7 +337,7 @@ class RPUART(BasePeripheral):
                 self._interrupt_status |= UARTRXINTR
             else:
                 self._interrupt_status &= ~UARTRXINTR
-            self.check_interrupts()
+            self._check_interrupts()
             self._update_dreq()
             return value
         if offset == UARTRSR:
@@ -392,7 +392,7 @@ class RPUART(BasePeripheral):
                     if self.tx_fifo.item_count > self.tx_trigger:
                         self._interrupt_status &= ~UARTTXINTR  # "cleared by writing data to the transmit FIFO until it becomes greater than the trigger level"
                 self._tx_pump()
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
 
         elif offset == UARTRSR:
@@ -418,7 +418,7 @@ class RPUART(BasePeripheral):
         elif offset == UARTCR:
             self._ctrl_register = value & CR_MASK
             if self._tx_pump():  # re-enabled with characters waiting
-                self.check_interrupts()
+                self._check_interrupts()
             self._update_dreq()
 
         elif offset == UARTIFLS:
@@ -430,11 +430,11 @@ class RPUART(BasePeripheral):
 
         elif offset == UARTIMSC:
             self._interrupt_mask = value & 0x7FF
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == UARTICR:
             self._interrupt_status &= ~self.raw_write_value
-            self.check_interrupts()
+            self._check_interrupts()
             self._update_dreq()  # DMAONERR: clearing the error interrupt lets the receive request through again
 
         else:

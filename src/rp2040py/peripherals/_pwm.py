@@ -345,13 +345,13 @@ class RPPWM(BasePeripheral):
             self.channels[0].en = value & (1 << 0)
         elif offset == INTR:
             self._int_raw &= ~(value & INT_MASK)
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTE:
             self._int_enable = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTF:
             self._int_force = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         else:
             super().write_uint32(offset, value)
 
@@ -361,7 +361,7 @@ class RPPWM(BasePeripheral):
 
     def channel_interrupt(self, index: int) -> None:
         self._int_raw |= 1 << index
-        self.check_interrupts()
+        self._check_interrupts()
 
         # We also set the DMA Request (DREQ) for the channel
         self.rp2040.dma.set_dreq(DREQChannel.DREQ_PWM_WRAP0 + index)
@@ -415,7 +415,7 @@ class RPPWM(BasePeripheral):
             "clock_freq": self.clock_freq,
         }
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.PWM_WRAP, bool(self.int_status))
 
     def _gpio_set(self, index: int, value: bool) -> None:
@@ -457,4 +457,4 @@ class RPPWM(BasePeripheral):
         self._int_raw = 0
         self._int_enable = 0
         self._int_force = 0
-        self.check_interrupts()
+        self._check_interrupts()

@@ -143,7 +143,7 @@ class Rig:
         elif kind == "start":
             adc.start_adc_read()
         elif kind == "check":
-            adc.check_interrupts()
+            return int(chip.read_uint32(ADC_BASE + P.INTS))  # the interrupt status, through the bus
         elif kind == "reset":
             adc.reset()
         else:
@@ -305,7 +305,7 @@ def mutant_rig(name: str) -> Rig:
                     if name != "c_no_dma":
                         self._update_dma()
                     if name != "c_no_interrupts":
-                        self.check_interrupts()
+                        self._check_interrupts()
             round_mask = (self.cs >> P.CS_RROBIN_SHIFT) & P.CS_RROBIN_MASK
             if round_mask and name != "c_no_round_robin":
                 channel = self._active_channel + (0 if name == "c_round_robin_same" else 1)
@@ -406,7 +406,7 @@ def mutant_rig(name: str) -> Rig:
             if offset == P.FCS and name == "fcs_over_not_cleared":
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.FCS and name == "fcs_no_check":
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
@@ -417,26 +417,26 @@ def mutant_rig(name: str) -> Rig:
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = value
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.FCS and name == "fcs_no_dma":  # the old behaviour: an FCS write did not touch the DREQ
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.DIV and name == "div_unmasked":
                 self.clock_div = value
                 return
             if offset == P.INTE and name == "inte_unmasked":
                 self.int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.INTE and name == "inte_no_check":
                 self.int_enable = value & P.FIFO_INT
                 return
             if offset == P.INTF and name == "intf_unmasked":
                 self.int_force = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.INTF and name == "intf_no_check":
                 self.int_force = value & P.FIFO_INT

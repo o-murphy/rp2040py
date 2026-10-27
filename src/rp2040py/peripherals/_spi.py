@@ -236,7 +236,7 @@ class RPSPI(BasePeripheral):
             self._int_raw |= SSPRORINTR
             # The interrupt line is the OR of the enabled raw interrupts, so the overrun reaches it at once. (`_fifos_updated()` below compares the status with the one it
             # sees on entry - after ROR was set - and so never noticed it: the line stayed low until something else changed.)
-            self.check_interrupts()
+            self._check_interrupts()
         self._fifos_updated()
         self._do_tx()
 
@@ -262,7 +262,7 @@ class RPSPI(BasePeripheral):
             "int_status": int(self.int_status),
         }
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self.int_status))
 
     def _fifos_updated(self) -> None:
@@ -276,7 +276,7 @@ class RPSPI(BasePeripheral):
         else:
             self._int_raw &= ~SSPRXINTR
         if self.int_status != prev_status:
-            self.check_interrupts()
+            self._check_interrupts()
 
         self._update_dma_tx()
         self._update_dma_rx()
@@ -346,7 +346,7 @@ class RPSPI(BasePeripheral):
             self._clock_divisor = value & CPSDVSR_MASK
         elif offset == SSPIMSC:
             self._int_enable = value & IMSC_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == SSPDMACR:
             self._dma_control = value & DMACR_MASK
             self._update_dma_tx()
@@ -355,6 +355,6 @@ class RPSPI(BasePeripheral):
             # By the bits the bus passed, not the alias-decoded value - the rule of the UART's and the DMA's write-1-to-clear registers (an alias decodes against a read
             # of ICR, which is write-only and reads as all ones here, so a CLR/XOR/SET write would otherwise clear the wrong bits).
             self._int_raw &= ~(self.raw_write_value & (SSPRTINTR | SSPRORINTR))
-            self.check_interrupts()
+            self._check_interrupts()
         else:
             super().write_uint32(offset, value)

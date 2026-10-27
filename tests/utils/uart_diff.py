@@ -114,7 +114,7 @@ class Rig:
         elif kind == "feed":
             uart.feed_byte(op[1])
         elif kind == "check":
-            uart.check_interrupts()
+            return int(chip.read_uint32(UART0_BASE + U.UARTIMIS))  # the interrupt status, through the bus
         elif kind == "reset":
             uart.reset()
         elif kind == "callbacks":
@@ -262,7 +262,7 @@ def mutant_rig(name: str) -> Rig:
             if name == "done_no_pump":
                 self._tx_shifting = False
                 self._tx_emit(self._tx_byte)
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return
             if name == "done_no_refresh":
@@ -273,13 +273,13 @@ def mutant_rig(name: str) -> Rig:
             if name == "done_keeps_shifting":
                 self._tx_emit(self._tx_byte)
                 self._tx_pump()
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return
             if name == "done_drops_byte":
                 self._tx_shifting = False
                 self._tx_pump()
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return
             super()._on_tx_done()
@@ -369,13 +369,13 @@ def mutant_rig(name: str) -> Rig:
             if name == "feed_ignores_enable":
                 self.rx_fifo.push(value)
                 self._interrupt_status |= U.UARTRXINTR
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return
             if name == "feed_ignores_rxe" and self._enabled:
                 self.rx_fifo.push(value)
                 self._interrupt_status |= U.UARTRXINTR
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return
             if name == "overrun_no_status" and self._enabled and self._rx_enabled and self.rx_fifo.full:
@@ -388,7 +388,7 @@ def mutant_rig(name: str) -> Rig:
                 self._interrupt_status |= U.UARTOEINTR
                 self.rx_fifo.pull()
                 self.rx_fifo.push(value)
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if name == "rx_full_overwrites" and self.rx_fifo.full:
                 self.rx_fifo.pull()
@@ -401,7 +401,7 @@ def mutant_rig(name: str) -> Rig:
         def read_uint32(self, offset: int) -> int:
             if offset == U.UARTDR and name == "dr_read_keeps_rxintr":
                 value = self.rx_fifo.pull()
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
                 return value
             if offset == U.UARTDR and name == "dr_read_no_dreq_update":
@@ -410,7 +410,7 @@ def mutant_rig(name: str) -> Rig:
                     self._interrupt_status |= U.UARTRXINTR
                 else:
                     self._interrupt_status &= ~U.UARTRXINTR
-                self.check_interrupts()
+                self._check_interrupts()
                 return value
             if offset == U.UARTIFLS and name == "ifls_reads_ilpr":
                 return self._ilpr
@@ -430,7 +430,7 @@ def mutant_rig(name: str) -> Rig:
                         if self.tx_fifo.item_count > self.tx_trigger and name != "tx_no_clear_above":
                             self._interrupt_status &= ~U.UARTTXINTR
                     self._tx_pump()
-                    self.check_interrupts()
+                    self._check_interrupts()
                     self._update_dreq()
                 return
             if offset == U.UARTDR and name == "dr_write_no_refresh":
@@ -440,14 +440,14 @@ def mutant_rig(name: str) -> Rig:
                         if self.tx_fifo.item_count > self.tx_trigger:
                             self._interrupt_status &= ~U.UARTTXINTR
                     self._tx_pump()
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == U.UARTDR and name == "dr_write_masked_9":
                 if self._enabled and self._tx_enabled:
                     if not self.tx_full:
                         self.tx_fifo.push(value & 0x1FF)
                     self._tx_pump()
-                    self.check_interrupts()
+                    self._check_interrupts()
                     self._update_dreq()
                 return
             if offset == U.UARTCR and name == "cr_no_pump":
@@ -470,19 +470,19 @@ def mutant_rig(name: str) -> Rig:
                 if self.on_byte:
                     self.on_byte(value & 0xFFF)
                 self._interrupt_status |= U.UARTTXINTR
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == U.UARTICR and name == "icr_decoded_value":
                 self._interrupt_status &= ~value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == U.UARTICR and name == "icr_clears_all":
                 self._interrupt_status = 0
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == U.UARTIMSC and name == "imsc_unmasked":
                 self._interrupt_mask = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == U.UARTIBRD and name == "ibrd_unmasked":
                 self._int_divisor = value & 0xFFFFF
@@ -523,25 +523,25 @@ def mutant_rig(name: str) -> Rig:
                 if self.on_byte:
                     self.on_byte(value & 0xFF)
                 self._interrupt_status |= U.UARTTXINTR
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == U.UARTDR and name == "dr_write_ignores_txe":
                 if self._enabled:
                     if self.on_byte:
                         self.on_byte(value & 0xFF)
                     self._interrupt_status |= U.UARTTXINTR
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == U.UARTDR and name == "loopback_ignored":
                 if self._enabled and self._tx_enabled:
                     if self.on_byte:
                         self.on_byte(value & 0xFF)
                     self._interrupt_status |= U.UARTTXINTR
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == U.UARTICR and name == "icr_no_dreq_update":
                 self._interrupt_status &= ~self.raw_write_value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             super().write_uint32(offset, value)
 

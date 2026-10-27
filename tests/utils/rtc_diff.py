@@ -478,7 +478,7 @@ def mutant_rig(name: str) -> Rig:
                 restart = True
             super()._retime(restart)
 
-        def check_interrupts(self) -> None:
+        def _check_interrupts(self) -> None:
             raw = self.raw_interrupt
             intf, inte = self.intf, self.inte
             if name == "irq_ignores_inte":
@@ -517,18 +517,18 @@ def mutant_rig(name: str) -> Rig:
             }.get(name, ())
             saved = {attr: getattr(self, attr) for attr in kept}
             if name == "reset_leaves_irq_up":
-                real, self.check_interrupts = self.check_interrupts, lambda: None  # type: ignore[method-assign]
+                real, self._check_interrupts = self._check_interrupts, lambda: None  # type: ignore[method-assign]
                 try:
                     super().reset()
                 finally:
-                    self.check_interrupts = real  # type: ignore[method-assign]
+                    self._check_interrupts = real  # type: ignore[method-assign]
                 return
             super().reset()
             for attr, value in saved.items():
                 setattr(self, attr, value)
             if saved:
                 self._retime(True)
-                self.check_interrupts()
+                self._check_interrupts()
 
         def write_uint32(self, offset: int, value: int) -> None:
             value &= 0xFFFFFFFF
@@ -555,11 +555,11 @@ def mutant_rig(name: str) -> Rig:
                 return
             if name == "inte_unmasked" and offset == R.INTE:
                 self.inte = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if name == "intf_unmasked" and offset == R.INTF:
                 self.intf = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if name == "force_not_stored" and offset == R.CTRL:
                 super().write_uint32(offset, value & ~R.CTRL_FORCE_NOTLEAPYEAR)
@@ -594,7 +594,7 @@ def mutant_rig(name: str) -> Rig:
                     self._load()
                 self._retime(load and name != "load_keeps_phase")
                 if load and name != "irq_not_updated_on_load":
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if name == "ctrl_load_reads_back" and offset == R.CTRL:
                 self._loaded_flag = bool(value & R.CTRL_LOAD)

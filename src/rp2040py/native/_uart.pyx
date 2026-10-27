@@ -191,10 +191,6 @@ cdef class RPUART(NativeBlock):
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def feed_byte(self, value):
         if not self._block.feed_byte(<uint32_t> (<int64_t> value)):
             raise_if_pending()

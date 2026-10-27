@@ -149,10 +149,6 @@ cdef class RPPIO(NativeBlock):
                 if not m.check_wait():
                     raise_if_pending()
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def irq_updated(self):
         if not self._block.irq_updated():
             raise_if_pending()

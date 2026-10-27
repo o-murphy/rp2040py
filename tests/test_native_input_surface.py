@@ -43,13 +43,12 @@ SURFACE: dict[str, dict[str, str]] = {
     "_adc": _merge(
         _c("complete_adc_read default_adc_read start_adc_read", "input"),
         _c("num_channels sample_time", "config"),
-        _c("check_interrupts", "plumbing"),
         _c("reset", "reset"),
     ),
     "_busctrl": _c("set_perf_counter", "input"),
     "_clocks": _merge(_c("reset_tree retune", "control"), _c("set_crystal_hz", "config"), _c("reset", "reset")),
     "_cortex_m0_core": _c("bus", "accessor"),
-    "_dma": _merge(_c("clear_dreq set_dreq", "input"), _c("check_interrupts", "plumbing")),
+    "_dma": _c("clear_dreq set_dreq", "input"),
     "_gpio_pin": _c("init", "construct"),
     "_gspi": _merge(
         _c("attach detach", "construct"),
@@ -59,7 +58,6 @@ SURFACE: dict[str, dict[str, str]] = {
     "_i2c": _merge(
         _c("arbitration_lost complete_connect complete_read complete_start complete_stop complete_write", "input"),
         _c("control fs_clock_high fs_clock_low master_bits ss_clock_high ss_clock_low", "config"),
-        _c("check_interrupts", "plumbing"),
         _c("reset", "reset"),
     ),
     "_io": _merge(_c("read", "register"), _c("reset", "reset")),
@@ -69,7 +67,7 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("advance stop", "control"),
         _c("write32 write_atomic", "register"),
         _c("machines pin_directions pin_values stopped", "state"),
-        _c("check_changed_pins check_interrupts irq_updated notify_due recompute_due", "plumbing"),
+        _c("check_changed_pins irq_updated notify_due recompute_due", "plumbing"),
         _c("reset", "reset"),
     ),
     "_pll": _c("frequency", "config"),
@@ -78,7 +76,6 @@ SURFACE: dict[str, dict[str, str]] = {
     "_pwm": _merge(
         _c("gpio_on_input", "input"),
         _c("channels gpio_direction gpio_value", "state"),
-        _c("check_interrupts", "plumbing"),
         _c("reset", "reset"),
     ),
     "_reset": _c("wdsel", "state"),
@@ -96,7 +93,7 @@ SURFACE: dict[str, dict[str, str]] = {
         ),
         _c("after_tap after_tap_ctx dreq_tap dreq_tap_ctx input_tap input_tap_ctx tap tap_ctx", "port"),
     ),
-    "_rtc": _merge(_c("check_interrupts clk_rtc_changed", "plumbing"), _c("reset", "reset")),
+    "_rtc": _merge(_c("clk_rtc_changed", "plumbing"), _c("reset", "reset")),
     "_simulator": _merge(_c("pio_block", "accessor"), _c("begin_batch run set_monotonic use_clock", "control")),
     "_sio": _merge(
         _c("gpio_output_enable gpio_value qspi_gpio_output_enable qspi_gpio_value", "state"),
@@ -108,7 +105,6 @@ SURFACE: dict[str, dict[str, str]] = {
     "_spi": _merge(
         _c("complete_transmit", "input"),
         _c("clock_divisor control0 data_bits", "config"),
-        _c("check_interrupts", "plumbing"),
         _c("power_on", "construct"),
         _c("reset", "reset"),
     ),
@@ -122,7 +118,7 @@ SURFACE: dict[str, dict[str, str]] = {
     "_uart": _merge(
         _c("feed_byte", "input"),
         _c("frac_divisor int_divisor", "config"),
-        _c("check_interrupts update_dreq", "plumbing"),
+        _c("update_dreq", "plumbing"),
         _c("detach init", "construct"),
         _c("reset", "reset"),
     ),

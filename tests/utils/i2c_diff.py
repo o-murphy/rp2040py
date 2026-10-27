@@ -182,7 +182,7 @@ class Rig:
         elif kind == "mask":  # IC_INTR_MASK, written on the bus
             chip.write_uint32(I2C0_BASE + 0x30, op[1])
         elif kind == "check":
-            i2c.check_interrupts()
+            return int(chip.read_uint32(I2C0_BASE + I.IC_INTR_STAT))  # the interrupt status, through the bus
         elif kind == "reset":
             i2c.reset()
         else:
@@ -234,7 +234,7 @@ def mutant_rig(name: str) -> Rig:
                 super()._next_command()
                 if not had and self.int_raw & I.R_ACTIVITY:
                     self.int_raw &= ~I.R_ACTIVITY
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if name == "restart_ignored":
                 enabled, blocked = self.enable & I.ENABLE, self.enable & I.TX_CMD_BLOCK
@@ -641,14 +641,14 @@ def mutant_rig(name: str) -> Rig:
                 super().write_uint32(offset, value)
                 if had and not (value & I.ENABLE):
                     self.int_raw |= I.R_RX_FULL
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == I.IC_ENABLE and name == "disable_keeps_activity":
                 had = self.int_raw & I.R_ACTIVITY
                 super().write_uint32(offset, value)
                 if had and not (value & I.ENABLE):
                     self.int_raw |= I.R_ACTIVITY
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == I.IC_CON and name == "speed_fix_missing":
                 self.control = value
@@ -689,7 +689,7 @@ def mutant_rig(name: str) -> Rig:
                 return
             if offset == I.IC_INTR_MASK and name == "intr_mask_unmasked":
                 self.int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == I.IC_INTR_MASK and name == "intr_mask_no_line_update":
                 self.int_enable = value & I.INTR_MASK_BITS

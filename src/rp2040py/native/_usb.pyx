@@ -355,13 +355,10 @@ cdef class RPUSBController(NativeBlock):
     def raise_interrupt(self, mask):
         """Raise INTR bits for which the model has no event."""
         self._block.int_raw |= <uint32_t> (<int64_t> mask)
-        self.check_interrupts()
-
-    # --- internals the oracle and the tests drive -------------------------------------------------
-
-    def check_interrupts(self):
         if not self._block.check_interrupts():
             raise_if_pending()
+
+    # --- internals the oracle and the tests drive -------------------------------------------------
 
     def _sie_status_updated(self):
         if not self._block.sie_status_updated():

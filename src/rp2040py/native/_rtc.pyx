@@ -80,10 +80,6 @@ cdef class RP2040RTC(NativeBlock):
         if not self._block.clk_rtc_changed(<double> clk_rtc):
             raise_if_pending()
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def reset(self):
         """`RESETS.RESET_RTC`: every register 0, the counter 0, the divider stopped (see the reference)."""
         if not self._block.reset():

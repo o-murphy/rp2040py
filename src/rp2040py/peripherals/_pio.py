@@ -298,16 +298,16 @@ class RPPIO(BasePeripheral):
 
         elif offset == IRQ0_INTE:
             self.irq0_int_enable = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ0_INTF:
             self.irq0_int_force = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ1_INTE:
             self.irq1_int_enable = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ1_INTF:
             self.irq1_int_force = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
 
         else:
             super().write_uint32(offset, value)
@@ -414,7 +414,7 @@ class RPPIO(BasePeripheral):
         self.irq0_int_force = 0
         self.irq1_int_enable = 0
         self.irq1_int_force = 0
-        self.check_interrupts()
+        self._check_interrupts()
 
     def snapshot(self) -> dict[str, Any]:
         """Everything the block holds, as plain values in one call (the inspection port of docs/records/0096): the block's registers and pacing state, the instruction memory,
@@ -438,7 +438,7 @@ class RPPIO(BasePeripheral):
             if machine.enabled and machine.waiting and machine.wait_type == WaitType.PIN and machine.wait_index == pin:
                 machine.check_wait()
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         first_irq = self.first_irq
         self.rp2040.set_interrupt(first_irq, bool(self.irq0_int_status))
         self.rp2040.set_interrupt(first_irq + 1, bool(self.irq1_int_status))
@@ -446,7 +446,7 @@ class RPPIO(BasePeripheral):
     def irq_updated(self) -> None:
         for machine in self.machines:
             machine.check_wait()
-        self.check_interrupts()
+        self._check_interrupts()
 
     def check_changed_pins(self) -> None:
         changed_pins = (self.old_pin_directions ^ self.pin_directions) | (self.old_pin_values ^ self.pin_values)

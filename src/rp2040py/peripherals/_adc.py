@@ -210,7 +210,7 @@ class RPADC(BasePeripheral):
             "sample_time": self.sample_time,
         }
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.ADC_FIFO, bool(self.int_status))
 
     def start_adc_read(self) -> None:
@@ -246,7 +246,7 @@ class RPADC(BasePeripheral):
                     value |= FIFO_ERR
                 self.fifo.push(value)
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
 
         # Round-robin
         round_mask = (self.cs >> CS_RROBIN_SHIFT) & CS_RROBIN_MASK
@@ -287,7 +287,7 @@ class RPADC(BasePeripheral):
                 return 0
             value = self.fifo.pull()
             self._update_dma()
-            self.check_interrupts()  # "The interrupt is cleared by draining the FIFO to a level lower than FCS.THRESH" (4.9.2.6): the line follows the level down
+            self._check_interrupts()  # "The interrupt is cleared by draining the FIFO to a level lower than FCS.THRESH" (4.9.2.6): the line follows the level down
             return value
         if offset == DIV:
             return self.clock_div
@@ -313,7 +313,7 @@ class RPADC(BasePeripheral):
             self.fcs &= ~(value & (FCS_OVER | FCS_UNDER))  # Write-clear bits
             self.fcs = (self.fcs & ~FCS_WRITE_MASK) | (value & FCS_WRITE_MASK)
             self._update_dma()  # DREQ_EN or the threshold may have changed
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == DIV:
             self.clock_div = value & (
@@ -322,11 +322,11 @@ class RPADC(BasePeripheral):
 
         elif offset == INTE:
             self.int_enable = value & FIFO_INT
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == INTF:
             self.int_force = value & FIFO_INT
-            self.check_interrupts()
+            self._check_interrupts()
 
         else:
             super().write_uint32(offset, value)

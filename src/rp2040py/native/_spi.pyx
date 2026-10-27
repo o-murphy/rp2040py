@@ -135,10 +135,6 @@ cdef class RPSPI(NativeBlock):
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def reset(self):
         """Registers and both FIFOs, back to power-on (0089 Phase 5). `on_transmit` is wiring - a device on the bus - and survives, as does `irq`/`dreq` identity."""
         if not self._block.reset():

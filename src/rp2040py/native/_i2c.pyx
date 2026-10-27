@@ -228,10 +228,6 @@ cdef class RPI2C(NativeBlock):
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def reset(self):
         """Registers, both FIFOs and the bus state machine, back to power-on (0089 Phase 5). The five `on_*` callbacks are wiring - whatever is on the bus - and survive."""
         if not self._block.reset():

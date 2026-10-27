@@ -308,20 +308,20 @@ class RPI2C(BasePeripheral):
             "master_bits": self.master_bits,
         }
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self.int_status))
 
     def _clear_interrupts(self, mask: int) -> int:
         if self.int_raw & mask:
             self.int_raw &= ~mask
-            self.check_interrupts()
+            self._check_interrupts()
             return 1
         return 0
 
     def _set_interrupts(self, mask: int) -> None:
         if not (self.int_raw & mask):
             self.int_raw |= mask
-            self.check_interrupts()
+            self._check_interrupts()
 
     @property
     def _config_open(self) -> bool:
@@ -609,7 +609,7 @@ class RPI2C(BasePeripheral):
 
         elif offset == IC_INTR_MASK:
             self.int_enable = value & INTR_MASK_BITS
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == IC_SS_SCL_HCNT:
             if self._config_open:

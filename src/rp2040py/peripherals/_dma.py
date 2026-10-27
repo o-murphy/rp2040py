@@ -237,7 +237,7 @@ class RPDMAChannel:
             self._ctrl &= ~BUSY
             if not (self._ctrl & IRQ_QUIET):
                 self.dma.int_raw |= 1 << self.index
-                self.dma.check_interrupts()
+                self.dma._check_interrupts()
             if self._chain_to != self.index:
                 channels = self.dma._channels
                 if 0 <= self._chain_to < len(channels):
@@ -324,7 +324,7 @@ class RPDMAChannel:
             elif self._ctrl & IRQ_QUIET:
                 # Null trigger interrupts
                 self.dma.int_raw |= 1 << self.index
-                self.dma.check_interrupts()
+                self.dma._check_interrupts()
 
     def reset(self) -> None:
         # Every register of the channel back to its datasheet reset value (2.5.7): all 0, CHAIN_TO included (0x0 for every channel: a channel that does not set it chains to channel 0 when it
@@ -381,7 +381,7 @@ class RPDMA(BasePeripheral):
         self._timer1 = 0
         self._timer2 = 0
         self._timer3 = 0
-        self.check_interrupts()
+        self._check_interrupts()
 
     @property
     def int_status0(self) -> int:
@@ -446,23 +446,23 @@ class RPDMA(BasePeripheral):
             return
         if offset in (INTR, INTS0, INTS1):
             self.int_raw &= ~self.raw_write_value
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTE0:
             self._int_enable0 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTF0:
             self._int_force0 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTE1:
             self._int_enable1 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTF1:
             self._int_force1 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == MULTI_CHAN_TRIGGER:
             for chan in self._channels:
@@ -535,6 +535,6 @@ class RPDMA(BasePeripheral):
             return 0
         return (cycles * 1e6) / self.rp2040.clk_sys
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.DMA_IRQ0, bool(self.int_status0))
         self.rp2040.set_interrupt(IRQ.DMA_IRQ1, bool(self.int_status1))

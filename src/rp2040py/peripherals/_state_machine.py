@@ -141,7 +141,7 @@ class StateMachine:
         self._update_dma_tx()
         self.check_wait()
         if self.tx_fifo.full:
-            self.pio.check_interrupts()
+            self.pio._check_interrupts()
 
     def read_fifo(self) -> int:
         if self.rx_fifo.empty:
@@ -152,7 +152,7 @@ class StateMachine:
         self._update_dma_rx()
         self.check_wait()
         if self.rx_fifo.empty:
-            self.pio.check_interrupts()
+            self.pio._check_interrupts()
         return result
 
     @property
@@ -448,7 +448,7 @@ class StateMachine:
                 if not self.rx_fifo.full:
                     self.rx_fifo.push(self.input_shift_reg)
                     self._update_dma_rx()
-                    self.pio.check_interrupts()
+                    self.pio._check_interrupts()
                 else:
                     self.pio.rx_stall |= FDEBUG_RXSTALL << self.index
                     self.pio.fdebug |= self.pio.rx_stall
@@ -463,7 +463,7 @@ class StateMachine:
                 if not self.tx_fifo.empty:
                     self.output_shift_reg = self.tx_fifo.pull()
                     self._update_dma_tx()
-                    self.pio.check_interrupts()
+                    self.pio._check_interrupts()
                 else:
                     self.pio.tx_stall |= FDEBUG_TXSTALL << self.index
                     self.pio.fdebug |= self.pio.tx_stall
@@ -491,7 +491,7 @@ class StateMachine:
                     if not self.tx_fifo.empty:
                         self.output_shift_reg = self.tx_fifo.pull()
                         self._update_dma_tx()
-                        self.pio.check_interrupts()
+                        self.pio._check_interrupts()
                     else:
                         self.pio.tx_stall |= FDEBUG_TXSTALL << self.index
                         self.pio.fdebug |= self.pio.tx_stall
@@ -509,7 +509,7 @@ class StateMachine:
                     if not self.rx_fifo.full:
                         self.rx_fifo.push(self.input_shift_reg)
                         self._update_dma_rx()
-                        self.pio.check_interrupts()
+                        self.pio._check_interrupts()
                     else:
                         self.pio.rx_stall |= FDEBUG_RXSTALL << self.index
                         self.pio.fdebug |= self.pio.rx_stall
@@ -711,7 +711,7 @@ class StateMachine:
                 self._update_dma_rx()
                 self._update_dma_tx()
                 self.check_wait()  # a stalled PUSH / PULL may find its FIFO different
-                self.pio.check_interrupts()  # the FIFO flags the interrupts follow
+                self.pio._check_interrupts()  # the FIFO flags the interrupts follow
         elif absolute_offset == SM0_ADDR:
             pass  # read-only
         elif absolute_offset == SM0_INSTR:
@@ -818,14 +818,14 @@ class StateMachine:
                 self.rx_fifo.push(self.wait_index)
                 self.waiting = False
                 self._update_dma_rx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         elif self.wait_type == WaitType.TX_FIFO:
             if not self.tx_fifo.empty:
                 self.output_shift_reg = self.tx_fifo.pull()
                 self.waiting = False
                 self._update_dma_tx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         elif self.wait_type == WaitType.OUT:
             if not self.tx_fifo.empty:
@@ -833,7 +833,7 @@ class StateMachine:
                 self.out_instruction(self.wait_index)
                 self.waiting = False
                 self._update_dma_tx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         if not self.waiting:
             self.next_pc()

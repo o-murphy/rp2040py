@@ -153,10 +153,6 @@ cdef class RPPWM(NativeBlock):
             "clock_freq": self.rp2040.clk_sys,
         }
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
     def gpio_on_input(self, index):
         if not self._block.gpio_on_input(<uint32_t> index):
             raise_if_pending()

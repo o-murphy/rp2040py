@@ -182,7 +182,7 @@ class RP2040RTC(BasePeripheral):
         self._alarm_pending = False
         self._advance_second()
         self._retime(True)
-        self.check_interrupts()
+        self._check_interrupts()
 
     def _advance_second(self) -> None:
         if self.second < 59:
@@ -217,7 +217,7 @@ class RP2040RTC(BasePeripheral):
         self.minute = (self.setup1 >> 8) & 0x3F
         self.second = self.setup1 & 0x3F
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         raw = self.raw_interrupt
         self.rp2040.set_interrupt(IRQ.RTC, bool(((int(raw) & self.inte) | self.intf) & INT_RTC))
 
@@ -232,7 +232,7 @@ class RP2040RTC(BasePeripheral):
         self.year = self.month = self.day = self.dotw = self.hour = self.minute = self.second = 0
         self.latched_date = 0
         self._retime(True)
-        self.check_interrupts()
+        self._check_interrupts()
 
     def snapshot(self) -> dict[str, int | float | bool]:
         """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `_running`, the alarm match, the two counter words)."""
@@ -308,19 +308,19 @@ class RP2040RTC(BasePeripheral):
                 self._load()
             self._retime(load)
             if load:
-                self.check_interrupts()
+                self._check_interrupts()
         elif offset == IRQ_SETUP_0:
             self.irq_setup0 = value & IRQ_SETUP_0_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ_SETUP_1:
             self.irq_setup1 = value & IRQ_SETUP_1_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTE:
             self.inte = value & INT_RTC
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTF:
             self.intf = value & INT_RTC
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset in (RTC_1, RTC_0, INTR, INTS):
             return  # read only
         else:
