@@ -98,9 +98,6 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         uint32_t int_status() noexcept
         cppbool check_interrupts() noexcept
         cppbool channel_interrupt(uint32_t index) noexcept
-        cppbool gpio_set(int64_t index, cppbool value) noexcept
-        cppbool gpio_set_dir(int64_t index, cppbool output) noexcept
-        cppbool gpio_read(int64_t index, cppbool* level) noexcept
         PwmInputTap input_tap
         void* input_tap_ctx
         cppbool gpio_on_input(uint32_t index) noexcept

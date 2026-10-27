@@ -223,25 +223,27 @@ class PWMChannel:
     def set_a(self, value: bool) -> None:
         if self.csr & CSR_A_INV:
             value = not value
-        self.pwm.gpio_set(self.pin_a1, value)
+        self.pwm._gpio_set(self.pin_a1, value)
         if self.pin_a2 >= 0:
-            self.pwm.gpio_set(self.pin_a2, value)
+            self.pwm._gpio_set(self.pin_a2, value)
 
     def set_b(self, value: bool) -> None:
         if self.csr & CSR_B_INV:
             value = not value
-        self.pwm.gpio_set(self.pin_b1, value)
+        self.pwm._gpio_set(self.pin_b1, value)
         if self.pin_b2 >= 0:
-            self.pwm.gpio_set(self.pin_b2, value)
+            self.pwm._gpio_set(self.pin_b2, value)
 
     @property
     def gpio_b_value(self) -> bool:
-        return bool(self.pwm.gpio_read(self.pin_b1) or (self.pwm.gpio_read(self.pin_b2) if self.pin_b2 > 0 else False))
+        return bool(
+            self.pwm._gpio_read(self.pin_b1) or (self.pwm._gpio_read(self.pin_b2) if self.pin_b2 > 0 else False)
+        )
 
     def set_b_direction(self, value: bool) -> None:
-        self.pwm.gpio_set_dir(self.pin_b1, value)
+        self.pwm._gpio_set_dir(self.pin_b1, value)
         if self.pin_b2 >= 0:
-            self.pwm.gpio_set_dir(self.pin_b2, value)
+            self.pwm._gpio_set_dir(self.pin_b2, value)
 
     def gpio_b_changed(self) -> None:
         value = self.gpio_b_value
@@ -416,21 +418,21 @@ class RPPWM(BasePeripheral):
     def check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.PWM_WRAP, bool(self.int_status))
 
-    def gpio_set(self, index: int, value: bool) -> None:
+    def _gpio_set(self, index: int, value: bool) -> None:
         bit = 1 << index
         new_gpio_value = self.gpio_value | bit if value else self.gpio_value & ~bit
         if self.gpio_value != new_gpio_value:
             self.gpio_value = new_gpio_value
             self.rp2040.gpio[index].check_for_updates()
 
-    def gpio_set_dir(self, index: int, output: bool) -> None:
+    def _gpio_set_dir(self, index: int, output: bool) -> None:
         bit = 1 << index
         new_gpio_direction = self.gpio_direction | bit if output else self.gpio_direction & ~bit
         if self.gpio_direction != new_gpio_direction:
             self.gpio_direction = new_gpio_direction
             self.rp2040.gpio[index].check_for_updates()
 
-    def gpio_read(self, index: int) -> bool:
+    def _gpio_read(self, index: int) -> bool:
         return self.rp2040.gpio[index].input_value
 
     def gpio_on_input(self, index: int) -> None:

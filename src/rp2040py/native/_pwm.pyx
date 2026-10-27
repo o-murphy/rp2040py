@@ -104,11 +104,6 @@ cdef class RPPWM(NativeBlock):
     def gpio_direction(self, value):
         self._block.gpio_direction = <uint32_t> (<int64_t> value)
 
-    @property
-    def clock_freq(self):
-        # The reference reads the live system clock; the counters were built on the value at construction.
-        return self.rp2040.clk_sys
-
     def snapshot(self):
         """The block's state in one call: every channel's registers, flags, counter bookkeeping, timer and alarms, and the block's pin words, interrupt words and clock."""
         cdef PwmChannel* c
@@ -161,20 +156,6 @@ cdef class RPPWM(NativeBlock):
     def check_interrupts(self):
         if not self._block.check_interrupts():
             raise_if_pending()
-
-    def gpio_set(self, index, value):
-        if not self._block.gpio_set(<int64_t> index, bool(value)):
-            raise_if_pending()
-
-    def gpio_set_dir(self, index, output):
-        if not self._block.gpio_set_dir(<int64_t> index, bool(output)):
-            raise_if_pending()
-
-    def gpio_read(self, index):
-        cdef cppbool level = False
-        if not self._block.gpio_read(<int64_t> index, &level):
-            raise_if_pending()
-        return bool(level)
 
     def gpio_on_input(self, index):
         if not self._block.gpio_on_input(<uint32_t> index):

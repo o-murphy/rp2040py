@@ -122,3 +122,7 @@ Removed from the native shells (readers moved to `snapshot()`, which already had
 
 **Step 2b, the pure side (same day).** Done at once, not left for later: the pure PLL's `refdiv`, `fbdiv`, `postdiv1`, `postdiv2`, `reference`, `locked` and the pure SPI's `enabled`, `master_mode` are private (`_refdiv`, ..., `_master_mode`), and the oracles' mutants that overrode them (`clocks_diff`'s `MutantPLL`, `spi_diff`'s `master_mode_inverted`) were renamed with them. The full oracle run (3,536 tests) is unchanged, so the mutants are still caught. The rule from here on: a getter leaves the native shell and goes private on the pure block in the same commit.
 
+## Step 2c - done (2026-10-27): ADC (nothing to remove) and PWM
+
+**ADC**: `num_channels` and `sample_time` are settable parameters, `start_adc_read` / `complete_adc_read` / `default_adc_read` are the world's inputs; there is no observation getter to remove. **PWM**: the native shell's `gpio_set`, `gpio_set_dir`, `gpio_read` and `clock_freq` had no caller in `src/`, `tests/`, the oracles or the scripts (the pure channels call the pure block's methods, and only the pure clock tree reads `clock_freq`), so they are removed, with their `.pxd` declarations; on the pure block the three methods are private (`_gpio_set`, `_gpio_set_dir`, `_gpio_read`; the one mutant that patches a call by text, `b_value_and`, was updated). Kept: `gpio_value` / `gpio_direction` (pin images: the pins read them, the tests and the pin oracle drive them) and `gpio_on_input`. Full oracle run: 3,536 tests.
+

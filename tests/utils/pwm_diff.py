@@ -364,7 +364,11 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         1,
     ),
     # -- the B input
-    "b_value_and": ("bool(self.pwm.gpio_read(self.pin_b1) or (", "bool(self.pwm.gpio_read(self.pin_b1) and (", 1),
+    "b_value_and": (
+        "self.pwm._gpio_read(self.pin_b1) or (self.pwm",
+        "self.pwm._gpio_read(self.pin_b1) and (self.pwm",
+        1,
+    ),
     "b_reads_output": ("return self.rp2040.gpio[index].input_value", "return self.rp2040.gpio[index].output_value", 1),
     "b_same_value_processed": (
         "if value == self.last_b_value:\n            return",
