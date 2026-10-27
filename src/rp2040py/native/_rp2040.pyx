@@ -374,6 +374,20 @@ cdef bool _clock_tree_tap_hook(void* ctx, uint32_t domain, double hz, double old
     return True
 
 
+cdef bool _clock_listeners_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
+    # The host's `add_clock_listener` callbacks: called after every consumer of `clk_sys` has followed (`ClocksBlock::after_tap`).
+    cdef RP2040 chip = <RP2040> ctx
+    if domain != 0:  # ClocksBlock::kTapSys
+        return True
+    try:
+        for listener in list(chip._clock_listeners):
+            listener(hz, old)
+    except BaseException as error:
+        park_error(error)
+        return False
+    return True
+
+
 cdef bool _pwm_input_tap_hook(void* ctx, uint32_t index) noexcept:
     # The observer of `RP2040.pwm_input_tap`: sees a pin telling the PWM an input moved; the PWM still gets it.
     cdef RP2040 chip = <RP2040> ctx
@@ -869,11 +883,22 @@ cdef class RP2040:
         """Calls `listener(clk_sys, old_clk_sys)` whenever clk_sys changes - for anything that derives a rate from it (a PIO clock divider, say). Returns the
         function that unsubscribes it."""
         self._clock_listeners.add(listener)
+        self._install_clock_listeners()
 
         def unsubscribe():
             self._clock_listeners.discard(listener)
+            self._install_clock_listeners()
 
         return unsubscribe
+
+    cdef _install_clock_listeners(self):
+        # The tree calls the listeners through its "after" port while there is one to call; a stand-in tree calls them itself.
+        if type(self._clocks) is RPClocks:
+            if self._clock_listeners:
+                (<RPClocks> self._clocks)._block.after_tap = _clock_listeners_hook
+                (<RPClocks> self._clocks)._block.after_tap_ctx = <void*> self
+            else:
+                (<RPClocks> self._clocks)._block.after_tap = NULL
 
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int word = self._mcu.bus.read32(<unsigned int> (address & 0xFFFFFFFFU))

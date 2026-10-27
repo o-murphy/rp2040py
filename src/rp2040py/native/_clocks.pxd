@@ -22,6 +22,8 @@ cdef extern from "clocks.hpp" namespace "rp2040core":
         ClocksBlock() noexcept
         ClockTap tap
         void* tap_ctx
+        ClockTap after_tap
+        void* after_tap_ctx
         void detach() noexcept
         void clear_sinks() noexcept
         void bind_xosc(const XoscBlock* block) noexcept

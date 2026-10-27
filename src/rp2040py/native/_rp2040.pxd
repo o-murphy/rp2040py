@@ -78,6 +78,7 @@ cdef class RP2040:
     cdef _install_dreq_tap(self)
     cdef _adopt_ppb(self, value)
     cdef _install_clock_tree_tap(self)
+    cdef _install_clock_listeners(self)
     cdef _adopt_sio(self, value)
     cdef _install_pwm_input_tap(self)
     cdef WindowHandler _direct_handler(self, object block, bint is_sio)

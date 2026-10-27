@@ -43,18 +43,6 @@ cdef cppbool _sys_sink(void* ctx, double hz, double old) noexcept:
     return True
 
 
-cdef cppbool _listeners_sink(void* ctx, double hz, double old) noexcept:
-    # Last of the sys sinks: the host's listeners (a PIO clock divider, say), after SysTick and the PWM counters have followed.
-    cdef RPClocks block = <RPClocks> ctx
-    try:
-        for listener in list(block.rp2040._clock_listeners):
-            listener(hz, old)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef cppbool _peri_sink(void* ctx, double hz, double old) noexcept:
     cdef RPClocks block = <RPClocks> ctx
     try:
@@ -123,7 +111,6 @@ cdef class RPClocks(NativeBlock):
             # the DMA reads clk_sys from the tree and the tree keeps its cycle time current: the Python listener it registered for that is not needed any more
             (<RPDMA> dma)._block.bind_clock(clocks_clk_sys, <void*> self._block, self._block.clk_sys())
             ok = ok and self._block.add_sys_sink(dma_sys_sink, <void*> (<RPDMA> dma)._block)
-        ok = ok and self._block.add_sys_sink(_listeners_sink, <void*> self)
         ok = ok and self._block.add_peri_sink(_peri_sink, <void*> self)
         ok = ok and self._block.add_ref_sink(watchdog_ref_sink, <void*> (<RPWatchdog> watchdog)._block)
         ok = ok and self._block.add_rtc_sink(rtc_rtc_sink, <void*> (<RP2040RTC> rtc)._block)

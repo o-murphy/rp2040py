@@ -108,6 +108,9 @@ public:
     using Tap = bool (*)(void* ctx, uint32_t domain, double hz, double old);
     Tap tap = nullptr;
     void* tap_ctx = nullptr;
+    // The same observer, called last: after the sinks of that domain have all followed (the host's own listeners of a rate, which read what the consumers made of it). Same `domain` and arguments.
+    Tap after_tap = nullptr;
+    void* after_tap_ctx = nullptr;
 
     // The sinks, called in the order they were added. False: the list is full.
     // Forgets every sink (the host re-registers them when a consumer is replaced).
@@ -346,19 +349,23 @@ private:
         const double old = clk_sys_;
         clk_sys_ = hz;
         if (tap != nullptr && !tap(tap_ctx, kTapSys, hz, old)) return false;
-        return tell(sys_sinks_, n_sys_, hz, old);
+        if (!tell(sys_sinks_, n_sys_, hz, old)) return false;
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapSys, hz, old);
     }
     bool set_clk_peri(double hz) noexcept {
         const double old = clk_peri_;
         clk_peri_ = hz;
         if (tap != nullptr && !tap(tap_ctx, kTapPeri, hz, old)) return false;
-        return tell(peri_sinks_, n_peri_, hz, old);
+        if (!tell(peri_sinks_, n_peri_, hz, old)) return false;
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapPeri, hz, old);
     }
     bool notify_ref_and_rtc() noexcept {
         if (tap != nullptr && !tap(tap_ctx, kTapRef, ref_freq(), 0.0)) return false;
         if (!tell(ref_sinks_, n_ref_, ref_freq(), 0.0)) return false;  // the watchdog's tick (the TIMER's and SysTick's reference) derives from clk_ref
+        if (after_tap != nullptr && !after_tap(after_tap_ctx, kTapRef, ref_freq(), 0.0)) return false;
         if (tap != nullptr && !tap(tap_ctx, kTapRtc, rtc_freq(), 0.0)) return false;
-        return tell(rtc_sinks_, n_rtc_, rtc_freq(), 0.0);              // the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
+        if (!tell(rtc_sinks_, n_rtc_, rtc_freq(), 0.0)) return false;  // the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapRtc, rtc_freq(), 0.0);
     }
 
     double ref_source_freq() const noexcept {
