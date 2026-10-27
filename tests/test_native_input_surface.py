@@ -11,10 +11,8 @@ Classes - what a host would have to be given:
   input      the world tells the chip something: a byte, a device's answer, a pin, the USB host            (an export)
   config     a parameter the world sets or a device reads of the configuration                              (an export)
   register   the bus view of a block (`read` / `write32` / `write_atomic` / `window_handler`)               (the bus, one export)
-  state      a read of a block's state that is not in its snapshot (a pin image, a flag)                    (to be moved into `snapshot()` or dropped)
-  reset      a block's own `reset()`                                                                         (the chip's cascade does it; kept for the oracles)
   construct  creating / detaching the block                                                                 (the chip builds its blocks)
-  test       a stimulus the oracles and the tests apply directly to one block (the clock tree's notices, the USB's `raise_*`, the XIP counters): not a host input; kept in the shell
+  test       what the oracles and the tests apply to or read off one block (the clock tree's notices, the USB's `raise_*`, the XIP counters, the pin images, a block's own `reset()`): not a host input; kept in the shell
              because the oracles need them, and not on the host's list (to go when an oracle can drive the same thing through the chip)
 """
 
@@ -24,7 +22,7 @@ from pathlib import Path
 import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native"
-CLASSES = {"control", "accessor", "port", "input", "config", "register", "reset", "construct", "test"}
+CLASSES = {"control", "accessor", "port", "input", "config", "register", "construct", "test"}
 
 _ROOT = r"(?:self\._block|self\._mcu|rp2040\._mcu|chip\._mcu|self\._own|self\._core|\(<\w+> \w+\)\._block|\(<\w+> self\.\w+\)\._block|\w+\._block)"
 
@@ -44,40 +42,40 @@ SURFACE: dict[str, dict[str, str]] = {
     "_adc": _merge(
         _c("complete_adc_read default_adc_read start_adc_read", "input"),
         _c("num_channels sample_time", "config"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_busctrl": _c("set_perf_counter", "input"),
-    "_clocks": _merge(_c("reset_tree retune", "control"), _c("set_crystal_hz", "config"), _c("reset", "reset")),
+    "_clocks": _merge(_c("reset_tree retune", "control"), _c("set_crystal_hz", "config"), _c("reset", "test")),
     "_cortex_m0_core": _c("bus", "accessor"),
     "_dma": _c("clear_dreq set_dreq", "input"),
     "_gpio_pin": _c("init", "construct"),
     "_gspi": _merge(
         _c("attach detach", "construct"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_i2c": _merge(
         _c("arbitration_lost complete_connect complete_read complete_start complete_stop complete_write", "input"),
         _c("control fs_clock_high fs_clock_low master_bits ss_clock_high ss_clock_low", "config"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
-    "_io": _merge(_c("read", "register"), _c("reset", "reset")),
-    "_pads": _merge(_c("read", "register"), _c("reset", "reset")),
+    "_io": _merge(_c("read", "register"), _c("reset", "test")),
+    "_pads": _merge(_c("read", "register"), _c("reset", "test")),
     "_pio": _merge(
         _c("pin_directions_changed pin_values_changed", "input"),
         _c("advance stop", "control"),
         _c("write32 write_atomic", "register"),
         _c("machines pin_directions pin_values stopped", "test"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_pll": _c("frequency", "config"),
-    "_ppb": _merge(_c("timer", "test"), _c("clk_sys_changed tick_changed", "plumbing"), _c("reset", "reset")),
+    "_ppb": _merge(_c("timer", "test"), _c("clk_sys_changed tick_changed", "plumbing"), _c("reset", "test")),
     "_pwm": _merge(
         _c("gpio_on_input", "input"),
         _c("channels gpio_direction gpio_value", "test"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_rosc": _merge(
-        _c("bind_random_source", "input"), _c("frequency hz", "config"), _c("read", "register"), _c("reset", "reset")
+        _c("bind_random_source", "input"), _c("frequency hz", "config"), _c("read", "register"), _c("reset", "test")
     ),
     "_rp2040": _merge(
         _c(
@@ -90,25 +88,25 @@ SURFACE: dict[str, dict[str, str]] = {
         ),
         _c("after_tap after_tap_ctx dreq_tap dreq_tap_ctx input_tap input_tap_ctx tap tap_ctx", "port"),
     ),
-    "_rtc": _merge(_c("clk_rtc_changed", "plumbing"), _c("reset", "reset")),
+    "_rtc": _merge(_c("clk_rtc_changed", "plumbing"), _c("reset", "test")),
     "_simulator": _merge(_c("pio_block", "accessor"), _c("begin_batch run set_monotonic use_clock", "control")),
     "_sio": _merge(
         _c("gpio_output_enable gpio_value qspi_gpio_output_enable qspi_gpio_value", "test"),
         _c("read_wide window_handler write32", "register"),
         _c("update_hardware_divider", "plumbing"),
         _c("init", "construct"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_spi": _merge(
         _c("complete_transmit", "input"),
         _c("clock_divisor control0 data_bits", "config"),
         _c("power_on", "construct"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
-    "_ssi": _merge(_c("detach", "construct"), _c("reset", "reset")),
-    "_syscfg": _c("reset", "reset"),
-    "_sysinfo": _c("reset", "reset"),
-    "_tbman": _c("reset", "reset"),
+    "_ssi": _merge(_c("detach", "construct"), _c("reset", "test")),
+    "_syscfg": _c("reset", "test"),
+    "_sysinfo": _c("reset", "test"),
+    "_tbman": _c("reset", "test"),
     "_timer": _merge(
         _c("raw_write_value write32", "register"), _c("tick_changed", "plumbing"), _c("detach init", "construct")
     ),
@@ -116,7 +114,7 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("feed_byte", "input"),
         _c("frac_divisor int_divisor", "config"),
         _c("detach init", "construct"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_usb": _merge(
         _c(
@@ -128,7 +126,7 @@ SURFACE: dict[str, dict[str, str]] = {
             "config",
         ),
         _c("check_interrupts sie_status_updated stall_nak_updated", "plumbing"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_vreg_and_chip_reset": _c("record_reset_cause set_psm_restart_flag", "control"),
     "_watchdog": _merge(
@@ -136,14 +134,14 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("tick_tap tick_tap_ctx", "port"),
         _c("timer", "test"),
         _c("clk_ref_changed", "plumbing"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
     "_xip_ctrl": _merge(
         _c("ctr_acc ctr_hit", "input"),
         _c("aux_window_handler write", "register"),
-        _c("reset", "reset"),
+        _c("reset", "test"),
     ),
-    "_xosc": _c("reset", "reset"),
+    "_xosc": _c("reset", "test"),
 }
 
 
