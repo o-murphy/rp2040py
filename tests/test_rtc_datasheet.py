@@ -67,18 +67,18 @@ def running_chip(rp2040_factory):
 
 def test_clk_rtc_is_the_aux_source_over_the_divider(rp2040_factory):
     chip = rp2040_factory()
-    assert chip.clocks.rtc_freq == 0  # ENABLE resets to 0
+    assert chip.clocks.snapshot()["rtc_freq"] == 0  # ENABLE resets to 0
     start_rtc_clock(chip)
-    assert chip.clocks.rtc_freq == 46875  # XOSC 12 MHz / 256
+    assert chip.clocks.snapshot()["rtc_freq"] == 46875  # XOSC 12 MHz / 256
     chip.write_uint32(CLOCKS + 0x6C, (1 << 11) | (2 << 5))  # ROSC_CLKSRC_PH
-    assert chip.clocks.rtc_freq == 6_500_000 / 256
+    assert chip.clocks.snapshot()["rtc_freq"] == 6_500_000 / 256
     chip.write_uint32(CLOCKS + 0x6C, (1 << 11) | (1 << 10) | (3 << 5))  # KILL
-    assert chip.clocks.rtc_freq == 0
+    assert chip.clocks.snapshot()["rtc_freq"] == 0
     chip.write_uint32(CLOCKS + 0x6C, (1 << 11) | (4 << 5))  # GPIN0 is not modelled
-    assert chip.clocks.rtc_freq == 0
+    assert chip.clocks.snapshot()["rtc_freq"] == 0
     chip.write_uint32(CLOCKS + 0x6C, (1 << 11) | (3 << 5))
     chip.write_uint32(CLOCKS + 0x70, 0)  # INT = 0 divides by 2**16
-    assert chip.clocks.rtc_freq == 12_000_000 / 65536
+    assert chip.clocks.snapshot()["rtc_freq"] == 12_000_000 / 65536
 
 
 def test_register_resets_and_widths(rp2040_factory):
@@ -320,4 +320,4 @@ def test_a_reset_of_the_block_clears_it_and_keeps_the_clock(rp2040_factory):
     assert chip.core.pending_interrupts & RTC_IRQ == 0
     chip.clock.tick(5 * SECOND)
     assert get_datetime(chip) == (0, 0, 0, 0, 0, 0, 0)  # disabled
-    assert chip.clocks.rtc_freq == 46875  # clk_rtc is the CLOCKS block's, not the RTC's
+    assert chip.clocks.snapshot()["rtc_freq"] == 46875  # clk_rtc is the CLOCKS block's, not the RTC's

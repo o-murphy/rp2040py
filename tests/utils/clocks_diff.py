@@ -136,6 +136,7 @@ class Rig:
     def snapshot(self) -> dict[str, Any]:
         chip = self.chip
         clocks = chip.clocks
+        clock_state = clocks.snapshot()
         reads = []
         for base, offsets in ((CLOCKS_BASE, CLOCKS_OFFSETS), (PLL_BASES[0], PLL_OFFSETS), (PLL_BASES[1], PLL_OFFSETS)):
             for offset in offsets:
@@ -146,12 +147,12 @@ class Rig:
             "freq": tuple(
                 float(value)
                 for value in (
-                    clocks.ref_freq,
-                    clocks.sys_freq,
-                    clocks.peri_freq,
-                    clocks.rtc_freq,
-                    clocks.usb_freq,
-                    clocks.adc_freq,
+                    clock_state["ref_freq"],
+                    clock_state["sys_freq"],
+                    clock_state["peri_freq"],
+                    clock_state["rtc_freq"],
+                    clock_state["usb_freq"],
+                    clock_state["adc_freq"],
                     chip.pll_sys.frequency,
                     chip.pll_usb.frequency,
                 )
@@ -376,7 +377,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
             count("clock changed")
         if rig.chip.pll_sys.frequency and rig.chip.pll_usb.frequency:
             count("both plls running")
-        if rig.chip.clocks.rtc_freq:
+        if rig.chip.clocks.snapshot()["rtc_freq"]:
             count("rtc clock running")
         if rig.chip.clocks.read_uint32(C.FC0_STATUS) & C.FC0_STATUS_DONE:
             count("fc done")
@@ -463,19 +464,19 @@ class MutantClocks(C.RPClocks):
         super().__init__(rp2040, name)
 
     @property
-    def sys_freq(self) -> float:
+    def _sys_freq(self) -> float:
         mutant = self._mutant
         if mutant == "sys_div_zero_is_one" and self.sys_div >> 8 == 0:
             return self._sys_source_freq
         if mutant == "sys_div_ignores_fraction":
             return self._sys_source_freq / C.clock_divisor(self.sys_div & ~C.CLK_DIV_FRAC_MASK)
-        return super().sys_freq
+        return super()._sys_freq
 
     @property
-    def ref_freq(self) -> float:
+    def _ref_freq(self) -> float:
         if self._mutant == "ref_div_ignores_int":
             return self._ref_source_freq
-        return super().ref_freq
+        return super()._ref_freq
 
     @property
     def _ref_source_freq(self) -> float:
@@ -500,7 +501,7 @@ class MutantClocks(C.RPClocks):
         return C.RPClocks._sys_source_freq.fget(self)  # type: ignore[attr-defined]
 
     @property
-    def peri_freq(self) -> float:
+    def _peri_freq(self) -> float:
         mutant, rp2040, ctrl = self._mutant, self.rp2040, self.peri_ctrl
         if mutant == "peri_ignores_kill":
             self.peri_ctrl = ctrl & ~C.CLK_PERI_CTRL_KILL
@@ -514,7 +515,7 @@ class MutantClocks(C.RPClocks):
         ):
             return rp2040.rosc_freq
         try:
-            return super().peri_freq
+            return super()._peri_freq
         finally:
             self.peri_ctrl = ctrl
 
@@ -543,7 +544,7 @@ class MutantClocks(C.RPClocks):
             return
 
         def sys() -> None:
-            clk_sys = self.sys_freq
+            clk_sys = self._sys_freq
             if mutant == "update_zero_updates_clk_sys":
                 changed = clk_sys != rp2040.clk_sys
             elif mutant == "update_notifies_unchanged_sys":
@@ -554,7 +555,7 @@ class MutantClocks(C.RPClocks):
                 C._set_clk_sys(rp2040, clk_sys)
 
         def peri() -> None:
-            clk_peri = self.peri_freq
+            clk_peri = self._peri_freq
             changed = (
                 clk_peri != rp2040.clk_peri
                 if mutant == "update_zero_updates_clk_peri"
@@ -566,7 +567,7 @@ class MutantClocks(C.RPClocks):
         def ref() -> None:
             if mutant == "update_skips_ref":
                 return
-            hz = self.ref_freq
+            hz = self._ref_freq
             if mutant == "update_ref_only_on_change" and hz == self._last_ref:
                 return
             self._last_ref = hz
@@ -574,7 +575,7 @@ class MutantClocks(C.RPClocks):
 
         def rtc() -> None:
             if mutant != "update_skips_rtc":
-                rp2040.rtc.clk_rtc_changed(self.rtc_freq)
+                rp2040.rtc.clk_rtc_changed(self._rtc_freq)
 
         if mutant == "update_peri_before_sys":
             peri()
@@ -602,9 +603,9 @@ class MutantClocks(C.RPClocks):
         if rp2040.clk_peri != C.DEFAULT_CLK and mutant != "reset_tree_keeps_clk_peri":
             C._set_clk_peri(rp2040, C.DEFAULT_CLK)
         if mutant != "reset_tree_skips_ref":
-            rp2040.watchdog.clk_ref_changed(self.ref_freq)
+            rp2040.watchdog.clk_ref_changed(self._ref_freq)
         if mutant != "reset_tree_skips_rtc":
-            rp2040.rtc.clk_rtc_changed(self.rtc_freq)
+            rp2040.rtc.clk_rtc_changed(self._rtc_freq)
 
     def reset(self) -> None:
         mutant, sys_ctrl, rtc_div, wake = (
@@ -659,7 +660,7 @@ class MutantClocks(C.RPClocks):
     def _fc_done(self) -> None:
         mutant = self._mutant
         if mutant in ("fc_max_exclusive", "fc_min_exclusive"):
-            end_hz = self.frequency_of(self._fc_src)
+            end_hz = self._frequency_of(self._fc_src)
             died = self._fc_started_hz == 0 or end_hz == 0
             khz = 0.0 if died else end_hz / 1000.0
             status = C.FC0_STATUS_DONE | (C.FC0_STATUS_DIED if died else 0)

@@ -150,58 +150,17 @@ cdef class RPClocks(NativeBlock):
         """The board's crystal (`chip.xosc_freq`): what the crystal block delivers while it is stable."""
         self._block.set_crystal_hz(<double> hz)
 
-    @property
-    def ref_freq(self):
-        value = self._block.ref_freq()
-        raise_if_pending()
-        return value
-
-    @property
-    def sys_freq(self):
-        value = self._block.sys_freq()
-        raise_if_pending()
-        return value
-
-    @property
-    def peri_freq(self):
-        value = self._block.peri_freq()
-        raise_if_pending()
-        return value
-
-    @property
-    def rtc_freq(self):
-        value = self._block.rtc_freq()
-        raise_if_pending()
-        return value
-
-    @property
-    def usb_freq(self):
-        value = self._block.usb_freq()
-        raise_if_pending()
-        return value
-
-    @property
-    def adc_freq(self):
-        value = self._block.adc_freq()
-        raise_if_pending()
-        return value
-
-    def frequency_of(self, source):
-        value = self._block.frequency_of(<uint32_t> source)
-        raise_if_pending()
-        return value
-
-    @property
-    def clk_sys(self):
-        return self._block.clk_sys()
-
-    @property
-    def clk_peri(self):
-        return self._block.clk_peri()
-
     def snapshot(self):
-        """The six clock generators' CTRL and DIV words (ref, peri, usb, sys, adc, rtc) in one call; the frequencies derived from them are `ref_freq` ... `adc_freq`."""
+        """The six clock generators' CTRL and DIV words (ref, peri, usb, sys, adc, rtc) and the frequencies derived from them, in one call."""
         cdef ClocksBlock* b = self._block
-        return {"ref_ctrl": b.ref_ctrl, "ref_div": b.ref_div, "peri_ctrl": b.peri_ctrl, "peri_div": b.peri_div, "usb_ctrl": b.usb_ctrl, "usb_div": b.usb_div, "sys_ctrl": b.sys_ctrl, "sys_div": b.sys_div, "adc_ctrl": b.adc_ctrl, "adc_div": b.adc_div, "rtc_ctrl": b.rtc_ctrl, "rtc_div": b.rtc_div}
+        state = {"ref_ctrl": b.ref_ctrl, "ref_div": b.ref_div, "peri_ctrl": b.peri_ctrl, "peri_div": b.peri_div, "usb_ctrl": b.usb_ctrl, "usb_div": b.usb_div, "sys_ctrl": b.sys_ctrl, "sys_div": b.sys_div, "adc_ctrl": b.adc_ctrl, "adc_div": b.adc_div, "rtc_ctrl": b.rtc_ctrl, "rtc_div": b.rtc_div}
+        state["ref_freq"] = b.ref_freq()
+        state["sys_freq"] = b.sys_freq()
+        state["peri_freq"] = b.peri_freq()
+        state["rtc_freq"] = b.rtc_freq()
+        state["usb_freq"] = b.usb_freq()
+        state["adc_freq"] = b.adc_freq()
+        raise_if_pending()
+        return state
 
     # --- the native bus protocol -----------------------------------------------------------------

@@ -146,11 +146,11 @@ def test_enabled0_and_enabled1_exist_and_are_read_only(mcu):
 def test_a_clock_sourced_from_a_stopped_crystal_does_not_run(mcu):
     """2.15.2.2 / table 220: clk_ref's SRC = 2 selects the crystal oscillator. Disabled, it delivers no clock; enabled, 12 MHz."""
     mcu.write_uint32(CLOCKS_BASE + C.CLK_REF_CTRL, C.CLK_REF_CTRL_SRC_XOSC)
-    assert mcu.clocks.ref_freq == 0
+    assert mcu.clocks.snapshot()["ref_freq"] == 0
     start_crystal(mcu)
-    assert mcu.clocks.ref_freq == 12e6
+    assert mcu.clocks.snapshot()["ref_freq"] == 12e6
     stop_crystal(mcu)
-    assert mcu.clocks.ref_freq == 0
+    assert mcu.clocks.snapshot()["ref_freq"] == 0
 
 
 def test_the_frequency_counter_sees_a_stopped_crystal_as_dead(mcu):

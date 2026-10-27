@@ -191,8 +191,8 @@ class RPClocks(BasePeripheral):
         self._fc_started_hz = 0.0
         self._fc_reset()
 
-    def snapshot(self) -> dict[str, int]:
-        """The ten clock generators' CTRL and DIV words (ref, peri, usb, sys, adc, rtc) as plain values; the frequencies derived from them are `ref_freq` ... `adc_freq`."""
+    def snapshot(self) -> dict[str, int | float]:
+        """The ten clock generators' CTRL and DIV words (ref, peri, usb, sys, adc, rtc) as plain values; the frequencies derived from them (`ref_freq` ... `adc_freq`) are entries too."""
         return {
             "ref_ctrl": self.ref_ctrl,
             "ref_div": self.ref_div,
@@ -206,6 +206,12 @@ class RPClocks(BasePeripheral):
             "adc_div": self.adc_div,
             "rtc_ctrl": self.rtc_ctrl,
             "rtc_div": self.rtc_div,
+            "ref_freq": self._ref_freq,
+            "sys_freq": self._sys_freq,
+            "peri_freq": self._peri_freq,
+            "rtc_freq": self._rtc_freq,
+            "usb_freq": self._usb_freq,
+            "adc_freq": self._adc_freq,
         }
 
     def reset(self) -> None:
@@ -243,17 +249,17 @@ class RPClocks(BasePeripheral):
         reset_clock_tree(self.rp2040)
 
     @property
-    def ref_freq(self) -> float:
+    def _ref_freq(self) -> float:
         """clk_ref in Hz. GPIN0/GPIN1 are not modelled and give 0."""
         return self._ref_source_freq / clock_divisor(self.ref_div & CLK_REF_DIV_INT_BITS)
 
     @property
-    def sys_freq(self) -> float:
+    def _sys_freq(self) -> float:
         """clk_sys in Hz. GPIN0/GPIN1 are not modelled and give 0."""
         return self._sys_source_freq / clock_divisor(self.sys_div)
 
     @property
-    def peri_freq(self) -> float:
+    def _peri_freq(self) -> float:
         """clk_peri in Hz - what the UART and SPI baud rate generators run from. 0 while the clock generator is stopped, and for the GPIN0/GPIN1 sources
         that are not modelled."""
         rp2040 = self.rp2040
@@ -262,7 +268,7 @@ class RPClocks(BasePeripheral):
             return 0
         source = (ctrl >> CLK_PERI_CTRL_AUXSRC_SHIFT) & CLK_PERI_CTRL_AUXSRC_MASK
         if source == CLK_PERI_CTRL_AUXSRC_CLK_SYS:
-            return self.sys_freq
+            return self._sys_freq
         if source == CLK_PERI_CTRL_AUXSRC_PLL_SYS:
             return rp2040.pll_sys.frequency
         if source == CLK_PERI_CTRL_AUXSRC_PLL_USB:
@@ -293,21 +299,21 @@ class RPClocks(BasePeripheral):
         return frequency / clock_divisor(div)
 
     @property
-    def rtc_freq(self) -> float:
+    def _rtc_freq(self) -> float:
         """clk_rtc in Hz (datasheet 2.15, table 234/235): the RTC's reference, the aux source divided by CLK_RTC_DIV (24.8, INT = 0 divides by 2^16)."""
         return self._aux_generator_freq(self.rtc_ctrl, self.rtc_div)
 
     @property
-    def usb_freq(self) -> float:
+    def _usb_freq(self) -> float:
         """clk_usb in Hz (tables 230/231), by the same mux and enable as clk_rtc; the divider is INT only."""
         return self._aux_generator_freq(self.usb_ctrl, self.usb_div)
 
     @property
-    def adc_freq(self) -> float:
+    def _adc_freq(self) -> float:
         """clk_adc in Hz (tables 232/233), by the same mux and enable as clk_rtc; the divider is INT only."""
         return self._aux_generator_freq(self.adc_ctrl, self.adc_div)
 
-    def frequency_of(self, source: int) -> float:
+    def _frequency_of(self, source: int) -> float:
         """What the frequency counter measures for an FC0_SRC value, in Hz; 0 for NULL, a source that is stopped, GPIN0/GPIN1 (not modelled) and a value that selects nothing."""
         rp2040 = self.rp2040
         return {
@@ -316,14 +322,14 @@ class RPClocks(BasePeripheral):
             FC0_SRC_ROSC: lambda: rp2040.rosc_freq,
             FC0_SRC_ROSC_PH: lambda: rp2040.rosc_freq,
             FC0_SRC_XOSC: lambda: xosc_hz(rp2040),
-            FC0_SRC_CLK_REF: lambda: self.ref_freq,
+            FC0_SRC_CLK_REF: lambda: self._ref_freq,
             FC0_SRC_CLK_SYS: lambda: (
                 rp2040.clk_sys
             ),  # the frequency the chip runs at: 125 MHz until firmware configures the tree
             FC0_SRC_CLK_PERI: lambda: rp2040.clk_peri,
-            FC0_SRC_CLK_USB: lambda: self.usb_freq,
-            FC0_SRC_CLK_ADC: lambda: self.adc_freq,
-            FC0_SRC_CLK_RTC: lambda: self.rtc_freq,
+            FC0_SRC_CLK_USB: lambda: self._usb_freq,
+            FC0_SRC_CLK_ADC: lambda: self._adc_freq,
+            FC0_SRC_CLK_RTC: lambda: self._rtc_freq,
         }.get(source, lambda: 0.0)()
 
     # ---- the frequency counter (2.15.4, 2.15.6.2) ----
@@ -342,7 +348,7 @@ class RPClocks(BasePeripheral):
         """Writing FC0_SRC "initiates the frequency count" (it runs even for NULL: pico-sdk's `frequency_count_khz()` says so). The test takes FC0_DELAY periods of clk_ref (from FC0_REF_KHZ) and then
         0.98 us * 2**FC0_INTERVAL; it is RUNNING until then and DONE after. The configuration is read at the start; a count already running is replaced."""
         self._fc_src = src
-        self._fc_started_hz = self.frequency_of(src)
+        self._fc_started_hz = self._frequency_of(src)
         self._fc_status = FC0_STATUS_RUNNING
         self._fc_result = 0
         delay = self._fc_delay * 1e6 / self._fc_ref_khz if self._fc_ref_khz else 0.0
@@ -352,7 +358,7 @@ class RPClocks(BasePeripheral):
         """The test interval is over. The result is the clock's frequency in kHz with five fractional bits, exact (the real counter is only as accurate as table 206 says; not independently sourced).
         A clock that is stopped at the start or at the end of the test sets DIED (and, as the datasheet says, FAIL); a frequency above FC0_MAX_KHZ sets FAST and below FC0_MIN_KHZ SLOW; PASS is
         set when DONE is and none of them is. Whether DONE is set for a DIED test is not stated; here it is - pico-sdk would otherwise wait for it for ever."""
-        end_hz = self.frequency_of(self._fc_src)
+        end_hz = self._frequency_of(self._fc_src)
         died = self._fc_started_hz == 0 or end_hz == 0
         khz = 0.0 if died else end_hz / 1000.0
         status = FC0_STATUS_DONE
@@ -384,7 +390,7 @@ class RPClocks(BasePeripheral):
     def _sys_source_freq(self) -> float:
         rp2040 = self.rp2040
         if (self.sys_ctrl & CLK_SYS_CTRL_SRC_MASK) == CLK_SYS_CTRL_SRC_REF:
-            return self.ref_freq
+            return self._ref_freq
         auxsrc = (self.sys_ctrl >> CLK_SYS_CTRL_AUXSRC_SHIFT) & CLK_SYS_CTRL_AUXSRC_MASK
         if auxsrc == CLK_SYS_CTRL_AUXSRC_PLL_SYS:
             return rp2040.pll_sys.frequency
@@ -597,18 +603,18 @@ def update_clocks(rp2040: "RP2040") -> None:
     Shared by both chip implementations (`_rp2040.py`, `native/_rp2040.pyx`): the registers it reads and the blocks it retunes are the same Python objects on
     each.
     """
-    clk_sys = rp2040.clocks.sys_freq
+    clk_sys = rp2040.clocks._sys_freq
     if clk_sys and clk_sys != rp2040.clk_sys:
         _set_clk_sys(rp2040, clk_sys)
-    clk_peri = rp2040.clocks.peri_freq
+    clk_peri = rp2040.clocks._peri_freq
     if clk_peri and clk_peri != rp2040.clk_peri:
         _set_clk_peri(rp2040, clk_peri)
-    _tap(rp2040, "ref", rp2040.clocks.ref_freq, 0.0)
+    _tap(rp2040, "ref", rp2040.clocks._ref_freq, 0.0)
     rp2040.watchdog.clk_ref_changed(
-        rp2040.clocks.ref_freq
+        rp2040.clocks._ref_freq
     )  # the watchdog's tick (the TIMER's and SysTick's reference) is derived from clk_ref
-    _tap(rp2040, "rtc", rp2040.clocks.rtc_freq, 0.0)
-    rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)  # the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
+    _tap(rp2040, "rtc", rp2040.clocks._rtc_freq, 0.0)
+    rp2040.rtc.clk_rtc_changed(rp2040.clocks._rtc_freq)  # the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
 
 
 def reset_clock_tree(rp2040: "RP2040") -> None:
@@ -621,7 +627,7 @@ def reset_clock_tree(rp2040: "RP2040") -> None:
         _set_clk_sys(rp2040, DEFAULT_CLK)
     if rp2040.clk_peri != DEFAULT_CLK:
         _set_clk_peri(rp2040, DEFAULT_CLK)
-    _tap(rp2040, "ref", rp2040.clocks.ref_freq, 0.0)
-    rp2040.watchdog.clk_ref_changed(rp2040.clocks.ref_freq)
-    _tap(rp2040, "rtc", rp2040.clocks.rtc_freq, 0.0)
-    rp2040.rtc.clk_rtc_changed(rp2040.clocks.rtc_freq)
+    _tap(rp2040, "ref", rp2040.clocks._ref_freq, 0.0)
+    rp2040.watchdog.clk_ref_changed(rp2040.clocks._ref_freq)
+    _tap(rp2040, "rtc", rp2040.clocks._rtc_freq, 0.0)
+    rp2040.rtc.clk_rtc_changed(rp2040.clocks._rtc_freq)

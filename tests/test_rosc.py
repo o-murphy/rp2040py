@@ -34,7 +34,7 @@ def test_div_and_freq_range_retune_the_chip_clocks(rp2040_factory):
     chip = rp2040_factory()
     _w(chip, DIV, 0xAA0 + 8)  # half the divisor: twice the frequency
     assert chip.rosc_freq == 13e6
-    assert chip.clocks.ref_freq == 13e6  # clk_ref still runs from the ROSC at reset
+    assert chip.clocks.snapshot()["ref_freq"] == 13e6  # clk_ref still runs from the ROSC at reset
     assert chip.clk_sys == 13e6  # and so does clk_sys
     _w(chip, DIV, 0xAA0)  # "div = 0 divides by 32"
     assert chip.rosc_freq == 3.25e6
