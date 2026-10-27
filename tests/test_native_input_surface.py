@@ -23,6 +23,10 @@ from pathlib import Path
 import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native"
+# cibuildwheel's Android and Pyodide runs copy only tests/ next to the wheel: with no shell source to scan there is nothing to compare the table with (every entry would look stale).
+needs_the_shell_source = pytest.mark.skipif(
+    not any(NATIVE.glob("*.pyx")), reason="the .pyx sources of the shells are not part of this test environment"
+)
 CLASSES = {"control", "accessor", "port", "input", "config", "own", "register", "construct", "test"}
 
 _ROOT = r"(?:self\._block|self\._mcu|rp2040\._mcu|chip\._mcu|self\._own|self\._core|\(<\w+> \w+\)\._block|\(<\w+> self\.\w+\)\._block|\w+\._block)"
@@ -204,6 +208,7 @@ def test_the_table_only_uses_the_known_classes():
             assert cls in CLASSES, f"{shell}.{member}: unknown class {cls!r}"
 
 
+@needs_the_shell_source
 def test_no_shell_calls_the_core_outside_the_pinned_surface():
     found = scan()
     unknown = {
@@ -218,6 +223,7 @@ def test_no_shell_calls_the_core_outside_the_pinned_surface():
     )
 
 
+@needs_the_shell_source
 def test_the_pinned_surface_has_no_stale_entries():
     found = scan()
     stale = {
