@@ -158,3 +158,7 @@ Removed from the native shell: the `_Channel` view class and `RPDMA.channels` (a
 
 Measured first: the shells' `check_interrupts()` wrappers were called only by the oracles' `check` operation (ADC, I2C, PWM, SPI, UART; the DMA, PIO, RTC and USB had no outside caller at all) and by the pure blocks themselves. The `check` operation of the five oracles became a read of the block's interrupt status register through the bus (the same operation stream, so the seeds and the coverage claims are unchanged), and **every mutant is still caught** (482 oracle tests of those five, then the full 3,536). Removed: nine shell wrappers; the pure blocks' `check_interrupts` is `_check_interrupts` (and the oracles' mutants that override it). The pin test showed the stale entries at once and was updated: plumbing 24 -> 16 entries. The USB shell keeps one private call for its `raise_interrupt` test hook.
 
+## Sketch of where it ends (2026-10-27)
+
+[chip-protocol-sketch.md](chip-protocol-sketch.md): a typed `Protocol` stub (`World` = the 16 slots, `Chip` = the narrowed inward half, `Backend`) with the host's whole engine in ten lines. A sketch for the maintainer, not a plan step; nothing in it is built.
+
