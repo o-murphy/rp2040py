@@ -31,11 +31,11 @@ def test_an_rx_overrun_raises_the_interrupt_line_at_once(rp2040_factory):
 def test_master_mode_is_sspcr1s_ms_bit_not_sspcr0s(rp2040_factory):
     chip = rp2040_factory()
     spi = chip.spi[0]
-    assert spi.master_mode  # reset: MS clear is master
+    assert spi.snapshot()["master_mode"]  # reset: MS clear is master
     chip.write_uint32(SPI0_BASE + SSPCR0, 1 << 2)  # bit 2 of SSPCR0 is part of the data size, not the mode
-    assert spi.master_mode
+    assert spi.snapshot()["master_mode"]
     chip.write_uint32(SPI0_BASE + SSPCR1, 1 << 2)  # SSPCR1.MS: slave
-    assert not spi.master_mode
+    assert not spi.snapshot()["master_mode"]
 
 
 def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):
@@ -43,10 +43,15 @@ def test_icr_clears_the_bits_the_bus_passed_whatever_the_alias(rp2040_factory):
     alias decodes against a read of ICR, which is write-only and reads as all ones here)."""
     chip = rp2040_factory()
     spi = chip.spi[0]
-    spi._int_raw = SSPRTINTR | SSPRORINTR
-    chip.write_uint32(SPI0_BASE + 0x3000 + SSPICR, SSPRORINTR)  # the CLR alias: clear ROR
-    assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == SSPRTINTR
-    chip.write_uint32(SPI0_BASE + SSPICR, SSPRTINTR)
+    spi.on_transmit = lambda value: None
+    for value in range(9):
+        spi.complete_transmit(value)  # eight fill the RX FIFO, the ninth is an overrun: ROR is raised
+    assert chip.read_uint32(SPI0_BASE + SSPRIS) & SSPRORINTR
+    chip.write_uint32(
+        SPI0_BASE + 0x3000 + SSPICR, SSPRTINTR
+    )  # the CLR alias, raw value RT: ROR is not among the bits written, so it stays
+    assert chip.read_uint32(SPI0_BASE + SSPRIS) & SSPRORINTR
+    chip.write_uint32(SPI0_BASE + 0x3000 + SSPICR, SSPRORINTR)  # the CLR alias, raw value ROR: cleared
     assert chip.read_uint32(SPI0_BASE + SSPRIS) & (SSPRTINTR | SSPRORINTR) == 0
 
 
@@ -92,7 +97,8 @@ def test_dma_requests_need_the_ssp_enabled_and_the_dma_enable(rp2040_factory):
     chip = rp2040_factory()
 
     def asked() -> tuple[bool, bool]:
-        return bool(chip.dma.dreq.get(DREQ_SPI0_TX, False)), bool(chip.dma.dreq.get(DREQ_SPI0_RX, False))
+        asserted = chip.dma.snapshot()["dreq"]
+        return DREQ_SPI0_TX in asserted, DREQ_SPI0_RX in asserted
 
     chip.write_uint32(SPI0_BASE + SSPDMACR, 3)
     assert asked() == (False, False)  # DMA enabled, SSP not: nothing asked for

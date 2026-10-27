@@ -31,12 +31,16 @@ def _write_with_an_alias(candidate: Rig, step: int) -> None:
 
 def _change_a_divider(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.clocks.sys_div ^= 0x300
+        clocks = candidate.chip.clocks
+        clocks.write_uint32(
+            0x04, clocks.read_uint32(0x04) ^ 0x300
+        )  # CLK_GPOUT0_DIV: a stored register, no retune (a retune would run the rig's failing listener)
 
 
 def _change_a_pll(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pll_usb.fbdiv_int ^= 0x10
+        pll = candidate.chip.pll_usb
+        pll.write_uint32(0x08, pll.read_uint32(0x08) ^ 0x10)  # FBDIV_INT
 
 
 def _move_the_clock(candidate: Rig, step: int) -> None:
@@ -85,11 +89,10 @@ def test_the_runs_exercise_what_they_claim_to():
         "listener",
         "exception",
         "clock changed",
-        "sink.ppb",
-        "sink.watchdog",
-        "sink.rtc",
-        "sink.uart0",
-        "sink.uart1",
+        "tree.sys",
+        "tree.ref",
+        "tree.rtc",
+        "tree.peri",
         "both plls running",
         "rtc clock running",
         "fc done",

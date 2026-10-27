@@ -4,9 +4,10 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._cpu cimport Cpu
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pwm cimport Timer32, Timer32PeriodicAlarm
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -41,13 +42,9 @@ cdef extern from "ppb.hpp" namespace "rp2040core":
         int64_t raw_write_value() noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPPPB:
+cdef class RPPPB(NativeBlock):
     cdef PpbBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block (the watchdog's tick reaches it in C++)
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
     cdef public object systick_timer
-    cdef public object systick_alarm
     cdef public object on_system_reset_request
     cdef object _core  # keeps the core (and so the `Cpu` the block points into) alive

@@ -74,6 +74,19 @@ class RPXOSC(BasePeripheral):
         self._stable = False
         self._is_dormant = False
 
+    def snapshot(self) -> dict[str, int | bool]:
+        """The block's state as plain values."""
+        return {
+            "ctrl": self._ctrl,
+            "status": self._status,
+            "dormant": self._dormant,
+            "startup": self._startup,
+            "count": self._count,
+            "enabled": self._enabled,
+            "stable": self._stable,
+            "is_dormant": self._is_dormant,
+        }
+
     def read_uint32(self, offset: int) -> int:
         if offset == XOSC_CTRL:
             return self._ctrl

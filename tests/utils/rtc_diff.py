@@ -17,7 +17,7 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _rtc as R
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x4005C000
@@ -49,31 +49,6 @@ CLOCK_CONFIGS = (  # (CLK_RTC_CTRL, CLK_RTC_DIV): stopped; XOSC/256 = 46875 Hz; 
     (ENABLE_BIT | (3 << 5), 0),
     (ENABLE_BIT | KILL_BIT | (3 << 5), 256 << 8),
     (ENABLE_BIT | (4 << 5), 256 << 8),
-)
-ATTRS = (
-    "clkdiv_m1",
-    "setup0",
-    "setup1",
-    "irq_setup0",
-    "irq_setup1",
-    "inte",
-    "intf",
-    "force_not_leap_year",
-    "enable",
-    "year",
-    "month",
-    "day",
-    "dotw",
-    "hour",
-    "minute",
-    "second",
-    "latched_date",
-    "ctrl",
-    "running",
-    "raw_interrupt",
-    "match_ena",
-    "date",
-    "time",
 )
 TIMES = (
     1,
@@ -117,20 +92,21 @@ class Boom(Exception):
 
 
 class Rig:
-    """One chip plus the log of every warning and every call of the interrupt line."""
+    """One whole chip plus the log of every warning and every call of the interrupt line.
+
+    The twin-backend model (docs/tasks/twin-backend-testing.md): the reference is the pure-Python *chip* (``_rp2040.RP2040``: its own clock, core, pins and blocks) and the candidate is the
+    C++ *chip* (``native/_rp2040.RP2040``); no block is moved from one into the other. Only a mutant swaps a block, and inside the pure chip."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.chip.write_uint32(
             0x40024000, (0xFAB << 12) | 0xAA0
         )  # xosc_init(): clk_rtc has no clock from a stopped crystal
         self.log: list[tuple] = []
         self.raising = False
-        if kind == "pure":
-            self._replace_the_block(R.RP2040RTC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
-            self._replace_the_block(factory)
+            self._replace_the_block(factory)  # inside the pure chip: a test of the test, not of the product
         self._tap()
 
     def _replace_the_block(self, factory: Callable[..., Any]) -> None:
@@ -187,7 +163,7 @@ class Rig:
         peripheral, clock = self.peripheral, self.chip.clock
         return {
             "regs": tuple(int(self.chip.read_uint32(BASE + offset)) for offset in READ_SAFE),
-            "attrs": tuple(getattr(peripheral, name) for name in ATTRS),
+            "state": tuple(sorted(peripheral.snapshot().items())),
             "raw": int(peripheral.raw_write_value),
             "alarm": (bool(clock.has_scheduled_alarm), float(clock.nanos_to_next_alarm)),
             "time": float(clock.nanos),
@@ -393,7 +369,7 @@ def mutant_rig(name: str) -> Rig:
             base.ctrl.fset(self, value)  # type: ignore[attr-defined]
 
         @property  # type: ignore[misc]
-        def running(self) -> bool:
+        def _running(self) -> bool:
             if name == "running_ignores_clock":
                 return self.enable
             if name == "running_ignores_enable":
@@ -479,12 +455,12 @@ def mutant_rig(name: str) -> Rig:
             if name == "load_dotw_ignored":
                 self.dotw = 0
 
-        def second_nanos(self) -> float:
+        def _second_nanos(self) -> float:
             if name == "second_ignores_clkdiv":
                 return 1e9 / self._clk_rtc
             if name == "second_clkdiv_without_plus_one":
                 return max(self.clkdiv_m1, 1) * 1e9 / self._clk_rtc
-            return super().second_nanos()
+            return super()._second_nanos()
 
         def clk_rtc_changed(self, clk_rtc: float) -> None:
             if name == "clk_rtc_change_keeps_phase":
@@ -496,13 +472,13 @@ def mutant_rig(name: str) -> Rig:
             super().clk_rtc_changed(clk_rtc)
 
         def _retime(self, restart: bool) -> None:
-            if name == "disable_does_not_stop" and not self.running and self._alarm_pending:
+            if name == "disable_does_not_stop" and not self._running and self._alarm_pending:
                 return
-            if name == "restart_on_every_ctrl_write" and restart is False and self.running:
+            if name == "restart_on_every_ctrl_write" and restart is False and self._running:
                 restart = True
             super()._retime(restart)
 
-        def check_interrupts(self) -> None:
+        def _check_interrupts(self) -> None:
             raw = self.raw_interrupt
             intf, inte = self.intf, self.inte
             if name == "irq_ignores_inte":
@@ -541,18 +517,18 @@ def mutant_rig(name: str) -> Rig:
             }.get(name, ())
             saved = {attr: getattr(self, attr) for attr in kept}
             if name == "reset_leaves_irq_up":
-                real, self.check_interrupts = self.check_interrupts, lambda: None  # type: ignore[method-assign]
+                real, self._check_interrupts = self._check_interrupts, lambda: None  # type: ignore[method-assign]
                 try:
                     super().reset()
                 finally:
-                    self.check_interrupts = real  # type: ignore[method-assign]
+                    self._check_interrupts = real  # type: ignore[method-assign]
                 return
             super().reset()
             for attr, value in saved.items():
                 setattr(self, attr, value)
             if saved:
                 self._retime(True)
-                self.check_interrupts()
+                self._check_interrupts()
 
         def write_uint32(self, offset: int, value: int) -> None:
             value &= 0xFFFFFFFF
@@ -579,11 +555,11 @@ def mutant_rig(name: str) -> Rig:
                 return
             if name == "inte_unmasked" and offset == R.INTE:
                 self.inte = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if name == "intf_unmasked" and offset == R.INTF:
                 self.intf = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if name == "force_not_stored" and offset == R.CTRL:
                 super().write_uint32(offset, value & ~R.CTRL_FORCE_NOTLEAPYEAR)
@@ -618,7 +594,7 @@ def mutant_rig(name: str) -> Rig:
                     self._load()
                 self._retime(load and name != "load_keeps_phase")
                 if load and name != "irq_not_updated_on_load":
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if name == "ctrl_load_reads_back" and offset == R.CTRL:
                 self._loaded_flag = bool(value & R.CTRL_LOAD)
@@ -835,7 +811,8 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
     for op in ops:
         before = len(rig.log)
         peripheral = rig.peripheral
-        old = (peripheral.minute, peripheral.hour, peripheral.day, peripheral.month, peripheral.year, peripheral.dotw)
+        s = peripheral.snapshot()
+        old = (s["minute"], s["hour"], s["day"], s["month"], s["year"], s["dotw"])
         if op[0] == "read":
             count("read.reg" if op[1] in REGISTERS else "read.unimplemented")
             if op[2]:
@@ -849,7 +826,8 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         failed = _step(rig, op)[1] is not None
         if failed:
             count("exception")
-        new = (peripheral.minute, peripheral.hour, peripheral.day, peripheral.month, peripheral.year, peripheral.dotw)
+        s = peripheral.snapshot()
+        new = (s["minute"], s["hour"], s["day"], s["month"], s["year"], s["dotw"])
         if op[0] == "tick":
             for label, i in (("minute", 0), ("hour", 1), ("day", 2), ("month", 3), ("year", 4), ("dotw", 5)):
                 if old[i] != new[i]:
@@ -858,11 +836,11 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
                 count("carry.february")
             if old[2] == 28 and new[2] == 29 and new[3] == 2:
                 count("carry.leap_day")
-        if peripheral.running:
+        if s["running"]:
             count("state.running")
-        if peripheral.enable and not peripheral.running:
+        if s["enable"] and not s["running"]:
             count("state.enabled_without_clock")
-        if peripheral.raw_interrupt:
+        if s["raw_interrupt"]:
             count("state.match")
         for entry in rig.log[before:]:
             if entry[0] == "irq":

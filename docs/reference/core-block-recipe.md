@@ -40,9 +40,11 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 
 ## 1. The reference and the facade (before any C++)
 
-- `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle) and a new `peripherals/X.py`
-  facade that imports `native/_X` when it can (`native_disabled()` / `RP2040PY_SKIP_CYTHON` forces the reference). The pure chip
-  (`_rp2040.py`) imports `_X` directly; the native chip (`native/_rp2040.pyx`) imports the facade.
+- `peripherals/X.py` -> `git mv` to `peripherals/_X.py` (the pure-Python reference, kept as the oracle). Both chips import their block directly: the pure chip
+  (`_rp2040.py`) `peripherals/_X`, the native chip (`native/_rp2040.pyx`) `native/_X`. **No facade by default.** Add a `peripherals/X.py` facade (imports `native/_X` when it can;
+  `native_disabled()` / `RP2040PY_SKIP_CYTHON` forces the reference) only when something outside the two chips imports the block's name or constants - the public
+  a device's type hint or constants, a test (no block class is a top-level export any more: `RPPIO`, `RPI2C` and `RPUSBController` left it) - because a native shell cannot be built on its own (it is the view of the chip's block). 15 facades nobody imported
+  were removed (record 0096, Phase 5b).
 - Anything the shell and the reference must compute the same way (a rounding, a division, an error message) is a function in `_X.py`
   that both call - not two copies. (Cython's `cdivision=True` turned `int / 64` into integer division in the UART shell.)
 
@@ -51,7 +53,7 @@ Header-only C++17; no exceptions, RTTI, STL or allocation; single-threaded. `tes
 `tests/utils/X_diff.py` + `tests/test_X_diff.py`: two chips, one generated operation stream, everything observable compared after every
 step - every register offset through the bus **and its XOR/SET/CLR aliases**, reads of unimplemented offsets (the warnings are compared),
 the block's side effects (IRQ line, DREQs, callbacks) as an ordered log, an exception on one side and not the other. Then prove it:
-agreement over several seeds, perturbations of the candidate through the public API caught at the step they are made, logic mutants
+agreement over several seeds (the comparison is `snapshot()` plus the registers read through the bus), perturbations of the candidate - **bus writes or the explicit inputs, never a back-door attribute** - caught at the step they are made, logic mutants
 of the reference (one subclass each) caught, coverage counts asserted so a green run means something. A mutant that survives is
 a hole in the generator - widen it.
 
@@ -62,6 +64,9 @@ a hole in the generator - widen it.
 - A `XHost` of plain function pointers + `void* ctx` + `const int* failed`. Everything outside the block is reached through it. Report an
   unimplemented register as `RegWarn` data, never as a string. A host call that fails makes the block return `false` at once, leaving
   exactly the state the reference's exception would have left.
+  The host struct is for the **world** only (a device on a bus, a pin listener, a console, a reset request): it has no slot that lets
+  the host stand its own object in for a chip block, and a new block adds none ([the border plan](../tasks/narrow-the-border-plan.md)).
+  The chip's blocks are never replaced; the two backends are compared as whole chips (`tests/utils/twin.py`).
 - `WindowHandler window_handler() { return BlockWindow<XBlock>::handler(this); }`.
 - Keep the reference's quirks and say so in the header comment, each one pinned by the oracle or the C++ checks. A real bug of the
   reference is *not* fixed in the port: fix it in its own commit first (and ask), then port (section A, step 5).
@@ -76,7 +81,7 @@ out-of-bounds index a mutant introduces is a failure): every survivor is a gap i
 ## 5. The shell (`native/_X.pxd/.pyx/.pyi`)
 
 A `cdef class` over the block; trampolines for each host function that catch `BaseException`, `park_error()` it and return `False`;
-the reference's attributes (including the private ones tests poke, as properties with setters); `read_uint32`/`write_uint32`/
+**no attribute-per-register mirrors** - state is changed through the bus and observed through one `snapshot()` (a dict of plain values, built by the shell in one call from the C++ block's public fields, with the same keys as the reference's `snapshot()`; record 0096, the snapshot series). Keep a property only for plumbing another block or the chip reads (a frequency, a pin image, a tick hook) and an explicit input method only for what the bus cannot do (`fire_timeout()`, `raise_interrupt()`, `set_counter()`); `read_uint32`/`write_uint32`/
 `write_uint32_atomic` that `raise_if_pending()`; `_native_window()` on the *type* (the bus registers the block's own C++ functions).
 Check what the differential says the first time it runs reference against native - it will find something.
 

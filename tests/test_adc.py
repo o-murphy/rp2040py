@@ -46,26 +46,18 @@ def test_round_robin_wraps_from_the_last_channel_to_channel_0():
     assert _ainsel(chip) == 4
 
 
-class _DmaRecorder:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, int]] = []
-
-    def set_dreq(self, channel: int) -> None:
-        self.calls.append(("set", int(channel)))
-
-    def clear_dreq(self, channel: int) -> None:
-        self.calls.append(("clear", int(channel)))
-
-
 def test_an_fcs_write_republishes_the_dreq_and_switching_dreq_en_off_takes_it_down():
     chip = RP2040()
-    chip.dma = recorder = _DmaRecorder()  # type: ignore[assignment]
+    calls: list[tuple[str, int]] = []
+    chip.dreq_tap = lambda number, asserted: calls.append(
+        (("set" if asserted else "clear"), number)
+    )  # the real DMA gets the requests as well
     chip.write_uint32(ADC_BASE + FCS, 1 | (1 << 3))  # FIFO and DREQ enabled, threshold 0: the level (0) is at it
-    assert recorder.calls[-1][0] == "set"
+    assert calls[-1][0] == "set"
     chip.write_uint32(ADC_BASE + FCS, 1)  # DREQ_EN off: the request that was up must go down (it used to stay up)
-    assert recorder.calls[-1][0] == "clear"
+    assert calls[-1][0] == "clear"
     chip.write_uint32(ADC_BASE + FCS, 1 | (1 << 3) | (3 << 24))  # threshold 3 above the level 0
-    assert recorder.calls[-1][0] == "clear"
+    assert calls[-1][0] == "clear"
 
 
 def test_start_one_is_self_clearing():
@@ -114,7 +106,8 @@ def test_ready_needs_the_adc_to_be_enabled_and_idle():
     assert not chip.read_uint32(ADC_BASE + CS) & (1 << 8)  # not enabled: not ready (the datasheet's reset value is 0)
     chip.write_uint32(ADC_BASE + CS, 1)
     assert chip.read_uint32(ADC_BASE + CS) & (1 << 8)
-    adc.busy = True
+    adc.on_adc_read = lambda channel: None  # a reader that has not answered yet
+    chip.write_uint32(ADC_BASE + CS, 1 | (1 << 2))  # EN | START_ONCE: a conversion is in flight
     assert not chip.read_uint32(ADC_BASE + CS) & (1 << 8)
 
 

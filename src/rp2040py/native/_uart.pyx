@@ -13,7 +13,7 @@ shift register is an alarm of the chip's C++ clock, so a character's time on the
 
 The API is the reference's: the registers' private attributes (`_ctrl_register`, `_line_ctrl_register`, `_int_divisor`, `_frac_divisor`,
 `_interrupt_mask`, `_interrupt_status`, readable and writable - `tests/test_chip_reset.py` pokes them), `rx_fifo` (a view with the reference
-FIFO's attribute names), `flags`, `enabled`/`tx_enabled`/`rx_enabled`/`fifos_enabled`, `word_length`, `baud_divider`, `baud_rate`,
+FIFO's attribute names), `flags`, `baud_divider`, `baud_rate`,
 `feed_byte`, `check_interrupts`, `reset`, `on_byte`/`on_baud_rate_change`, `tx_fifo` (a view), `tx_full`/`tx_capacity`/`tx_trigger`, plus `BasePeripheral`'s surface (name,
 rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/...). Unlike the DMA it does not need the chip's bus.
 """
@@ -21,19 +21,15 @@ rp2040, raw_write_value, read_uint32, write_uint32, write_uint32_atomic, warn/..
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, pending_flag, raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.peripherals._uart import _WORD_LENGTH_BY_LCR_WLEN, _baud_rate, _bit_ns
+from rp2040py.peripherals._uart import _baud_rate, _bit_ns
 from rp2040py.native._register_warning import warn_register
 
 __all__ = ("RPUART",)
-
-cdef uint32_t FEN = 1 << 4
-cdef uint32_t UARTEN = 1 << 0
-cdef uint32_t TXE = 1 << 8
-cdef uint32_t RXE = 1 << 9
 
 
 cdef cppbool _ports_irq(void* chip, uint32_t line, cppbool level) noexcept:
@@ -102,76 +98,7 @@ cdef void _ports_warn(void* chip, uint32_t block, uint32_t kind, uint32_t offset
         park_error(error)
 
 
-cdef class _RxFifo:
-    """The RX FIFO as the reference's `utils.fifo.FIFO(32)` shows it."""
-
-    cdef RPUART _owner
-
-    @property
-    def size(self):
-        return 32
-
-    @property
-    def item_count(self):
-        return self._owner._block.rx_count()
-
-    @property
-    def empty(self):
-        return self._owner._block.rx_empty()
-
-    @property
-    def full(self):
-        return self._owner._block.rx_full()
-
-    @property
-    def items(self):
-        return [self._owner._block.rx_at(i) for i in range(self._owner._block.rx_count())]
-
-    def push(self, value):
-        self._owner._block.rx_push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._owner._block.rx_pull()
-
-    def peek(self):
-        return self._owner._block.rx_peek()
-
-    def reset(self):
-        self._owner._block.rx_reset()
-
-
-cdef class _TxFifo:
-    """The TX FIFO as the reference's `utils.fifo.FIFO(32)` shows it."""
-
-    cdef RPUART _owner
-
-    @property
-    def size(self):
-        return 32
-
-    @property
-    def item_count(self):
-        return self._owner._block.tx_count()
-
-    @property
-    def empty(self):
-        return self._owner._block.tx_empty()
-
-    @property
-    def items(self):
-        return [self._owner._block.tx_at(i) for i in range(self._owner._block.tx_count())]
-
-    def push(self, value):
-        self._owner._block.tx_push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._owner._block.tx_pull()
-
-    def reset(self):
-        self._owner._block.tx_reset()
-
-
-cdef class RPUART:
+cdef class RPUART(NativeBlock):
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
         cdef UartHost host
         clock = rp2040.clock
@@ -192,8 +119,10 @@ cdef class RPUART:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <UartBlock*> <size_t> rp2040._native_uart_address(mcu_index)
+            self._ops = register_ops(self._block)
             return
         self._block = &self._own
+        self._ops = register_ops(self._block)
         self._ports.chip = <void*> self
         self._ports.warn = _ports_warn
         self._ports.irq = _ports_irq
@@ -222,144 +151,31 @@ cdef class RPUART:
         if self._block == &self._own:
             self._own.detach()
 
-    # --- the reference's attributes --------------------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    @property
-    def rx_fifo(self):
-        cdef _RxFifo view = _RxFifo.__new__(_RxFifo)
-        view._owner = self
-        return view
-
-    @property
-    def tx_fifo(self):
-        cdef _TxFifo view = _TxFifo.__new__(_TxFifo)
-        view._owner = self
-        return view
-
-    @property
-    def tx_capacity(self):
-        return self._block.tx_capacity()
-
-    @property
-    def tx_full(self):
-        return self._block.tx_full()
-
-    @property
-    def tx_trigger(self):
-        return self._block.tx_trigger()
-
-    @property
-    def _tx_shifting(self):
-        return self._block.tx_shifting()
-
-    @property
-    def _ctrl_register(self):
-        return self._block.ctrl
-
-    @_ctrl_register.setter
-    def _ctrl_register(self, value):
-        self._block.ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _line_ctrl_register(self):
-        return self._block.line_ctrl
-
-    @_line_ctrl_register.setter
-    def _line_ctrl_register(self, value):
-        self._block.line_ctrl = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_divisor(self):
-        return self._block.int_divisor
-
-    @_int_divisor.setter
-    def _int_divisor(self, value):
-        self._block.int_divisor = <uint32_t> (<int64_t> value)
-
-    @property
-    def _frac_divisor(self):
-        return self._block.frac_divisor
-
-    @_frac_divisor.setter
-    def _frac_divisor(self, value):
-        self._block.frac_divisor = <uint32_t> (<int64_t> value)
-
-    @property
-    def _interrupt_mask(self):
-        return self._block.interrupt_mask
-
-    @_interrupt_mask.setter
-    def _interrupt_mask(self, value):
-        self._block.interrupt_mask = <uint32_t> (<int64_t> value)
-
-    @property
-    def _interrupt_status(self):
-        return self._block.interrupt_status
-
-    @_interrupt_status.setter
-    def _interrupt_status(self, value):
-        self._block.interrupt_status = <uint32_t> (<int64_t> value)
-
-    @property
-    def _ifls(self):
-        return self._block.ifls
-
-    @_ifls.setter
-    def _ifls(self, value):
-        self._block.ifls = <uint32_t> (<int64_t> value)
-
-    @property
-    def _ilpr(self):
-        return self._block.ilpr
-
-    @_ilpr.setter
-    def _ilpr(self, value):
-        self._block.ilpr = <uint32_t> (<int64_t> value)
-
-    @property
-    def _dmacr(self):
-        return self._block.dmacr
-
-    @_dmacr.setter
-    def _dmacr(self, value):
-        self._block.dmacr = <uint32_t> (<int64_t> value)
-
-    @property
-    def _rsr(self):
-        return self._block.rsr
-
-    @_rsr.setter
-    def _rsr(self, value):
-        self._block.rsr = <uint32_t> (<int64_t> value)
-
-    def _update_dreq(self):
-        if not self._block.update_dreq():
-            raise_if_pending()
-
-    @property
-    def enabled(self):
-        return bool(self._block.ctrl & UARTEN)
-
-    @property
-    def tx_enabled(self):
-        return bool(self._block.ctrl & TXE)
-
-    @property
-    def rx_enabled(self):
-        return bool(self._block.ctrl & RXE)
-
-    @property
-    def fifos_enabled(self):
-        return bool(self._block.line_ctrl & FEN)
-
-    @property
-    def word_length(self):
-        """Number of bits per UART character"""
-        return _WORD_LENGTH_BY_LCR_WLEN[(self._block.line_ctrl >> 5) & 0x3]
+    def snapshot(self):
+        """The block's state in one call: the registers (public fields of the C++ block), both FIFOs' contents, the shifter and what is derived from them."""
+        cdef UartBlock* b = self._block
+        cdef uint32_t i
+        return {
+            "ctrl": b.ctrl,
+            "line_ctrl": b.line_ctrl,
+            "int_divisor": b.int_divisor,
+            "frac_divisor": b.frac_divisor,
+            "interrupt_mask": b.interrupt_mask,
+            "interrupt_status": b.interrupt_status,
+            "ifls": b.ifls,
+            "ilpr": b.ilpr,
+            "dmacr": b.dmacr,
+            "rsr": b.rsr,
+            "rx": tuple([b.rx_at(i) for i in range(b.rx_count())]),
+            "tx": tuple([b.tx_at(i) for i in range(b.tx_count())]),
+            "tx_shifting": bool(b.tx_shifting()),
+            "tx_capacity": b.tx_capacity(),
+            "tx_trigger": b.tx_trigger(),
+            "tx_full": bool(b.tx_full()),
+            "flags": b.flags(),
+        }
 
     @property
     def baud_divider(self):
@@ -369,62 +185,15 @@ cdef class RPUART:
     def baud_rate(self):
         return _baud_rate(self.rp2040.clk_peri, self.baud_divider)
 
-    def clk_peri_changed(self):
-        """The peripheral clock changed: re-announce the baud rate, unless the firmware has not set the divider yet (rp2040js 1.4.0)."""
-        if self.baud_divider and self.on_baud_rate_change:
-            self.on_baud_rate_change(self.baud_rate)
-
-    @property
-    def flags(self):
-        return self._block.flags()
-
     # --- BasePeripheral's surface ----------------------------------------------------------------
-
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
 
     def feed_byte(self, value):
         if not self._block.feed_byte(<uint32_t> (<int64_t> value)):
             raise_if_pending()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
 
     def reset(self):
         """Registers and the RX FIFO, back to power-on (0089 Phase 5). `on_byte`/`on_baud_rate_change` are not touched: they are wiring."""
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

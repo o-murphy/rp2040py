@@ -52,6 +52,10 @@ class RPPADS(BasePeripheral):
             return self.rp2040.qspi[_QSPI_PAD_TO_PIN[gpio_index]]
         return self.rp2040.gpio[gpio_index]
 
+    def snapshot(self) -> dict[str, int]:
+        """The registers this block owns itself (the per-pad registers live on the pins) as plain values."""
+        return {"voltage_select": self.voltage_select, "swclk": self.swclk, "swd": self.swd}
+
     def read_uint32(self, offset: int) -> int:
         if self._first_pad_register <= offset <= self._last_pad_register:
             gpio = self.get_pin_from_offset(offset)

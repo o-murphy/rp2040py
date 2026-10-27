@@ -7,7 +7,10 @@ and pin traffic) - a green differential that never executed a WAIT would prove n
 """
 
 import pytest
-from utils.pio_diff import MUTANTS, Rig, coverage, generate, mutant_rig, run_pair
+from utils.pio_diff import MUTANTS, SM_STRIDE, Rig, coverage, generate, mutant_rig, run_pair
+
+from rp2040py.peripherals import pio_registers as R
+from rp2040py.utils.pio_assembler import PIO_MOV_DEST_X, PIO_OP_INVERT, PIO_SRC_X, pio_mov
 
 STEPS = 12000  # the coverage run (cheap: one chip, no snapshots)
 DIFF_STEPS = 3500  # the lockstep runs snapshot everything after every step, which is what costs
@@ -22,21 +25,22 @@ def test_the_pure_python_pio_and_the_default_pio_agree(seed):
 
 def _flip_x(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pio[0].machines[1].x ^= 1
+        candidate.write(
+            0, R.SM0_INSTR + SM_STRIDE, pio_mov(PIO_MOV_DEST_X, PIO_SRC_X, PIO_OP_INVERT)
+        )  # MOV X, ~X on machine 1
 
 
 def _bump_pin_image(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pio[1].pin_values ^= 1 << 5
+        pio = candidate.chip.pio[1]
+        pio.pin_values_changed(((pio.snapshot()["pin_values"] >> 5) & 1) ^ 1, 5, 1)
 
 
 def _change_a_fifo(candidate: Rig, step: int) -> None:
     if step == 700:
-        fifo = candidate.chip.pio[0].machines[2].tx_fifo
-        if fifo.full:  # a push into a full FIFO would change nothing
-            fifo.pull()
-        else:
-            fifo.push(0xDEADBEEF)
+        candidate.write(
+            0, R.TXF0 + 8, 0xDEADBEEF
+        )  # a word into machine 2's TX FIFO (or, with the FIFO full / joined away, TXOVER)
 
 
 def _advance_an_extra_cycle(candidate: Rig, step: int) -> None:
@@ -46,7 +50,8 @@ def _advance_an_extra_cycle(candidate: Rig, step: int) -> None:
 
 def _raise_a_flag(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pio[1].irq ^= 1 << 2
+        flags = candidate.chip.pio[1].snapshot()["irq"]
+        candidate.write(1, R.IRQ if flags & 4 else R.IRQ_FORCE, 4)  # flip IRQ flag 2: write-1-to-clear, or force it
 
 
 @pytest.mark.parametrize(

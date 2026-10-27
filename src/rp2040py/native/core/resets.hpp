@@ -33,6 +33,13 @@ public:
     uint32_t reset_bits = 0;  // the RESET register
     uint32_t wdsel = 0;
 
+    // The registers as one flat array: `reset_bits`, `wdsel`.
+    static constexpr uint32_t kSnapshotWords = 2;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = reset_bits;
+        out[1] = wdsel;
+    }
+
     uint32_t read(uint32_t offset) noexcept {
         using namespace resets_regs;
         if (offset == REG_RESET) return reset_bits;

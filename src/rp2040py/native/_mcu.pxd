@@ -44,8 +44,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
     ctypedef double (*McuMonotonicFn)(void* chip) noexcept
     ctypedef bool (*McuIrqHook)(void* ctx, uint32_t irq, bool level) noexcept
     ctypedef void (*McuWarnFn)(void* ctx, uint32_t block, uint32_t kind, uint32_t offset, int64_t value) noexcept
-    ctypedef bool (*McuTreeHook)(void* ctx) noexcept
-    ctypedef bool (*McuDreqHook)(void* ctx, uint32_t number, bool asserted) noexcept
 
     cdef const uint32_t kMcuBlockRtc
     cdef const uint32_t kMcuBlockTbman
@@ -107,25 +105,12 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool (*i2c_write)(void* ctx, uint32_t instance, uint32_t value) noexcept
         bool (*i2c_read)(void* ctx, uint32_t instance, bool ack) noexcept
         bool (*i2c_stop)(void* ctx, uint32_t instance) noexcept
-        bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) noexcept
         bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept
-        bool (*pin_input_changed)(void* ctx, uint32_t bank, uint32_t pin, bool pwm, uint32_t pio_mask) noexcept
-        bool (*pin_inputs)(void* ctx, uint32_t bank, uint32_t* value) noexcept
-        bool (*pin_update)(void* ctx, uint32_t bank, uint32_t pin_mask) noexcept
-        void (*system_reset_request)(void* ctx) noexcept
-        bool (*watchdog_trigger)(void* ctx) noexcept
-        bool (*watchdog_tick)(void* ctx, double tick_hz) noexcept
-        double (*xosc_hz)(void* ctx) noexcept
-        double (*rosc_hz)(void* ctx) noexcept
         bool (*adc_read)(void* ctx, uint32_t channel) noexcept
-        bool (*ssi_baudr)(void* ctx, double* value) noexcept
-        bool (*clk_sys)(void* ctx, double* hz) noexcept
         const UsbHost* usb_wire
-        bool (*reset_block)(void* ctx, uint32_t block) noexcept
         bool (*usb_reset)(void* ctx) noexcept
         bool (*bus_reset)(void* ctx) noexcept
-        bool (*record_cause)(void* ctx, uint32_t flag) noexcept
-        bool (*pio_started)(void* ctx, uint32_t index) noexcept
+        bool (*reset_requested)(void* ctx, uint32_t cause) noexcept
         bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) noexcept
 
     cdef cppclass Mcu:
@@ -141,8 +126,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         bool core1_running() noexcept
         void set_irq_hook(McuIrqHook hook, void* ctx) noexcept
         bool set_dreq(uint32_t number, bool asserted) noexcept
-        void attach_dma(DmaBlock* dma) noexcept
-        void set_dreq_hook(McuDreqHook hook, void* ctx) noexcept
         bool owns_clock() noexcept
         void request_stop(bool stop) noexcept
         bool stop_requested() noexcept
@@ -170,10 +153,11 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         void set_usb_dpram(uint8_t* data) noexcept
         void set_memory(const McuMemory& memory) noexcept
         void set_flash(uint8_t* data, uint32_t size) noexcept
-        void set_ssi_world(bool world) noexcept
-        bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
-        bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept
+        bool reset(bool from_watchdog, bool preserve_flash) noexcept
+        bool enter_reset_code(uint32_t cause) noexcept
         void leave_reset() noexcept
+        void bind_uart_peri_sinks() noexcept
+        void begin_batch() noexcept
         PwmBlock& pwm() noexcept
         PpbBlock& ppb() noexcept
         PpbBlock& ppb(uint8_t core) noexcept
@@ -184,10 +168,6 @@ cdef extern from "mcu.hpp" namespace "rp2040core":
         XoscBlock& xosc() noexcept
         RoscBlock& rosc() noexcept
         void set_crystal_hz(double hz) noexcept
-        void set_pin_bank_world(uint32_t bank, bool world) noexcept
-        void set_pwm_world(bool world) noexcept
-        void set_pio_world(uint32_t index, bool world) noexcept
-        void set_tree_hook(McuTreeHook hook, void* ctx) noexcept
         TimerBlock& timer() noexcept
         AdcBlock& adc() noexcept
         UartBlock& uart(uint32_t i) noexcept

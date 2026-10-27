@@ -4,20 +4,26 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pll cimport PllBlock
 from rp2040py.native._rosc cimport RoscBlock
-from rp2040py.native._xosc cimport XoscBlock
 from rp2040py.native._window_map cimport WindowHandler
+from rp2040py.native._xosc cimport XoscBlock
 
 cdef extern from "clocks.hpp" namespace "rp2040core":
 
     ctypedef double (*ClockHzFn)(void* ctx)
     ctypedef cppbool (*ClockSinkFn)(void* ctx, double hz, double old)
+    ctypedef cppbool (*ClockTap)(void* ctx, uint32_t domain, double hz, double old)
 
     cdef cppclass ClocksBlock:
         ClocksBlock() noexcept
+        ClockTap tap
+        void* tap_ctx
+        ClockTap after_tap
+        void* after_tap_ctx
         void detach() noexcept
         void clear_sinks() noexcept
         void bind_xosc(const XoscBlock* block) noexcept
@@ -31,6 +37,7 @@ cdef extern from "clocks.hpp" namespace "rp2040core":
         double clk_sys() noexcept
         double clk_peri() noexcept
         void force_clk_peri(double hz) noexcept
+        void force_clk_sys(double hz) noexcept
         void reset() noexcept
         cppbool reset_tree() noexcept
         double ref_freq() noexcept
@@ -69,13 +76,6 @@ cdef extern from "clock_sinks.hpp" namespace "rp2040core":
     cppbool watchdog_ref_sink(void* ctx, double hz, double old) noexcept
     cppbool rtc_rtc_sink(void* ctx, double hz, double old) noexcept
 
-cdef class RPClocks:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPClocks(NativeBlock):
     cdef ClocksBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
-    cdef object _pll_sys
-    cdef object _pll_usb
-    cdef object _consumers  # the blocks the direct sinks point into: kept alive while they are bound
-    cdef public unsigned char _sys_dirty  # raised whenever clk_sys changes: the batch loop ends its batch on it (core/batch.hpp `clk_changed`)

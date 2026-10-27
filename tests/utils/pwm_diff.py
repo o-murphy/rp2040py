@@ -29,8 +29,8 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _pwm as P
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 PWM_BASE = 0x40050000
 IO_BANK0 = 0x40014000
@@ -63,13 +63,11 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         # the chip's own PWM starts with its timers running (its reset comes with the chip's); stop it so that a replaced one leaves no alarm behind
         self.chip.pwm.reset()
-        if kind == "pure":
-            self._replace_the_pwm(P.RPPWM)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_pwm(factory)
         self._tap()
@@ -84,14 +82,11 @@ class Rig:
     def _tap(self) -> None:
         chip, log = self.chip, self.log
 
-        class _Dma:
-            def set_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 1))
+        # The observer of the requests that reach the chip's (real) DMA: it sees the order of them and the DMA still gets each one.
+        def dreq_tap(number: int, asserted: bool) -> None:
+            log.append(("dreq", chip.clock.nanos, int(number), int(asserted)))
 
-            def clear_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 0))
-
-        chip.dma = _Dma()  # type: ignore[assignment]  # the PWM looks `rp2040.dma` up on every wrap
+        chip.dreq_tap = dreq_tap
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:
@@ -136,9 +131,9 @@ class Rig:
         ):  # a probe: the block's direction word set from outside. After a reset it is never zero (the A pins stay outputs), which the B-input path is gated on
             chip.pwm.gpio_direction = op[1]
         elif kind == "reset":
-            chip.pwm.reset()
+            chip.reset()
         elif kind == "check":
-            chip.pwm.check_interrupts()
+            return int(chip.read_uint32(PWM_BASE + P.INTS))  # the interrupt status, through the bus
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -147,53 +142,21 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, pwm = self.chip, self.chip.pwm
-        channels = []
-        for channel in pwm.channels:
-            timer = channel.timer
-            channels.append(
-                (
-                    int(channel.csr),
-                    int(channel.div),
-                    int(channel.cc),
-                    int(channel.top),
-                    bool(channel.last_b_value),
-                    bool(channel.counting_up),
-                    bool(channel.cc_updated),
-                    bool(channel.top_updated),
-                    float(channel.tick_counter),
-                    int(channel.div_mode),
-                    bool(timer.enable),
-                    int(timer.mode),
-                    float(timer.prescaler),
-                    int(timer.top),
-                    int(timer.raw_counter),
-                    int(timer.counter),
-                    int(channel.alarm_a.target),
-                    int(channel.alarm_b.target),
-                    int(channel.alarm_a_rise.target),
-                    int(channel.alarm_b_rise.target),
-                    bool(channel.alarm_a.enable),
-                    bool(channel.alarm_b.enable),
-                    bool(channel.alarm_a_rise.enable),
-                    bool(channel.alarm_b_rise.enable),
-                    bool(channel.alarm_bottom.enable),
-                    -1 if channel.latched_top is None else int(channel.latched_top),
-                    int(channel.latched_cc_a),
-                    int(channel.latched_cc_b),
-                    int(channel.counter),
-                )
-            )
+        state = pwm.snapshot()
         return {
             "regs": tuple(int(chip.read_uint32(PWM_BASE + offset)) for offset in ALL_REGISTERS),
-            "channels": tuple(channels),
-            "block": (
-                int(pwm.gpio_value),
-                int(pwm.gpio_direction),
-                int(pwm._int_raw),
-                int(pwm._int_enable),
-                int(pwm._int_force),
-                int(pwm.int_status),
-                int(pwm.clock_freq),
+            "channels": tuple(tuple(sorted(channel.items())) for channel in state["channels"]),
+            "block": tuple(
+                state[name]
+                for name in (
+                    "gpio_value",
+                    "gpio_direction",
+                    "int_raw",
+                    "int_enable",
+                    "int_force",
+                    "int_status",
+                    "clock_freq",
+                )
             ),
             "pins": tuple(
                 (
@@ -401,7 +364,11 @@ MUTATIONS: dict[str, tuple[str, str, int]] = {
         1,
     ),
     # -- the B input
-    "b_value_and": ("bool(self.pwm.gpio_read(self.pin_b1) or (", "bool(self.pwm.gpio_read(self.pin_b1) and (", 1),
+    "b_value_and": (
+        "self.pwm._gpio_read(self.pin_b1) or (self.pwm",
+        "self.pwm._gpio_read(self.pin_b1) and (self.pwm",
+        1,
+    ),
     "b_reads_output": ("return self.rp2040.gpio[index].input_value", "return self.rp2040.gpio[index].output_value", 1),
     "b_same_value_processed": (
         "if value == self.last_b_value:\n            return",

@@ -2,8 +2,7 @@
 replay from a broken one - here with the current IO_BANK0/PADS_BANK0 against themselves, on a bare chip with no firmware."""
 
 from utils.pin_trace import record_pins, replay_pins
-
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 IO_BASE, PADS_BASE, SIO_BASE = 0x40014000, 0x4001C000, 0xD0000000
 GPIO_STATUS = lambda n: IO_BASE + 8 * n
@@ -17,7 +16,9 @@ EDGE_HIGH, EDGE_LOW = 1 << 3, 1 << 2  # per-pin nibble of the IRQ registers
 
 def _session() -> "list[tuple]":
     """A scripted session over the real bus: SIO drives pin 2, pin 3 is an input with an edge interrupt that the test drives from outside."""
-    mcu = RP2040()
+    mcu = new_chip(
+        "pure"
+    )  # the recorder stands in front of a block: inside the pure chip, the chip a trace is recorded on
     events = record_pins(mcu)
     clock = mcu.clock
     mcu.write_uint32(GPIO_CTRL(2), FUNCSEL_SIO)

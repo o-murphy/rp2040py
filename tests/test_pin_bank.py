@@ -2,8 +2,6 @@
 and the sources of a pin's level are wired straight to the native SIO / PIO / PWM registers - and wired back to the host when a block is replaced (docs/records/0096-cpp-mcu-core.md #29).
 """
 
-import types
-
 import pytest
 
 pytest.importorskip("rp2040py.native._gpio_pin", reason="the native pins are not built")
@@ -11,7 +9,6 @@ pytest.importorskip("rp2040py.native._gpio_pin", reason="the native pins are not
 from rp2040py.native._gpio_pin import GPIOPin, GPIOPinBank
 from rp2040py.native._io import RPIO
 from rp2040py.native._pads import RPPADS
-from rp2040py.native._pin_wiring import bind_pin_sources
 from rp2040py.rp2040 import RP2040
 
 SIO = 0xD0000000
@@ -69,39 +66,3 @@ def test_the_sio_registers_reach_the_pins_with_no_python_in_between():
     chip.write_uint32(SIO + GPIO_HI_OE, 1 << 1)
     chip.write_uint32(SIO + GPIO_HI_OUT, 1 << 1)
     assert chip.qspi[1].value.name == "HIGH"
-
-
-def test_unwiring_and_rewiring_the_sources_changes_nothing_a_pin_can_see():
-    chip = _native_chip()
-    chip.write_uint32(IO + 8 * 2 + 4, 5)
-    chip.write_uint32(SIO + GPIO_OE, 1 << 2)
-    chip.write_uint32(SIO + GPIO_OUT, 1 << 2)
-    before = chip.gpio[2].status
-    bind_pin_sources(
-        chip._gpio_bank, types.SimpleNamespace()
-    )  # nothing native to read: every source goes back to the host
-    assert chip.gpio[2].status == before
-    chip._bind_pin_sources()
-    assert chip.gpio[2].status == before
-    chip.write_uint32(SIO + GPIO_OUT, 0)
-    assert chip.gpio[2].value.name == "LOW"
-
-
-def test_replacing_a_block_re_points_the_pins_without_being_asked():
-    """The pins read the native SIO / PIO / PWM registers directly; assigning a block (or an element of `chip.pio`) must move them to the new block by itself."""
-    chip = _native_chip()
-    chip.write_uint32(IO + 8 * 4 + 4, 5)  # GPIO4: SIO
-    chip.write_uint32(SIO + GPIO_OE, 1 << 4)
-    chip.write_uint32(SIO + GPIO_OUT, 1 << 4)
-    assert chip.gpio[4].value.name == "HIGH"
-    # a PIO stand-in that drives GPIO6 high
-    chip.write_uint32(IO + 8 * 6 + 4, 6)  # GPIO6: PIO0
-    standin = types.SimpleNamespace(pin_directions=1 << 6, pin_values=1 << 6, machines=[])
-    chip.pio[0] = standin
-    assert chip.gpio[6].value.name == "HIGH"
-    chip.pio = [types.SimpleNamespace(pin_directions=0, pin_values=0, machines=[])] * 2
-    assert chip.gpio[6].raw_output_enable is False
-    # a PWM stand-in on GPIO8
-    chip.write_uint32(IO + 8 * 8 + 4, 4)  # GPIO8: PWM
-    chip.pwm = types.SimpleNamespace(gpio_direction=1 << 8, gpio_value=1 << 8, gpio_on_input=lambda index: None)
-    assert chip.gpio[8].raw_output_enable is True and chip.gpio[8].raw_output_value is True

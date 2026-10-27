@@ -6,13 +6,15 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._bus cimport Bus
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "dma.hpp" namespace "rp2040core":
 
     ctypedef double (*DmaClockFn)(void* ctx)
+    ctypedef cppbool (*DmaDreqTap)(void* ctx, uint32_t number, cppbool asserted)
 
     cdef cppclass DmaChannel:
         int index
@@ -38,6 +40,8 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         DmaChannel channels[12]
         uint32_t int_raw
         double transfer_ns
+        DmaDreqTap dreq_tap
+        void* dreq_tap_ctx
         DmaBlock() noexcept
         void detach() noexcept
         uint32_t int_status0() noexcept
@@ -46,7 +50,6 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         uint32_t timer(int index) noexcept
         uint64_t dreq_mask() noexcept
         cppbool dreq(uint32_t number) noexcept
-        double get_timer(uint32_t treq, cppbool* ok) noexcept
         cppbool set_dreq(uint32_t number) noexcept
         void clear_dreq(uint32_t number) noexcept
         cppbool check_interrupts() noexcept
@@ -59,13 +62,6 @@ cdef extern from "dma.hpp" namespace "rp2040core":
         void clk_sys_changed(double hz) noexcept
 
 
-cdef class RPDMA:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPDMA(NativeBlock):
     cdef DmaBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
-    cdef object _channels
-    cdef object _dreq_view
-    cdef object _unsubscribe_clock
-    cdef object _bound_tree  # the native clock tree the block reads clk_sys from (None: it asks the chip, through the Python listener and callback)

@@ -34,8 +34,6 @@ from rp2040py.native._simulation_clock cimport SimulationClock
 
 from rp2040py.clock.clock import IClock
 from rp2040py.native._gpio_pin import GPIOPin, GPIOPinBank
-from rp2040py.native._gpio_pin import GPIOPinBank as _NativeGPIOPinBank
-from rp2040py.native._pin_wiring import bind_pin_sources
 from rp2040py.irq import IRQ
 from rp2040py.memory_map import (
     APB_START_ADDRESS,
@@ -47,7 +45,7 @@ from rp2040py.memory_map import (
 )
 from rp2040py.native._adc import RPADC
 from rp2040py.native._busctrl import RPBUSCTRL
-from rp2040py.native._clocks import RPClocks
+from rp2040py.native._clocks cimport RPClocks
 from rp2040py.native._pll import RPPLL
 from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.native._i2c import RPI2C
@@ -60,7 +58,7 @@ from rp2040py.reset_cause import ResetCause
 from rp2040py.native._pio import RPPIO
 from rp2040py.native._ppb import RPPPB
 from rp2040py.native._psm import RPPSM
-from rp2040py.native._pwm import RPPWM
+from rp2040py.native._pwm cimport RPPWM
 from rp2040py.native._reset import RPReset
 from rp2040py.native._rtc import RP2040RTC
 from rp2040py.native._spi import RPSPI
@@ -229,18 +227,6 @@ class _PeripheralTable(dict):
         return self
 
 
-class _PinSourceList(list):
-    """`RP2040.pio`: a list that tells the chip when one of its blocks is replaced, so the pins' direct sources follow (`RP2040._bind_pin_sources`)."""
-
-    def __init__(self, items, owner):
-        super().__init__(items)
-        self._owner = owner
-
-    def __setitem__(self, index, value):
-        super().__setitem__(index, value)
-        self._owner._bind_pin_sources()
-
-
 cdef bool _irq_hook(void* ctx, uint32_t irq, bool level) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -287,38 +273,6 @@ cdef dict _BLOCK_WINDOW = {
     kMcuBlockUsb: 0x50110,
 }  # the block the `Mcu` built -> its key in the peripherals table
 
-# The blocks of the reset cascade and the chip attribute that holds each one's Python object (`RP2040._reset_world_mask`); the pin banks' IO / PADS blocks also follow their bank.
-_RESET_BLOCKS = (
-    (kMcuBlockPpb, lambda chip: chip.ppb),
-    (kMcuBlockSio, lambda chip: chip.sio),
-    (kMcuBlockClocks, lambda chip: chip.clocks),
-    (kMcuBlockIoBank0, lambda chip: chip.io_bank0),
-    (kMcuBlockPadsBank0, lambda chip: chip.pads_bank0),
-    (kMcuBlockIoQspi, lambda chip: chip.io_qspi),
-    (kMcuBlockPadsQspi, lambda chip: chip.pads_qspi),
-    (kMcuBlockPwm, lambda chip: chip.pwm),
-    (kMcuBlockDma, lambda chip: chip.dma),
-    (kMcuBlockAdc, lambda chip: chip.adc),
-    (kMcuBlockTimer, lambda chip: chip.timer),
-    (kMcuBlockUart0, lambda chip: chip.uart[0]),
-    (kMcuBlockUart1, lambda chip: chip.uart[1]),
-    (kMcuBlockSpi0, lambda chip: chip.spi[0]),
-    (kMcuBlockSpi1, lambda chip: chip.spi[1]),
-    (kMcuBlockI2c0, lambda chip: chip.i2c[0]),
-    (kMcuBlockI2c1, lambda chip: chip.i2c[1]),
-    (kMcuBlockPio0, lambda chip: chip.pio[0]),
-    (kMcuBlockPio1, lambda chip: chip.pio[1]),
-    (kMcuBlockUsb, lambda chip: chip.usb_ctrl),
-    (kMcuBlockRtc, lambda chip: chip.rtc),
-    (kMcuBlockBusctrl, lambda chip: chip.busctrl),
-    (kMcuBlockSyscfg, lambda chip: chip.syscfg),
-    (kMcuBlockXosc, lambda chip: chip.xosc),
-    (kMcuBlockRosc, lambda chip: chip.rosc),
-    (kMcuBlockXip, lambda chip: chip.xip_ctrl),
-    (kMcuBlockSsi, lambda chip: chip.ssi),
-    (kMcuBlockWatchdog, lambda chip: chip.watchdog),
-    (kMcuBlockVreg, lambda chip: chip.vreg_and_chip_reset),
-)
 _CAUSE_CODES = {ResetCause.POWER_ON: 0, ResetCause.RUN_PIN: 1, ResetCause.WATCHDOG: 2}  # core/mcu.hpp's McuResetCause
 
 
@@ -371,16 +325,6 @@ cdef object _bank_of(RP2040 chip, uint32_t bank):
     return chip._gpio_bank if bank == 0 else chip._qspi_bank
 
 
-cdef bool _w_pin_source(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        value[0] = <uint32_t> _bank_of(chip, bank)._world_source(source)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_pin_changed(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -391,84 +335,68 @@ cdef bool _w_pin_changed(void* ctx, uint32_t bank, uint32_t pin, int new_state, 
     return True
 
 
-cdef bool _w_pin_input_changed(void* ctx, uint32_t bank, uint32_t pin, bool pwm, uint32_t pio_mask) noexcept:
+cdef bool _w_reset_requested(void* ctx, uint32_t cause) noexcept:
+    # The chip asked to be reset, and why (0: AIRCR.SYSRESETREQ, 1: the watchdog): whatever the hook of that block is now - `BaseDevice` installs the one with the host-side effects of a reset.
     cdef RP2040 chip = <RP2040> ctx
     try:
-        _bank_of(chip, bank)._world_input(pin, pwm, pio_mask)
+        if cause == 0:
+            chip.ppb._world_system_reset()
+        else:
+            chip.watchdog._world_trigger()
     except BaseException as error:
         park_error(error)
         return False
     return True
 
 
-cdef bool _w_pin_inputs(void* ctx, uint32_t bank, uint32_t* value) noexcept:
+cdef bool _dreq_tap_hook(void* ctx, uint32_t number, bool asserted) noexcept:
+    # The observer of `RP2040.dreq_tap`: sees a request on its way to the chip's DMA, which still gets it.
     cdef RP2040 chip = <RP2040> ctx
     try:
-        value[0] = <uint32_t> (<long long> _bank_of(chip, bank).input_values())
+        chip._dreq_tap(int(number), asserted)
     except BaseException as error:
         park_error(error)
         return False
     return True
 
 
-cdef bool _w_pin_update(void* ctx, uint32_t bank, uint32_t pin_mask) noexcept:
+_TREE_DOMAINS = ("sys", "peri", "ref", "rtc")
+
+
+cdef bool _clock_tree_tap_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
+    # The observer of `RP2040.clock_tree_tap`: sees every announcement of the clock tree before its consumers do.
     cdef RP2040 chip = <RP2040> ctx
     try:
-        pins = chip.qspi if bank else chip.gpio
-        for index in range(len(pins)):
-            if index < 32 and pin_mask & ((<uint32_t> 1) << index):
-                pins[index].check_for_updates()
+        chip._clock_tree_tap(_TREE_DOMAINS[domain], hz, old)
     except BaseException as error:
         park_error(error)
         return False
     return True
 
 
-cdef void _w_system_reset_request(void* ctx) noexcept:
+cdef bool _clock_listeners_hook(void* ctx, uint32_t domain, double hz, double old) noexcept:
+    # The host's `add_clock_listener` callbacks: called after every consumer of `clk_sys` has followed (`ClocksBlock::after_tap`).
     cdef RP2040 chip = <RP2040> ctx
+    if domain != 0:  # ClocksBlock::kTapSys
+        return True
     try:
-        chip.ppb._world_system_reset()
-    except BaseException as error:
-        park_error(error)
-
-
-cdef bool _w_watchdog_trigger(void* ctx) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.watchdog._world_trigger()
+        for listener in list(chip._clock_listeners):
+            listener(hz, old)
     except BaseException as error:
         park_error(error)
         return False
     return True
 
 
-cdef bool _w_watchdog_tick(void* ctx, double tick_hz) noexcept:
+cdef bool _pwm_input_tap_hook(void* ctx, uint32_t index) noexcept:
+    # The observer of `RP2040.pwm_input_tap`: sees a pin telling the PWM an input moved; the PWM still gets it.
     cdef RP2040 chip = <RP2040> ctx
     try:
-        chip.watchdog._world_tick(tick_hz)
+        chip._pwm_input_tap(int(index))
     except BaseException as error:
         park_error(error)
         return False
     return True
-
-
-cdef double _w_xosc_hz(void* ctx) noexcept:
-    # The crystal's output while a host's own XOSC block (not the chip's) is in place: the board's crystal while that block says it is stable.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        return <double> chip.xosc_freq if chip.xosc.read_uint32(XOSC_STATUS) & XOSC_STATUS_STABLE else 0.0
-    except BaseException as error:
-        park_error(error)
-        return 0.0
-
-
-cdef double _w_rosc_hz(void* ctx) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        return <double> chip.rosc_freq
-    except BaseException as error:
-        park_error(error)
-        return 0.0
 
 
 cdef bool _w_i2c_start(void* ctx, uint32_t instance, bool repeated) noexcept:
@@ -516,16 +444,6 @@ cdef bool _w_i2c_stop(void* ctx, uint32_t instance) noexcept:
         return False
 
 
-cdef bool _w_reset_block(void* ctx, uint32_t block) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip._reset_block_python(block)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_usb_reset(void* ctx) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -549,46 +467,6 @@ cdef bool _w_bus_reset(void* ctx) noexcept:
     return True
 
 
-cdef bool _w_record_cause(void* ctx, uint32_t flag) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.vreg_and_chip_reset.record_reset_cause(flag)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _w_ssi_baudr(void* ctx, double* value) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        value[0] = <double> (chip.ssi.read_uint32(0x14) & 0xFFFF)  # SSI.BAUDR
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _w_clk_sys(void* ctx, double* hz) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        hz[0] = <double> chip.clk_sys
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _w_pio_started(void* ctx, uint32_t index) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.pio[index]._world_started()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef bool _w_adc_read(void* ctx, uint32_t channel) noexcept:
     cdef RP2040 chip = <RP2040> ctx
     try:
@@ -603,34 +481,6 @@ cdef bool _w_adc_channel_value(void* ctx, uint32_t channel, int64_t* value) noex
     cdef RP2040 chip = <RP2040> ctx
     try:
         value[0] = <int64_t> chip.adc._world_channel_value(<object> channel)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef bool _tree_hook(void* ctx) noexcept:
-    # A tree the host put over the chip's own (an oracle's reference): the oscillators and the PLLs tell the chip, which re-derives through whichever tree it has now.
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        chip.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
-cdef dict _DREQ_BY_NUMBER = {int(channel): channel for channel in DREQChannel}
-
-
-cdef bool _dreq_hook(void* ctx, uint32_t number, bool asserted) noexcept:
-    cdef RP2040 chip = <RP2040> ctx
-    try:
-        channel = _DREQ_BY_NUMBER.get(number, number)
-        if asserted:
-            chip._dma.set_dreq(channel)
-        else:
-            chip._dma.clear_dreq(channel)
     except BaseException as error:
         park_error(error)
         return False
@@ -701,16 +551,7 @@ cdef class RP2040:
         world.failed = pending_flag()
         world.uart_byte = _w_uart_byte
         world.uart_baud = _w_uart_baud
-        world.pin_source = _w_pin_source
         world.pin_changed = _w_pin_changed
-        world.pin_input_changed = _w_pin_input_changed
-        world.pin_inputs = _w_pin_inputs
-        world.pin_update = _w_pin_update
-        world.system_reset_request = _w_system_reset_request
-        world.watchdog_trigger = _w_watchdog_trigger
-        world.watchdog_tick = _w_watchdog_tick
-        world.xosc_hz = _w_xosc_hz
-        world.rosc_hz = _w_rosc_hz
         world.spi_transmit = _w_spi_transmit
         world.i2c_start = _w_i2c_start
         world.i2c_connect = _w_i2c_connect
@@ -718,15 +559,11 @@ cdef class RP2040:
         world.i2c_read = _w_i2c_read
         world.i2c_stop = _w_i2c_stop
         world.adc_read = _w_adc_read
-        world.pio_started = _w_pio_started
-        world.ssi_baudr = _w_ssi_baudr
         usb_wire_fill(&usb_wire, <void*> self)
         world.usb_wire = &usb_wire
-        world.reset_block = _w_reset_block
         world.usb_reset = _w_usb_reset
         world.bus_reset = _w_bus_reset
-        world.record_cause = _w_record_cause
-        world.clk_sys = _w_clk_sys
+        world.reset_requested = _w_reset_requested
         world.adc_channel_value = _w_adc_channel_value
         self._mcu.build(world)
 
@@ -738,8 +575,8 @@ cdef class RP2040:
         self.rosc_freq = 6.5 * MHZ
         self._clock_listeners = set()
 
-        self.ppb = RPPPB(self, "PPB", 0)
-        self.sio = RPSIO(self, 0)
+        self._adopt_ppb(RPPPB(self, "PPB", 0))
+        self._adopt_sio(RPSIO(self, 0))
         if os.environ.get("RP2040PY_CORE1", "1").lower() in ("0", "off", "false", "no"):  # the CLI's --no-core1 sets it: the second core is on unless asked to be off
             self.set_core1_enabled(False)
 
@@ -752,14 +589,15 @@ cdef class RP2040:
             ),
         ]
         self.i2c = [RPI2C(self, "I2C0", IRQ.I2C0, 0), RPI2C(self, "I2C1", IRQ.I2C1, 1)]
-        self.pwm = RPPWM(self, "PWM_BASE", 0)
+        self._pwm_block = RPPWM(self, "PWM_BASE", 0)
+        self._install_pwm_input_tap()
         self.adc = RPADC(self, "ADC", 0)
 
         # The chip's pins are slots of two banks (30 GPIO pins, 6 QSPI pins). The native ones share two C++ banks: the IO_BANK0 / IO_QSPI / PADS windows work on them directly, and the
         # chip asks the bank for what is a property of all its pins at once (`gpio_values`, the IO_BANK0 interrupt line). The facade hands out the pure-Python pins and banks instead when
         # the native ones are switched off (RP2040PY_SKIP_CYTHON=1): the same interface, the pure-Python windows go with them. `gpio` / `qspi` are the banks' own pin lists.
-        self._gpio_bank = GPIOPinBank(self, 30, False, 0, 0)
-        self._qspi_bank = GPIOPinBank(self, 6, True, 0, 1)
+        self._gpio_bank_object = GPIOPinBank(self, 30, False, 0, 0)
+        self._qspi_bank_object = GPIOPinBank(self, 6, True, 0, 1)
         self.gpio = self._gpio_bank.shells
         for i in range(30):
             GPIOPin(self, i, bank=self._gpio_bank)
@@ -777,13 +615,14 @@ cdef class RP2040:
         for _qspi_pin, _pad_reset in zip(self.qspi, QSPI_PAD_RESET_VALUES):
             _qspi_pin.reset(io=False, pad_reset=_pad_reset)
 
-        self.dma = RPDMA(self, "DMA", 0)
-        self.pio = [
+        self._dma = RPDMA(self, "DMA", 0)
+        self._install_dreq_tap()
+        self._pio_blocks = [
             RPPIO(self, "PIO0", IRQ.PIO0_IRQ0, 0),
             RPPIO(self, "PIO1", IRQ.PIO1_IRQ0, 1),
         ]
         self.usb_ctrl = RPUSBController(self, "USB")
-        self.watchdog = RPWatchdog(self, "WATCHDOG_BASE", 0)
+        self._watchdog = RPWatchdog(self, "WATCHDOG_BASE", 0)
         # Named, not just an entry in `peripherals` below: BaseDevice.hard_reset() has to
         # record *which* reset just happened in CHIP_RESET (0089 Phase 1), the same way it
         # reaches self.watchdog for REASON - a dict lookup by base address would work but
@@ -805,21 +644,23 @@ cdef class RP2040:
         self.pads_bank0 = RPPADS(self, "PADS_BANK0_BASE", "bank0", 0)
         self.pads_qspi = RPPADS(self, "PADS_QSPI_BASE", "qspi", 1)
         self.timer = RPTimer(self, "TIMER_BASE", 0)
-        self.rtc = RP2040RTC(self, "RTC_BASE")
-        self.clocks = RPClocks(self, "CLOCKS_BASE", 0)  # after the PLLs and the blocks it drives (PPB, PWM, watchdog, RTC): the native tree points at their C++ blocks
+        self._rtc = RP2040RTC(self, "RTC_BASE")
+        self._clocks = RPClocks(self, "CLOCKS_BASE", 0)  # after the PLLs and the blocks it drives (PPB, PWM, watchdog, RTC): the native tree points at their C++ blocks
         self.busctrl = RPBUSCTRL(self, "BUSCTRL_BASE")
         self.syscfg = RP2040SysCfg(self, "SYSCFG")
         self.xip_ctrl = RPXIPCtrl(self, "XIP_CTRL_BASE")
-        self.ssi = RPSSI(self, "SSI")
-        self.xosc = RPXOSC(self, "XOSC_BASE", 0)
+        self._ssi_object = RPSSI(self, "SSI")
+        self._xosc = RPXOSC(self, "XOSC_BASE", 0)
         self.io_bank0 = RPIO(self, "IO_BANK0_BASE", None, 0)
         self.io_qspi = RPIO(self, "IO_QSPI_BASE", self.qspi, 1)
-        self.rosc = RPROSC(self, "ROSC_BASE", 0)
+        self._rosc = RPROSC(self, "ROSC_BASE", 0)
+        self._clocks.set_crystal_hz(self._xosc_freq)  # the board's crystal; the tree, the oscillators and their sinks were wired by the `Mcu`
+        self._install_clock_tree_tap()
 
         self.peripherals = {
             0x14000: self.xip_ctrl,
             0x50400: RPXIPAux(self, "XIP_AUX_BASE"),
-            0x18000: self.ssi,
+            0x18000: self._ssi_object,
             0x40000: RP2040SysInfo(self, "SYSINFO_BASE"),
             0x40004: self.syscfg,
             0x40008: self.clocks,
@@ -852,9 +693,6 @@ cdef class RP2040:
             0x50200: self.pio[0],
             0x50300: self.pio[1],
         }
-
-        # The pins read the native SIO / PIO / PWM registers directly (no Python call per level evaluation)
-        self._bind_pin_sources()
 
         # Debugging
         self.on_break = self._default_on_break
@@ -897,7 +735,7 @@ cdef class RP2040:
         elif from_watchdog is not None and from_watchdog != (cause is ResetCause.WATCHDOG):
             raise ValueError(f"enter_reset(from_watchdog={from_watchdog}, cause={cause}): they disagree")
         # The cascade, the USB link told and the cause recorded are the `Mcu`'s (the cause is recorded *after* the reset, so the wider reset cannot wipe it).
-        if not self._mcu.enter_reset_code(_CAUSE_CODES[cause], self.psm.wdsel, self.resets.wdsel, self._reset_world_mask()):
+        if not self._mcu.enter_reset_code(_CAUSE_CODES[cause]):
             raise_if_pending()
         raise_if_pending()
 
@@ -1033,91 +871,13 @@ cdef class RP2040:
         `SYSINFO`/`TBMAN` are covered by not needing it - they hold no instance state at
         all, so `BasePeripheral`'s default no-op is their correct implementation.
         """
-        if not self._mcu.reset(1 if from_watchdog else 0, 1 if preserve_flash else 0, self.psm.wdsel, self.resets.wdsel, self._reset_world_mask()):
+        if not self._mcu.reset(1 if from_watchdog else 0, 1 if preserve_flash else 0):
             raise_if_pending()
         raise_if_pending()
 
-    def _reset_world_mask(self):
-        """Which blocks of the cascade the chip does not hold itself (an oracle's pure-Python reference, a test's stand-in): bit `block` of the mask, for the `Mcu` to hand to `_reset_block_python`."""
-        cdef uint64_t mask = 0
-        for block, getter in _RESET_BLOCKS:
-            if not getattr(getter(self), "_from_mcu", False):
-                mask |= (<uint64_t> 1) << block
-        # a pin bank the host holds takes its IO / PADS blocks with it
-        if not getattr(self._gpio_bank, "_from_mcu", False):
-            mask |= ((<uint64_t> 1) << kMcuBlockIoBank0) | ((<uint64_t> 1) << kMcuBlockPadsBank0)
-        if not getattr(self._qspi_bank, "_from_mcu", False):
-            mask |= ((<uint64_t> 1) << kMcuBlockIoQspi) | ((<uint64_t> 1) << kMcuBlockPadsQspi)
-        return mask
-
-    def _reset_block_python(self, block):
-        """The reference's reset of one block of the cascade, for a block the chip does not hold (the `Mcu` calls it instead of resetting its own)."""
-        if block == kMcuBlockPpb:
-            self.ppb.reset()
-        elif block == kMcuBlockSio:
-            self.sio.reset()
-        elif block == kMcuBlockClocks:
-            self.clocks.reset()
-            self.clocks.reset_tree()
-        elif block == kMcuBlockIoBank0:
-            for pin in self.gpio:
-                pin.reset(pads=False)
-            self.io_bank0.reset()
-        elif block == kMcuBlockPadsBank0:
-            for pin in self.gpio:
-                pin.reset(io=False)
-            self.pads_bank0.reset()
-        elif block == kMcuBlockIoQspi:
-            for qspi_pin in self.qspi:
-                qspi_pin.reset(pads=False)
-            self.io_qspi.reset()
-        elif block == kMcuBlockPadsQspi:
-            # PADS_QSPI does not share BANK0's reset value - GPIO_QSPI_SS's pull-up is what holds the flash deselected and what makes BOOTSEL readable (record 0050)
-            for qspi_pin, pad_reset in zip(self.qspi, QSPI_PAD_RESET_VALUES):
-                qspi_pin.reset(io=False, pad_reset=pad_reset)
-            self.pads_qspi.reset()
-        elif block == kMcuBlockPwm:
-            self.pwm.reset()
-        elif block == kMcuBlockDma:
-            self.dma.reset()
-        elif block == kMcuBlockAdc:
-            self.adc.reset()
-        elif block == kMcuBlockTimer:
-            self.timer.reset()
-        elif block == kMcuBlockUart0:
-            self.uart[0].reset()
-        elif block == kMcuBlockUart1:
-            self.uart[1].reset()
-        elif block == kMcuBlockSpi0:
-            self.spi[0].reset()
-        elif block == kMcuBlockSpi1:
-            self.spi[1].reset()
-        elif block == kMcuBlockI2c0:
-            self.i2c[0].reset()
-        elif block == kMcuBlockI2c1:
-            self.i2c[1].reset()
-        elif block == kMcuBlockPio0:
-            self.pio[0].reset()
-        elif block == kMcuBlockPio1:
-            self.pio[1].reset()
-        elif block == kMcuBlockUsb:
-            self.usb_ctrl.reset()
-        elif block == kMcuBlockRtc:
-            self.rtc.reset()
-        elif block == kMcuBlockBusctrl:
-            self.busctrl.reset()
-        elif block == kMcuBlockSyscfg:
-            self.syscfg.reset()
-        elif block == kMcuBlockXosc:
-            self.xosc.reset()
-        elif block == kMcuBlockRosc:
-            self.rosc.reset()
-        elif block == kMcuBlockXip:
-            self.xip_ctrl.reset()
-        elif block == kMcuBlockSsi:
-            self.ssi.reset()
-        elif block == kMcuBlockWatchdog:
-            self.watchdog.reset()
+    def _bind_uart_peri_sinks(self):
+        """Puts the UARTs back on the peripheral clock's sinks (the C++ ones: they announce the baud rate again when `clk_peri` changes); called by the clock tree's shell after it has rebuilt the lists."""
+        self._mcu.bind_uart_peri_sinks()
 
     def update_clocks(self):
         """Re-derives `clk_sys`/`clk_peri` from the PLL and CLOCKS registers and retunes what runs from them (see `peripherals.clocks.update_clocks`)."""
@@ -1127,109 +887,107 @@ cdef class RP2040:
         """Calls `listener(clk_sys, old_clk_sys)` whenever clk_sys changes - for anything that derives a rate from it (a PIO clock divider, say). Returns the
         function that unsubscribes it."""
         self._clock_listeners.add(listener)
+        self._install_clock_listeners()
 
         def unsubscribe():
             self._clock_listeners.discard(listener)
+            self._install_clock_listeners()
 
         return unsubscribe
+
+    cdef _install_clock_listeners(self):
+        # The tree calls the listeners through its "after" port while there is one to call; a stand-in tree calls them itself.
+        if type(self._clocks) is RPClocks:
+            if self._clock_listeners:
+                (<RPClocks> self._clocks)._block.after_tap = _clock_listeners_hook
+                (<RPClocks> self._clocks)._block.after_tap_ctx = <void*> self
+            else:
+                (<RPClocks> self._clocks)._block.after_tap = NULL
 
     cpdef unsigned int read_uint32(self, long long address) except? 0:
         cdef unsigned int word = self._mcu.bus.read32(<unsigned int> (address & 0xFFFFFFFFU))
         raise_if_pending()
         return word
 
-    def _bind_pin_sources(self):
-        """Points the chip's native pin banks at the registers of the native SIO / PIO / PWM blocks, where there are such (core/pin.hpp's direct sources); callable again whenever one is replaced."""
-        # A PWM or a PIO that is the host's own (not the `Mcu`'s) is told of a pin input that moved by the host, not inside (`Mcu::set_pwm_world` / `set_pio_world`).
-        pwm_block = self._pwm_block  # (a cdef field: not reachable by getattr)
-        if pwm_block is not None:
-            self._mcu.set_pwm_world(not getattr(pwm_block, "_from_mcu", False))
-        pio_blocks = self._pio_blocks
-        if pio_blocks is not None:
-            for index in range(2):
-                self._mcu.set_pio_world(index, not (index < len(pio_blocks) and getattr(pio_blocks[index], "_from_mcu", False)))
-        for bank in (getattr(self, "_gpio_bank", None), getattr(self, "_qspi_bank", None)):
-            if isinstance(bank, _NativeGPIOPinBank):  # a pure-Python bank (an oracle's reference pins) reads the blocks itself
-                bind_pin_sources(bank, self)
-
-    # The pins read the registers of these three blocks directly (see `_bind_pin_sources`), so replacing one has to re-point them: every way of replacing is a property or a list that does it.
     @property
     def pwm(self):
         return self._pwm_block
 
-    @pwm.setter
-    def pwm(self, value) -> None:
-        self._pwm_block = value
-        self._bind_pin_sources()
-        self._rebind_clock_sinks()
+    @property
+    def clock_tree_tap(self):
+        """An observer of what the clock tree announces: `f(domain, hz, old)` with `domain` one of "sys", "peri", "ref", "rtc", called before the consumers of that domain are told (they still are). `old` is the
+        previous value for "sys" and "peri", 0.0 for the other two. `None` takes it away. Same on the pure-Python chip; how a test or a debugger sees what the tree told, in what order."""
+        return self._clock_tree_tap
+
+    @clock_tree_tap.setter
+    def clock_tree_tap(self, value) -> None:
+        self._clock_tree_tap = value
+        self._install_clock_tree_tap()
+
+    cdef _install_clock_tree_tap(self):
+        if type(self._clocks) is RPClocks:
+            if self._clock_tree_tap is None:
+                (<RPClocks> self._clocks)._block.tap = NULL
+            else:
+                (<RPClocks> self._clocks)._block.tap = _clock_tree_tap_hook
+                (<RPClocks> self._clocks)._block.tap_ctx = <void*> self
+
+    @property
+    def pwm_input_tap(self):
+        """An observer of the pins' calls that tell the PWM an input moved: `f(pin)`, called for every one before the PWM handles it (the PWM still does). `None` takes it away.
+        Same on the pure-Python chip; how a test or a debugger sees which pins told the PWM, without standing in for it."""
+        return self._pwm_input_tap
+
+    @pwm_input_tap.setter
+    def pwm_input_tap(self, value) -> None:
+        self._pwm_input_tap = value
+        self._install_pwm_input_tap()
+
+    cdef _install_pwm_input_tap(self):
+        # Only the chip's own native PWM has the C++ tap; a stand-in for the PWM receives the calls itself.
+        if type(self._pwm_block) is RPPWM:
+            if self._pwm_input_tap is None:
+                (<RPPWM> self._pwm_block)._block.input_tap = NULL
+            else:
+                (<RPPWM> self._pwm_block)._block.input_tap = _pwm_input_tap_hook
+                (<RPPWM> self._pwm_block)._block.input_tap_ctx = <void*> self
 
     @property
     def pio(self):
         return self._pio_blocks
 
-    @pio.setter
-    def pio(self, value) -> None:
-        self._pio_blocks = _PinSourceList(value, self)
-        self._bind_pin_sources()
-
     @property
     def sio(self):
         return self._sio
 
-    @sio.setter
-    def sio(self, value) -> None:
+    cdef _adopt_sio(self, value):
         self._sio = value
         self._mcu.bus.set_sio(self._direct_handler(value, True))
-        self._bind_pin_sources()
 
     @property
     def ppb(self):
         return self._ppb
 
-    @ppb.setter
-    def ppb(self, value) -> None:
+    cdef _adopt_ppb(self, value):
         self._ppb = value
         self._mcu.bus.set_ppb(self._direct_handler(value, False))
-        self._rebind_clock_sinks()
 
     # The clock tree tells these five (with the DMA) of a change directly when they are native blocks (core/clock_sinks.hpp), so replacing one has to re-point the tree: every way of replacing is a property.
     @property
     def watchdog(self):
         return self._watchdog
 
-    @watchdog.setter
-    def watchdog(self, value) -> None:
-        self._watchdog = value
-        self._rebind_clock_sinks()
-
     @property
     def clocks(self):
         return self._clocks
-
-    @clocks.setter
-    def clocks(self, value) -> None:
-        old = self._clocks
-        self._clocks = value
-        if old is not None and old is not value and hasattr(old, "release_consumers"):
-            old.release_consumers()  # (the blocks it drove go back to asking the chip, and it stops telling them)
 
     @property
     def xosc(self):
         return self._xosc
 
-    @xosc.setter
-    def xosc(self, value) -> None:
-        self._xosc = value
-        self._rebind_clock_sinks()
-
     @property
     def rosc(self):
         return self._rosc
-
-    @rosc.setter
-    def rosc(self, value) -> None:
-        self._rosc = value
-        self._rebind_clock_sinks()
 
     @property
     def xosc_freq(self):
@@ -1259,32 +1017,29 @@ cdef class RP2040:
     def dma(self):
         return self._dma
 
-    @dma.setter
-    def dma(self, value) -> None:
-        self._dma = value
-        # The DMA requests of the blocks go to `Mcu::set_dreq` (core/mcu.hpp). The chip's own native DMA is attached to it, so a request reaches its C++ block with no Python in
-        # between; anything else (a recorder, a test double, a pure-Python DMA) gets the requests through a hook, instead of the DMA, as it always did.
-        if type(value) is RPDMA:
-            self._mcu.set_dreq_hook(NULL, NULL)
-            self._mcu.attach_dma((<RPDMA> value)._block)
-        else:
-            self._mcu.attach_dma(NULL)
-            self._mcu.set_dreq_hook(_dreq_hook, <void*> self)
-        self._rebind_clock_sinks()
+    @property
+    def dreq_tap(self):
+        """An observer of the DMA requests that reach the chip's DMA: `f(number, asserted)`, called for every request, the redundant ones too, before the DMA gets it (the DMA still does). `None` takes it away.
+        Same on the pure-Python chip; it is how a test or a debugger sees the order of the requests without standing in for the DMA."""
+        return self._dreq_tap
+
+    @dreq_tap.setter
+    def dreq_tap(self, value) -> None:
+        self._dreq_tap = value
+        self._install_dreq_tap()
+
+    cdef _install_dreq_tap(self):
+        # Only the chip's own native DMA has the C++ tap; a stand-in for the DMA (a recorder) receives the requests itself and has no use for it.
+        if type(self._dma) is RPDMA:
+            if self._dreq_tap is None:
+                (<RPDMA> self._dma)._block.dreq_tap = NULL
+            else:
+                (<RPDMA> self._dma)._block.dreq_tap = _dreq_tap_hook
+                (<RPDMA> self._dma)._block.dreq_tap_ctx = <void*> self
 
     @property
     def rtc(self):
         return self._rtc
-
-    @rtc.setter
-    def rtc(self, value) -> None:
-        self._rtc = value
-        self._rebind_clock_sinks()
-
-    def _rebind_clock_sinks(self):
-        clocks = self._clocks  # (None while the chip is being built)
-        if clocks is not None and hasattr(clocks, "rebind_consumers"):
-            clocks.rebind_consumers()
 
     def _native_pio_address(self, index):
         """The address of this chip's PIO block `index` (0 or 1), for the native PIO shell that is its Python view; None if there is no such block."""
@@ -1453,25 +1208,23 @@ cdef class RP2040:
     def _native_i2c_address(self, index):
         return <size_t> &self._mcu.i2c(<uint32_t> index)
 
-    # The chip's two pin banks: the `Mcu`'s own (views of its C++ banks) or a host's (an oracle's reference banks). SIO reads the pins' inputs and updates the pins in C++ for the first kind and asks the
-    # host for the second.
+    # The chip's two pin banks: the `Mcu`'s own (views of its C++ banks).
     @property
     def _gpio_bank(self):
         return self._gpio_bank_object
-
-    @_gpio_bank.setter
-    def _gpio_bank(self, bank) -> None:
-        self._gpio_bank_object = bank
-        self._mcu.set_pin_bank_world(0, not getattr(bank, "_from_mcu", False))
 
     @property
     def _qspi_bank(self):
         return self._qspi_bank_object
 
-    @_qspi_bank.setter
-    def _qspi_bank(self, bank) -> None:
-        self._qspi_bank_object = bank
-        self._mcu.set_pin_bank_world(1, not getattr(bank, "_from_mcu", False))
+    @property
+    def clk_sys(self):
+        """The system clock, in Hz: the C++ clock tree's value (SysTick, the PWM counters, the DMA and the batch loop follow it). Assigning sets that value without telling anyone, as a host or a test that fixes the rate does."""
+        return self._mcu.clocks().clk_sys()
+
+    @clk_sys.setter
+    def clk_sys(self, value) -> None:
+        self._mcu.clocks().force_clk_sys(<double> value)
 
     @property
     def clk_peri(self):
@@ -1500,15 +1253,10 @@ cdef class RP2040:
     def _native_xip_address(self):
         return <size_t> &self._mcu.xip()
 
-    # The SSI is the `Mcu`'s own, or a host's (an oracle's reference): the `Mcu`'s listens to the chip-select pin and gives the XIP stream its BAUDR; a host's does both itself.
+    # The SSI is the `Mcu`'s own: it listens to the chip-select pin and gives the XIP stream its BAUDR.
     @property
     def ssi(self):
         return self._ssi_object
-
-    @ssi.setter
-    def ssi(self, block) -> None:
-        self._ssi_object = block
-        self._mcu.set_ssi_world(not getattr(block, "_from_mcu", False))
 
     def _native_pwm_address(self):
         return <size_t> &self._mcu.pwm()
@@ -1537,13 +1285,6 @@ cdef class RP2040:
 
     def _native_rosc_address(self):
         return <size_t> &self._mcu.rosc()
-
-    def _native_tree(self, native):
-        """Which tree the oscillators and the PLLs tell: the `Mcu`'s own (`native`), or the chip's Python `update_clocks()` (a tree that replaced it)."""
-        if native:
-            self._mcu.set_tree_hook(NULL, NULL)
-        else:
-            self._mcu.set_tree_hook(_tree_hook, <void*> self)
 
     def _native_tbman_address(self):
         """The address of the TBMAN block the `Mcu` built, for the shell that is its Python view."""

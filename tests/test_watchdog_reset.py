@@ -155,7 +155,7 @@ def test_a_fresh_device_reads_as_a_power_on_reset(tmp_path):
     device = _make_device(tmp_path)
 
     assert device.mcu.watchdog.read_uint32(REASON) == 0
-    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert device.mcu.watchdog.snapshot()["scratch_data"] == (0,) * 8
     assert _chip_reset(device) == HAD_POR
 
 
@@ -164,7 +164,7 @@ def test_watchdog_reset_keeps_its_own_reason_and_scratch_and_leaves_chip_reset_a
     REASON readable afterwards at all, and what keeps watchdog_enable()'s magic alive long enough
     to distinguish a timeout from a deliberate reboot."""
     device = _make_device(tmp_path)
-    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+    device.mcu.watchdog.write_uint32(SCRATCH4, WATCHDOG_MAGIC)
 
     _trigger_watchdog(device)
 
@@ -176,7 +176,7 @@ def test_watchdog_reset_keeps_its_own_reason_and_scratch_and_leaves_chip_reset_a
 def test_watchdog_timeout_reports_timer_not_force(tmp_path):
     device = _make_device(tmp_path)
 
-    device.mcu.watchdog.alarm.callback()  # what Timer32PeriodicAlarm fires on a missed feed()
+    device.mcu.watchdog.fire_timeout()  # what the countdown does on a missed feed()
 
     assert device.mcu.watchdog.read_uint32(REASON) == TIMER
     assert _chip_reset(device) == HAD_POR
@@ -187,12 +187,12 @@ def test_run_pin_reset_clears_the_watchdog_and_records_had_run(tmp_path):
     previous watchdog reboot's REASON and misreport why it came up - 0057's own open question."""
     device = _make_device(tmp_path)
     _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
-    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+    device.mcu.watchdog.write_uint32(SCRATCH4, WATCHDOG_MAGIC)
 
     device.hard_reset(cause=ResetCause.RUN_PIN)
 
     assert device.mcu.watchdog.read_uint32(REASON) == 0
-    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert device.mcu.watchdog.snapshot()["scratch_data"] == (0,) * 8
     assert _chip_reset(device) == HAD_RUN
 
 
@@ -252,16 +252,16 @@ def test_a_watchdog_reset_reaches_the_wdsel_gated_path(tmp_path):
 
     With no WDSEL bit set, a watchdog reset must leave the peripherals alone."""
     device = _make_device(tmp_path)
-    device.mcu.uart[0]._interrupt_mask = 0xFF
+    device.mcu.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
 
     _trigger_watchdog(device)
 
-    assert device.mcu.uart[0]._interrupt_mask == 0xFF, "watchdog reset ignored WDSEL"
+    assert device.mcu.uart[0].snapshot()["interrupt_mask"] == 0xFF, "watchdog reset ignored WDSEL"
 
     device.mcu.psm.write_uint32(0x08, 0x1FFFC)  # what pico-sdk's watchdog_reboot() writes
     _trigger_watchdog(device)
 
-    assert device.mcu.uart[0]._interrupt_mask == 0
+    assert device.mcu.uart[0].snapshot()["interrupt_mask"] == 0
 
 
 def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_path):
@@ -269,13 +269,13 @@ def test_a_run_pin_reset_reports_the_reset_pin_not_a_stale_watchdog_reboot(tmp_p
     reached through the pin rather than through `hard_reset(cause=...)` directly."""
     device = _make_device(tmp_path)
     _trigger_watchdog(device)  # a guest machine.reset() earlier in the session
-    device.mcu.watchdog.scratch_data[4] = WATCHDOG_MAGIC
+    device.mcu.watchdog.write_uint32(SCRATCH4, WATCHDOG_MAGIC)
 
     device.mcu.set_run_pin(low=True)
     device.mcu.set_run_pin(low=False)
 
     assert device.mcu.watchdog.read_uint32(REASON) == 0
-    assert device.mcu.watchdog.scratch_data == [0] * 8
+    assert device.mcu.watchdog.snapshot()["scratch_data"] == (0,) * 8
     assert _chip_reset(device) == HAD_RUN
 
 
@@ -292,7 +292,7 @@ def test_recording_a_cause_leaves_the_debugger_owned_psm_restart_flag_alone(tmp_
     """PSM_RESTART_FLAG is the block's one writable bit, cleared by the bootrom's write-1-to-clear
     handshake (record 0050) - a reset cause must not forge or clear it."""
     device = _make_device(tmp_path)
-    device.mcu.vreg_and_chip_reset.chip_reset |= PSM_RESTART_FLAG
+    device.mcu.vreg_and_chip_reset.set_psm_restart_flag()
 
     device.hard_reset(cause=ResetCause.RUN_PIN)
 

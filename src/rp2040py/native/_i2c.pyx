@@ -20,6 +20,7 @@ The API is the reference's: the registers' attributes (readable and writable), `
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -32,50 +33,7 @@ cdef uint32_t SPEED_MASK = 0x3
 cdef uint32_t SPEED_STANDARD = 1
 
 
-cdef class _Fifo:
-    """One of the two FIFOs as the reference's `utils.fifo.FIFO(16)` shows it."""
-
-    cdef RPI2C _owner
-    cdef bint _is_tx
-
-    cdef Fifo16* _fifo(self):
-        return &self._owner._block.tx if self._is_tx else &self._owner._block.rx
-
-    @property
-    def size(self):
-        return 16
-
-    @property
-    def item_count(self):
-        return self._fifo().count()
-
-    @property
-    def empty(self):
-        return self._fifo().empty()
-
-    @property
-    def full(self):
-        return self._fifo().full()
-
-    @property
-    def items(self):
-        cdef Fifo16* fifo = self._fifo()
-        return [fifo.at(i) for i in range(fifo.count())]
-
-    def push(self, value):
-        self._fifo().push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._fifo().pull()
-
-    def peek(self):
-        return self._fifo().peek()
-
-    def reset(self):
-        self._fifo().reset()
-
-
-cdef class RPI2C:
+cdef class RPI2C(NativeBlock):
     def __init__(self, rp2040, name, irq, mcu_index=-1):
         self.rp2040 = rp2040
         self.name = name
@@ -89,6 +47,7 @@ cdef class RPI2C:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <I2cBlock*> <size_t> rp2040._native_i2c_address(mcu_index)
+            self._ops = register_ops(self._block)
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPI2C is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
@@ -206,245 +165,50 @@ cdef class RPI2C:
         if not self._block.arbitration_lost():
             raise_if_pending()
 
-    # --- the reference's attributes --------------------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
+    def snapshot(self):
+        """The block's state in one call: the registers, the bus state machine, both FIFOs' contents and what is derived from them."""
+        cdef I2cBlock* b = self._block
+        cdef uint32_t i
+        return {
+            "state": I2CState(b.state),
+            "busy": bool(b.busy),
+            "stop": bool(b.stop),
+            "pending_restart": bool(b.pending_restart),
+            "abort_pending": bool(b.abort_pending),
+            "first_byte": bool(b.first_byte),
+            "abort_source": b.abort_source,
+            "int_raw": b.int_raw,
+            "int_enable": b.int_enable,
+            "enable": b.enable,
+            "rx_threshold": b.rx_threshold,
+            "tx_threshold": b.tx_threshold,
+            "control": b.control,
+            "target_address": b.target_address,
+            "slave_address": b.slave_address,
+            "ss_clock_high_period": b.ss_clock_high,
+            "ss_clock_low_period": b.ss_clock_low,
+            "fs_clock_high_period": b.fs_clock_high,
+            "fs_clock_low_period": b.fs_clock_low,
+            "spikelen": b.spikelen,
+            "sda_hold": b.sda_hold,
+            "sda_setup": b.sda_setup,
+            "ack_general_call": b.ack_general_call,
+            "slv_data_nack_only": b.slv_data_nack_only,
+            "dma_control": b.dma_control,
+            "dma_tdlr": b.dma_tdlr,
+            "dma_rdlr": b.dma_rdlr,
+            "rx": tuple([b.rx.at(i) for i in range(b.rx.count())]),
+            "tx": tuple([b.tx.at(i) for i in range(b.tx.count())]),
+            "int_status": b.int_status(),
+            "speed": int(self.speed),
+            "scl_low_period": self.scl_low_period,
+            "scl_high_period": self.scl_high_period,
+            "master_bits": b.master_bits(),
+        }
 
-    @property
-    def _rx_fifo(self):
-        cdef _Fifo view = _Fifo.__new__(_Fifo)
-        view._owner = self
-        view._is_tx = False
-        return view
-
-    @property
-    def _tx_fifo(self):
-        cdef _Fifo view = _Fifo.__new__(_Fifo)
-        view._owner = self
-        view._is_tx = True
-        return view
-
-    @property
-    def _state(self):
-        return I2CState(self._block.state)
-
-    @_state.setter
-    def _state(self, value):
-        self._block.state = <uint32_t> (<int64_t> value)
-
-    @property
-    def _busy(self):
-        return bool(self._block.busy)
-
-    @_busy.setter
-    def _busy(self, value):
-        self._block.busy = bool(value)
-
-    @property
-    def _stop(self):
-        return bool(self._block.stop)
-
-    @_stop.setter
-    def _stop(self, value):
-        self._block.stop = bool(value)
-
-    @property
-    def _pending_restart(self):
-        return bool(self._block.pending_restart)
-
-    @_pending_restart.setter
-    def _pending_restart(self, value):
-        self._block.pending_restart = bool(value)
-
-    @property
-    def _abort_pending(self):
-        return bool(self._block.abort_pending)
-
-    @_abort_pending.setter
-    def _abort_pending(self, value):
-        self._block.abort_pending = bool(value)
-
-    @property
-    def _first_byte(self):
-        return bool(self._block.first_byte)
-
-    @_first_byte.setter
-    def _first_byte(self, value):
-        self._block.first_byte = bool(value)
-
-    @property
-    def enable(self):
-        return self._block.enable
-
-    @enable.setter
-    def enable(self, value):
-        self._block.enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def rx_threshold(self):
-        return self._block.rx_threshold
-
-    @rx_threshold.setter
-    def rx_threshold(self, value):
-        self._block.rx_threshold = <uint32_t> (<int64_t> value)
-
-    @property
-    def tx_threshold(self):
-        return self._block.tx_threshold
-
-    @tx_threshold.setter
-    def tx_threshold(self, value):
-        self._block.tx_threshold = <uint32_t> (<int64_t> value)
-
-    @property
-    def control(self):
-        return self._block.control
-
-    @control.setter
-    def control(self, value):
-        self._block.control = <uint32_t> (<int64_t> value)
-
-    @property
-    def ss_clock_high_period(self):
-        return self._block.ss_clock_high
-
-    @ss_clock_high_period.setter
-    def ss_clock_high_period(self, value):
-        self._block.ss_clock_high = <uint32_t> (<int64_t> value)
-
-    @property
-    def ss_clock_low_period(self):
-        return self._block.ss_clock_low
-
-    @ss_clock_low_period.setter
-    def ss_clock_low_period(self, value):
-        self._block.ss_clock_low = <uint32_t> (<int64_t> value)
-
-    @property
-    def fs_clock_high_period(self):
-        return self._block.fs_clock_high
-
-    @fs_clock_high_period.setter
-    def fs_clock_high_period(self, value):
-        self._block.fs_clock_high = <uint32_t> (<int64_t> value)
-
-    @property
-    def fs_clock_low_period(self):
-        return self._block.fs_clock_low
-
-    @fs_clock_low_period.setter
-    def fs_clock_low_period(self, value):
-        self._block.fs_clock_low = <uint32_t> (<int64_t> value)
-
-    @property
-    def target_address(self):
-        return self._block.target_address
-
-    @target_address.setter
-    def target_address(self, value):
-        self._block.target_address = <uint32_t> (<int64_t> value)
-
-    @property
-    def slave_address(self):
-        return self._block.slave_address
-
-    @slave_address.setter
-    def slave_address(self, value):
-        self._block.slave_address = <uint32_t> (<int64_t> value)
-
-    @property
-    def abort_source(self):
-        return self._block.abort_source
-
-    @abort_source.setter
-    def abort_source(self, value):
-        self._block.abort_source = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_raw(self):
-        return self._block.int_raw
-
-    @int_raw.setter
-    def int_raw(self, value):
-        self._block.int_raw = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_enable(self):
-        return self._block.int_enable
-
-    @int_enable.setter
-    def int_enable(self, value):
-        self._block.int_enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def _spikelen(self):
-        return self._block.spikelen
-
-    @_spikelen.setter
-    def _spikelen(self, value):
-        self._block.spikelen = <uint32_t> (<int64_t> value)
-
-    @property
-    def sda_hold(self):
-        return self._block.sda_hold
-
-    @sda_hold.setter
-    def sda_hold(self, value):
-        self._block.sda_hold = <uint32_t> (<int64_t> value)
-
-    @property
-    def sda_setup(self):
-        return self._block.sda_setup
-
-    @sda_setup.setter
-    def sda_setup(self, value):
-        self._block.sda_setup = <uint32_t> (<int64_t> value)
-
-    @property
-    def ack_general_call(self):
-        return self._block.ack_general_call
-
-    @ack_general_call.setter
-    def ack_general_call(self, value):
-        self._block.ack_general_call = <uint32_t> (<int64_t> value)
-
-    @property
-    def slv_data_nack_only(self):
-        return self._block.slv_data_nack_only
-
-    @slv_data_nack_only.setter
-    def slv_data_nack_only(self, value):
-        self._block.slv_data_nack_only = <uint32_t> (<int64_t> value)
-
-    @property
-    def dma_control(self):
-        return self._block.dma_control
-
-    @dma_control.setter
-    def dma_control(self, value):
-        self._block.dma_control = <uint32_t> (<int64_t> value)
-
-    @property
-    def dma_tdlr(self):
-        return self._block.dma_tdlr
-
-    @dma_tdlr.setter
-    def dma_tdlr(self, value):
-        self._block.dma_tdlr = <uint32_t> (<int64_t> value)
-
-    @property
-    def dma_rdlr(self):
-        return self._block.dma_rdlr
-
-    @dma_rdlr.setter
-    def dma_rdlr(self, value):
-        self._block.dma_rdlr = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_status(self):
-        return self._block.int_status()
+    # --- what a device on the bus reads of the configuration --------------------------------------
 
     @property
     def speed(self):
@@ -464,47 +228,9 @@ cdef class RPI2C:
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def reset(self):
         """Registers, both FIFOs and the bus state machine, back to power-on (0089 Phase 5). The five `on_*` callbacks are wiring - whatever is on the bus - and survive."""
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's own
-        read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder, a profiler)
-        cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

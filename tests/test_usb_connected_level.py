@@ -44,20 +44,20 @@ def test_connected_survives_write_one_to_clear():
     # The host is still on the other end of the bus, so the *status* is still true...
     assert usb.read_uint32(SIE_STATUS) & SIE_CONNECTED
     # ...while the *event* it acknowledged is gone, so the interrupt does not re-raise.
-    assert not usb._int_raw & INTR_DEV_CONN_DIS
+    assert not usb.snapshot()["int_raw"] & INTR_DEV_CONN_DIS
 
 
 def test_connecting_raises_the_event_once():
     mcu = RP2040()
     usb = _usb(mcu)
-    assert usb._int_raw & INTR_DEV_CONN_DIS
+    assert usb.snapshot()["int_raw"] & INTR_DEV_CONN_DIS
 
     _write(mcu, SIE_STATUS, SIE_CONNECTED)
-    assert not usb._int_raw & INTR_DEV_CONN_DIS
+    assert not usb.snapshot()["int_raw"] & INTR_DEV_CONN_DIS
 
     # A second identical muxing write is not a new connection and must not re-raise it.
     _write(mcu, USB_MUXING, TO_DIGITAL_PAD | SOFTCON)
-    assert not usb._int_raw & INTR_DEV_CONN_DIS
+    assert not usb.snapshot()["int_raw"] & INTR_DEV_CONN_DIS
     assert usb.read_uint32(SIE_STATUS) & SIE_CONNECTED
 
 
@@ -66,4 +66,4 @@ def test_a_block_reset_disconnects():
     usb = _usb(mcu)
     usb.reset()
     assert not usb.read_uint32(SIE_STATUS) & SIE_CONNECTED
-    assert not usb._int_raw & INTR_DEV_CONN_DIS
+    assert not usb.snapshot()["int_raw"] & INTR_DEV_CONN_DIS

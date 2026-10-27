@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _adc as P
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ADC_BASE = 0x4004C000
 NVIC_ISPR = 0xE000E200
@@ -53,14 +53,12 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.pending: list[int] = []  # channels a deferred device has been asked for and has not completed
         self.depth = 0
         self.counter = 0
-        if kind == "pure":
-            self._replace_the_adc(P.RPADC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_adc(factory)
         self._tap()
@@ -75,14 +73,11 @@ class Rig:
     def _tap(self) -> None:
         chip, log = self.chip, self.log
 
-        class _Dma:
-            def set_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 1))
+        # The observer of the requests that reach the chip's (real) DMA: it sees the order of them and the DMA still gets each one.
+        def dreq_tap(number: int, asserted: bool) -> None:
+            log.append(("dreq", chip.clock.nanos, int(number), int(asserted)))
 
-            def clear_dreq(self, channel: int) -> None:
-                log.append(("dreq", chip.clock.nanos, int(channel), 0))
-
-        chip.dma = _Dma()  # type: ignore[assignment]  # the ADC looks `rp2040.dma` up whenever its FIFO level changes
+        chip.dreq_tap = dreq_tap
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:
@@ -148,9 +143,9 @@ class Rig:
         elif kind == "start":
             adc.start_adc_read()
         elif kind == "check":
-            adc.check_interrupts()
+            return int(chip.read_uint32(ADC_BASE + P.INTS))  # the interrupt status, through the bus
         elif kind == "reset":
-            adc.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -159,40 +154,14 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, adc = self.chip, self.chip.adc
-        fifo = adc.fifo
         return {
             "regs": tuple(int(chip.read_uint32(ADC_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(adc.cs),
-                int(adc.fcs),
-                int(adc.clock_div),
-                int(adc.int_enable),
-                int(adc.int_force),
-                int(adc.result),
-                bool(adc.busy),
-                int(adc.current_channel),
-                int(adc.raw_write_value),
-            ),
-            "fifo": (bool(fifo.empty), bool(fifo.full), int(fifo.item_count), tuple(int(v) for v in fifo.items)),
-            "props": (
-                int(adc.temperature_enable),
-                int(adc.enabled),
-                float(adc.divider),
-                int(adc.int_raw),
-                int(adc.int_status),
-                int(adc._active_channel),
-            ),
+            "state": (tuple(sorted(adc.snapshot().items())), int(adc.raw_write_value)),
             "alarms": (
                 bool(chip.clock.has_scheduled_alarm),
                 float(chip.clock.nanos_to_next_alarm),
             ),  # the chip has no other alarm in this rig
-            "wiring": (
-                int(adc.num_channels),
-                adc.sample_time,
-                int(adc.resolution),
-                int(adc.dreq),
-                tuple(adc.channel_values),
-            ),
+            "wiring": (int(adc.resolution), int(adc.dreq), tuple(adc.channel_values)),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
             "time": float(chip.clock.nanos),
         }
@@ -336,7 +305,7 @@ def mutant_rig(name: str) -> Rig:
                     if name != "c_no_dma":
                         self._update_dma()
                     if name != "c_no_interrupts":
-                        self.check_interrupts()
+                        self._check_interrupts()
             round_mask = (self.cs >> P.CS_RROBIN_SHIFT) & P.CS_RROBIN_MASK
             if round_mask and name != "c_no_round_robin":
                 channel = self._active_channel + (0 if name == "c_round_robin_same" else 1)
@@ -437,7 +406,7 @@ def mutant_rig(name: str) -> Rig:
             if offset == P.FCS and name == "fcs_over_not_cleared":
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.FCS and name == "fcs_no_check":
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
@@ -448,26 +417,26 @@ def mutant_rig(name: str) -> Rig:
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = value
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.FCS and name == "fcs_no_dma":  # the old behaviour: an FCS write did not touch the DREQ
                 self.fcs &= ~(value & (P.FCS_OVER | P.FCS_UNDER))
                 self.fcs = (self.fcs & ~P.FCS_WRITE_MASK) | (value & P.FCS_WRITE_MASK)
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.DIV and name == "div_unmasked":
                 self.clock_div = value
                 return
             if offset == P.INTE and name == "inte_unmasked":
                 self.int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.INTE and name == "inte_no_check":
                 self.int_enable = value & P.FIFO_INT
                 return
             if offset == P.INTF and name == "intf_unmasked":
                 self.int_force = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.INTF and name == "intf_no_check":
                 self.int_force = value & P.FIFO_INT

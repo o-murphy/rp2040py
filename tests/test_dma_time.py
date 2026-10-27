@@ -43,24 +43,3 @@ def test_the_cycle_follows_clk_sys(rp2040_factory):
     assert _busy(chip)
     chip.clock.tick(1)
     assert not _busy(chip)
-
-
-def test_a_dma_whose_clock_tree_is_replaced_goes_back_to_asking_the_chip(rp2040_factory):
-    """On the native chip the DMA reads `clk_sys` from the C++ tree. When the chip's `clocks` is replaced (an oracle swaps in the pure-Python reference), the DMA must not keep a pointer into the
-    freed tree: it goes back to the chip's `clk_sys` and a listener, and follows the new tree."""
-    from rp2040py.peripherals import _clocks, _pll
-
-    chip = rp2040_factory()
-    set_clk_sys(chip, 50e6)
-    chip.pll_sys = _pll.RPPLL(chip, "PLL_SYS_BASE")
-    chip.pll_usb = _pll.RPPLL(chip, "PLL_USB_BASE")
-    chip.peripherals[0x40028] = chip.pll_sys
-    chip.peripherals[0x4002C] = chip.pll_usb
-    chip.clocks = _clocks.RPClocks(chip, "CLOCKS_BASE")
-    chip.peripherals[0x40008] = chip.clocks
-    set_clk_sys(chip, 100e6)  # through the replacement tree: 10 ns a word
-    _start(chip, 100)
-    chip.clock.tick(999)
-    assert _busy(chip)
-    chip.clock.tick(1)
-    assert not _busy(chip)

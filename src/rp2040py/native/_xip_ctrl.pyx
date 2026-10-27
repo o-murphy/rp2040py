@@ -14,15 +14,15 @@ The reference's state is kept readable under its names (`ctrl`, `ctr_hit`, `ctr_
 
 from libc.stdint cimport int64_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._register_warning import register_warning
 
-
 __all__ = ("RPXIPAux", "RPXIPCtrl")
 
 
-cdef class RPXIPCtrl:
+cdef class RPXIPCtrl(NativeBlock):
     def __init__(self, rp2040, name):
         native_xip = getattr(rp2040, "_native_xip_address", None)
         if native_xip is None:
@@ -33,6 +33,7 @@ cdef class RPXIPCtrl:
         # the chip's `Mcu` builds the block: its window, the flash window's hooks, the XIP_AUX window, its DMA request and its pace (clk_sys, SSI.BAUDR) are wired inside
         self._from_mcu = True
         self._block = <XipBlock*> <size_t> native_xip()
+        self._ops = register_ops(self._block)
         self.rp2040 = rp2040
         self.name = name
         self.clock = rp2040.clock
@@ -53,139 +54,43 @@ cdef class RPXIPCtrl:
         if not self._block.reset():
             raise_if_pending()
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
     def write_uint32(self, offset, value):
         if not self._block.write(<uint32_t> offset, <int64_t> value):
             raise_if_pending()
         raise_if_pending()
 
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
+    # --- the state, in one call ------------------------------------------------------------------
 
-    # --- the reference's state, as views -------------------------------------------------------------
+    def snapshot(self):
+        """The block's state in one call: the registers and counters, the stream, the flush, the cache tags and recency, and the data RAM."""
+        cdef XipBlock* b = self._block
+        return {
+            "ctrl": b.ctrl,
+            "ctr_hit": b.ctr_hit,
+            "ctr_acc": b.ctr_acc,
+            "stream_addr": b.stream_addr,
+            "stream_ctr": b.stream_ctr,
+            "stream_fifo": tuple([b.fifo[i] for i in range(b.fifo_len)]),
+            "stream_in_flight": bool(b.stream_in_flight),
+            "flush_done_ticks": b.flush_done_ticks,
+            "flush_ready": bool(b.flush_ready()),
+            "stat": b.stat(),
+            "sram_available": not (b.ctrl & 0x9),
+            "tags": tuple([(b.tags[i][0], b.tags[i][1]) for i in range(1024)]),
+            "recent": tuple([b.recent[i] for i in range(1024)]),
+            "sram": bytes(b.sram[:16384]),
+        }
 
-    @property
-    def ctrl(self):
-        return self._block.ctrl
-
-    @ctrl.setter
-    def ctrl(self, value):
-        self._block.ctrl = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def ctr_hit(self):
-        return self._block.ctr_hit
-
-    @ctr_hit.setter
-    def ctr_hit(self, value):
-        self._block.ctr_hit = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def ctr_acc(self):
-        return self._block.ctr_acc
-
-    @ctr_acc.setter
-    def ctr_acc(self, value):
-        self._block.ctr_acc = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_addr(self):
-        return self._block.stream_addr
-
-    @stream_addr.setter
-    def stream_addr(self, value):
-        self._block.stream_addr = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_ctr(self):
-        return self._block.stream_ctr
-
-    @stream_ctr.setter
-    def stream_ctr(self, value):
-        self._block.stream_ctr = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def stream_fifo(self):
-        return [self._block.fifo[i] for i in range(self._block.fifo_len)]
-
-    @property
-    def stream_in_flight(self):
-        return bool(self._block.stream_in_flight)
-
-    @property
-    def flush_done_ticks(self):
-        return self._block.flush_done_ticks
-
-    @flush_done_ticks.setter
-    def flush_done_ticks(self, value):
-        self._block.flush_done_ticks = <int64_t> value
-
-    @property
-    def flush_ready(self):
-        return bool(self._block.flush_ready())
-
-    @property
-    def stat(self):
-        return self._block.stat()
-
-    @property
-    def tags(self):
-        return [[self._block.tags[i][0], self._block.tags[i][1]] for i in range(1024)]
-
-    @property
-    def recent(self):
-        return [self._block.recent[i] for i in range(1024)]
-
-    @property
-    def sram(self):
-        return bytes(self._block.sram[:16384])
-
-    @property
-    def sram_available(self):
-        return not (self._block.ctrl & 0x9)
+    def set_counter(self, name, value):
+        """The one thing the bus cannot do: put a counter (`"ctr_acc"` or `"ctr_hit"`) near its ceiling (see the reference)."""
+        if name == "ctr_acc":
+            self._block.ctr_acc = <uint32_t> (value & 0xFFFFFFFF)
+        elif name == "ctr_hit":
+            self._block.ctr_hit = <uint32_t> (value & 0xFFFFFFFF)
+        else:
+            raise ValueError(f"not a counter: {name!r}")
 
     # --- the bus protocol ----------------------------------------------------------------------------
-
-    def access(self, address):
-        self._block.access(<uint32_t> address)
-        raise_if_pending()
-
-    def write_access(self, address):
-        self._block.write_access(<uint32_t> address)
-        raise_if_pending()
-
-    def pop_stream_fifo(self):
-        cdef uint32_t word = self._block.pop_stream_fifo()
-        raise_if_pending()
-        return word
-
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block instead of a Python trampoline (see `_rp2040.pyx`)."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)
-
 
 cdef class RPXIPAux:
     """`XIP_AUX` (`0x50400000`): "a simple bus interface providing access only to the streaming FIFO" - a window onto the XIP block's FIFO."""

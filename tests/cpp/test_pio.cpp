@@ -36,7 +36,6 @@ struct Host {
     int dreq_calls = 0;
     int fail_on_irq_call = -1;
     int irq_calls = 0;
-    int started_calls = 0;
 
     void add(Kind kind, uint32_t a, uint32_t b) {
         if (count < kMax) events[count++] = Event{kind, a, b};
@@ -76,11 +75,6 @@ static bool h_pin_input(void* ctx, uint32_t pin, bool* level) {
     *level = static_cast<Host*>(ctx)->pin_level[pin];
     return true;
 }
-static bool h_started(void* ctx) {
-    ++static_cast<Host*>(ctx)->started_calls;
-    return true;
-}
-
 struct Rig {
     Host host;
     ChipPorts ports;
@@ -93,7 +87,6 @@ struct Rig {
         PioHost h;
         h.pin_update = h_pin_update;
         h.pin_input = h_pin_input;
-        h.started = h_started;
         h.ctx = &host;
         CHECK(pio.init(&ports, kTestBlock, h, index == 0 ? 7 : 9, index));
         host.count = 0;
@@ -394,7 +387,7 @@ static void test_wait_gpio_pin_and_irq_and_the_irq_instruction() {
 static void test_pacing_enable_restart_arrears() {
     Rig r;
     CHECK(r.pio.write_atomic(CTRL, 0b0001, kAtomicNormal));
-    CHECK(r.host.started_calls == 1 && !r.pio.stopped && r.sm().enabled && r.sm().next_due_fp == r.pio.cycle_fp);
+    CHECK(!r.pio.stopped && r.sm().enabled && r.sm().next_due_fp == r.pio.cycle_fp);
     // one instruction per advance: SET X,1 with a 1-cycle clock divider
     r.pio.instructions[0] = op(SET, (1 << 5) | 1);
     r.pio.instructions[1] = op(SET, (1 << 5) | 2);

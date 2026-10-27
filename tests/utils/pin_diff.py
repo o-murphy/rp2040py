@@ -27,8 +27,8 @@ from typing import Any
 from rp2040py import _gpio_pin as G
 from rp2040py import _pin_bank as G_bank
 from rp2040py.irq import IRQ
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 IO_BANK0, IO_QSPI, PADS_BANK0, PADS_QSPI, SIO = 0x40014000, 0x40018000, 0x4001C000, 0x40020000, 0xD0000000
 ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
@@ -62,27 +62,6 @@ BLOCKS = (
 )
 
 
-class _PwmProbe:
-    """Stands in for the PWM: the two source registers pins read, and the hook an input change calls."""
-
-    def __init__(self, log: list) -> None:
-        self.gpio_direction = 0
-        self.gpio_value = 0
-        self._log = log
-
-    def gpio_on_input(self, index: int) -> None:
-        self._log.append(("pwm.input", index))
-
-
-class _PioProbe:
-    """Stands in for one PIO: the two source registers pins read; no state machines, so no pin waits."""
-
-    def __init__(self) -> None:
-        self.pin_directions = 0
-        self.pin_values = 0
-        self.machines: list = []
-
-
 class Rig:
     """One chip plus the timestamped log of everything that left its pins."""
 
@@ -94,15 +73,11 @@ class Rig:
         bank_module: Any = None,
     ) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
-        chip = self.chip
-        chip.pwm = _PwmProbe(self.log)
-        chip.pio = [_PioProbe(), _PioProbe()]
-        if kind in ("pure", "mutant"):
-            pin_class = G.GPIOPin if kind == "pure" else factory
-            assert pin_class is not None
-            self._replace_the_pins(pin_class, windows, bank_module or G_bank)
+        if kind == "mutant":
+            assert factory is not None
+            self._replace_the_pins(factory, windows, bank_module or G_bank)
         self._tap()
 
     def _replace_the_pins(
@@ -141,6 +116,9 @@ class Rig:
 
     def _tap(self) -> None:
         chip, log = self.chip, self.log
+        chip.pwm_input_tap = lambda index: log.append(
+            ("pwm.input", index)
+        )  # the real PWM; the observer sees the pins' calls
         # Every rig starts from pins whose announced state is reconciled with their power-on registers
         for pins in (chip.gpio, chip.qspi):
             for pin in pins:
@@ -188,7 +166,11 @@ class Rig:
         elif kind == "pwm":
             chip.pwm.gpio_direction, chip.pwm.gpio_value = op[1] & 0x3FFFFFFF, op[2] & 0x3FFFFFFF
         elif kind == "pio":
-            chip.pio[op[1]].pin_directions, chip.pio[op[1]].pin_values = op[2] & 0x3FFFFFFF, op[3] & 0x3FFFFFFF
+            block = chip.pio[
+                op[1]
+            ]  # the real PIO: its pin image is set the way a state machine's pin write sets it (the pins read it lazily)
+            block.pin_directions_changed(op[2] & 0x3FFFFFFF, 0, GPIO_PINS)
+            block.pin_values_changed(op[3] & 0x3FFFFFFF, 0, GPIO_PINS)
         elif kind == "pin_reset":
             self._pins(op[1])[op[2]].reset(io=bool(op[3]), pads=bool(op[4]))
         elif kind == "io_reset":
@@ -202,25 +184,7 @@ class Rig:
     # --- the observation -------------------------------------------------------------------------------------------------
 
     def _pin_state(self, pin: Any) -> tuple:
-        return (
-            int(pin.ctrl),
-            int(pin.pad_value),
-            int(pin.irq_enable_mask),
-            int(pin.irq_force_mask),
-            int(pin.irq_status),
-            bool(pin._seen),
-            bool(pin._raw_input_value),
-            bool(pin._driven),
-            int(pin.status),
-            int(pin.value),
-            bool(pin.input_value),
-            bool(pin.output_enable),
-            bool(pin.output_value),
-            bool(pin.irq_value),
-            bool(pin.raw_interrupt),
-            bool(pin.raw_output_enable),
-            bool(pin.raw_output_value),
-        )
+        return tuple(sorted(pin.snapshot().items()))
 
     def snapshot(self) -> dict[str, Any]:
         chip = self.chip
@@ -228,9 +192,9 @@ class Rig:
         for bank, pins in (("gpio", chip.gpio), ("qspi", chip.qspi)):
             out[bank] = tuple(self._pin_state(pin) for pin in pins)
         for pads in (chip.pads_bank0, chip.pads_qspi):
-            out[f"pads.{pads.name}"] = (int(pads.voltage_select), int(pads.swclk), int(pads.swd))
+            out[f"pads.{pads.name}"] = tuple(pads.snapshot().values())
         for block in (chip.io_bank0, chip.io_qspi):
-            out[f"extra.{block.name}"] = tuple(tuple(masks) for dest in (1, 2) for masks in block._extra[dest])
+            out[f"extra.{block.name}"] = block.snapshot()["extra"]
         for base, offsets, _count in BLOCKS:
             out[f"regs.{base:x}"] = tuple(int(chip.read_uint32(base + offset)) for offset in offsets)
         # what a property of all the pins at once is (a chip asks its bank for these)

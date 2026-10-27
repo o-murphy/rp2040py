@@ -17,7 +17,7 @@ from typing import Any
 from rp2040py.peripherals import _psm as P
 from rp2040py.peripherals import _reset as R
 from rp2040py.peripherals import _xosc as X
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BLOCKS: dict[str, dict[str, Any]] = {
@@ -27,7 +27,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "PSM_BASE",
         "registers": (0x0, 0x4, 0x8, 0xC),
         "unimplemented": (0x10, 0x14, 0x40, 0xFFC),
-        "attrs": ("wdsel", "_frce_on", "_frce_off"),
         "ops": (),
     },
     "resets": {
@@ -36,7 +35,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "RESETS_BASE",
         "registers": (0x0, 0x4, 0x8),
         "unimplemented": (0xC, 0x10, 0x40, 0xFFC),
-        "attrs": ("wdsel", "_reset", "_wdsel"),
         "ops": (),
     },
     "xosc": {
@@ -45,7 +43,6 @@ BLOCKS: dict[str, dict[str, Any]] = {
         "name": "XOSC_BASE",
         "registers": (0x00, 0x04, 0x08, 0x0C, 0x1C),
         "unimplemented": (0x10, 0x14, 0x18, 0x20, 0x40, 0xFFC),
-        "attrs": ("_ctrl", "_status", "_dormant", "_startup", "_count", "_enabled", "_stable", "_is_dormant"),
         "ops": ("reset",),
     },
 }
@@ -66,6 +63,10 @@ XOSC_VALUES = (
 )
 
 
+def _freeze_state(state: dict[str, Any]) -> tuple:
+    return tuple(sorted((name, _freeze(value)) for name, value in state.items()))
+
+
 def _freeze(value: Any) -> Any:
     return tuple(value) if hasattr(value, "__iter__") else value
 
@@ -76,11 +77,9 @@ class Rig:
     def __init__(self, block: str, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.block = block
         self.spec = BLOCKS[block]
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
-        if kind == "pure":
-            self._replace_the_block(self.spec["cls"])
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_block(factory)
         self._tap()
@@ -109,7 +108,7 @@ class Rig:
         elif kind == "read":
             return int(chip.read_uint32(base + op[2] + op[1]))
         elif kind == "reset":
-            self.peripheral.reset()
+            self.chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -118,7 +117,7 @@ class Rig:
         base, peripheral = self.spec["base"], self.peripheral
         return {
             "regs": tuple(int(self.chip.read_uint32(base + offset)) for offset in self.spec["registers"]),
-            "attrs": tuple(_freeze(getattr(peripheral, name)) for name in self.spec["attrs"]),
+            "state": _freeze_state(peripheral.snapshot()),
             "raw": int(peripheral.raw_write_value),
         }
 

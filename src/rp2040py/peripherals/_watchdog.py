@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.peripherals.peripheral import BasePeripheral
 from rp2040py.utils.timer32 import Timer32, Timer32PeriodicAlarm, TimerMode
@@ -142,6 +142,28 @@ class RPWatchdog(BasePeripheral):
         `machine.reset()` there used to hang."""
         self.rp2040.enter_reset(from_watchdog=True)
         self.rp2040.leave_reset()
+
+    def fire_timeout(self) -> None:
+        """What the countdown does when it reaches zero without a feed: REASON = TIMER, then the chip's reset (`on_watchdog_trigger`). Tests call it by hand."""
+        self.alarm.callback()
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers and flags, the eight scratch words, the tick, and the countdown (its enables, target and rate)."""
+        return {
+            "reason": self._reason,
+            "enable": bool(self._enable),
+            "tick_enable": bool(self._tick_enable),
+            "tick_cycles": self._tick_cycles,
+            "tick_hz": self.tick_hz,
+            "pause_dbg0": bool(self._pause_dbg0),
+            "pause_dbg1": bool(self._pause_dbg1),
+            "pause_jtag": bool(self._pause_jtag),
+            "scratch_data": tuple(self.scratch_data),
+            "timer_enable": bool(self.timer.enable),
+            "alarm_enable": bool(self.alarm.enable),
+            "alarm_target": int(self.alarm.target),
+            "timer_frequency": float(self.timer.frequency),
+        }
 
     def reset(self) -> None:
         """Back to power-on: the reset-cause bookkeeping this block carries across a reboot (REASON and the eight scratch registers), and the rest of it - CTRL (disabled, the three PAUSE bits

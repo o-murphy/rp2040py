@@ -33,11 +33,12 @@ def _write_the_compare_register(candidate: Rig, step: int) -> None:
         candidate.chip.write_uint32(PWM_BASE + 0x14 * 3 + 0x0C, 0x00050003)  # channel 3 CC
 
 
-def _flip_the_b_input_latch(candidate: Rig, step: int) -> None:
-    if (
-        step == 700
-    ):  # (a pin's level is not a reliable probe: an input override a random FUNCSEL write left on the pin can pin it)
-        candidate.chip.pwm.channels[3].last_b_value = not candidate.chip.pwm.channels[3].last_b_value
+def _write_a_channel_csr(candidate: Rig, step: int) -> None:
+    if step == 700:
+        pwm = candidate.chip.pwm
+        pwm.write_uint32(
+            0x14 * 3, pwm.read_uint32(0x14 * 3) ^ 0x2
+        )  # channel 3 CSR: toggle A_INV, on the candidate alone
 
 
 def _advance_one_clock(candidate: Rig, step: int) -> None:
@@ -47,7 +48,8 @@ def _advance_one_clock(candidate: Rig, step: int) -> None:
 
 def _change_the_interrupt_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pwm._int_enable ^= 0x1
+        pwm = candidate.chip.pwm
+        pwm.write_uint32(0xA8, pwm.read_uint32(0xA8) ^ 0x1)  # INTE
 
 
 def _change_the_pin_word(candidate: Rig, step: int) -> None:
@@ -57,7 +59,10 @@ def _change_the_pin_word(candidate: Rig, step: int) -> None:
 
 def _change_a_channel(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.pwm.channels[2].tick_counter += 1
+        pwm = candidate.chip.pwm
+        pwm.write_uint32(
+            0x14 * 2 + 0x04, pwm.read_uint32(0x14 * 2 + 0x04) ^ 0x10
+        )  # channel 2 DIV: the fractional divider
 
 
 def _pull_a_pin(candidate: Rig, step: int) -> None:
@@ -70,7 +75,7 @@ def _pull_a_pin(candidate: Rig, step: int) -> None:
     [
         _write_a_register,
         _write_the_compare_register,
-        _flip_the_b_input_latch,
+        _write_a_channel_csr,
         _advance_one_clock,
         _change_the_interrupt_enable,
         _change_the_pin_word,

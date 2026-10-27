@@ -1,7 +1,7 @@
 """The native SIO on the native bus (docs/records/0096-cpp-mcu-core.md, Phase 2): the SIO range (0xD0000000...) is not
-a peripheral-table window, so the chip learns about a native block through its `sio` property instead. These tests pin
-what that path must keep: the bus agrees with the pure chip, a wrapper around the block still sees every access, and a
-failure inside the block reaches the caller of the bus access that caused it - and only that one."""
+a peripheral-table window, so the chip serves it through its own `sio`. These tests pin what that path must keep: the bus
+agrees with the pure chip, and a failure inside the block reaches the caller of the bus access that caused it - and only
+that one. Whole chips, as built: nothing is swapped in (docs/tasks/twin-backend-testing.md)."""
 
 import random
 
@@ -10,24 +10,17 @@ from utils.chip_pair import Native, PurePython, make_chip
 
 pytest.importorskip("rp2040py.native._sio", reason="the native extension is not built")
 
-from rp2040py._sio import RPSIO as PureSIO
-from rp2040py.native._sio import RPSIO as NativeSIO
-
 SIO = 0xD0000000
-DIV_UDIVISOR, DIV_QUOTIENT, GPIO_OUT, GPIO_OUT_SET, GPIO_OE_SET = 0x064, 0x070, 0x010, 0x014, 0x024
+DIV_UDIVISOR, DIV_QUOTIENT, GPIO_OUT, GPIO_OUT_SET, GPIO_OE, GPIO_OE_SET = 0x064, 0x070, 0x010, 0x014, 0x020, 0x024
+IO_GPIO2_CTRL = 0x40014000 + 8 * 2 + 4
 
 
 def _chips():
-    pure, native = make_chip(PurePython), make_chip(Native)
-    # Both blocks built explicitly: the facade hands out one class or the other depending on RP2040PY_SKIP_CYTHON.
-    pure.sio = PureSIO(pure)
-    native.sio = NativeSIO(native)
-    return pure, native
+    return make_chip(PurePython), make_chip(Native)
 
 
 def test_the_native_chip_gets_the_native_sio_and_serves_it_from_the_bus():
     native = make_chip(Native)
-    native.sio = NativeSIO(native)
 
     native.write_uint32(SIO + GPIO_OUT_SET, 0b101)
 
@@ -63,46 +56,13 @@ def test_the_native_chip_with_the_native_sio_matches_the_pure_chip_with_the_pure
             else:
                 results.append(chip.write_uint8(address, value & 0xFF))
         assert results[0] == results[1], f"op {index} {op} @ {address:#x}: pure {results[0]!r}, native {results[1]!r}"
-        for name in ("gpio_value", "gpio_output_enable", "div_csr", "div_dividend", "div_divisor", "spin_lock"):
-            assert getattr(native.sio, name) == getattr(pure.sio, name), f"{name} after op {index}"
+        assert native.sio.snapshot() == pure.sio.snapshot(), f"SIO state after op {index}"
         assert native.core.cycles == pure.core.cycles
 
 
-def test_a_wrapper_around_the_native_sio_still_sees_every_access():
-    """The native fast path is looked up on the block's *type*: a recorder/profiler that forwards attributes is not
-    bypassed by lending out its target's C++ handler."""
-    native = make_chip(Native)
-    native.sio = NativeSIO(native)
-    seen = []
-
-    class Wrapper:
-        def __init__(self, target):
-            self.target = target
-
-        def __getattr__(self, name):
-            return getattr(self.target, name)
-
-        def read_uint32(self, offset):
-            seen.append(("r", offset))
-            return self.target.read_uint32(offset)
-
-        def write_uint32(self, offset, value):
-            seen.append(("w", offset))
-            self.target.write_uint32(offset, value)
-
-    native.sio = Wrapper(native.sio)
-
-    native.read_uint32(SIO + GPIO_OUT)
-    native.write_uint32(SIO + GPIO_OUT_SET, 1)
-
-    assert seen == [("r", GPIO_OUT), ("w", GPIO_OUT_SET)]
-    assert native.sio.gpio_value == 1
-
-
-@pytest.mark.parametrize("pure", [True, False], ids=["pure", "native"])
-def test_a_divide_by_zero_surfaces_from_the_bus_write_and_the_bus_keeps_working(pure):
-    chip = make_chip(Native)
-    chip.sio = (PureSIO if pure else NativeSIO)(chip)
+@pytest.mark.parametrize("cls", [PurePython, Native], ids=["pure", "native"])
+def test_a_divide_by_zero_surfaces_from_the_bus_write_and_the_bus_keeps_working(cls):
+    chip = make_chip(cls)
 
     with pytest.raises(ZeroDivisionError):
         chip.write_uint32(SIO + DIV_UDIVISOR, 0x100000000)
@@ -111,29 +71,22 @@ def test_a_divide_by_zero_surfaces_from_the_bus_write_and_the_bus_keeps_working(
     assert chip.read_uint32(SIO + GPIO_OUT) == 1
 
 
-def test_a_pin_update_that_raises_surfaces_from_the_register_write_that_caused_it():
+@pytest.mark.parametrize("cls", [PurePython, Native], ids=["pure", "native"])
+def test_a_pin_listener_that_raises_surfaces_from_the_register_write_that_caused_it(cls):
+    """SIO tells the pins when it writes an output or an output enable; a device listening on the pin that raises reaches the writer."""
+
     class Boom(Exception):
         pass
 
-    for pure in (True, False):
-        chip = make_chip(Native)
-        chip.sio = (PureSIO if pure else NativeSIO)(chip)
+    chip = make_chip(cls)
 
-        class FailingPins:
-            def __init__(self, real):
-                self.real = real
+    def listener(new, old):
+        raise Boom("pin 2")
 
-            def __len__(self):
-                return len(self.real)
+    chip.write_uint32(IO_GPIO2_CTRL, 5)  # GPIO2: SIO
+    chip.gpio[2].add_listener(listener)
 
-            def __getitem__(self, index):
-                if index == 2:
-                    raise Boom("pin 2")
-                return self.real[index]
+    with pytest.raises(Boom):
+        chip.write_uint32(SIO + GPIO_OE_SET, 0b100)
 
-        chip.gpio = FailingPins(chip.gpio)
-
-        with pytest.raises(Boom):
-            chip.write_uint32(SIO + GPIO_OE_SET, 0b100)
-
-        assert chip.sio.gpio_output_enable == 0b100  # the register was updated before the pins were told
+    assert chip.read_uint32(SIO + GPIO_OE) & 0b100  # the register was updated before the pins were told

@@ -35,7 +35,7 @@ _BASE_CLOCK_CLASS = SimulationClock
 
 # Mirrors simulator.py's own module-level constants exactly - see that file's docstrings for the full rationale (why 256/0.005s, why the
 # idle jump must not be weighted by simulated nanoseconds).
-cdef double BATCH_YIELD_BUDGET_SECONDS = 0.005
+BATCH_YIELD_BUDGET_SECONDS = 0.005  # (a module attribute, read at every batch: a test that is about something other than the wall clock sets it very high)
 cdef int TIME_CHECK_INTERVAL = 256
 cdef long BATCH_INSTRUCTION_CEILING = 1000000
 cdef double PACED_IDLE_NANOS = 1_000_000.0  # mirrors _execute_batch.py's _PACED_IDLE_NANOS
@@ -84,14 +84,13 @@ def execute_batch(simulator: object, tick_batch: int) -> None:
                 "(use the pure-Python _execute_batch.execute_batch with it)"
             )
 
-    clocks._sys_dirty = 0  # raised by the tree's sys sink when clk_sys changes: the batch ends and the next one starts at the new rate
     rp2040._mcu.use_clock(&clock._clock)  # a clock handed to the chip is the chip's clock; the simulator's is the one this batch ticks
-    rp2040._mcu.set_clk_changed_flag(<const uint8_t*> &clocks._sys_dirty)
+    rp2040._mcu.begin_batch()  # (the tree raises the chip's own flag when clk_sys changes: the batch ends and the next one starts at the new rate)
     rp2040._mcu.set_monotonic(_monotonic)
     params.tick_batch = tick_batch
     params.cycle_nanos = 1e9 / <double> rp2040.clk_sys  # one system clock: 125 MHz until firmware configures the tree
     params.instruction_ceiling = BATCH_INSTRUCTION_CEILING
-    params.yield_budget_seconds = BATCH_YIELD_BUDGET_SECONDS
+    params.yield_budget_seconds = <double> BATCH_YIELD_BUDGET_SECONDS
     params.check_interval = TIME_CHECK_INTERVAL
     params.paced_idle_nanos = PACED_IDLE_NANOS
     params.quantum_cycles = rp2040.quantum_cycles  # two cores only: the cycles a core runs ahead of the other between synchronisation points (1: the exact scheduler)

@@ -23,10 +23,6 @@ cdef extern from "gspi.hpp" namespace "rp2040core":
         void detach() noexcept
         cppbool start_response(const uint8_t* bytes, uint32_t length) noexcept
         void reset() noexcept
-        cppbool selected() noexcept
-        uint32_t bits_in_word() noexcept
-        uint32_t shift_register() noexcept
-        cppbool responding() noexcept
 
 
 cdef class GspiShifter:
@@ -37,4 +33,3 @@ cdef class GspiShifter:
     cdef object _cs
     cdef bint _attached
 
-    cdef _bind_sources(self, GPIOPin pin)

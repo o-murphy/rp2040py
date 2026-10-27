@@ -31,7 +31,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _ssi as S
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 SSI_BASE = 0x18000000
 FLASH_WINDOWS = ((0x0, 0x40000), (0xFFE000, 0x1000000))  # the first 256 KiB and the last 8 KiB of the 16 MiB flash
@@ -64,23 +64,18 @@ class Rig:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self.chip = RP2040()
-        if kind == "pure":
-            self._replace_the_ssi(S.RPSSI)
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._tap()
 
     def _tap(self) -> None:
         chip, log = self.chip, self.log
 
-        class _Dma:
-            def set_dreq(self, channel: int) -> None:
-                log.append(("dreq", int(channel), 1))
+        # The observer of the requests that reach the chip's (real) DMA: it sees the order of them and the DMA still gets each one.
+        def dreq_tap(number: int, asserted: bool) -> None:
+            log.append(("dreq", int(number), int(asserted)))
 
-            def clear_dreq(self, channel: int) -> None:
-                log.append(("dreq", int(channel), 0))
-
-        chip.dma = _Dma()  # type: ignore[assignment]  # the SSI looks `rp2040.dma` up whenever a level moves
+        chip.dreq_tap = dreq_tap
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:
@@ -153,17 +148,7 @@ class Rig:
                 if offset != S.SSI_DR0 and offset not in S.CLEAR_ON_READ
             )
         }
-        out["ints"] = (
-            int(ssi._risr),
-            int(ssi._isr),
-            int(ssi._sticky),
-            bool(ssi._irq_level),
-            bool(ssi._dreq_tx),
-            bool(ssi._dreq_rx),
-        )
-        out["rx"] = tuple(int(b) for b in ssi._rx_queue)
-        tx = ssi._tx_buffer
-        out["command"] = (bool(ssi._write_enabled), bool(ssi._cs_asserted), len(tx), bytes(tx[:260]))
+        out["state"] = tuple(sorted(ssi.snapshot().items()))
         out["flash"] = tuple(bytes(chip.flash[a:b]) for a, b in FLASH_WINDOWS)
         return out
 

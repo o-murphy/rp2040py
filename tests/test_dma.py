@@ -44,6 +44,11 @@ CH1_AL1_CTRL = DMA_BASE + 0x050
 MULTI_CHAN_TRIGGER = DMA_BASE + 0x430
 
 
+def _channel_active(cpu, index):
+    """Whether channel `index` is busy: the last entry of its tuple in the DMA's `snapshot()` (the same on both chips)."""
+    return cpu.dma.snapshot()["channels"][index][-1]
+
+
 def test_dma_channel_chaining(rp2040_factory):
     clock = MockClock()
     cpu = rp2040_factory(clock)
@@ -182,9 +187,9 @@ def test_spi_dma_paired_tx_rx_transfer_completes_without_listener(rp2040_factory
     clock.advance(1_000_000)  # 1 simulated second.
 
     assert cpu.read_uint32(CH0_TRANS_COUNT) == 0
-    assert not cpu.dma.channels[0].active
+    assert not _channel_active(cpu, 0)
     assert cpu.read_uint32(CH1_TRANS_COUNT) == 0
-    assert not cpu.dma.channels[1].active
+    assert not _channel_active(cpu, 1)
     # RPSPI's default `on_transmit` always echoes back 0 (no real full-duplex loopback modeled) -
     # this asserts the RX DMA channel actually wrote real per-byte completions, not that it
     # merely stopped being busy.
@@ -239,9 +244,9 @@ def test_an_abort_clears_the_transfer_counter_and_the_busy_flag(rp2040_factory):
         CH0_AL1_CTRL, EN | INCR_READ | INCR_WRITE | (DREQChannel.DREQ_SPI0_TX << TREQ_SEL_SHIFT)
     )  # paced by a DREQ that is never up
     cpu.write_uint32(MULTI_CHAN_TRIGGER, bit(0))
-    assert cpu.dma.channels[0].active and cpu.read_uint32(CH0_TRANS_COUNT) == 100
+    assert _channel_active(cpu, 0) and cpu.read_uint32(CH0_TRANS_COUNT) == 100
     cpu.write_uint32(DMA_BASE + 0x444, bit(0))  # CHAN_ABORT
-    assert not cpu.dma.channels[0].active
+    assert not _channel_active(cpu, 0)
     assert cpu.read_uint32(CH0_TRANS_COUNT) == 0
     assert cpu.read_uint32(DMA_BASE + 0x444) == 0
 

@@ -4,7 +4,6 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from rp2040py._pin_bank import GPIOPinBank
-from rp2040py.peripherals.pio_registers import WaitType
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
@@ -346,6 +345,34 @@ class GPIOPin:
             return GPIOPinState.INPUT_PULL_UP
         return GPIOPinState.INPUT
 
+    @property
+    def driven(self) -> bool:
+        """True while a device holds the pin with `set_input_value()` (until `release_input()`): a wire between two pins asks this to let go of the far end."""
+        return self._driven
+
+    def snapshot(self) -> dict[str, int | bool]:
+        """The pin's state as plain values: its CTRL and pad words, the three interrupt words, what the outside holds on it (seen, raw, driven) and what is derived from them."""
+        return {
+            "ctrl": self.ctrl,
+            "pad_value": self.pad_value,
+            "irq_enable_mask": self.irq_enable_mask,
+            "irq_force_mask": self.irq_force_mask,
+            "irq_status": self.irq_status,
+            "seen": bool(self._seen),
+            "raw_input_value": bool(self._raw_input_value),
+            "driven": bool(self._driven),
+            "always_output_enabled": bool(self._always_output_enabled),
+            "status": int(self.status),
+            "value": int(self.value),
+            "input_value": bool(self.input_value),
+            "output_enable": bool(self.output_enable),
+            "output_value": bool(self.output_value),
+            "irq_value": bool(self.irq_value),
+            "raw_interrupt": bool(self.raw_interrupt),
+            "raw_output_enable": bool(self.raw_output_enable),
+            "raw_output_value": bool(self.raw_output_value),
+        }
+
     def set_input_value(self, value: bool) -> None:
         self._driven = True
         self._apply_input_value(value)
@@ -384,14 +411,7 @@ class GPIOPin:
         if self.function_select == FUNCTION_PWM:
             self.rp2040.pwm.gpio_on_input(self.index)
         for pio in self.rp2040.pio:
-            for machine in pio.machines:
-                if (
-                    machine.enabled
-                    and machine.waiting
-                    and machine.wait_type == WaitType.PIN
-                    and machine.wait_index == self.index
-                ):
-                    machine.check_wait()
+            pio.check_pin_waits(self.index)
 
     def pad_changed(self) -> None:
         """The pad register was written: if that moved the level the interrupt logic sees (IE, or a pull on a floating pin), it is an input change."""

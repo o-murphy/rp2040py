@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._gpio_pin cimport GPIOPinBank
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -19,11 +20,8 @@ cdef extern from "io.hpp" namespace "rp2040core":
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPIO:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPIO(NativeBlock):
     cdef IoBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public list pins
     cdef GPIOPinBank _owner
     cdef uint32_t _count

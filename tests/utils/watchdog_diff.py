@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _watchdog as W
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 BASE = 0x40058000
@@ -25,17 +25,6 @@ CLK_REF_CTRL = (
     0x40008000 + 0x30
 )  # CLOCKS: SRC 0 ROSC (6.5 MHz), 1 the aux source (PLL_USB: not running here), 2 XOSC (12 MHz)
 TIMER_RAWL = 0x40054000 + 0x28
-ATTRS = (
-    "_reason",
-    "_enable",
-    "_tick_enable",
-    "_tick_cycles",
-    "tick_hz",
-    "_pause_dbg0",
-    "_pause_dbg1",
-    "_pause_jtag",
-    "scratch_data",
-)
 TIMES = (1, 500, 20_000, 400_000, 5_000_000, 60_000_000)  # ns; 1 us = 2 counts at the 2 MHz countdown
 
 
@@ -51,12 +40,10 @@ class Rig:
     """One chip plus the log of every warning and every call of the reset handler."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.raising = False
-        if kind == "pure":
-            self._replace_the_block(W.RPWatchdog)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_block(factory)
         self._tap()
@@ -116,21 +103,15 @@ class Rig:
             "regs": tuple(
                 int(self.chip.read_uint32(BASE + offset)) for offset in (W.CTRL, W.REASON, *W.SCRATCH_REGS, W.TICK)
             ),
-            "attrs": tuple(_freeze(getattr(peripheral, name)) for name in ATTRS),
+            "state": tuple(sorted(peripheral.snapshot().items())),
             "raw": int(peripheral.raw_write_value),
             "alarm": (bool(clock.has_scheduled_alarm), float(clock.nanos_to_next_alarm)),
             "time": float(clock.nanos),
-            "timer": (
-                bool(peripheral.timer.enable),
-                bool(peripheral.alarm.enable),
-                int(peripheral.alarm.target),
-                float(peripheral.timer.frequency),
-            ),
             # what counts on the tick: the TIMER's count and rate, and SysTick's rate
             "followers": (
                 int(self.chip.read_uint32(TIMER_RAWL)),
-                float(self.chip.timer.tick_hz),
-                float(self.chip.ppb.tick_hz),
+                float(self.chip.timer.snapshot()["tick_hz"]),
+                float(self.chip.ppb.snapshot()["tick_hz"]),
             ),
         }
 

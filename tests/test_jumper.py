@@ -52,7 +52,7 @@ def test_the_wire_floats_when_neither_end_drives_it_and_the_pull_decides(rp2040_
     _let_go(rp2040, 0)
 
     pin = rp2040.gpio[1]
-    assert pin._driven is False  # nothing holds it any more
+    assert pin.driven is False  # nothing holds it any more
     assert pin.input_value is False  # the pad's reset state: no pull, reads low
 
 

@@ -16,109 +16,18 @@ attributes: `frequency` is what `update_clocks` retunes), `systick_alarm`, `rese
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._cpu cimport Cpu
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
+from rp2040py.native._views cimport Timer32View
 from rp2040py.native._window_map cimport WindowHandler
-
-from rp2040py.utils.timer32 import TimerMode
 
 __all__ = ("RPPPB",)
 
 
-cdef class _AlarmView:
-    """SysTick's compare alarm as the reference's `Timer32PeriodicAlarm` shows it (`target`, `enable`): the state lives in the C++ block."""
-
-    cdef RPPPB _owner
-    cdef Timer32PeriodicAlarm* _alarm
-
-    @property
-    def target(self):
-        return self._alarm.target()
-
-    @target.setter
-    def target(self, value):
-        self._alarm.set_target(<int64_t> value)
-
-    @property
-    def enable(self):
-        return bool(self._alarm.enable())
-
-    @enable.setter
-    def enable(self, value):
-        self._alarm.set_enable(bool(value))
-
-
-cdef class _TimerView:
-    """SysTick's `Timer32` as the reference shows it."""
-
-    cdef RPPPB _owner
-    cdef Timer32* _timer
-
-    @property
-    def counter(self):
-        return self._timer.counter()
-
-    @property
-    def raw_counter(self):
-        return self._timer.raw_counter()
-
-    @property
-    def top(self):
-        return self._timer.top()
-
-    @top.setter
-    def top(self, value):
-        self._timer.set_top(<int64_t> value)
-
-    @property
-    def frequency(self):
-        return self._timer.frequency()
-
-    @frequency.setter
-    def frequency(self, value):
-        self._timer.set_frequency(<double> value)
-
-    @property
-    def prescaler(self):
-        return self._timer.prescaler()
-
-    @prescaler.setter
-    def prescaler(self, value):
-        self._timer.set_prescaler(<double> value)
-
-    @property
-    def enable(self):
-        return bool(self._timer.enable())
-
-    @enable.setter
-    def enable(self, value):
-        self._timer.set_enable(bool(value))
-
-    @property
-    def mode(self):
-        return TimerMode(self._timer.mode_raw())
-
-    @mode.setter
-    def mode(self, value):
-        self._timer.set_mode_raw(<uint32_t> int(value))
-
-    def set(self, value, zig_zag_down=False):
-        self._timer.set(<int64_t> value, bool(zig_zag_down))
-
-    def advance(self, delta):
-        self._timer.advance(<int64_t> delta)
-
-    def reset(self):
-        self._timer.reset()
-
-    def to_nanos(self, cycles):
-        return self._timer.to_nanos(<int64_t> cycles)
-
-
-cdef class RPPPB:
+cdef class RPPPB(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
-        cdef _TimerView timer
-        cdef _AlarmView alarm
+        cdef Timer32View timer
         cdef Cpu* cpu
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -144,18 +53,15 @@ cdef class RPPPB:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already and wired it (its window, its lines, the clock tree, the watchdog's tick) - this object is the Python view of it
             self._block = <PpbBlock*> <size_t> rp2040._native_ppb_address()
+            self._ops = register_ops(self._block)
         else:
             raise TypeError(
                 "the native block is a view of the chip's C++ `Mcu` block: RPPPB is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
             )
-        timer = _TimerView.__new__(_TimerView)
+        timer = Timer32View.__new__(Timer32View)
         timer._owner = self
         timer._timer = &self._block.timer
         self.systick_timer = timer
-        alarm = _AlarmView.__new__(_AlarmView)
-        alarm._owner = self
-        alarm._alarm = &self._block.alarm
-        self.systick_alarm = alarm
 
     def _default_system_reset_request(self):
         # AIRCR.SYSRESETREQ: "Reset the core only" (datasheet 2.4.2.9)
@@ -163,127 +69,47 @@ cdef class RPPPB:
         self.reset()
         self.rp2040.leave_reset()
 
-    @property
-    def scr(self):
-        return self._block.scr
-
-    @property
-    def mpu_ctrl(self):
-        return self._block.mpu_ctrl
-
-    @property
-    def mpu_rnr(self):
-        return self._block.mpu_rnr
-
-    @property
-    def mpu_rbar(self):
-        return [self._block.mpu_rbar[i] for i in range(8)]
-
-    @property
-    def mpu_rasr(self):
-        return [self._block.mpu_rasr[i] for i in range(8)]
-
     def _world_system_reset(self):
         """AIRCR.SYSRESETREQ: whatever `on_system_reset_request` is now (the chip's host calls this for the block it built)."""
         self.on_system_reset_request()
 
-    # --- the reference's attributes --------------------------------------------------------------
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
-    @property
-    def systick_count_flag(self):
-        return bool(self._block.count_flag)
-
-    @systick_count_flag.setter
-    def systick_count_flag(self, value):
-        self._block.count_flag = bool(value)
-
-    @property
-    def systick_clk_source(self):
-        return bool(self._block.clk_source)
-
-    @systick_clk_source.setter
-    def systick_clk_source(self, value):
-        self._block.clk_source = bool(value)
-
-    @property
-    def systick_int_enable(self):
-        return bool(self._block.int_enable)
-
-    @systick_int_enable.setter
-    def systick_int_enable(self, value):
-        self._block.int_enable = bool(value)
-
-    @property
-    def systick_reload(self):
-        return self._block.reload
-
-    @systick_reload.setter
-    def systick_reload(self, value):
-        self._block.reload = <uint32_t> (<int64_t> value)
-
-    # --- the reference's methods ------------------------------------------------------------------
-
-    @property
-    def systick_enable(self):
-        return bool(self._block.systick_enable)
-
-    @systick_enable.setter
-    def systick_enable(self, value):
-        self._block.systick_enable = bool(value)
+    def snapshot(self):
+        """The block's state in one call: SysTick (flags, reload, the countdown and its alarm, the clocks it follows) and the system-control registers (SCR, the MPU)."""
+        cdef PpbBlock* b = self._block
+        return {
+            "systick_count_flag": bool(b.count_flag),
+            "systick_clk_source": bool(b.clk_source),
+            "systick_int_enable": bool(b.int_enable),
+            "systick_enable": bool(b.systick_enable),
+            "tick_hz": b.tick_hz(),
+            "systick_reload": b.reload,
+            "timer_enable": bool(b.timer.enable()),
+            "timer_mode": b.timer.mode_raw(),
+            "clk_sys": b.clk_sys(),
+            "timer_frequency": b.timer.frequency(),
+            "timer_prescaler": b.timer.prescaler(),
+            "timer_top": b.timer.top(),
+            "timer_raw_counter": b.timer.raw_counter(),
+            "timer_counter": b.timer.counter(),
+            "alarm_target": b.alarm.target(),
+            "alarm_enable": bool(b.alarm.enable()),
+            "scr": b.scr,
+            "mpu_ctrl": b.mpu_ctrl,
+            "mpu_rnr": b.mpu_rnr,
+            "mpu_rbar": tuple([b.mpu_rbar[i] for i in range(8)]),
+            "mpu_rasr": tuple([b.mpu_rasr[i] for i in range(8)]),
+        }
 
     def tick_changed(self, tick_hz):
         """The watchdog's tick is now `tick_hz` (0: stopped): SysTick follows it when its CLKSOURCE says reference clock."""
         self._block.tick_changed(<double> tick_hz)
 
-    @property
-    def tick_hz(self):
-        return self._block.tick_hz()
-
     def clk_sys_changed(self, clk_sys):
         """clk_sys is now `clk_sys` (called by `update_clocks`): SysTick follows it when its CLKSOURCE says processor clock."""
         self._block.clk_sys_changed(<double> clk_sys)
-
-    @property
-    def clk_sys(self):
-        return self._block.clk_sys()
 
     def reset(self):
         """SysTick back to stopped, reload and counter 0xFFFFFF (0089 Phase 5)."""
         self._block.reset()
 
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        self._block.write(<uint32_t> offset, <int64_t> value)
-        raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type)
-        raise_if_pending()
-
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers for the PPB range instead of calling this object: the addresses of the block's own read/write functions and
-        its context. Looked up on the *type* by the bus, so a recorder that forwards attributes is not bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

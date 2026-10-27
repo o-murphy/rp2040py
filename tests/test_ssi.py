@@ -234,7 +234,7 @@ def test_chip_select_already_asserted_at_reset_is_not_silently_missed(rp2040_fac
     # (see docs/BACKLOG.md).
     rp2040, ssi = _ssi(rp2040_factory)
     assert rp2040.qspi[1].value == GPIOPinState.LOW
-    assert ssi._cs_asserted
+    assert ssi.snapshot()["cs_asserted"]
 
     received = _send(rp2040, ssi, ssi_mod.CMD_READ_JEDEC_ID, 0x00, 0x00, 0x00)
 
@@ -328,14 +328,9 @@ def _watch(rp2040):
     """Records what the SSI tells the chip: the interrupt lines and the DMA requests."""
     events = []
 
-    class _Dma:
-        def set_dreq(self, channel):
-            events.append(("dreq", int(channel), 1))
-
-        def clear_dreq(self, channel):
-            events.append(("dreq", int(channel), 0))
-
-    rp2040.dma = _Dma()
+    rp2040.dreq_tap = lambda number, asserted: events.append(
+        ("dreq", int(number), int(asserted))
+    )  # (the real DMA gets the requests as well)
     original = rp2040.set_interrupt
 
     def set_interrupt(irq, value):

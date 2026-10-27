@@ -29,7 +29,9 @@ def test_the_two_agree_on_the_transmit_microscope(seed):
 def _feed_an_extra_byte(candidate: Rig, step: int) -> None:
     if step == 700:
         uart = candidate.chip.uart[0]
-        uart._ctrl_register |= 0x301  # a disabled UART takes nothing from the line; this one is damaged while enabled
+        uart.write_uint32(
+            0x30, uart.read_uint32(0x30) | 0x301
+        )  # UARTCR: a disabled UART takes nothing from the line; this one is damaged while enabled
         uart.feed_byte(0x5A)
 
 
@@ -40,12 +42,14 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _change_the_interrupt_mask(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.uart[0]._interrupt_mask ^= 0x10
+        uart = candidate.chip.uart[0]
+        uart.write_uint32(0x38, uart.read_uint32(0x38) ^ 0x10)  # UARTIMSC
 
 
 def _change_the_line_control(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.uart[0]._line_ctrl_register ^= 0x10
+        uart = candidate.chip.uart[0]
+        uart.write_uint32(0x2C, uart.read_uint32(0x2C) ^ 0x10)  # UARTLCR_H
 
 
 def _drain_a_byte(candidate: Rig, step: int) -> None:

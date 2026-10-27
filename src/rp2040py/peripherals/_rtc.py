@@ -108,7 +108,7 @@ class RP2040RTC(BasePeripheral):
     def ctrl(self) -> int:
         return (
             (CTRL_FORCE_NOTLEAPYEAR if self.force_not_leap_year else 0)
-            | (CTRL_RTC_ACTIVE if self.running else 0)
+            | (CTRL_RTC_ACTIVE if self._running else 0)
             | (CTRL_RTC_ENABLE if self.enable else 0)
         )
 
@@ -119,7 +119,7 @@ class RP2040RTC(BasePeripheral):
         self._retime(False)
 
     @property
-    def running(self) -> bool:
+    def _running(self) -> bool:
         """The counter is counting: enabled, and clk_rtc runs."""
         return self.enable and self._clk_rtc > 0
 
@@ -165,24 +165,24 @@ class RP2040RTC(BasePeripheral):
         self._clk_rtc = clk_rtc
         self._retime(True)
 
-    def second_nanos(self) -> float:
+    def _second_nanos(self) -> float:
         """One second of the counter in simulated nanoseconds: (CLKDIV_M1 + 1) periods of clk_rtc."""
         return (self.clkdiv_m1 + 1) * 1e9 / self._clk_rtc
 
     def _retime(self, restart: bool) -> None:
-        """The divider runs while `running`; `restart` begins a new second (a load, a change of rate or of divider), otherwise a second already under way is left alone."""
-        if not self.running:
+        """The divider runs while `_running`; `restart` begins a new second (a load, a change of rate or of divider), otherwise a second already under way is left alone."""
+        if not self._running:
             self._alarm.cancel()
             self._alarm_pending = False
         elif restart or not self._alarm_pending:
-            self._alarm.schedule(self.second_nanos())
+            self._alarm.schedule(self._second_nanos())
             self._alarm_pending = True
 
     def _on_second(self) -> None:
         self._alarm_pending = False
         self._advance_second()
         self._retime(True)
-        self.check_interrupts()
+        self._check_interrupts()
 
     def _advance_second(self) -> None:
         if self.second < 59:
@@ -217,7 +217,7 @@ class RP2040RTC(BasePeripheral):
         self.minute = (self.setup1 >> 8) & 0x3F
         self.second = self.setup1 & 0x3F
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         raw = self.raw_interrupt
         self.rp2040.set_interrupt(IRQ.RTC, bool(((int(raw) & self.inte) | self.intf) & INT_RTC))
 
@@ -232,7 +232,36 @@ class RP2040RTC(BasePeripheral):
         self.year = self.month = self.day = self.dotw = self.hour = self.minute = self.second = 0
         self.latched_date = 0
         self._retime(True)
-        self.check_interrupts()
+        self._check_interrupts()
+
+    def snapshot(self) -> dict[str, int | float | bool]:
+        """The block's state as plain values: the stored registers and counter fields, and what is derived from them (the CTRL word, `_running`, the alarm match, the two counter words)."""
+        return {
+            "clkdiv_m1": self.clkdiv_m1,
+            "setup0": self.setup0,
+            "setup1": self.setup1,
+            "irq_setup0": self.irq_setup0,
+            "irq_setup1": self.irq_setup1,
+            "inte": self.inte,
+            "intf": self.intf,
+            "force_not_leap_year": self.force_not_leap_year,
+            "enable": self.enable,
+            "year": self.year,
+            "month": self.month,
+            "day": self.day,
+            "dotw": self.dotw,
+            "hour": self.hour,
+            "minute": self.minute,
+            "second": self.second,
+            "latched_date": self.latched_date,
+            "ctrl": self.ctrl,
+            "running": self._running,
+            "second_nanos": self._second_nanos() if self._running else 0.0,
+            "match_ena": self.match_ena,
+            "raw_interrupt": self.raw_interrupt,
+            "date": self.date,
+            "time": self.time,
+        }
 
     def read_uint32(self, offset: int) -> int:
         if offset == CLKDIV_M1:
@@ -279,19 +308,19 @@ class RP2040RTC(BasePeripheral):
                 self._load()
             self._retime(load)
             if load:
-                self.check_interrupts()
+                self._check_interrupts()
         elif offset == IRQ_SETUP_0:
             self.irq_setup0 = value & IRQ_SETUP_0_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ_SETUP_1:
             self.irq_setup1 = value & IRQ_SETUP_1_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTE:
             self.inte = value & INT_RTC
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTF:
             self.intf = value & INT_RTC
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset in (RTC_1, RTC_0, INTR, INTS):
             return  # read only
         else:

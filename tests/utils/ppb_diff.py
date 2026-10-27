@@ -27,8 +27,8 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _ppb as P
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 PPB_BASE = 0xE000E000
 IRQ_COUNT = 32
@@ -89,13 +89,11 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         # the chip's own PPB starts at its reset values (SysTick stopped); a replaced one is reset so that no alarm is left behind
         self.chip.ppb.reset()
-        if kind == "pure":
-            self._replace_the_ppb(P.RPPPB)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_ppb(factory)
         self._tap()
@@ -141,7 +139,7 @@ class Rig:
         elif kind == "service":  # the core takes a pending exception (or not)
             return bool(chip.core.check_for_interrupts())
         elif kind == "reset":
-            chip.ppb.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -150,33 +148,9 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, ppb, core = self.chip, self.chip.ppb, self.chip.core
-        timer = ppb.systick_timer
+        state = ppb.snapshot()
         return {
-            "systick": (
-                bool(ppb.systick_count_flag),
-                bool(ppb.systick_clk_source),
-                bool(ppb.systick_int_enable),
-                bool(ppb.systick_enable),
-                float(ppb.tick_hz),
-                int(ppb.systick_reload),
-                bool(timer.enable),
-                int(timer.mode),
-                float(ppb.clk_sys),
-                float(timer.frequency),
-                float(timer.prescaler),
-                int(timer.top),
-                int(timer.raw_counter),
-                int(timer.counter),
-                int(ppb.systick_alarm.target),
-                bool(ppb.systick_alarm.enable),
-            ),
-            "system": (
-                int(ppb.scr),
-                int(ppb.mpu_ctrl),
-                int(ppb.mpu_rnr),
-                tuple(int(word) for word in ppb.mpu_rbar),
-                tuple(int(word) for word in ppb.mpu_rasr),
-            ),
+            "state": tuple(sorted(state.items())),
             "regs": tuple(int(chip.read_uint32(PPB_BASE + offset)) for offset in SNAPSHOT_REGISTERS),
             "core": (
                 int(core.pending_interrupts),

@@ -1,6 +1,6 @@
 import math
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock.clock import IClock
 from rp2040py.irq import IRQ
@@ -223,25 +223,27 @@ class PWMChannel:
     def set_a(self, value: bool) -> None:
         if self.csr & CSR_A_INV:
             value = not value
-        self.pwm.gpio_set(self.pin_a1, value)
+        self.pwm._gpio_set(self.pin_a1, value)
         if self.pin_a2 >= 0:
-            self.pwm.gpio_set(self.pin_a2, value)
+            self.pwm._gpio_set(self.pin_a2, value)
 
     def set_b(self, value: bool) -> None:
         if self.csr & CSR_B_INV:
             value = not value
-        self.pwm.gpio_set(self.pin_b1, value)
+        self.pwm._gpio_set(self.pin_b1, value)
         if self.pin_b2 >= 0:
-            self.pwm.gpio_set(self.pin_b2, value)
+            self.pwm._gpio_set(self.pin_b2, value)
 
     @property
     def gpio_b_value(self) -> bool:
-        return bool(self.pwm.gpio_read(self.pin_b1) or (self.pwm.gpio_read(self.pin_b2) if self.pin_b2 > 0 else False))
+        return bool(
+            self.pwm._gpio_read(self.pin_b1) or (self.pwm._gpio_read(self.pin_b2) if self.pin_b2 > 0 else False)
+        )
 
     def set_b_direction(self, value: bool) -> None:
-        self.pwm.gpio_set_dir(self.pin_b1, value)
+        self.pwm._gpio_set_dir(self.pin_b1, value)
         if self.pin_b2 >= 0:
-            self.pwm.gpio_set_dir(self.pin_b2, value)
+            self.pwm._gpio_set_dir(self.pin_b2, value)
 
     def gpio_b_changed(self) -> None:
         value = self.gpio_b_value
@@ -343,13 +345,13 @@ class RPPWM(BasePeripheral):
             self.channels[0].en = value & (1 << 0)
         elif offset == INTR:
             self._int_raw &= ~(value & INT_MASK)
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTE:
             self._int_enable = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTF:
             self._int_force = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         else:
             super().write_uint32(offset, value)
 
@@ -359,32 +361,86 @@ class RPPWM(BasePeripheral):
 
     def channel_interrupt(self, index: int) -> None:
         self._int_raw |= 1 << index
-        self.check_interrupts()
+        self._check_interrupts()
 
         # We also set the DMA Request (DREQ) for the channel
         self.rp2040.dma.set_dreq(DREQChannel.DREQ_PWM_WRAP0 + index)
 
-    def check_interrupts(self) -> None:
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: every channel's registers, flags, counter bookkeeping, timer and alarms (`channels`, one dict each), and the block's pin words, interrupt words and clock."""
+        channels = []
+        for channel in self.channels:
+            timer = channel.timer
+            channels.append(
+                {
+                    "csr": channel.csr,
+                    "div": channel.div,
+                    "cc": channel.cc,
+                    "top": channel.top,
+                    "last_b_value": bool(channel.last_b_value),
+                    "counting_up": bool(channel.counting_up),
+                    "cc_updated": bool(channel.cc_updated),
+                    "top_updated": bool(channel.top_updated),
+                    "tick_counter": float(channel.tick_counter),
+                    "div_mode": int(channel.div_mode),
+                    "timer_enable": bool(timer.enable),
+                    "timer_mode": int(timer.mode),
+                    "timer_prescaler": float(timer.prescaler),
+                    "timer_top": int(timer.top),
+                    "timer_raw_counter": int(timer.raw_counter),
+                    "timer_counter": int(timer.counter),
+                    "alarm_a_target": int(channel.alarm_a.target),
+                    "alarm_b_target": int(channel.alarm_b.target),
+                    "alarm_a_rise_target": int(channel.alarm_a_rise.target),
+                    "alarm_b_rise_target": int(channel.alarm_b_rise.target),
+                    "alarm_a_enable": bool(channel.alarm_a.enable),
+                    "alarm_b_enable": bool(channel.alarm_b.enable),
+                    "alarm_a_rise_enable": bool(channel.alarm_a_rise.enable),
+                    "alarm_b_rise_enable": bool(channel.alarm_b_rise.enable),
+                    "alarm_bottom_enable": bool(channel.alarm_bottom.enable),
+                    "latched_top": -1 if channel.latched_top is None else int(channel.latched_top),
+                    "latched_cc_a": channel.latched_cc_a,
+                    "latched_cc_b": channel.latched_cc_b,
+                    "counter": channel.counter,
+                }
+            )
+        return {
+            "channels": tuple(channels),
+            "gpio_value": self.gpio_value,
+            "gpio_direction": self.gpio_direction,
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "int_force": self._int_force,
+            "int_status": self.int_status,
+            "clock_freq": self.clock_freq,
+        }
+
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.PWM_WRAP, bool(self.int_status))
 
-    def gpio_set(self, index: int, value: bool) -> None:
+    def _gpio_set(self, index: int, value: bool) -> None:
         bit = 1 << index
         new_gpio_value = self.gpio_value | bit if value else self.gpio_value & ~bit
         if self.gpio_value != new_gpio_value:
             self.gpio_value = new_gpio_value
             self.rp2040.gpio[index].check_for_updates()
 
-    def gpio_set_dir(self, index: int, output: bool) -> None:
+    def _gpio_set_dir(self, index: int, output: bool) -> None:
         bit = 1 << index
         new_gpio_direction = self.gpio_direction | bit if output else self.gpio_direction & ~bit
         if self.gpio_direction != new_gpio_direction:
             self.gpio_direction = new_gpio_direction
             self.rp2040.gpio[index].check_for_updates()
 
-    def gpio_read(self, index: int) -> bool:
+    def _gpio_read(self, index: int) -> bool:
         return self.rp2040.gpio[index].input_value
 
     def gpio_on_input(self, index: int) -> None:
+        tap = getattr(
+            self.rp2040, "pwm_input_tap", None
+        )  # an observer of the pins' calls (the C++ block's twin); it does not stand in for the PWM
+        if tap is not None:
+            tap(index)
         # A pin that is an output ignores what happens on its input. rp2040js tests `gpioDirection && 1 << index`, a logical AND that is true whenever the word is nonzero - after a reset
         # it never is zero, so no B-input edge was ever seen; it means `&` (this pin's bit), which record 0096 (Phase 4) made the reference do.
         if self.gpio_direction & (1 << index):
@@ -401,4 +457,4 @@ class RPPWM(BasePeripheral):
         self._int_raw = 0
         self._int_enable = 0
         self._int_force = 0
-        self.check_interrupts()
+        self._check_interrupts()

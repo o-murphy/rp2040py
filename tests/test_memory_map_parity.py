@@ -7,11 +7,12 @@ fire. This is what holds the C++ translation to the semantics it replaced, quirk
 mirrors are read-only; sub-word accesses never use a mirror; the boot ROM is word-indexed; a DPRAM
 write is reported to `usb_ctrl.dpram_updated`).
 
-Not compared, because the old code had no defined answer: an unaligned 16-bit access (`RP2040.write_uint16`
-says "we assume that address is 16-bit aligned"; the pure and Cython buses disagree about an odd address, and
-the Cython one writes past a 4-byte scratch buffer), and an unaligned access whose bytes run past
-the end of a buffer (out-of-bounds in Cython with bounds checking off, `IndexError` in Python). The
-C++ map reports those as "not handled", which the caller turns into an ordinary unmapped access.
+Not compared at random, because the old code had no defined answer: an unaligned 16-bit access (`RP2040.write_uint16`
+says "we assume that address is 16-bit aligned"; the pure and Cython buses disagreed about an odd address, and
+the Cython one wrote past a 4-byte scratch buffer). The one case that used to raise on the pure side - an access whose
+bytes run past the end of a memory (rp2040js fixed the same crash in 1.4.1) - is defined now and held by
+`test_an_access_running_past_the_end_of_a_memory_is_served_alike`: the C++ map reports it as "not handled", which the
+caller turns into an ordinary unmapped access, and the pure bus does the same.
 """
 
 import random
@@ -65,15 +66,6 @@ def _addresses(rng):
     return [a for a in out if 0 <= a <= 0xFFFFFFFF]
 
 
-def _in_bounds(address, width):
-    """True unless a `width`-byte access at `address` would run past the end of its backing buffer."""
-    for _name, base, size, window in REGIONS:
-        offset = address - base
-        if 0 <= offset < window:
-            return (offset & (FLASH_SIZE - 1) if size == FLASH_SIZE else offset) + width <= size
-    return True
-
-
 def _operations(seed, count):
     rng = random.Random(seed)
     addresses = _addresses(rng)
@@ -82,8 +74,6 @@ def _operations(seed, count):
         address = rng.choice(addresses)
         if width == 16 or rng.random() < 0.7:  # 16-bit accesses are always aligned; 32-bit ones mostly
             address &= ~(width // 8 - 1)
-        if not _in_bounds(address, width // 8):
-            continue
         yield rng.choice(("r", "w")), width, address, rng.getrandbits(32)
 
 
@@ -110,6 +100,46 @@ def test_the_native_bus_matches_the_pure_python_bus(seed):
     assert bytes(native.flash) == bytes(pure.flash)
     assert bytes(native.usb_dpram) == bytes(pure.usb_dpram)
     assert list(native.bootrom) == list(pure.bootrom)
+
+
+_ENDS = [
+    ("sram", SRAM, SRAM_SIZE),
+    ("dpram", DPRAM, DPRAM_SIZE),
+    *[(f"flash mirror {mirror}", FLASH + mirror * 0x01000000, 0x01000000) for mirror in range(4)],
+]
+
+
+@pytest.mark.parametrize(("name", "base", "size"), _ENDS, ids=[end[0] for end in _ENDS])
+def test_an_access_running_past_the_end_of_a_memory_is_served_alike(name, base, size):
+    """The last bytes of a memory: a word that starts in it and ends past it, and a halfword on its last byte. Neither chip may raise, and they must agree on what comes back, what is
+    written, and on the DPRAM hook. (The pure bus raised `struct.error` here, the C++ bus never did; rp2040js 1.4.1 fixed the same crash.)"""
+    rng = random.Random(size)
+    bootrom_words = [rng.getrandbits(32) for _ in range(BOOTROM_SIZE // 4)]
+    pure, native = make_chip(PurePython, bootrom_words), make_chip(Native, bootrom_words)
+    top = base + size
+    for chip in (pure, native):
+        for offset in range(8):  # the last bytes hold something that would show a wrong read or write
+            if name == "sram":
+                chip.sram[SRAM_SIZE - 8 + offset] = 0x10 + offset
+            elif name == "dpram":
+                chip.usb_dpram[DPRAM_SIZE - 8 + offset] = 0x10 + offset
+            else:
+                chip.flash[(top - 8 + offset) & (FLASH_SIZE - 1)] = 0x10 + offset
+
+    for distance in (3, 2, 1):  # a word starting 3, 2 or 1 bytes before the end
+        address = top - distance
+        assert _apply(pure, "r", 32, address, 0) == _apply(native, "r", 32, address, 0) == 0xFFFFFFFF
+        _apply(pure, "w", 32, address, 0xAABBCCDD)
+        _apply(native, "w", 32, address, 0xAABBCCDD)
+    address = top - 1  # a halfword on the last byte
+    assert _apply(pure, "r", 16, address, 0) == _apply(native, "r", 16, address, 0)
+    _apply(pure, "w", 16, address, 0xEEFF)
+    _apply(native, "w", 16, address, 0xEEFF)
+
+    assert native.hook_calls == pure.hook_calls
+    assert bytes(native.sram) == bytes(pure.sram)
+    assert bytes(native.flash) == bytes(pure.flash)
+    assert bytes(native.usb_dpram) == bytes(pure.usb_dpram)
 
 
 def test_a_dpram_write_reports_its_offset_and_the_original_value():

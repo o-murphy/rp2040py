@@ -37,6 +37,17 @@ public:
     uint32_t bod = vreg_regs::BOD_RESET;
     uint32_t chip_reset = vreg_regs::HAD_POR;
 
+    // The registers as one flat array: `vreg`, `bod`, `chip_reset`.
+    static constexpr uint32_t kSnapshotWords = 3;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = vreg;
+        out[1] = bod;
+        out[2] = chip_reset;
+    }
+
+    // What a debugger's psm_restart does: nothing on the bus can set PSM_RESTART_FLAG, only clear it.
+    void set_psm_restart_flag() noexcept { chip_reset |= vreg_regs::PSM_RESTART_FLAG; }
+
     // `flag` is one of the three cause flags (the shell checks); the register keeps only PSM_RESTART_FLAG besides it.
     void record_reset_cause(uint32_t flag) noexcept { chip_reset = (chip_reset & vreg_regs::PSM_RESTART_FLAG) | flag; }
 

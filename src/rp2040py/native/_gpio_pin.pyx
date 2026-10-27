@@ -16,8 +16,8 @@ that this object owns, and what is left here is the edge of the pin - the things
 Every failure of those callbacks (an exception from a listener, from a source attribute) is parked in the shared slot of
 `_pending.pyx` and re-raised here, right after the C++ call returns - the same exception, at the same call, as before.
 
-The full `@property` surface of `_gpio_pin.py` is preserved: `ctrl`, `pad_value`, the three IRQ words, `index`, `_raw_input_value`,
-`_driven` and `_always_output_enabled` are properties over the C++ pin's fields, so external callers (`peripherals/ssi.py`,
+The full `@property` surface of `_gpio_pin.py` is preserved: `ctrl`, `pad_value`, the three IRQ words, `index`, the state a block
+keeps on the outside of the pin is `snapshot()`; `driven` is the one device-facing flag, so external callers (`peripherals/ssi.py`,
 `external/cyw43`, `tests/utils/pin_trace.py`, tests) see no difference. `rp2040` stays `object` (untyped), same reasoning as
 `native/_pio.pyx`: its `pwm`/`sio`/`pio` aren't in a typed `.pxd` surface.
 """
@@ -47,12 +47,6 @@ from rp2040py.native._pin cimport (
 
 from rp2040py._gpio_pin import GPIOPinState
 
-# WaitType from pio_registers (its real home), NOT the peripherals.pio facade: the facade pulls in
-# native._pio, and native._pio cimports GPIOPin from this module - importing WaitType via the facade
-# would make _gpio_pin depend on _pio and turn that one-way cimport into a fragile circular runtime
-# import. Sourcing WaitType directly keeps _gpio_pin free of any _pio dependency.
-from rp2040py.peripherals.pio_registers import WaitType
-
 _logger = logging.getLogger(__name__)
 
 # Indexed by GPIOPinState integer value (LOW=0, HIGH=1, INPUT=2, PULL_UP=3, PULL_DOWN=4,
@@ -68,16 +62,6 @@ cdef tuple _STATES = (
 
 
 # --- the C++ pin's host: what only Python can answer ----------------------------------------------------------------------
-
-cdef cppbool _source_trampoline(void* ctx, uint32_t source, uint32_t* out) noexcept:
-    cdef GPIOPinBank owner = <GPIOPinBank> ctx
-    try:
-        out[0] = <uint32_t> owner._world_source(source)
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
 
 cdef cppbool _change_trampoline(void* ctx, uint32_t pin_index, int new_state, int old_state) noexcept:
     cdef GPIOPinBank owner = <GPIOPinBank> ctx
@@ -139,7 +123,6 @@ cdef class GPIOPinBank:
             self._bank = <PinBank*> <size_t> rp2040._native_pins_address(mcu_bank)
             return
         self._bank = &self._own
-        host.source = _source_trampoline
         host.on_change = _change_trampoline
         mcu = native_mcu(rp2040)
         if mcu != NULL and first == 0 and count == 30:
@@ -160,28 +143,6 @@ cdef class GPIOPinBank:
             raise_if_pending()
 
     # What the C++ bank asks of the world, as methods: the trampolines above call them for a bank made directly, and the chip's host calls them for the bank the `Mcu` holds.
-    def _world_source(self, source):
-        rp = self.rp2040
-        if source == kSrcSioOe:
-            return <unsigned int> rp.sio.gpio_output_enable
-        if source == kSrcSioValue:
-            return <unsigned int> rp.sio.gpio_value
-        if source == kSrcPio0Oe:
-            return <unsigned int> rp.pio[0].pin_directions
-        if source == kSrcPio0Value:
-            return <unsigned int> rp.pio[0].pin_values
-        if source == kSrcPio1Oe:
-            return <unsigned int> rp.pio[1].pin_directions
-        if source == kSrcPio1Value:
-            return <unsigned int> rp.pio[1].pin_values
-        if source == kSrcSioQspiOe:
-            return <unsigned int> rp.sio.qspi_gpio_output_enable
-        if source == kSrcSioQspiValue:
-            return <unsigned int> rp.sio.qspi_gpio_value
-        if source == kSrcPwmDirection:
-            return <unsigned int> rp.pwm.gpio_direction
-        return <unsigned int> rp.pwm.gpio_value  # kSrcPwmValue
-
     def _world_changed(self, pin_index, new_state, old_state):
         cdef GPIOPin pin = <GPIOPin> self.shells[pin_index - self.first]
         value = _STATES[new_state]
@@ -196,14 +157,7 @@ cdef class GPIOPinBank:
         for pio_index, pio in enumerate(rp.pio):
             if not (pio_mask >> pio_index) & 1:
                 continue
-            for machine in pio.machines:
-                if (
-                    machine.enabled
-                    and machine.waiting
-                    and machine.wait_type == WaitType.PIN
-                    and machine.wait_index == pin_index
-                ):
-                    machine.check_wait()
+            pio.check_pin_waits(pin_index)
 
     def __len__(self):
         return self._bank.count()
@@ -338,36 +292,32 @@ cdef class GPIOPin:
         self._pin.irq_status = value
 
     @property
-    def _raw_input_value(self):
-        return self._pin.raw_input_value
-
-    @_raw_input_value.setter
-    def _raw_input_value(self, bint value):
-        self._pin.raw_input_value = value
-
-    @property
-    def _driven(self):
+    def driven(self):
+        """True while a device holds the pin with `set_input_value()` (until `release_input()`): a wire between two pins asks this to let go of the far end."""
         return self._pin.driven
 
-    @_driven.setter
-    def _driven(self, bint value):
-        self._pin.driven = value
-
-    @property
-    def _seen(self):
-        return self._pin.seen
-
-    @_seen.setter
-    def _seen(self, bint value):
-        self._pin.seen = value
-
-    @property
-    def _always_output_enabled(self):
-        return self._pin.always_output_enabled
-
-    @_always_output_enabled.setter
-    def _always_output_enabled(self, bint value):
-        self._pin.always_output_enabled = value
+    def snapshot(self):
+        """The pin's state as plain values: its CTRL and pad words, the three interrupt words, what the outside holds on it (seen, raw, driven) and what is derived from them."""
+        return {
+            "ctrl": self.ctrl,
+            "pad_value": self.pad_value,
+            "irq_enable_mask": self.irq_enable_mask,
+            "irq_force_mask": self.irq_force_mask,
+            "irq_status": self.irq_status,
+            "seen": bool(self._pin.seen),
+            "raw_input_value": bool(self._pin.raw_input_value),
+            "driven": bool(self._pin.driven),
+            "always_output_enabled": bool(self._pin.always_output_enabled),
+            "status": int(self.status),
+            "value": int(self.value),
+            "input_value": bool(self.input_value),
+            "output_enable": bool(self.output_enable),
+            "output_value": bool(self.output_value),
+            "irq_value": bool(self.irq_value),
+            "raw_interrupt": bool(self.raw_interrupt),
+            "raw_output_enable": bool(self.raw_output_enable),
+            "raw_output_value": bool(self.raw_output_value),
+        }
 
     # --- @property surface (behavioural parity with _gpio_pin.py) ---------------------------------------------------------
 

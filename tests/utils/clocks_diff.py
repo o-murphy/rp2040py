@@ -17,7 +17,7 @@ from typing import Any
 
 from rp2040py.peripherals import _clocks as C
 from rp2040py.peripherals import _pll as P
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 ALIAS_BASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
 CLOCKS_BASE = 0x40008000
@@ -65,51 +65,15 @@ class Boom(Exception):
     """What a failing host listener raises."""
 
 
-class _Spy:
-    """Forwards everything to the real consumer and records the call the clock tree makes of it."""
-
-    def __init__(self, target: Any, rig: "Rig", name: str) -> None:
-        object.__setattr__(self, "_target", target)
-        object.__setattr__(self, "_rig", rig)
-        object.__setattr__(self, "_name", name)
-
-    def __getattr__(self, attribute: str) -> Any:
-        return getattr(self._target, attribute)
-
-    def __setattr__(self, attribute: str, value: Any) -> None:
-        setattr(self._target, attribute, value)
-
-    def _record(self, *args: Any) -> None:
-        self._rig.log.append(("sink", float(self._rig.chip.clock.nanos), self._name, *args))
-
-    def clk_ref_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_ref_changed(hz)
-
-    def clk_rtc_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_rtc_changed(hz)
-
-    def clk_sys_changed(self, hz: float) -> Any:
-        self._record(float(hz))
-        return self._target.clk_sys_changed(hz)
-
-    def clk_peri_changed(self) -> Any:
-        self._record()
-        return self._target.clk_peri_changed()
-
-
 class Rig:
     """One chip plus the log of every warning and every call the clock tree makes."""
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.raising = False
-        if kind == "pure":
-            self._replace_the_blocks(C.RPClocks, P.RPPLL)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_blocks(*factory())
         self._tap()
@@ -133,10 +97,10 @@ class Rig:
                     ("log", float(chip.clock.nanos), _m, str(name), str(message))
                 ),
             )
-        chip.watchdog = _Spy(chip.watchdog, self, "watchdog")
-        chip.rtc = _Spy(chip.rtc, self, "rtc")
-        chip.ppb = _Spy(chip.ppb, self, "ppb")
-        chip.uart = [_Spy(uart, self, f"uart{index}") for index, uart in enumerate(chip.uart)]
+        # What the clock tree announces, in order: the observer sees each announcement before the consumers of that domain, which still get it
+        chip.clock_tree_tap = lambda domain, hz, old: log.append(
+            ("tree", float(chip.clock.nanos), domain, float(hz), float(old))
+        )
 
         def listener(clk_sys: float, old: float) -> None:
             log.append(("listener", float(chip.clock.nanos), float(clk_sys), float(old), self.raising))
@@ -172,6 +136,7 @@ class Rig:
     def snapshot(self) -> dict[str, Any]:
         chip = self.chip
         clocks = chip.clocks
+        clock_state = clocks.snapshot()
         reads = []
         for base, offsets in ((CLOCKS_BASE, CLOCKS_OFFSETS), (PLL_BASES[0], PLL_OFFSETS), (PLL_BASES[1], PLL_OFFSETS)):
             for offset in offsets:
@@ -182,12 +147,12 @@ class Rig:
             "freq": tuple(
                 float(value)
                 for value in (
-                    clocks.ref_freq,
-                    clocks.sys_freq,
-                    clocks.peri_freq,
-                    clocks.rtc_freq,
-                    clocks.usb_freq,
-                    clocks.adc_freq,
+                    clock_state["ref_freq"],
+                    clock_state["sys_freq"],
+                    clock_state["peri_freq"],
+                    clock_state["rtc_freq"],
+                    clock_state["usb_freq"],
+                    clock_state["adc_freq"],
                     chip.pll_sys.frequency,
                     chip.pll_usb.frequency,
                 )
@@ -195,17 +160,14 @@ class Rig:
             "pwm": tuple(float(channel.timer.frequency) for channel in chip.pwm.channels),
             # what the C++ consumers were told (the default tree calls them directly, so no spy sees it): SysTick's clk_sys, the watchdog's tick, the RTC's second
             "consumers": (
-                float(chip.ppb.clk_sys),
-                float(chip.watchdog.tick_hz),
-                bool(chip.rtc.running),
-                float(chip.rtc.second_nanos()) if chip.rtc.running else 0.0,
+                float(chip.ppb.snapshot()["clk_sys"]),
+                float(chip.watchdog.snapshot()["tick_hz"]),
+                bool(chip.rtc.snapshot()["running"]),
+                float(chip.rtc.snapshot()["second_nanos"]),
             ),
             "raw": (int(clocks.raw_write_value), int(chip.pll_sys.raw_write_value), int(chip.pll_usb.raw_write_value)),
             "time": float(chip.clock.nanos),
         }
-
-
-_C_CONSUMERS = ("ppb", "watchdog", "rtc")
 
 
 class Divergence:
@@ -384,10 +346,6 @@ def run_pair(
             return Divergence(step, op, f"result {result_a!r}/{error_a} vs {result_b!r}/{error_b}")
         new_a, new_b = a.log[log_a:], b.log[log_b:]
         log_a, log_b = len(a.log), len(b.log)
-        if a.kind == "default" or b.kind == "default":
-            # The default tree tells SysTick, the watchdog and the RTC from C++ without a Python call to spy on: their calls are compared by what they did ("consumers" in the snapshot), not as a log
-            new_a = [entry for entry in new_a if not (entry[0] == "sink" and entry[2] in _C_CONSUMERS)]
-            new_b = [entry for entry in new_b if not (entry[0] == "sink" and entry[2] in _C_CONSUMERS)]
         if new_a != new_b:
             return Divergence(step, op, f"log: {new_a[:6]} vs {new_b[:6]}")
         snapshot_a, snapshot_b = a.snapshot(), b.snapshot()
@@ -414,12 +372,12 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         if error:
             count("exception")
         for entry in rig.log[before:]:
-            count(entry[0] if entry[0] != "sink" else f"sink.{entry[2]}")
+            count(entry[0] if entry[0] != "tree" else f"tree.{entry[2]}")
         if (rig.chip.clk_sys, rig.chip.clk_peri) != clk:
             count("clock changed")
         if rig.chip.pll_sys.frequency and rig.chip.pll_usb.frequency:
             count("both plls running")
-        if rig.chip.clocks.rtc_freq:
+        if rig.chip.clocks.snapshot()["rtc_freq"]:
             count("rtc clock running")
         if rig.chip.clocks.read_uint32(C.FC0_STATUS) & C.FC0_STATUS_DONE:
             count("fc done")
@@ -506,19 +464,19 @@ class MutantClocks(C.RPClocks):
         super().__init__(rp2040, name)
 
     @property
-    def sys_freq(self) -> float:
+    def _sys_freq(self) -> float:
         mutant = self._mutant
         if mutant == "sys_div_zero_is_one" and self.sys_div >> 8 == 0:
             return self._sys_source_freq
         if mutant == "sys_div_ignores_fraction":
             return self._sys_source_freq / C.clock_divisor(self.sys_div & ~C.CLK_DIV_FRAC_MASK)
-        return super().sys_freq
+        return super()._sys_freq
 
     @property
-    def ref_freq(self) -> float:
+    def _ref_freq(self) -> float:
         if self._mutant == "ref_div_ignores_int":
             return self._ref_source_freq
-        return super().ref_freq
+        return super()._ref_freq
 
     @property
     def _ref_source_freq(self) -> float:
@@ -543,7 +501,7 @@ class MutantClocks(C.RPClocks):
         return C.RPClocks._sys_source_freq.fget(self)  # type: ignore[attr-defined]
 
     @property
-    def peri_freq(self) -> float:
+    def _peri_freq(self) -> float:
         mutant, rp2040, ctrl = self._mutant, self.rp2040, self.peri_ctrl
         if mutant == "peri_ignores_kill":
             self.peri_ctrl = ctrl & ~C.CLK_PERI_CTRL_KILL
@@ -557,7 +515,7 @@ class MutantClocks(C.RPClocks):
         ):
             return rp2040.rosc_freq
         try:
-            return super().peri_freq
+            return super()._peri_freq
         finally:
             self.peri_ctrl = ctrl
 
@@ -586,7 +544,7 @@ class MutantClocks(C.RPClocks):
             return
 
         def sys() -> None:
-            clk_sys = self.sys_freq
+            clk_sys = self._sys_freq
             if mutant == "update_zero_updates_clk_sys":
                 changed = clk_sys != rp2040.clk_sys
             elif mutant == "update_notifies_unchanged_sys":
@@ -597,7 +555,7 @@ class MutantClocks(C.RPClocks):
                 C._set_clk_sys(rp2040, clk_sys)
 
         def peri() -> None:
-            clk_peri = self.peri_freq
+            clk_peri = self._peri_freq
             changed = (
                 clk_peri != rp2040.clk_peri
                 if mutant == "update_zero_updates_clk_peri"
@@ -609,7 +567,7 @@ class MutantClocks(C.RPClocks):
         def ref() -> None:
             if mutant == "update_skips_ref":
                 return
-            hz = self.ref_freq
+            hz = self._ref_freq
             if mutant == "update_ref_only_on_change" and hz == self._last_ref:
                 return
             self._last_ref = hz
@@ -617,7 +575,7 @@ class MutantClocks(C.RPClocks):
 
         def rtc() -> None:
             if mutant != "update_skips_rtc":
-                rp2040.rtc.clk_rtc_changed(self.rtc_freq)
+                rp2040.rtc.clk_rtc_changed(self._rtc_freq)
 
         if mutant == "update_peri_before_sys":
             peri()
@@ -645,9 +603,9 @@ class MutantClocks(C.RPClocks):
         if rp2040.clk_peri != C.DEFAULT_CLK and mutant != "reset_tree_keeps_clk_peri":
             C._set_clk_peri(rp2040, C.DEFAULT_CLK)
         if mutant != "reset_tree_skips_ref":
-            rp2040.watchdog.clk_ref_changed(self.ref_freq)
+            rp2040.watchdog.clk_ref_changed(self._ref_freq)
         if mutant != "reset_tree_skips_rtc":
-            rp2040.rtc.clk_rtc_changed(self.rtc_freq)
+            rp2040.rtc.clk_rtc_changed(self._rtc_freq)
 
     def reset(self) -> None:
         mutant, sys_ctrl, rtc_div, wake = (
@@ -702,7 +660,7 @@ class MutantClocks(C.RPClocks):
     def _fc_done(self) -> None:
         mutant = self._mutant
         if mutant in ("fc_max_exclusive", "fc_min_exclusive"):
-            end_hz = self.frequency_of(self._fc_src)
+            end_hz = self._frequency_of(self._fc_src)
             died = self._fc_started_hz == 0 or end_hz == 0
             khz = 0.0 if died else end_hz / 1000.0
             status = C.FC0_STATUS_DONE | (C.FC0_STATUS_DIED if died else 0)
@@ -735,27 +693,27 @@ class MutantPLL(P.RPPLL):
         super().__init__(rp2040, name)
 
     @property
-    def refdiv(self) -> int:
+    def _refdiv(self) -> int:
         if self._mutant == "pll_refdiv_zero_is_zero" and not self.cs & P.PLL_CS_REFDIV_MASK:
             return 0
-        return super().refdiv
+        return super()._refdiv
 
     @property
-    def reference(self) -> float:
+    def _reference(self) -> float:
         if self._mutant == "pll_refdiv_zero_is_zero" and not self.cs & P.PLL_CS_REFDIV_MASK:
             return 0.0
-        return super().reference
+        return super()._reference
 
     @property
-    def locked(self) -> bool:
+    def _locked(self) -> bool:
         mutant = self._mutant
         if mutant == "pll_lock_always":
             return True
         if mutant == "pll_lock_ignores_vcopd":
-            return not self.pwr & P.PLL_PWR_PD and self.reference > 0
+            return not self.pwr & P.PLL_PWR_PD and self._reference > 0
         if mutant == "pll_lock_ignores_reference":
             return not self.pwr & (P.PLL_PWR_PD | P.PLL_PWR_VCOPD)
-        return super().locked
+        return super()._locked
 
     @property
     def frequency(self) -> float:
@@ -769,9 +727,9 @@ class MutantPLL(P.RPPLL):
             self.pwr = pwr & ~P.PLL_PWR_POSTDIVPD
         try:
             if mutant == "pll_bypass_divides_by_postdiv" and cs & P.PLL_CS_BYPASS and not pwr & P.PLL_PWR_PD:
-                return self.reference / ((self.postdiv1 or 1) * (self.postdiv2 or 1))
+                return self._reference / ((self._postdiv1 or 1) * (self._postdiv2 or 1))
             if mutant == "pll_bypass_not_divided_by_refdiv" and cs & P.PLL_CS_BYPASS and not pwr & P.PLL_PWR_PD:
-                return self.reference * (self.refdiv or 1)
+                return self._reference * (self._refdiv or 1)
             if (
                 mutant == "pll_bypass_needs_vco"
                 and cs & P.PLL_CS_BYPASS
@@ -781,7 +739,7 @@ class MutantPLL(P.RPPLL):
             if (
                 mutant == "pll_postdiv_zero_is_zero"
                 and not cs & P.PLL_CS_BYPASS
-                and (self.postdiv1 == 0 or self.postdiv2 == 0)
+                and (self._postdiv1 == 0 or self._postdiv2 == 0)
             ):
                 return 0.0
             return super().frequency

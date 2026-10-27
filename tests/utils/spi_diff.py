@@ -27,7 +27,7 @@ from typing import Any
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _spi as P
 from rp2040py.peripherals.dma import DREQChannel
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 SPI0_BASE = 0x4003C000
 NVIC_ISPR = 0xE000E200
@@ -59,13 +59,11 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.pending: list[int] = []  # bytes a deferred device has been handed and not yet completed
         self.next_rx = 0
-        if kind == "pure":
-            self._replace_the_spi(P.RPSPI)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_spi(factory)
         self._tap()
@@ -81,14 +79,11 @@ class Rig:
     def _tap(self) -> None:
         chip, log = self.chip, self.log
 
-        class _Dma:
-            def set_dreq(self, channel: int) -> None:
-                log.append(("dreq", int(channel), 1))
+        # The observer of the requests that reach the chip's (real) DMA: it sees the order of them and the DMA still gets each one.
+        def dreq_tap(number: int, asserted: bool) -> None:
+            log.append(("dreq", int(number), int(asserted)))
 
-            def clear_dreq(self, channel: int) -> None:
-                log.append(("dreq", int(channel), 0))
-
-        chip.dma = _Dma()  # type: ignore[assignment]  # the SPI looks `rp2040.dma` up whenever a FIFO level changes
+        chip.dreq_tap = dreq_tap
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:
@@ -141,9 +136,9 @@ class Rig:
                 self.pending.pop(0)
             spi.complete_transmit(op[1])
         elif kind == "check":
-            spi.check_interrupts()
+            return int(chip.read_uint32(SPI0_BASE + P.SSPMIS))  # the interrupt status, through the bus
         elif kind == "reset":
-            spi.reset()
+            chip.reset()
         elif kind == "clk":
             chip.clk_peri = op[1]
         elif kind == "tick":
@@ -156,35 +151,13 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, spi = self.chip, self.chip.spi[0]
-        rx, tx = spi.rx_fifo, spi.tx_fifo
         return {
             "regs": tuple(int(chip.read_uint32(SPI0_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(spi._control0),
-                int(spi._control1),
-                int(spi._dma_control),
-                int(spi._clock_divisor),
-                int(spi._int_raw),
-                int(spi._int_enable),
-                bool(spi._busy),
-                int(spi.raw_write_value),
-                bool(spi._frame_active),
-                None if spi._reply is None else int(spi._reply),
-            ),
+            "state": (tuple(sorted(spi.snapshot().items())), int(spi.raw_write_value)),
             "time": (
                 float(chip.clock.nanos),
                 bool(chip.clock.has_scheduled_alarm),
                 float(chip.clock.nanos_to_next_alarm),
-            ),
-            "rx": (bool(rx.empty), bool(rx.full), int(rx.item_count), tuple(int(v) for v in rx.items)),
-            "tx": (bool(tx.empty), bool(tx.full), int(tx.item_count), tuple(int(v) for v in tx.items)),
-            "props": (
-                bool(spi.enabled),
-                int(spi.data_bits),
-                bool(spi.master_mode),
-                int(spi.spi_mode),
-                float(spi.clock_frequency),
-                int(spi.int_status),
             ),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
         }
@@ -213,10 +186,10 @@ def mutant_rig(name: str) -> Rig:
             return super().spi_mode
 
         @property
-        def master_mode(self) -> bool:
+        def _master_mode(self) -> bool:
             if name == "master_mode_inverted":
                 return bool(self._control0 & P.MS)
-            return super().master_mode
+            return super()._master_mode
 
         @property
         def clock_frequency(self) -> float:
@@ -291,17 +264,17 @@ def mutant_rig(name: str) -> Rig:
         def _frame_ns(self) -> float:
             bit = P._bit_ns(self.rp2040.clk_peri, self._clock_divisor, (self._control0 >> P.SCR_SHIFT) & P.SCR_MASK)
             if name == "frame_one_bit":
-                return bit if self.master_mode else 0.0
+                return bit if self._master_mode else 0.0
             if name == "frame_slave_timed":
                 return bit * self.data_bits
             if name == "frame_ignores_scr":
                 return (
                     P._bit_ns(self.rp2040.clk_peri, self._clock_divisor, 0) * self.data_bits
-                    if self.master_mode
+                    if self._master_mode
                     else 0.0
                 )
             if name == "frame_dss_plus_one":
-                return bit * (self.data_bits + 1) if self.master_mode else 0.0
+                return bit * (self.data_bits + 1) if self._master_mode else 0.0
             return super()._frame_ns()
 
         def complete_transmit(self, rx_value: int) -> None:
@@ -362,7 +335,7 @@ def mutant_rig(name: str) -> Rig:
                 self._int_raw = (self._int_raw | P.SSPTXINTR) if tx_low else (self._int_raw & ~P.SSPTXINTR)
                 self._int_raw = (self._int_raw | P.SSPRXINTR) if rx_high else (self._int_raw & ~P.SSPRXINTR)
                 if self.int_status != prev_status:
-                    self.check_interrupts()
+                    self._check_interrupts()
                 self._update_dma_tx()
                 self._update_dma_rx()
                 return
@@ -394,19 +367,19 @@ def mutant_rig(name: str) -> Rig:
                 return
             if offset == P.SSPICR and name == "icr_decoded_value":
                 self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR))
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPICR and name == "icr_clears_all":
                 self._int_raw = 0
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPICR and name == "icr_clears_tx":
                 self._int_raw &= ~(value & (P.SSPRTINTR | P.SSPRORINTR | P.SSPTXINTR))
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPIMSC and name == "imsc_unmasked":
                 self._int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == P.SSPCR0 and name == "cr0_unmasked":
                 self._control0 = value

@@ -3,7 +3,7 @@
 Mirrors `peripherals/uart.py`; held to identical behaviour by `tests/test_watchdog_diff.py` (docs/records/0096-cpp-mcu-core.md).
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 from rp2040py.peripherals._watchdog import (
     COUNT_MASK,
     COUNT_SHIFT,
@@ -39,8 +39,7 @@ from rp2040py.peripherals._watchdog import (
 )
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._watchdog import RPWatchdog
 except ImportError:
     from rp2040py.peripherals._watchdog import RPWatchdog

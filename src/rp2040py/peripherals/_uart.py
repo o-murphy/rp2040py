@@ -151,6 +151,28 @@ class RPUART(BasePeripheral):
         self.on_byte: Callable[[int], None] | None = None
         self.on_baud_rate_change: Callable[[int], None] | None = None
 
+    def snapshot(self) -> dict[str, int | bool | tuple[int, ...]]:
+        """The block's state as plain values: the registers, both FIFOs' contents, the shifter and what is derived from them (the TX thresholds, the flag register)."""
+        return {
+            "ctrl": self._ctrl_register,
+            "line_ctrl": self._line_ctrl_register,
+            "int_divisor": self._int_divisor,
+            "frac_divisor": self._frac_divisor,
+            "interrupt_mask": self._interrupt_mask,
+            "interrupt_status": self._interrupt_status,
+            "ifls": self._ifls,
+            "ilpr": self._ilpr,
+            "dmacr": self._dmacr,
+            "rsr": self._rsr,
+            "rx": tuple(self.rx_fifo.items),
+            "tx": tuple(self.tx_fifo.items),
+            "tx_shifting": self._tx_shifting,
+            "tx_capacity": self.tx_capacity,
+            "tx_trigger": self.tx_trigger,
+            "tx_full": self.tx_full,
+            "flags": self.flags,
+        }
+
     def reset(self) -> None:
         """Registers and the RX FIFO, back to power-on (0089 Phase 5).
 
@@ -176,23 +198,23 @@ class RPUART(BasePeripheral):
         self._update_dreq()
 
     @property
-    def enabled(self) -> bool:
+    def _enabled(self) -> bool:
         return bool(self._ctrl_register & UARTEN)
 
     @property
-    def tx_enabled(self) -> bool:
+    def _tx_enabled(self) -> bool:
         return bool(self._ctrl_register & TXE)
 
     @property
-    def rx_enabled(self) -> bool:
+    def _rx_enabled(self) -> bool:
         return bool(self._ctrl_register & RXE)
 
     @property
-    def fifos_enabled(self) -> bool:
+    def _fifos_enabled(self) -> bool:
         return bool(self._line_ctrl_register & FEN)
 
     @property
-    def word_length(self) -> int:
+    def _word_length(self) -> int:
         """Number of bits per UART character"""
         return _WORD_LENGTH_BY_LCR_WLEN[(self._line_ctrl_register >> 5) & 0x3]
 
@@ -212,7 +234,7 @@ class RPUART(BasePeripheral):
     @property
     def tx_capacity(self) -> int:
         """ "If the FIFOs are disabled (have a depth of one location)": 1, else 32."""
-        return TX_FIFO_DEPTH if self.fifos_enabled else 1
+        return TX_FIFO_DEPTH if self._fifos_enabled else 1
 
     @property
     def tx_full(self) -> bool:
@@ -221,7 +243,7 @@ class RPUART(BasePeripheral):
     @property
     def tx_trigger(self) -> int:
         """The level at or below which the TX interrupt asserts: the UARTIFLS.TXIFLSEL fraction of the FIFO, or empty (0) with the FIFOs disabled."""
-        if not self.fifos_enabled:
+        if not self._fifos_enabled:
             return 0
         return _TX_TRIGGER_BY_SEL.get(self._ifls & 0x7, _TX_TRIGGER_BY_SEL[2])
 
@@ -251,7 +273,7 @@ class RPUART(BasePeripheral):
         from above the trigger level to at or below it, UARTTXINTR is raised (4.2.6.3: "based on a transition through a level"; cleared by UARTICR or by writes taking the FIFO back above
         the level - and not raised again by the characters that follow while it stays at or below). A character with no time on the wire is delivered at once. Returns whether anything moved."""
         moved = False
-        while not self._tx_shifting and not self.tx_fifo.empty and self.enabled and self.tx_enabled:
+        while not self._tx_shifting and not self.tx_fifo.empty and self._enabled and self._tx_enabled:
             before = self.tx_fifo.item_count
             byte = self.tx_fifo.pull()
             moved = True
@@ -271,21 +293,21 @@ class RPUART(BasePeripheral):
         self._tx_shifting = False
         self._tx_emit(self._tx_byte)
         self._tx_pump()
-        self.check_interrupts()
+        self._check_interrupts()
         self._update_dreq()
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self._interrupt_status & self._interrupt_mask))
 
     def _update_dreq(self) -> None:
         """The two DMA requests. TX: the transmit FIFO never fills, so it is asking whenever the transmitter is enabled and TXDMAE is set. RX: whenever the receiver is enabled, RXDMAE is set
         and the FIFO holds a byte - unless DMAONERR is set and an error interrupt is up ("the DMA receive request outputs ... are disabled when the UART error interrupt is asserted")."""
-        ready = self.enabled
+        ready = self._enabled
         # TX: UARTTXDMASREQ, "asserted when there is at least one empty location in the transmit FIFO"
-        tx = ready and self.tx_enabled and bool(self._dmacr & DMACR_TXDMAE) and not self.tx_full
+        tx = ready and self._tx_enabled and bool(self._dmacr & DMACR_TXDMAE) and not self.tx_full
         rx = (
             ready
-            and self.rx_enabled
+            and self._rx_enabled
             and bool(self._dmacr & DMACR_RXDMAE)
             and not self.rx_fifo.empty
             and not (self._dmacr & DMACR_DMAONERR and self._interrupt_status & UART_ERROR_INTERRUPTS)
@@ -295,7 +317,7 @@ class RPUART(BasePeripheral):
 
     def feed_byte(self, value: int) -> None:
         # "RXE: Receive enable": a disabled receiver (or UART) takes nothing from the line
-        if not (self.enabled and self.rx_enabled):
+        if not (self._enabled and self._rx_enabled):
             return
         if self.rx_fifo.full:
             # "OE: Overrun error. This bit is set to 1 if data is received and the FIFO is already full ... no more data is written when the FIFO is full"
@@ -305,7 +327,7 @@ class RPUART(BasePeripheral):
             self.rx_fifo.push(value)
             # The RX interrupt is not held back until a trigger level (UARTIFLS): see the note on `_ifls`
             self._interrupt_status |= UARTRXINTR
-        self.check_interrupts()
+        self._check_interrupts()
         self._update_dreq()
 
     def read_uint32(self, offset: int) -> int:
@@ -315,7 +337,7 @@ class RPUART(BasePeripheral):
                 self._interrupt_status |= UARTRXINTR
             else:
                 self._interrupt_status &= ~UARTRXINTR
-            self.check_interrupts()
+            self._check_interrupts()
             self._update_dreq()
             return value
         if offset == UARTRSR:
@@ -363,14 +385,14 @@ class RPUART(BasePeripheral):
     def write_uint32(self, offset: int, value: int) -> None:
         if offset == UARTDR:
             # "TXE: Transmit enable": a disabled transmitter (or UART) sends nothing - the byte goes nowhere
-            if self.enabled and self.tx_enabled:
+            if self._enabled and self._tx_enabled:
                 # A write to a full FIFO is lost, as on the chip (firmware polls UARTFR.TXFF first)
                 if not self.tx_full:
                     self.tx_fifo.push(value & 0xFF)
                     if self.tx_fifo.item_count > self.tx_trigger:
                         self._interrupt_status &= ~UARTTXINTR  # "cleared by writing data to the transmit FIFO until it becomes greater than the trigger level"
                 self._tx_pump()
-                self.check_interrupts()
+                self._check_interrupts()
                 self._update_dreq()
 
         elif offset == UARTRSR:
@@ -396,7 +418,7 @@ class RPUART(BasePeripheral):
         elif offset == UARTCR:
             self._ctrl_register = value & CR_MASK
             if self._tx_pump():  # re-enabled with characters waiting
-                self.check_interrupts()
+                self._check_interrupts()
             self._update_dreq()
 
         elif offset == UARTIFLS:
@@ -408,11 +430,11 @@ class RPUART(BasePeripheral):
 
         elif offset == UARTIMSC:
             self._interrupt_mask = value & 0x7FF
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == UARTICR:
             self._interrupt_status &= ~self.raw_write_value
-            self.check_interrupts()
+            self._check_interrupts()
             self._update_dreq()  # DMAONERR: clearing the error interrupt lets the receive request through again
 
         else:

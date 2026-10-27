@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.interpolator import Interpolator
 from rp2040py.utils.bit import s32, u32
@@ -280,6 +280,38 @@ class RPSIO:
             self._launch_seq = 0
             self._core1_launched = True
             self.rp2040.launch_core1(*self._launch_words)
+
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the four GPIO words, core 0's divider, the spin locks and both interpolators (`i0.accum0` ...)."""
+        state: dict[str, Any] = {
+            "gpio_value": self.gpio_value,
+            "gpio_output_enable": self.gpio_output_enable,
+            "qspi_gpio_value": self.qspi_gpio_value,
+            "qspi_gpio_output_enable": self.qspi_gpio_output_enable,
+            "div_dividend": self.div_dividend,
+            "div_divisor": self.div_divisor,
+            "div_quotient": self.div_quotient,
+            "div_remainder": self.div_remainder,
+            "div_csr": self.div_csr,
+            "spin_lock": self.spin_lock,
+        }
+        for index, interp in enumerate((self.interp0, self.interp1)):
+            for name in [
+                "accum0",
+                "accum1",
+                "base0",
+                "base1",
+                "base2",
+                "ctrl0",
+                "ctrl1",
+                "result0",
+                "result1",
+                "result2",
+                "smresult0",
+                "smresult1",
+            ]:
+                state[f"i{index}.{name}"] = getattr(interp, name)
+        return state
 
     def update_hardware_divider(self, signed: bool) -> None:
         if self.div_divisor == 0:

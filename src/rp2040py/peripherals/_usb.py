@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.clock.clock import IAlarm
 from rp2040py.irq import IRQ
@@ -430,7 +430,7 @@ class RPUSBController(BasePeripheral):
             # reading it acknowledges the SOF interrupts (datasheet INTR.DEV_SOF / HOST_SOF)
             if self._int_raw & (INTR_DEV_SOF | INTR_HOST_SOF):
                 self._int_raw &= ~(INTR_DEV_SOF | INTR_HOST_SOF)
-                self.check_interrupts()
+                self._check_interrupts()
             return self._sof_frame_number & SOF_COUNT_MASK
         if offset == SIE_CTRL:
             return self._sie_ctrl
@@ -566,10 +566,10 @@ class RPUSBController(BasePeripheral):
             self._sie_status_updated()
         elif offset == INTE:
             self._int_enable = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == INTF:
             self._int_force = value & INT_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         else:
             super().write_uint32(offset, value)
 
@@ -724,7 +724,7 @@ class RPUSBController(BasePeripheral):
         # the other buffer of a double-buffered endpoint may already be waiting
         self._service_endpoint(endpoint, out)
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.USBCTRL, bool(self.int_status))
 
     def reset(self) -> None:
@@ -783,7 +783,7 @@ class RPUSBController(BasePeripheral):
             endpoint_alarm.alarm.cancel()
             endpoint_alarm.clear()
 
-        self.check_interrupts()
+        self._check_interrupts()
 
     def reset_device(self) -> None:
         self.reset_alarm.schedule(10_000_000)  # USB reset takes ~10ms
@@ -827,21 +827,21 @@ class RPUSBController(BasePeripheral):
             self._int_raw |= INTR_BUFF_STATUS
         else:
             self._int_raw &= ~INTR_BUFF_STATUS
-        self.check_interrupts()
+        self._check_interrupts()
 
     def _abort_done_updated(self) -> None:
         if self._ep_abort_done:
             self._int_raw |= INTR_ABORT_DONE
         else:
             self._int_raw &= ~INTR_ABORT_DONE
-        self.check_interrupts()
+        self._check_interrupts()
 
     def _stall_nak_updated(self) -> None:
         if self._ep_status_stall_nak:
             self._int_raw |= INTR_EP_STALL_NAK
         else:
             self._int_raw &= ~INTR_EP_STALL_NAK
-        self.check_interrupts()
+        self._check_interrupts()
 
     def _sie_status_updated(self) -> None:
         # What each interrupt is the raw state of: a SIE_STATUS bit (level: the interrupt follows it), or an event the register's write-1-to-clear acknowledges. The resume interrupt is the
@@ -875,9 +875,51 @@ class RPUSBController(BasePeripheral):
             self._int_raw |= INTR_HOST_CONN_DIS
         else:
             self._int_raw &= ~INTR_HOST_CONN_DIS
-        self.check_interrupts()
+        self._check_interrupts()
 
     # ============ Host Mode Methods ============
+
+    def snapshot(self) -> dict[str, Any]:
+        """The controller's state as plain values: the interrupt words, the SIE, the mode, the buffer bookkeeping (done, select, two-buffer counts, OUT requests in flight) and the host-mode control transfer in progress."""
+        return {
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "int_force": self._int_force,
+            "int_status": self.int_status,
+            "sie_status": self._sie_status,
+            "sie_ctrl": self._sie_ctrl,
+            "connected": bool(self._connected),
+            "connect_event": bool(self._connect_event),
+            "host_connect_event": bool(self._host_connect_event),
+            "host_mode": bool(self._host_mode),
+            "sof_enabled": bool(self._sof_enabled),
+            "device_attached": self.connected_device is not None,
+            "sof_frame_number": self._sof_frame_number,
+            "ep_status_stall_nak": self._ep_status_stall_nak,
+            "buff_done": tuple(tuple(done) for done in self._buff_done),
+            "buf_select": tuple(self._buf_select),
+            "two_buffer_count": tuple(self._two_buffer_count),
+            "pending_reads": tuple(tuple(pending) for pending in self._pending_reads),
+            "expecting_status_phase": bool(self._expecting_status_phase),
+            "control_data_pid": self._control_data_pid,
+            "pending_setup_response": bytes(self._pending_setup_response or b""),
+            "device_address": None if self.connected_device is None else self.connected_device.address,
+        }
+
+    def raise_sie_status(self, mask: int) -> None:
+        """Raise SIE_STATUS bits no modelled event sets (suspend, resume, the error flags): what a token-level host would do."""
+        self._sie_status |= mask
+        self._sie_status_updated()
+
+    def raise_stall_nak(self, mask: int) -> None:
+        """Raise EP_STATUS_STALL_NAK bits, which only a handshake from the host sets."""
+        self._ep_status_stall_nak |= mask
+        self._stall_nak_updated()
+
+    def raise_interrupt(self, mask: int) -> None:
+        """Raise INTR bits for which the model has no event (the SOF interrupts need a host that sends start-of-frame tokens)."""
+        self._int_raw |= mask
+        self._check_interrupts()
 
     def connect_device(self, device: USBDevice) -> None:
         """Connect a simulated USB device to the host controller."""
@@ -934,7 +976,7 @@ class RPUSBController(BasePeripheral):
     def _generate_sof(self) -> None:
         self._sof_frame_number = (self._sof_frame_number + 1) & 0x7FF
         self._int_raw |= INTR_HOST_SOF
-        self.check_interrupts()
+        self._check_interrupts()
 
         # Poll interrupt endpoints
         self._poll_interrupt_endpoints()

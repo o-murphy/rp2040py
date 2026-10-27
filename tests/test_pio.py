@@ -6,10 +6,7 @@ Note: rp2040py.utils.pio_assembler's pio_jmp/pio_mov take (address, cond, ...)/(
   test_pio_assembler.py for the already-ported unit tests of the encoding itself.
 """
 
-import asyncio
-
 import pytest
-from utils.cortex_test_driver import ICortexTestDriver
 from utils.create_test_driver import create_test_driver
 
 from rp2040py.simulator import Simulator
@@ -110,52 +107,22 @@ OUT_COUNT_SHIFT = 20
 VALID_PINS_MASK = 0x3FFFFFFF
 
 
-class _LoopBoundDriver:
-    """Wraps an ICortexTestDriver so every call runs inside `loop.run_until_complete()` on the
-    test's own thread - RPPIO.write_uint32()'s CTRL branch (peripherals/pio.py) needs a running
-    loop to schedule a long program's continuation onto (`asyncio.get_running_loop()`) - true
-    automatically via Simulator's own permanent loop for every real caller, but a bare RP2040
-    driven directly by these tests has no Simulator at all.
-
-    Deliberately `run_until_complete()`, not a persistent background `run_forever()` thread: a
-    background loop would let a long-running/never-self-stopping PIO continuation (e.g. a state
-    machine parked on `wait irq`, which only ever needs to be re-checked when something explicit
-    like an IRQ register write happens - see `RPPIO.irq_updated()`, called synchronously from
-    `write_uint32()` itself) spin at full speed between test statements for no reason - measured
-    multiple *seconds* of pure waste per such test. `run_until_complete()` gives the continuation
-    task only as many turns as it takes for the awaited call to finish, then stops - no state is
-    lost (each explicit write still synchronously re-checks whatever it needs to), it just doesn't
-    keep grinding on its own between statements the way production's real Simulator loop
-    legitimately does (there, unlike here, that's correct: real emulation should run as fast as
-    possible)."""
-
-    def __init__(self, driver: ICortexTestDriver, loop: asyncio.AbstractEventLoop) -> None:
-        self._driver = driver
-        self._loop = loop
-
-    def __getattr__(self, name: str):
-        attr = getattr(self._driver, name)
-        if not callable(attr):
-            return attr
-
-        def _call(*args, **kwargs):
-            async def _run():
-                return attr(*args, **kwargs)
-
-            return self._loop.run_until_complete(_run())
-
-        return _call
-
-
 @pytest.fixture
 def cpu():
     driver = create_test_driver()
-    loop = asyncio.new_event_loop()
-    wrapped = _LoopBoundDriver(driver, loop)
-    wrapped.init()
-    yield wrapped
-    wrapped.tear_down()
-    loop.close()
+    driver.init()
+    yield driver
+    driver.tear_down()
+
+
+def run_pio(cpu, steps: int = 1000) -> None:
+    """A chip with no Simulator has nobody to advance its clock: the tests that start a state machine and then look at where it got to step PIO0 themselves
+    (a start by CTRL only marks the block as running)."""
+    pio = cpu.rp2040.pio[0]
+    for _ in range(steps):
+        if pio.stopped:
+            break
+        pio.advance(1)
 
 
 def reset_state_machines(cpu) -> None:
@@ -408,6 +375,7 @@ def test_program_with_a_wait_irq_7_instruction(cpu):
     cpu.write_uint32(INSTR_MEM1, pio_wait(True, PIO_WAIT_SRC_IRQ, 7))
     cpu.write_uint32(INSTR_MEM2, pio_jmp(2, PIO_COND_ALWAYS))
     cpu.write_uint32(CTRL, 1)  # Starts State Machine #0
+    run_pio(cpu)
     assert cpu.read_uint32(SM0_ADDR) == 1
     cpu.write_uint32(SM2_INSTR, pio_irq(False, False, 5))  # Set IRQ 5
     assert cpu.read_uint32(SM0_ADDR) == 1
@@ -424,6 +392,7 @@ def test_program_with_a_wait_0_irq_7_instruction(cpu):
     cpu.write_uint32(INSTR_MEM1, pio_wait(False, PIO_WAIT_SRC_IRQ, 7))
     cpu.write_uint32(INSTR_MEM2, pio_jmp(2, PIO_COND_ALWAYS))
     cpu.write_uint32(CTRL, 1)  # Starts State Machine #0
+    run_pio(cpu)
     assert cpu.read_uint32(SM0_ADDR) == 1
     cpu.write_uint32(IRQ, 1 << 7)  # Clear IRQ 7
     assert cpu.read_uint32(SM0_ADDR) == 2
@@ -468,6 +437,7 @@ def test_wraps_the_program_when_it_gets_to_execctrl_wrap_top(cpu):
     cpu.write_uint32(INSTR_MEM3, pio_jmp(3, PIO_COND_ALWAYS))  # infinite loop
 
     cpu.write_uint32(CTRL, 1)  # Starts State Machine #0
+    run_pio(cpu)
     assert cpu.read_uint32(SM0_ADDR) == 1
 
 
@@ -709,8 +679,7 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
         simulator._execute_batch()
     simulator.stop()
 
-    machine = rp2040.pio[0].machines[0]
-    assert machine.cycles == 0  # SM0 not yet enabled - only DMA has run so far.
+    assert rp2040.pio[0].snapshot()["machines"][0]["cycles"] == 0  # SM0 not yet enabled - only DMA has run so far.
 
     # Enable SM0 - the exact MMIO write cyw43_bus_pio_spi.c's pio_sm_set_enabled(true) performs,
     # immediately followed (in real firmware) by a tight poll of PIO.FDEBUG.
@@ -721,8 +690,8 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
     # clock.tick() (which is what lets the DMA channel's pending alarm actually refill the FIFO)
     # always gets a turn between every single PIO step. Before the fix, _step_batch() ran inline
     # right here and both of these were already false.
-    assert machine.cycles == 0
-    assert not (rp2040.pio[0].fdebug & FDEBUG_TXSTALL)
+    assert rp2040.pio[0].snapshot()["machines"][0]["cycles"] == 0
+    assert not (rp2040.read_uint32(FDEBUG) & FDEBUG_TXSTALL)
 
     # Now genuinely drive it forward the way a real boot does (via _execute_batch()'s own outer
     # loop) - the whole transfer must complete correctly, not just the first FIFO's worth.
@@ -738,4 +707,6 @@ def test_enabling_a_dma_fed_sm_does_not_run_steps_synchronously_when_a_simulator
 
     assert not (dma_ctrl & busy_bit)  # DMA channel finished, not stuck mid-transfer.
     assert rp2040.read_uint32(trans_count) == 0
-    assert machine.cycles > 0  # SM0 genuinely ran (not just DMA looping without a consumer).
+    assert (
+        rp2040.pio[0].snapshot()["machines"][0]["cycles"] > 0
+    )  # SM0 genuinely ran (not just DMA looping without a consumer).

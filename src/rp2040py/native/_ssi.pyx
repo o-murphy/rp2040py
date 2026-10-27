@@ -15,67 +15,14 @@ command (all the block keeps) and the *count* as its length.
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._window_map cimport WindowHandler
-
 
 __all__ = ("RPSSI",)
 
 
-cdef class _RxView:
-    """The RX FIFO as the reference's `deque` shows it: length, iteration, `append` (what a test pushes by hand)."""
-
-    cdef RPSSI _owner
-
-    def __len__(self):
-        return self._owner._block.rx_count()
-
-    def __bool__(self):
-        return self._owner._block.rx_count() != 0
-
-    def __iter__(self):
-        return iter([self._owner._block.rx_at(i) for i in range(self._owner._block.rx_count())])
-
-    def append(self, value):
-        self._owner._block.rx_push(<uint8_t> (<int> value & 0xFF))
-
-    def __repr__(self):
-        return repr(list(self))
-
-
-cdef class _TxView:
-    """The command in flight as the reference's `bytearray` shows it: its length (a count, however long) and its first 260 bytes."""
-
-    cdef RPSSI _owner
-
-    def __len__(self):
-        return self._owner._block.tx_length()
-
-    def _kept(self):
-        cdef uint32_t n = self._owner._block.tx_length()
-        if n > 260:
-            n = 260
-        return bytes([self._owner._block.tx_at(i) for i in range(n)])
-
-    def __getitem__(self, index):
-        kept = self._kept()
-        if isinstance(index, slice):
-            return kept[index]
-        if index >= len(kept) or index < -len(kept):
-            raise IndexError("the native SSI keeps only the first 260 bytes of a command")
-        return kept[index]
-
-    def __iter__(self):
-        return iter(self._kept())
-
-    def append(self, value):
-        self._owner._block.tx_append(<uint8_t> (<int> value & 0xFF))
-
-    def __repr__(self):
-        return repr(self._kept())
-
-
-cdef class RPSSI:
+cdef class RPSSI(NativeBlock):
     def __init__(self, rp2040, name):
         native_ssi = getattr(rp2040, "_native_ssi_address", None)
         if native_ssi is None:
@@ -86,6 +33,7 @@ cdef class RPSSI:
         # the chip's `Mcu` builds the block: its window, its interrupt line, its DMA requests and its chip-select listener are wired inside
         self._from_mcu = True
         self._block = <SsiBlock*> <size_t> native_ssi()
+        self._ops = register_ops(self._block)
         self.rp2040 = rp2040
         self.name = name
 
@@ -94,118 +42,38 @@ cdef class RPSSI:
         command to the same flash twice)."""
         self._block.detach()
 
-    # --- the reference's private state, as views --------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def _rx_queue(self):
-        cdef _RxView view = _RxView.__new__(_RxView)
-        view._owner = self
-        return view
-
-    @property
-    def _tx_buffer(self):
-        cdef _TxView view = _TxView.__new__(_TxView)
-        view._owner = self
-        return view
-
-    @property
-    def _ssienr(self):
-        return self._block.ssienr()
-
-    @_ssienr.setter
-    def _ssienr(self, value):
-        self._block.set_ssienr(<uint32_t> (<int64_t> value))
-
-    @property
-    def _txflr(self):
-        return self._block.txflr()
-
-    @property
-    def _stored(self):
-        # the not-acted-on registers by offset, as the reference's dict (MWCR, SER, TXFTLR, RXFTLR, IMR, DMACR, DMATDLR, DMARDLR)
-        offsets = (0x0C, 0x10, 0x18, 0x1C, 0x2C, 0x4C, 0x50, 0x54)
-        return {offset: self._block.stored(index) for index, offset in enumerate(offsets)}
-
-    @property
-    def _sticky(self):
-        return self._block.sticky()
-
-    @_sticky.setter
-    def _sticky(self, value):
-        self._block.set_sticky(<uint32_t> (value & 0xFFFFFFFF))
-
-    @property
-    def _risr(self):
-        return self._block.risr()
-
-    @property
-    def _isr(self):
-        return self._block.isr()
-
-    @property
-    def _irq_level(self):
-        return bool(self._block.irq_level())
-
-    @property
-    def _dreq_tx(self):
-        return bool(self._block.dreq_tx())
-
-    @property
-    def _dreq_rx(self):
-        return bool(self._block.dreq_rx())
-
-    @property
-    def _write_enabled(self):
-        return self._block.write_enabled()
-
-    @_write_enabled.setter
-    def _write_enabled(self, value):
-        self._block.set_write_enabled(bool(value))
-
-    @property
-    def _cs_asserted(self):
-        return self._block.cs_asserted()
-
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
+    def snapshot(self):
+        """The block's state in one call: the enable, the held and derived interrupts and requests, the stored registers, the received bytes, and the flash command in flight."""
+        cdef SsiBlock* b = self._block
+        cdef uint32_t i
+        cdef uint32_t n = b.tx_length()
+        if n > 260:
+            n = 260
+        offsets = (0x0C, 0x10, 0x18, 0x1C, 0x2C, 0x4C, 0x50, 0x54)  # the not-acted-on registers: MWCR, SER, TXFTLR, RXFTLR, IMR, DMACR, DMATDLR, DMARDLR
+        return {
+            "ssienr": b.ssienr(),
+            "txflr": b.txflr(),
+            "stored": tuple([(offset, b.stored(index)) for index, offset in enumerate(offsets)]),
+            "sticky": b.sticky(),
+            "risr": b.risr(),
+            "isr": b.isr(),
+            "irq_level": bool(b.irq_level()),
+            "dreq_tx": bool(b.dreq_tx()),
+            "dreq_rx": bool(b.dreq_rx()),
+            "rx": tuple([b.rx_at(i) for i in range(b.rx_count())]),
+            "write_enabled": bool(b.write_enabled()),
+            "cs_asserted": bool(b.cs_asserted()),
+            "command_length": b.tx_length(),
+            "command": bytes([b.tx_at(i) for i in range(n)]),
+        }
 
     # --- BasePeripheral's surface -----------------------------------------------------------------
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        self._block.write(<uint32_t> offset, <int64_t> value)
-        raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type)
-        raise_if_pending()
 
     def reset(self):
         if not self._block.reset():
             raise_if_pending()
         raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol ------------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the
-        block's own read/write functions and its context. Looked up on the *type* by the bus."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

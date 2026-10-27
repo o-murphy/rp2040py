@@ -48,6 +48,17 @@ public:
     uint32_t dbgforce = syscfg_regs::DBGFORCE_RESET;
     uint32_t mempowerdown = 0;
 
+    // The six registers the block owns as one flat array (PROC0_NMI_MASK is the core's): `proc1_nmi_mask`, `proc_config`, `proc_in_sync_bypass`, `proc_in_sync_bypass_hi`, `dbgforce`, `mempowerdown`.
+    static constexpr uint32_t kSnapshotWords = 6;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = proc1_nmi_mask;
+        out[1] = proc_config;
+        out[2] = proc_in_sync_bypass;
+        out[3] = proc_in_sync_bypass_hi;
+        out[4] = dbgforce;
+        out[5] = mempowerdown;
+    }
+
     bool reset() noexcept {
         using namespace syscfg_regs;
         cpu_->interrupt_nmi_mask = 0;

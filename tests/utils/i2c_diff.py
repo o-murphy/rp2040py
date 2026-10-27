@@ -28,7 +28,7 @@ from typing import Any
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import _i2c as I
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 I2C0_BASE = 0x40044000
 NVIC_ISPR = 0xE000E200
@@ -71,12 +71,10 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self.counter = 0  # drives the auto devices' answers: identical on both rigs because they see identical streams
-        if kind == "pure":
-            self._replace_the_i2c(I.RPI2C)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_i2c(factory)
         self._tap()
@@ -181,14 +179,12 @@ class Rig:
             i2c.complete_stop()
         elif kind == "arbitration_lost":
             i2c.arbitration_lost()
-        elif (
-            kind == "mask"
-        ):  # the mask set behind the register's back (a value the register's 13 bits could not hold included)
-            i2c.int_enable = op[1]
+        elif kind == "mask":  # IC_INTR_MASK, written on the bus
+            chip.write_uint32(I2C0_BASE + 0x30, op[1])
         elif kind == "check":
-            i2c.check_interrupts()
+            return int(chip.read_uint32(I2C0_BASE + I.IC_INTR_STAT))  # the interrupt status, through the bus
         elif kind == "reset":
-            i2c.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -197,48 +193,9 @@ class Rig:
 
     def snapshot(self) -> dict[str, Any]:
         chip, i2c = self.chip, self.chip.i2c[0]
-        rx, tx = i2c._rx_fifo, i2c._tx_fifo
         return {
             "regs": tuple(int(chip.read_uint32(I2C0_BASE + offset)) for offset in PLAIN_REGISTERS),
-            "state": (
-                int(i2c._state),
-                bool(i2c._busy),
-                bool(i2c._stop),
-                bool(i2c._pending_restart),
-                bool(i2c._abort_pending),
-                bool(i2c._first_byte),
-                int(i2c.abort_source),
-                int(i2c.int_raw),
-                int(i2c.int_enable),
-                int(i2c.enable),
-                int(i2c.rx_threshold),
-                int(i2c.tx_threshold),
-                int(i2c.control),
-                int(i2c.target_address),
-                int(i2c.slave_address),
-                int(i2c.ss_clock_high_period),
-                int(i2c.ss_clock_low_period),
-                int(i2c.fs_clock_high_period),
-                int(i2c.fs_clock_low_period),
-                int(i2c._spikelen),
-                int(i2c.sda_hold),
-                int(i2c.sda_setup),
-                int(i2c.ack_general_call),
-                int(i2c.slv_data_nack_only),
-                int(i2c.dma_control),
-                int(i2c.dma_tdlr),
-                int(i2c.dma_rdlr),
-                int(i2c.raw_write_value),
-            ),
-            "rx": (bool(rx.empty), bool(rx.full), int(rx.item_count), tuple(int(v) for v in rx.items)),
-            "tx": (bool(tx.empty), bool(tx.full), int(tx.item_count), tuple(int(v) for v in tx.items)),
-            "props": (
-                int(i2c.int_status),
-                int(i2c.speed),
-                int(i2c.scl_low_period),
-                int(i2c.scl_high_period),
-                int(i2c.master_bits),
-            ),
+            "state": (tuple(sorted(i2c.snapshot().items())), int(i2c.raw_write_value)),
             "nvic": int(chip.read_uint32(NVIC_ISPR)),
         }
 
@@ -277,7 +234,7 @@ def mutant_rig(name: str) -> Rig:
                 super()._next_command()
                 if not had and self.int_raw & I.R_ACTIVITY:
                     self.int_raw &= ~I.R_ACTIVITY
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if name == "restart_ignored":
                 enabled, blocked = self.enable & I.ENABLE, self.enable & I.TX_CMD_BLOCK
@@ -684,14 +641,14 @@ def mutant_rig(name: str) -> Rig:
                 super().write_uint32(offset, value)
                 if had and not (value & I.ENABLE):
                     self.int_raw |= I.R_RX_FULL
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == I.IC_ENABLE and name == "disable_keeps_activity":
                 had = self.int_raw & I.R_ACTIVITY
                 super().write_uint32(offset, value)
                 if had and not (value & I.ENABLE):
                     self.int_raw |= I.R_ACTIVITY
-                    self.check_interrupts()
+                    self._check_interrupts()
                 return
             if offset == I.IC_CON and name == "speed_fix_missing":
                 self.control = value
@@ -732,7 +689,7 @@ def mutant_rig(name: str) -> Rig:
                 return
             if offset == I.IC_INTR_MASK and name == "intr_mask_unmasked":
                 self.int_enable = value
-                self.check_interrupts()
+                self._check_interrupts()
                 return
             if offset == I.IC_INTR_MASK and name == "intr_mask_no_line_update":
                 self.int_enable = value & I.INTR_MASK_BITS

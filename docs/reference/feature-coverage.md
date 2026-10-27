@@ -33,7 +33,7 @@ One place to see, block by block and datasheet section by section, what is model
 | SYSCFG | Stub | Yes | Ported | only `PROC0_NMI_MASK` and `PROC1_NMI_MASK` act (each core's own NMI mask) |
 | VREG_AND_CHIP_RESET | Partial | Yes | Ported | `VREG`, `BOD` are stored; `CHIP_RESET` acts |
 | BUSCTRL | Stub | Yes | Ported | no arbitration, no performance counters |
-| IO_BANK0 | Partial | Yes | C++ (`core/io.hpp`) over the shared pin bank; also IO_QSPI, PADS_BANK0, PADS_QSPI (`core/pads.hpp`) | `PROC1_*` / `DORMANT_WAKE_*` are stored and raise nothing (the per-core GPIO lines are not split: core 1 sees the lines as core 0 does; no dormant); the pad electrical model (drive, slew, Schmitt, `VOLTAGE_SELECT`) is absent; PIO pin-write arbitration (`OUT_STICKY`...) is not done |
+| IO_BANK0 | Partial | Yes | C++ (`core/io.hpp`) over the shared pin bank; also IO_QSPI, PADS_BANK0, PADS_QSPI (`core/pads.hpp`) | `PROC1_*` / `DORMANT_WAKE_*` are stored and raise nothing (the per-core GPIO lines are not split: core 1 sees the lines as core 0 does; no dormant); the pad electrical model (drive, slew, Schmitt, `VOLTAGE_SELECT`) is absent |
 | PADS_BANK0 / PADS_QSPI / IO_QSPI | Partial | Yes | C++ (with IO_BANK0, above) | `VOLTAGE_SELECT` and `SWCLK` / `SWD` are stored; pad drive, slew and Schmitt have no electrical model |
 | GPIO: input synchronisers | Missing | Yes | - | two clk_sys cycles of latency (2.21), bypassed by `SYSCFG.PROC_IN_SYNC_BYPASS(_HI)` and the PIO's `INPUT_SYNC_BYPASS`, both stored; needs a go-ahead |
 | XIP_CTRL | Done | Yes | Ported | tag-only 2-way cache, aliases, counters, flush, cache-as-SRAM, streaming FIFO + `DREQ_XIP_STREAM`, `XIP_AUX`; the XIP window is read-only to the bus (0098); no bus fault is raised |

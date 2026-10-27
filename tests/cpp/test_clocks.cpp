@@ -207,6 +207,40 @@ static void test_a_200_mhz_clk_sys_and_the_order_of_the_sinks() {
     CHECK(sys_calls >= 1);
 }
 
+// The observers: `tap` is called before the sinks of a domain, `after_tap` after all of them, with the same arguments.
+static bool on_tap(void*, uint32_t domain, double hz, double old) {
+    return record(domain == ClocksBlock::kTapSys ? 't' : domain == ClocksBlock::kTapPeri ? 'u' : domain == ClocksBlock::kTapRef ? 'f' : 'g', hz, old);
+}
+static bool on_after_tap(void*, uint32_t domain, double hz, double old) {
+    return record(domain == ClocksBlock::kTapSys ? 'a' : domain == ClocksBlock::kTapPeri ? 'b' : domain == ClocksBlock::kTapRef ? 'h' : 'i', hz, old);
+}
+
+static void test_the_after_tap_is_called_last_with_the_same_arguments() {
+    fresh();
+    sdk_clocks();
+    clocks.tap = on_tap;
+    clocks.after_tap = on_after_tap;
+    env.n = 0;
+    sdk_pll(pll_sys, 100, 6, 1);  // clk_sys 125 -> 200 MHz
+    CHECK(clocks.clk_sys() == 200 * MHZ);
+    int seen = 0;
+    for (int i = 0; i + 3 < env.n && i + 3 < 64; ++i) {
+        if (env.calls[i].sink == 't') {
+            ++seen;
+            // the tap, then both sinks in the order they were added, then the "after" observer
+            CHECK(env.calls[i + 1].sink == 's' && env.calls[i + 2].sink == 'S' && env.calls[i + 3].sink == 'a');
+            CHECK(env.calls[i + 3].hz == env.calls[i].hz && env.calls[i + 3].old == env.calls[i].old);
+        }
+    }
+    CHECK(seen >= 1);
+    // no after_tap, no call: the sinks run as before
+    clocks.after_tap = nullptr;
+    env.n = 0;
+    sdk_pll(pll_sys, 125, 6, 2);
+    for (int i = 0; i < env.n && i < 64; ++i) CHECK(env.calls[i].sink != 'a');
+    clocks.tap = nullptr;
+}
+
 static void test_a_retune_with_no_change_tells_only_the_ref_and_rtc_sinks() {
     fresh();
     sdk_clocks();
@@ -698,6 +732,7 @@ int main() {
     test_reset_and_the_tree_reset();
     test_a_failing_sink_stops_the_retune();
     test_a_sink_gets_its_own_context();
+    test_the_after_tap_is_called_last_with_the_same_arguments();
     test_a_failing_peri_ref_or_rtc_sink_stops_the_retune();
     test_reset_tree_stops_at_a_failing_sink();
     test_a_parked_failure_stops_an_alias_write();

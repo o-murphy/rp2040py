@@ -51,6 +51,14 @@ public:
 
     uint32_t voltage_select = 0, swclk = pads_regs::SWCLK_RESET, swd = pads_regs::SWD_RESET;
 
+    // The registers the block owns as one flat array: `voltage_select`, `swclk`, `swd`.
+    static constexpr uint32_t kSnapshotWords = 3;
+    void snapshot(uint32_t* out) const noexcept {
+        out[0] = voltage_select;
+        out[1] = swclk;
+        out[2] = swd;
+    }
+
     // The alias decode asks the fallible read.
     bool decode_read(uint32_t offset, uint32_t* out) noexcept { return read(offset, out); }
 

@@ -4,8 +4,9 @@
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._core_host cimport ChipPorts
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pwm cimport Timer32, Timer32PeriodicAlarm
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -14,7 +15,11 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
     ctypedef cppbool (*WatchdogTriggerFn)(void* ctx)
     ctypedef cppbool (*WatchdogTickFn)(void* ctx, double tick_hz)
 
+    ctypedef cppbool (*WatchdogTickTap)(void* ctx, double tick_hz)
+
     cdef cppclass WatchdogBlock:
+        WatchdogTickTap tick_tap
+        void* tick_tap_ctx
         Timer32 timer
         Timer32PeriodicAlarm alarm
         uint32_t scratch[8]
@@ -38,14 +43,9 @@ cdef extern from "watchdog.hpp" namespace "rp2040core":
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPWatchdog:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RPWatchdog(NativeBlock):
     cdef WatchdogBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
     cdef public object on_watchdog_trigger
-    cdef public object scratch_data
     cdef public object timer
-    cdef public object alarm
     cdef object _tick_listeners

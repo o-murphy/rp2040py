@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 from rp2040py.native._clock cimport Clock
 from rp2040py.native._core_host cimport ChipPorts
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "usb.hpp" namespace "rp2040core":
@@ -90,8 +91,6 @@ cdef extern from "usb.hpp" namespace "rp2040core":
         uint32_t cpu_should_handle() noexcept
         uint32_t int_status() noexcept
         cppbool check_interrupts() noexcept
-        cppbool buff_status_updated() noexcept
-        cppbool abort_done_updated() noexcept
         cppbool stall_nak_updated() noexcept
         cppbool sie_status_updated() noexcept
         cppbool set_connected(cppbool value) noexcept
@@ -112,13 +111,10 @@ cdef extern from "usb.hpp" namespace "rp2040core":
 cdef void usb_wire_fill(UsbHost* wire, void* chip) noexcept
 
 
-cdef class RPUSBController:
+cdef class RPUSBController(NativeBlock):
     cdef dict __dict__  # tests and boards replace methods (`dpram_updated`) with instance attributes, as on the pure-Python class
     cdef UsbBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view and the host's end of the wire
-    cdef public bint _from_mcu
-    cdef public object rp2040
     cdef public object clock
-    cdef public object name
     cdef object _dpram_view
     cdef object _device
     cdef object _pending_response

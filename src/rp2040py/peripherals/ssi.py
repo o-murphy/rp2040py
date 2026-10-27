@@ -5,7 +5,7 @@ directly. Mirrors `peripherals/pio.py`/`timer.py`/`dma.py`.
 The two are held to identical behaviour by the lockstep differential of `tests/test_ssi_diff.py`; the pure-Python class stays the oracle (docs/records/0096-cpp-mcu-core.md).
 """
 
-from rp2040py._native_gate import native_disabled
+from rp2040py._native_gate import raise_import_error_on_native_disabled
 from rp2040py.peripherals._ssi import (
     CMD_BLOCK_ERASE,
     CMD_PAGE_PROGRAM,
@@ -58,8 +58,7 @@ from rp2040py.peripherals._ssi import (
 )
 
 try:
-    if native_disabled():
-        raise ImportError("RP2040PY_SKIP_CYTHON=1 set, forcing pure-Python fallback")
+    raise_import_error_on_native_disabled()
     from rp2040py.native._ssi import RPSSI
 except ImportError:
     from rp2040py.peripherals._ssi import RPSSI

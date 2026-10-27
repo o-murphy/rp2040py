@@ -5,6 +5,7 @@ from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "rtc.hpp" namespace "rp2040core":
@@ -45,12 +46,8 @@ cdef extern from "rtc.hpp" namespace "rp2040core":
         uint32_t read(uint32_t offset) noexcept
         cppbool write(uint32_t offset, int64_t value) noexcept
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
-        cppbool second_elapsed() noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RP2040RTC:
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
+cdef class RP2040RTC(NativeBlock):
     cdef RtcBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock

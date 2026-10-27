@@ -56,7 +56,7 @@ async def run_pads(image: str) -> int:
             await asyncio.wait_for(device.aexec("import machine\nmachine.reset()", timeout=5), timeout=6)
         except (TimeoutError, asyncio.TimeoutError, RuntimeError):
             pass
-        wdsel = mcu.psm.wdsel
+        wdsel = mcu.psm.snapshot()["wdsel"]
         print(f"PSM.WDSEL the firmware wrote before triggering: {wdsel:#x}")
         if not wdsel:
             print("FAILED: the firmware never selected any watchdog reset domain")

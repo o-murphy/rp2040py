@@ -66,23 +66,26 @@ def test_qspi_pads_go_back_to_their_own_reset_values_not_bank0s(rp2040_factory):
 
 def test_peripheral_registers_go_back_to_power_on(rp2040_factory):
     rp2040 = rp2040_factory()
-    rp2040.uart[0]._interrupt_mask = 0xFF
-    rp2040.spi[0]._control0 = 0x1234
-    rp2040.i2c[1].target_address = 0x42
-    rp2040.adc.cs = 0xFF
-    rp2040.clocks.sys_div = 0x999
-    rp2040.pio[0].instructions[0] = 0xDEAD
-    rp2040.pio[0].machines[0].enabled = True
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
+    rp2040.spi[0].write_uint32(0x00, 0x1234)  # SSPCR0
+    rp2040.i2c[1].write_uint32(0x04, 0x42)  # IC_TAR
+    rp2040.adc.write_uint32(0x00, 0x1)  # CS: EN
+    rp2040.clocks.write_uint32(0x40, 0x99900)  # CLK_SYS_DIV
+    rp2040.write_uint32(0x50200048, 0xDEAD)  # PIO0 INSTR_MEM0
+    rp2040.simulator = object()  # an owner, so the CTRL write below does not start the no-Simulator fallback loop
+    rp2040.write_uint32(0x50200000, 1)  # PIO0 CTRL: state machine 0 enabled
+    assert rp2040.pio[0].snapshot()["machines"][0]["enabled"] == 1
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.uart[0]._interrupt_mask == 0
-    assert rp2040.spi[0]._control0 == 0
-    assert rp2040.i2c[1].target_address == 0x55
-    assert rp2040.adc.cs == 0
-    assert rp2040.clocks.sys_div == 0x100
-    assert rp2040.pio[0].instructions[0] == 0
-    assert rp2040.pio[0].machines[0].enabled is False
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
+    assert rp2040.spi[0].snapshot()["control0"] == 0
+    assert rp2040.i2c[1].snapshot()["target_address"] == 0x55
+    assert rp2040.adc.snapshot()["cs"] == 0
+    assert rp2040.clocks.snapshot()["sys_div"] == 0x100
+    pio = rp2040.pio[0].snapshot()
+    assert pio["instructions"][0] == 0
+    assert pio["machines"][0]["enabled"] == 0
 
 
 def test_sram_and_flash_survive(rp2040_factory):
@@ -122,8 +125,8 @@ def test_externally_driven_input_survives(rp2040_factory):
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.gpio[16]._driven is True
-    assert rp2040.gpio[16]._raw_input_value is True
+    assert rp2040.gpio[16].driven is True
+    assert rp2040.gpio[16].snapshot()["raw_input_value"] is True
 
 
 def test_peripheral_callbacks_and_analog_inputs_survive(rp2040_factory):
@@ -150,12 +153,12 @@ def test_a_watchdog_reset_that_selected_nothing_leaves_peripherals_alone(rp2040_
     processor. Firmware that wants more says so - which pico-sdk's `watchdog_reboot()` does."""
     rp2040 = rp2040_factory()
     _drive_gpio_high(rp2040, 15)
-    rp2040.uart[0]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.gpio[15].ctrl & 0x1F == FUNCTION_SIO
-    assert rp2040.uart[0]._interrupt_mask == 0xFF
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0xFF
 
 
 def test_the_core_is_reset_even_when_nothing_was_selected(rp2040_factory):
@@ -176,27 +179,27 @@ def test_psm_wdsel_resets_bit_reaches_every_peripheral(rp2040_factory):
     selecting it selects them all, even though `RESETS.WDSEL` itself stays 0."""
     rp2040 = rp2040_factory()
     _drive_gpio_high(rp2040, 15)
-    rp2040.uart[0]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
     _select_everything(rp2040)
-    assert rp2040.resets.wdsel == 0, "pico-sdk never writes RESETS.WDSEL - the PSM bit is the route"
+    assert rp2040.resets.snapshot()["wdsel"] == 0, "pico-sdk never writes RESETS.WDSEL - the PSM bit is the route"
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.gpio[15].ctrl & 0x1F == 0x1F
-    assert rp2040.uart[0]._interrupt_mask == 0
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
 
 
 def test_resets_wdsel_selects_individual_blocks(rp2040_factory):
     """The direct route: a guest that selects only UART0 gets only UART0 reset."""
     rp2040 = rp2040_factory()
-    rp2040.uart[0]._interrupt_mask = 0xFF
-    rp2040.uart[1]._interrupt_mask = 0xFF
+    rp2040.uart[0].write_uint32(0x38, 0xFF)  # UARTIMSC
+    rp2040.uart[1].write_uint32(0x38, 0xFF)  # UARTIMSC
     rp2040.resets.write_uint32(0x04, RESET_UART0)
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
-    assert rp2040.uart[0]._interrupt_mask == 0
-    assert rp2040.uart[1]._interrupt_mask == 0xFF
+    assert rp2040.uart[0].snapshot()["interrupt_mask"] == 0
+    assert rp2040.uart[1].snapshot()["interrupt_mask"] == 0xFF
 
 
 def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):
@@ -208,7 +211,7 @@ def test_psm_wdsel_sio_bit_gates_sio(rp2040_factory):
     rp2040.reset(preserve_flash=True, from_watchdog=True)
 
     assert rp2040.sio.gpio_output_enable == 0
-    assert WDSEL_RESETS & rp2040.psm.wdsel == 0, "only SIO was selected"
+    assert WDSEL_RESETS & rp2040.psm.snapshot()["wdsel"] == 0, "only SIO was selected"
 
 
 def test_the_remaining_register_blocks_reset_too(rp2040_factory):
@@ -216,19 +219,24 @@ def test_the_remaining_register_blocks_reset_too(rp2040_factory):
     its register file was read against the datasheet (0098); SYSINFO/TBMAN still inherit it, and correctly -
     they hold no instance state at all."""
     rp2040 = rp2040_factory()
-    rp2040.rtc.ctrl = 0xF
-    rp2040.rtc.setup0 = 0x1234
-    rp2040.busctrl.perf_ctr[1] = 99
-    rp2040.busctrl.perf_sel[1] = 0
+    rp2040.rtc.write_uint32(0x0C, 0xF)  # CTRL
+    rp2040.rtc.write_uint32(0x04, 0x1234)  # SETUP_0
+    assert rp2040.rtc.snapshot()["ctrl"] != 0 and rp2040.rtc.snapshot()["setup0"] != 0
+    rp2040.busctrl.set_perf_counter(1, 99)
+    rp2040.busctrl.write_uint32(0x14, 0)  # PERFSEL1
+    assert rp2040.busctrl.snapshot()["perf_ctr"] == (0, 99, 0, 0)
     rp2040.syscfg.write_uint32(0x14, 0xFFFFFFFF)  # DBGFORCE
     rp2040.syscfg.write_uint32(0x00, 0xFF)  # PROC0_NMI_MASK, the core's
 
     rp2040.reset(preserve_flash=True)
 
-    assert rp2040.rtc.ctrl == 0
-    assert rp2040.rtc.setup0 == 0
-    assert rp2040.busctrl.perf_ctr == [0, 0, 0, 0]
-    assert rp2040.busctrl.perf_sel == [0x1F, 0x1F, 0x1F, 0x1F]
+    assert rp2040.rtc.snapshot()["ctrl"] == 0
+    assert rp2040.rtc.snapshot()["setup0"] == 0
+    assert rp2040.busctrl.snapshot() == {
+        "bus_priority": 0,
+        "perf_ctr": (0, 0, 0, 0),
+        "perf_sel": (0x1F, 0x1F, 0x1F, 0x1F),
+    }
     assert rp2040.syscfg.read_uint32(0x14) == 0x66
     assert rp2040.syscfg.read_uint32(0x00) == 0
 
@@ -237,18 +245,18 @@ def test_xip_and_ssi_are_gated_on_the_psm_xip_domain_not_a_resets_bit(rp2040_fac
     """There is no `RESETS_RESET_XIP` or `_SSI` - the XIP domain is a `PSM.WDSEL` bit, and both
     halves of it reset together."""
     rp2040 = rp2040_factory()
-    rp2040.xip_ctrl.stream_addr = 0x1000
-    rp2040.ssi._ssienr = 1
+    rp2040.xip_ctrl.write_uint32(0x14, 0x1000)  # STREAM_ADDR
+    rp2040.ssi.write_uint32(0x08, 1)  # SSIENR
     rp2040.resets.write_uint32(0x04, 0x01FFFFFF)  # every RESETS bit, and it must not be enough
 
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xip_ctrl.stream_addr == 0x1000
-    assert rp2040.ssi._ssienr == 1
+    assert rp2040.xip_ctrl.snapshot()["stream_addr"] == 0x1000
+    assert rp2040.ssi.snapshot()["ssienr"] == 1
 
     rp2040.psm.write_uint32(0x08, WDSEL_XIP)
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xip_ctrl.stream_addr == 0
-    assert rp2040.ssi._ssienr == 0
+    assert rp2040.xip_ctrl.snapshot()["stream_addr"] == 0
+    assert rp2040.ssi.snapshot()["ssienr"] == 0
 
 
 def test_resetting_ssi_does_not_duplicate_its_chip_select_listener(rp2040_factory):
@@ -273,7 +281,7 @@ def test_resetting_ssi_re_syncs_chip_select_from_the_pin(rp2040_factory):
 
     from rp2040py.gpio_pin import GPIOPinState
 
-    assert rp2040.ssi._cs_asserted == (rp2040.qspi[1].value == GPIOPinState.LOW)
+    assert rp2040.ssi.snapshot()["cs_asserted"] == (rp2040.qspi[1].value == GPIOPinState.LOW)
 
 
 def test_xosc_resets_on_a_power_on_but_not_on_a_watchdog_reboot(rp2040_factory):
@@ -286,13 +294,13 @@ def test_xosc_resets_on_a_power_on_but_not_on_a_watchdog_reboot(rp2040_factory):
 
     # what firmware does: enable the crystal, which this model makes stable immediately
     rp2040.xosc.write_uint32(0x00, 0xFAB << 12)
-    assert rp2040.xosc._enabled and rp2040.xosc._stable
+    assert rp2040.xosc.snapshot()["enabled"] and rp2040.xosc.snapshot()["stable"]
 
     rp2040.psm.write_uint32(0x08, 0x1FFFC)  # watchdog_reboot()'s own value: XOSC/ROSC excluded
     rp2040.reset(preserve_flash=True, from_watchdog=True)
-    assert rp2040.xosc._enabled, "a watchdog reboot must not stop the oscillator clocking it"
+    assert rp2040.xosc.snapshot()["enabled"], "a watchdog reboot must not stop the oscillator clocking it"
 
     rp2040.reset(preserve_flash=True)  # a RUN-pin/power-on reset selects everything
-    assert not rp2040.xosc._enabled
-    assert not rp2040.xosc._stable
+    assert not rp2040.xosc.snapshot()["enabled"]
+    assert not rp2040.xosc.snapshot()["stable"]
     assert WDSEL_XOSC & 0x1FFFC == 0, "the bit watchdog_reboot() clears, spelled out"

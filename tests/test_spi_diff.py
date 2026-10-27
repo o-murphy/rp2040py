@@ -32,12 +32,14 @@ def _write_a_register(candidate: Rig, step: int) -> None:
 
 def _change_the_interrupt_enable(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.spi[0]._int_enable ^= 0x4
+        spi = candidate.chip.spi[0]
+        spi.write_uint32(0x14, spi.read_uint32(0x14) ^ 0x4)  # SSPIMSC
 
 
 def _change_the_control_register(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.spi[0]._control0 ^= 0x40
+        spi = candidate.chip.spi[0]
+        spi.write_uint32(0x00, spi.read_uint32(0x00) ^ 0x40)  # SSPCR0: SPO
 
 
 def _drain_a_byte(candidate: Rig, step: int) -> None:

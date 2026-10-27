@@ -102,6 +102,16 @@ public:
     void detach() noexcept { cancel_alarm(&fc_alarm_); }
 
 
+    // An observer of every announcement of the tree, called first, before the sinks of that domain, without taking anything away from them: the port a test or a debugger uses to see what the tree told its
+    // consumers and in what order. `domain` is one of the `kTap...` values; `old` is the previous value for `sys` and `peri`, 0 for `ref` and `rtc`. False from the tap: the host has parked its error.
+    static constexpr uint32_t kTapSys = 0, kTapPeri = 1, kTapRef = 2, kTapRtc = 3;
+    using Tap = bool (*)(void* ctx, uint32_t domain, double hz, double old);
+    Tap tap = nullptr;
+    void* tap_ctx = nullptr;
+    // The same observer, called last: after the sinks of that domain have all followed (the host's own listeners of a rate, which read what the consumers made of it). Same `domain` and arguments.
+    Tap after_tap = nullptr;
+    void* after_tap_ctx = nullptr;
+
     // The sinks, called in the order they were added. False: the list is full.
     // Forgets every sink (the host re-registers them when a consumer is replaced).
     void clear_sinks() noexcept { n_sys_ = n_peri_ = n_ref_ = n_rtc_ = 0; }
@@ -114,6 +124,7 @@ public:
     double clk_peri() const noexcept { return clk_peri_; }
     // The peripheral clock as the peripherals see it, set by a host that wants a rate the registers do not give (a test, a board's fixed peripheral clock); the next re-derivation overwrites it.
     void force_clk_peri(double hz) noexcept { clk_peri_ = hz; }
+    void force_clk_sys(double hz) noexcept { clk_sys_ = hz; }  // the same for clk_sys (a test that fixes the rate; no consumer is told)
 
     // Every CLK_*_CTRL/DIV back to its power-on value (a divisor of 1.0 is 0x100); the stored registers and FC0 too. clk_sys / clk_peri are `reset_tree()`'s.
     void reset() noexcept {
@@ -337,16 +348,24 @@ private:
     bool set_clk_sys(double hz) noexcept {
         const double old = clk_sys_;
         clk_sys_ = hz;
-        return tell(sys_sinks_, n_sys_, hz, old);
+        if (tap != nullptr && !tap(tap_ctx, kTapSys, hz, old)) return false;
+        if (!tell(sys_sinks_, n_sys_, hz, old)) return false;
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapSys, hz, old);
     }
     bool set_clk_peri(double hz) noexcept {
         const double old = clk_peri_;
         clk_peri_ = hz;
-        return tell(peri_sinks_, n_peri_, hz, old);
+        if (tap != nullptr && !tap(tap_ctx, kTapPeri, hz, old)) return false;
+        if (!tell(peri_sinks_, n_peri_, hz, old)) return false;
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapPeri, hz, old);
     }
     bool notify_ref_and_rtc() noexcept {
+        if (tap != nullptr && !tap(tap_ctx, kTapRef, ref_freq(), 0.0)) return false;
         if (!tell(ref_sinks_, n_ref_, ref_freq(), 0.0)) return false;  // the watchdog's tick (the TIMER's and SysTick's reference) derives from clk_ref
-        return tell(rtc_sinks_, n_rtc_, rtc_freq(), 0.0);              // the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
+        if (after_tap != nullptr && !after_tap(after_tap_ctx, kTapRef, ref_freq(), 0.0)) return false;
+        if (tap != nullptr && !tap(tap_ctx, kTapRtc, rtc_freq(), 0.0)) return false;
+        if (!tell(rtc_sinks_, n_rtc_, rtc_freq(), 0.0)) return false;  // the RTC counts on clk_rtc / (CLKDIV_M1 + 1)
+        return after_tap == nullptr || after_tap(after_tap_ctx, kTapRtc, rtc_freq(), 0.0);
     }
 
     double ref_source_freq() const noexcept {

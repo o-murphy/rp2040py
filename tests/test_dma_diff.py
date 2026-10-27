@@ -33,7 +33,10 @@ def _raise_a_spurious_dreq(candidate: Rig, step: int) -> None:
 
 def _set_a_raw_interrupt_bit(candidate: Rig, step: int) -> None:
     if step == 700:
-        candidate.chip.dma.int_raw ^= 1 << 4
+        dma = candidate.chip.dma
+        dma.write_uint32(
+            0x408, dma.read_uint32(0x408) ^ (1 << 4)
+        )  # INTF0: force an interrupt on one channel, on the candidate alone
 
 
 def _let_the_clock_run_on(candidate: Rig, step: int) -> None:

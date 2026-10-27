@@ -1,9 +1,6 @@
 """Pure-Python reference implementation of `StateMachine` - the PIO peripheral's actual per-cycle
-interpreter (opcode decode, shift-register math, wait/jmp condition checks). `state_machine.py` is
-the public facade that picks this or the native `rp2040py.native._state_machine` port; callers
-should import `StateMachine` from there (or from `rp2040py`/`rp2040py.peripherals.pio`, which
-re-export it), never from here directly - same relationship `_cortex_m0_core.py` has to
-`cortex_m0_core.py`.
+interpreter (opcode decode, shift-register math, wait/jmp condition checks). It is internal to the pure-Python
+`peripherals/_pio.py` block (the native block has its machines in C++); a state machine is reached through its PIO's bus and `snapshot()`.
 """
 
 from typing import TYPE_CHECKING
@@ -144,7 +141,7 @@ class StateMachine:
         self._update_dma_tx()
         self.check_wait()
         if self.tx_fifo.full:
-            self.pio.check_interrupts()
+            self.pio._check_interrupts()
 
     def read_fifo(self) -> int:
         if self.rx_fifo.empty:
@@ -155,7 +152,7 @@ class StateMachine:
         self._update_dma_rx()
         self.check_wait()
         if self.rx_fifo.empty:
-            self.pio.check_interrupts()
+            self.pio._check_interrupts()
         return result
 
     @property
@@ -373,7 +370,7 @@ class StateMachine:
         if not pio.in_cycle:  # a write outside a stepped cycle (SMx_INSTR, a woken machine): its own cycle
             pio.collate()
             pio.schedule_resolve()
-            pio.recompute_due()
+            pio._recompute_due()
 
     def set_out_pin_dirs(self, value: int, enable: bool = True) -> None:
         self.out_pin_direction = value
@@ -451,7 +448,7 @@ class StateMachine:
                 if not self.rx_fifo.full:
                     self.rx_fifo.push(self.input_shift_reg)
                     self._update_dma_rx()
-                    self.pio.check_interrupts()
+                    self.pio._check_interrupts()
                 else:
                     self.pio.rx_stall |= FDEBUG_RXSTALL << self.index
                     self.pio.fdebug |= self.pio.rx_stall
@@ -466,7 +463,7 @@ class StateMachine:
                 if not self.tx_fifo.empty:
                     self.output_shift_reg = self.tx_fifo.pull()
                     self._update_dma_tx()
-                    self.pio.check_interrupts()
+                    self.pio._check_interrupts()
                 else:
                     self.pio.tx_stall |= FDEBUG_TXSTALL << self.index
                     self.pio.fdebug |= self.pio.tx_stall
@@ -494,7 +491,7 @@ class StateMachine:
                     if not self.tx_fifo.empty:
                         self.output_shift_reg = self.tx_fifo.pull()
                         self._update_dma_tx()
-                        self.pio.check_interrupts()
+                        self.pio._check_interrupts()
                     else:
                         self.pio.tx_stall |= FDEBUG_TXSTALL << self.index
                         self.pio.fdebug |= self.pio.tx_stall
@@ -512,7 +509,7 @@ class StateMachine:
                     if not self.rx_fifo.full:
                         self.rx_fifo.push(self.input_shift_reg)
                         self._update_dma_rx()
-                        self.pio.check_interrupts()
+                        self.pio._check_interrupts()
                     else:
                         self.pio.rx_stall |= FDEBUG_RXSTALL << self.index
                         self.pio.fdebug |= self.pio.rx_stall
@@ -540,10 +537,10 @@ class StateMachine:
                 irq = irq_index(arg & 0x1F, self.index)
                 if clear:
                     self.pio.irq &= ~(1 << irq)
-                    self.pio.irq_updated()
+                    self.pio._irq_updated()
                 else:
                     self.pio.irq |= 1 << irq
-                    self.pio.irq_updated()
+                    self.pio._irq_updated()
                     if wait:
                         self.wait(WaitType.IRQ, False, irq)
 
@@ -700,7 +697,7 @@ class StateMachine:
             self.clock_div_int = value >> 16
             # CLKDIV_INT == 0 divides by 65536 (RP2040 datasheet 3.5.5), not by zero.
             self.div_fp = ((self.clock_div_int or 65536) << 8) | self.clock_div_frac
-            self.pio.recompute_due()
+            self.pio._recompute_due()
         elif absolute_offset == SM0_EXECCTRL:
             # bits 6:5 are reserved and 31 (EXEC_STALLED) is read only
             self.exec_ctrl = ((value & EXECCTRL_WRITE_MASK) | (self.exec_ctrl & 0x80000000)) & 0xFFFFFFFF
@@ -714,14 +711,14 @@ class StateMachine:
                 self._update_dma_rx()
                 self._update_dma_tx()
                 self.check_wait()  # a stalled PUSH / PULL may find its FIFO different
-                self.pio.check_interrupts()  # the FIFO flags the interrupts follow
+                self.pio._check_interrupts()  # the FIFO flags the interrupts follow
         elif absolute_offset == SM0_ADDR:
             pass  # read-only
         elif absolute_offset == SM0_INSTR:
             self.execute_instruction(value & 0xFFFF)
             if self.waiting:
                 self.exec_ctrl |= EXECCTRL_EXEC_STALLED
-            self.pio.recompute_due()
+            self.pio._recompute_due()
         elif absolute_offset == SM0_PINCTRL:
             self.pin_ctrl = value
         else:
@@ -821,14 +818,14 @@ class StateMachine:
                 self.rx_fifo.push(self.wait_index)
                 self.waiting = False
                 self._update_dma_rx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         elif self.wait_type == WaitType.TX_FIFO:
             if not self.tx_fifo.empty:
                 self.output_shift_reg = self.tx_fifo.pull()
                 self.waiting = False
                 self._update_dma_tx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         elif self.wait_type == WaitType.OUT:
             if not self.tx_fifo.empty:
@@ -836,7 +833,7 @@ class StateMachine:
                 self.out_instruction(self.wait_index)
                 self.waiting = False
                 self._update_dma_tx()
-                self.pio.check_interrupts()
+                self.pio._check_interrupts()
 
         if not self.waiting:
             self.next_pc()
@@ -850,4 +847,4 @@ class StateMachine:
             wait_delay = max(wait_delay, 0)
             self.next_due_fp = self.pio.cycle_fp + (1 + wait_delay) * self.div_fp
             self.due_rearmed = True
-            self.pio.notify_due(self.next_due_fp)
+            self.pio._notify_due(self.next_due_fp)

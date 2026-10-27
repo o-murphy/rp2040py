@@ -46,12 +46,21 @@ def test_ic_intr_mask_holds_13_bits():
 def test_a_second_abort_keeps_the_earlier_reasons_and_replaces_the_flush_count():
     chip, _ = _chip()
     i2c = chip.i2c[0]
-    i2c.abort_source = 1 << 3 | (2 << 23)  # TXDATA_NOACK, two commands flushed
-    i2c._tx_fifo.push(1)
-    i2c.arbitration_lost()  # a second abort, with one command queued
-    assert i2c.abort_source & 0x1FF == 1 << 3  # the earlier reason is still there
-    assert i2c.abort_source & (1 << 12)  # and the new one joined it
-    assert i2c.abort_source >> 23 == 1  # the count is this abort's, not 2 | 1
+    i2c.on_start = lambda repeated: None  # a bus that never answers by itself: the completions below are the test's own
+    i2c.on_connect = lambda address, mode: None
+    chip.write_uint32(I2C0_BASE + 0x6C, 1)  # IC_ENABLE
+    for command in (1, 2, 3):
+        chip.write_uint32(I2C0_BASE + IC_DATA_CMD, command)
+    i2c.complete_start()
+    i2c.complete_connect(False)  # the address is not acknowledged: 7B_ADDR_NOACK, the three commands flushed
+    assert i2c.snapshot()["abort_source"] == 1 | (3 << 23)
+    chip.write_uint32(I2C0_BASE + IC_DATA_CMD, 4)
+    chip.write_uint32(I2C0_BASE + IC_DATA_CMD, 5)
+    i2c.arbitration_lost()  # a second abort, with commands queued
+    abort_source = i2c.snapshot()["abort_source"]
+    assert abort_source & 0x1FF == 1  # the earlier reason is still there
+    assert abort_source & (1 << 12)  # and the new one joined it
+    assert abort_source >> 23 == 2  # the count is this abort's, not 3 | 2
 
 
 def test_fs_spklen_is_writable_only_while_the_i2c_is_disabled():
@@ -104,7 +113,13 @@ def test_configuration_registers_are_written_only_while_disabled_and_keep_their_
 def test_the_first_data_byte_flag_is_bit_11_of_ic_data_cmd():
     chip, _ = _chip()
     i2c = chip.i2c[0]
-    i2c._first_byte = True
+    i2c.on_start = lambda repeated: None
+    i2c.on_connect = lambda address, mode: None
+    i2c.on_read_byte = lambda ack: None
+    chip.write_uint32(I2C0_BASE + 0x6C, 1)  # IC_ENABLE
+    chip.write_uint32(I2C0_BASE + IC_DATA_CMD, 1 << 8)  # a read command
+    i2c.complete_start()
+    i2c.complete_connect(True)
     i2c.complete_read(0x42)
     assert chip.read_uint32(I2C0_BASE + 0x10) == 0x42 | (1 << 11)
 

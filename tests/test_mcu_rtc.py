@@ -47,10 +47,10 @@ def test_the_force_register_raises_the_line_on_the_cpu(chip):
 
 
 def test_the_python_rtc_is_a_view_of_the_block_the_bus_reaches(chip):
-    chip.rtc.clkdiv_m1 = 46874
+    chip.rtc.write_uint32(CLKDIV_M1, 46874)
     assert chip.read_uint32(RTC + CLKDIV_M1) == 46874
     chip.write_uint32(RTC + SETUP_0, (2024 << 12) | (2 << 8) | 29)
-    assert chip.rtc.setup0 == (2024 << 12) | (2 << 8) | 29
+    assert chip.rtc.snapshot()["setup0"] == (2024 << 12) | (2 << 8) | 29
 
 
 def test_a_replaced_rtc_takes_the_window_over(chip):
@@ -179,7 +179,7 @@ def test_the_watchdog_tick_reaches_the_timer_and_systick_and_then_the_hosts_list
     chip.watchdog.add_tick_listener(heard.append)
     chip.watchdog.clk_ref_changed(12e6)
     chip.write_uint32(0x40058000 + 0x2C, 12 | (1 << 9))  # WATCHDOG.TICK: 12 cycles of clk_ref, enabled
-    assert chip.timer.tick_hz == 1e6 and chip.ppb.tick_hz == 1e6
+    assert chip.timer.snapshot()["tick_hz"] == 1e6 and chip.ppb.snapshot()["tick_hz"] == 1e6
     assert heard == [1e6]
 
 

@@ -13,23 +13,13 @@ import random
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport park_error, raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
 from rp2040py.native._register_warning import register_warning
 
 __all__ = ("RPROSC",)
-
-
-cdef cppbool _frequency_trampoline(void* ctx, double hz) noexcept:
-    cdef RPROSC block = <RPROSC> ctx
-    try:
-        block.rp2040.rosc_freq = hz
-        block.rp2040.update_clocks()
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
 
 
 cdef cppbool _bit_trampoline(void* ctx, uint32_t* bit) noexcept:
@@ -42,7 +32,7 @@ cdef cppbool _bit_trampoline(void* ctx, uint32_t* bit) noexcept:
     return True
 
 
-cdef class RPROSC:
+cdef class RPROSC(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -60,17 +50,11 @@ cdef class RPROSC:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus and its notices to the clock tree - and this object is the Python view of it
             # (its RANDOMBIT comes from the block's own seeded generator until a source is set: `random_bit = fn`)
             self._block = <RoscBlock*> <size_t> rp2040._native_rosc_address()
+            self._ops = register_ops(self._block)
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPROSC is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def _rejoin_the_python_tree(self, tree):
-        """`tree` is going away (the chip's clock tree was replaced): tell the chip through Python again, if this block was telling that tree."""
-        if self._bound_tree is not tree:
-            return
-        self._bound_tree = None
-        self._block.bind_frequency_listener(_frequency_trampoline, <void*> self)
 
     def _warn_kind(self, kind, offset, value):
         """A register access the block does not implement, as the logger's message (the chip's host calls this for the block it built)."""
@@ -89,10 +73,6 @@ cdef class RPROSC:
         else:
             self.warn(register_warning(kind, offset, value))
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
-
     def read_uint32(self, offset):
         cdef uint32_t value = 0
         if not self._block.read(<uint32_t> offset, &value):
@@ -100,117 +80,34 @@ cdef class RPROSC:
         raise_if_pending()
         return value
 
-    def write_uint32(self, offset, value):
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     @property
     def frequency(self):
         return self._block.frequency()
 
-    def _count_now(self):
-        return self._block.count_now()
-
-    @property
-    def _ctrl(self):
-        return self._block.ctrl
-
-    @_ctrl.setter
-    def _ctrl(self, value):
-        self._block.ctrl = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _freqa(self):
-        return self._block.freqa
-
-    @_freqa.setter
-    def _freqa(self, value):
-        self._block.freqa = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _freqb(self):
-        return self._block.freqb
-
-    @_freqb.setter
-    def _freqb(self, value):
-        self._block.freqb = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _dormant(self):
-        return self._block.dormant
-
-    @_dormant.setter
-    def _dormant(self, value):
-        self._block.dormant = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _div(self):
-        return self._block.div
-
-    @_div.setter
-    def _div(self, value):
-        self._block.div = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _phase(self):
-        return self._block.phase
-
-    @_phase.setter
-    def _phase(self, value):
-        self._block.phase = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _badwrite(self):
-        return bool(self._block.badwrite)
-
-    @_badwrite.setter
-    def _badwrite(self, value):
-        self._block.badwrite = bool(value)
-
-    @property
-    def _enabled(self):
-        return bool(self._block.enabled)
-
-    @_enabled.setter
-    def _enabled(self, value):
-        self._block.enabled = bool(value)
-
-    @property
-    def _last_bit(self):
-        return self._block.last_bit
-
-    @_last_bit.setter
-    def _last_bit(self, value):
-        self._block.last_bit = <uint32_t> (value & 1)
-
-    @property
-    def _count(self):
-        return self._block.count
-
-    @_count.setter
-    def _count(self, value):
-        self._block.count = <uint32_t> (value & 0xFFFFFFFF)
-
-    @property
-    def _count_epoch(self):
-        return self._block.count_epoch
-
-    @_count_epoch.setter
-    def _count_epoch(self, value):
-        self._block.count_epoch = <int64_t> value
-
     @property
     def _hz(self):
+        """What the chip's `rosc_freq` reads (the frequency this block last announced): chip plumbing, read-only."""
         return self._block.hz
 
-    @_hz.setter
-    def _hz(self, value):
-        self._block.hz = <double> value
+    def snapshot(self):
+        """The block's state in one call: its registers and flags (public fields of the C++ block), the COUNT bookkeeping and what the clock makes of it."""
+        cdef RoscBlock* b = self._block
+        return {
+            "ctrl": b.ctrl,
+            "freqa": b.freqa,
+            "freqb": b.freqb,
+            "dormant": b.dormant,
+            "div": b.div,
+            "phase": b.phase,
+            "badwrite": bool(b.badwrite),
+            "enabled": bool(b.enabled),
+            "last_bit": b.last_bit,
+            "count": b.count,
+            "count_epoch": b.count_epoch,
+            "hz": b.hz,
+            "frequency": b.frequency(),
+            "count_now": b.count_now(),
+        }
 
     @property
     def random_bit(self):
@@ -231,23 +128,4 @@ cdef class RPROSC:
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's
-        own read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder,
-        a profiler) cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

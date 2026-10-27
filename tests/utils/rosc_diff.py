@@ -26,8 +26,8 @@ from collections.abc import Callable
 from typing import Any
 
 from rp2040py.peripherals import _rosc as P
-from rp2040py.rp2040 import RP2040
 from utils.is32bit import IS32BIT
+from utils.twin import new_chip
 
 ROSC_BASE = 0x40060000
 ALIASES = (0x0000, 0x1000, 0x2000, 0x3000)  # normal, XOR, SET, CLR
@@ -63,12 +63,10 @@ class Rig:
 
     def __init__(self, kind: str, factory: "Callable[..., Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._lfsr = 0xACE1
-        if kind == "pure":
-            self._replace_the_rosc(P.RPROSC)
-        elif kind == "mutant":
+        if kind == "mutant":
             assert factory is not None
             self._replace_the_rosc(factory)
         self._tap()
@@ -119,7 +117,7 @@ class Rig:
         elif kind == "tick":
             chip.clock.tick(op[1])
         elif kind == "reset":
-            chip.rosc.reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -130,23 +128,7 @@ class Rig:
         chip, rosc = self.chip, self.chip.rosc
         return {
             "regs": tuple(int(chip.read_uint32(ROSC_BASE + offset)) for offset in REGISTERS),
-            "state": (
-                int(rosc._ctrl),
-                int(rosc._freqa),
-                int(rosc._freqb),
-                int(rosc._dormant),
-                int(rosc._div),
-                int(rosc._phase),
-                bool(rosc._badwrite),
-                bool(rosc._enabled),
-                int(rosc._last_bit),
-                int(rosc._count),
-                int(rosc._count_epoch),
-                float(rosc._hz),
-                float(rosc.frequency),
-                int(rosc._count_now()),
-                int(rosc.raw_write_value),
-            ),
+            "state": (tuple(sorted(rosc.snapshot().items())), int(rosc.raw_write_value)),
             "chip": (float(chip.rosc_freq), float(chip.clk_sys), float(chip.clk_peri), float(chip.clock.nanos)),
         }
 
@@ -405,7 +387,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
     rosc = rig.chip.rosc
     for op in ops:
         before = len(rig.log)
-        was_count = rosc._count_now()
+        was_count = rosc.snapshot()["count_now"]
         _, error = _step(rig, op)
         if error is not None:
             count(f"raised.{error.split(':')[0]}")
@@ -419,14 +401,15 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
                 count("div.valid")
             if offset == P.ROSC_COUNT and (value & 0xFF):
                 count("count.start")
-        if was_count and rosc._count_now() == 0:
+        state = rosc.snapshot()
+        if was_count and state["count_now"] == 0:
             count("count.reached_zero")
-        if was_count and 0 < rosc._count_now() < was_count:
+        if was_count and 0 < state["count_now"] < was_count:
             count("count.counting")
-        if not rosc._enabled:
+        if not state["enabled"]:
             count("state.disabled")
-        if rosc._badwrite:
+        if state["badwrite"]:
             count("state.badwrite")
-        if rosc._hz != P.NOMINAL_HZ:
+        if state["hz"] != P.NOMINAL_HZ:
             count("state.retuned")
     return counts

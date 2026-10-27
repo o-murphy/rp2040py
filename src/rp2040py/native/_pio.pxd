@@ -5,6 +5,7 @@ from libc.stdint cimport int32_t, int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
 
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._pin cimport PinBank
 from rp2040py.native._window_map cimport WindowHandler
 
@@ -14,7 +15,6 @@ cdef extern from "pio.hpp" namespace "rp2040core":
 
     ctypedef cppbool (*PioPinUpdateFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PioPinInputFn)(void* ctx, uint32_t pin, cppbool* level)
-    ctypedef cppbool (*PioStartedFn)(void* ctx)
 
     cdef cppclass PioFifo:
         uint32_t buffer[8]
@@ -92,13 +92,9 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         uint32_t irq0_int_status() noexcept
         uint32_t irq1_int_status() noexcept
         cppbool check_interrupts() noexcept
-        cppbool irq_updated() noexcept
         cppbool gpio_values(uint32_t* out) noexcept
         void pin_values_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept
         void pin_directions_changed(uint32_t value, uint32_t first_pin, uint32_t count) noexcept
-        cppbool check_changed_pins() noexcept
-        void recompute_due() noexcept
-        void notify_due(int64_t due_fp) noexcept
         cppbool advance(int64_t cycles) noexcept
         cppbool run_due() noexcept
         uint32_t read(uint32_t offset) noexcept
@@ -112,22 +108,13 @@ cdef extern from "pio.hpp" namespace "rp2040core":
         WindowHandler window_handler() noexcept
 
 
-cdef class RPPIO:
+cdef class RPPIO(NativeBlock):
     cdef PioBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public bint _from_mcu  # (always: a PIO shell is the view of the chip's block)
-    cdef public object rp2040
-    cdef public str name
-    cdef public list machines
     cdef public object dreq_rx
     cdef public object dreq_tx
     cdef public unsigned int first_irq
     cdef public unsigned int index
-    cdef object _instructions
-    cdef object _run_task
 
     cdef _warn(self, msg)
-    cpdef check_changed_pins(self)
-    cpdef recompute_due(self)
-    cpdef notify_due(self, long long due_fp)
     cpdef advance(self, long long cycles)
     cpdef step(self)

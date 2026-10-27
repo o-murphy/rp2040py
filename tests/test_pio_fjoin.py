@@ -5,6 +5,8 @@ instruction will stall. The RX FIFO will appear both RXFULL and RXEMPTY in the F
 FIFOs unavailable." and, for the bits themselves, "FIFOs are flushed when this bit is changed".
 """
 
+from rp2040py.peripherals.pio_registers import DREQ_RX0, DREQ_TX0
+
 PIO0 = 0x50200000
 FSTAT, FDEBUG, FLEVEL, TXF0, RXF0 = 0x04, 0x08, 0x0C, 0x10, 0x20
 SM0_SHIFTCTRL, SM0_INSTR = 0xD0, 0xD8
@@ -45,7 +47,7 @@ def test_fjoin_tx_gives_eight_tx_entries_and_no_rx_fifo(rp2040_factory):
     assert _r(chip, RXF0) == 0 and _r(chip, FDEBUG) & RXUNDER  # nothing is ever there to read
     _w(chip, SM0_INSTR, PUSH_NOBLOCK)  # nowhere to push to: dropped
     _w(chip, SM0_INSTR, PUSH_BLOCK)
-    assert chip.pio[0].machines[0].waiting  # "any PUSH instruction will stall"
+    assert chip.pio[0].snapshot()["machines"][0]["waiting"]  # "any PUSH instruction will stall"
 
 
 def test_fjoin_rx_gives_eight_rx_entries_and_no_tx_fifo(rp2040_factory):
@@ -59,7 +61,7 @@ def test_fjoin_rx_gives_eight_rx_entries_and_no_tx_fifo(rp2040_factory):
         _w(chip, SM0_INSTR, PUSH_NOBLOCK)
     assert ((_r(chip, FLEVEL) >> 4) & 0xF) == 8 and _r(chip, FSTAT) & RXFULL
     _w(chip, SM0_INSTR, PULL_BLOCK)
-    assert chip.pio[0].machines[0].waiting  # nothing to pull, ever
+    assert chip.pio[0].snapshot()["machines"][0]["waiting"]  # nothing to pull, ever
 
 
 def test_both_joins_leave_neither_fifo(rp2040_factory):
@@ -87,16 +89,10 @@ def test_the_dma_requests_follow_the_joined_fifos(rp2040_factory):
     chip = rp2040_factory()
     events = []
 
-    class _Dma:
-        def set_dreq(self, channel):
-            events.append((int(channel), 1))
-
-        def clear_dreq(self, channel):
-            events.append((int(channel), 0))
-
-    chip.dma = _Dma()
-    machine = chip.pio[0].machines[0]
-    tx, rx = int(machine.dreq_tx), int(machine.dreq_rx)
+    chip.dreq_tap = lambda number, asserted: events.append(
+        (int(number), int(asserted))
+    )  # (the real DMA gets the requests as well)
+    tx, rx = int(DREQ_TX0[0]), int(DREQ_RX0[0])
     _w(chip, SM0_SHIFTCTRL, FJOIN_TX)
     assert (tx, 1) in events and (rx, 0) in events  # TX has room, RX is "empty": no request
     events.clear()

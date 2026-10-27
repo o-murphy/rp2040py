@@ -56,6 +56,10 @@ class RPIO(BasePeripheral):
         }  # (enable, force) per pin, for proc 1 and dormant wake
         self._pin_registers_end = len(self.pins) * 8
 
+    def snapshot(self) -> dict[str, tuple]:
+        """The proc 1 / dormant wake masks this block stores itself (proc 0's are on the pins): `extra` is, for each of the two destinations, the enable and the force mask of every pin."""
+        return {"extra": tuple(tuple(tuple(masks) for masks in self._extra[dest]) for dest in (1, 2))}
+
     def reset(self) -> None:
         """The stored proc 1 / dormant wake masks back to zero (proc 0's are on the pins, reset with them)."""
         for enable, force in self._extra.values():

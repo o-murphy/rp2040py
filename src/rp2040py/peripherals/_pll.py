@@ -58,31 +58,31 @@ class RPPLL(BasePeripheral):
         self.prim = 0x77000  # POSTDIV1 = 7, POSTDIV2 = 7
 
     @property
-    def refdiv(self) -> int:
+    def _refdiv(self) -> int:
         return self.cs & PLL_CS_REFDIV_MASK
 
     @property
-    def fbdiv(self) -> int:
+    def _fbdiv(self) -> int:
         return self.fbdiv_int & PLL_FBDIV_INT_MASK
 
     @property
-    def postdiv1(self) -> int:
+    def _postdiv1(self) -> int:
         return (self.prim >> PLL_PRIM_POSTDIV1_SHIFT) & PLL_PRIM_POSTDIV_MASK
 
     @property
-    def postdiv2(self) -> int:
+    def _postdiv2(self) -> int:
         return (self.prim >> PLL_PRIM_POSTDIV2_SHIFT) & PLL_PRIM_POSTDIV_MASK
 
     @property
-    def reference(self) -> float:
+    def _reference(self) -> float:
         """FREF / REFDIV in Hz: the crystal oscillator's output (0 until the XOSC is enabled) over the reference divider."""
-        return xosc_hz(self.rp2040) / (self.refdiv or 1)
+        return xosc_hz(self.rp2040) / (self._refdiv or 1)
 
     @property
-    def locked(self) -> bool:
+    def _locked(self) -> bool:
         """CS.LOCK (table 275, "PLL is locked"): the VCO runs (PD and VCOPD clear) off a reference that is there. The model has no start-up delay (the datasheet gives none); constraints outside the
         design's range (reference 5-800 MHz, FBDIV 16-320, VCO 750-1600 MHz) have no stated behaviour and are not modelled."""
-        return not self.pwr & (PLL_PWR_PD | PLL_PWR_VCOPD) and self.reference > 0
+        return not self.pwr & (PLL_PWR_PD | PLL_PWR_VCOPD) and self._reference > 0
 
     @property
     def frequency(self) -> float:
@@ -91,17 +91,21 @@ class RPPLL(BasePeripheral):
         (VCOPD and POSTDIVPD clear)."""
         if self.pwr & PLL_PWR_PD:
             return 0.0
-        ref_freq = self.reference
+        ref_freq = self._reference
         if self.cs & PLL_CS_BYPASS:
             return ref_freq
         if self.pwr & (PLL_PWR_VCOPD | PLL_PWR_POSTDIVPD):
             return 0.0
-        postdiv = (self.postdiv1 or 1) * (self.postdiv2 or 1)
-        return ref_freq * self.fbdiv / postdiv
+        postdiv = (self._postdiv1 or 1) * (self._postdiv2 or 1)
+        return ref_freq * self._fbdiv / postdiv
+
+    def snapshot(self) -> dict[str, int]:
+        """The block's registers as plain values (the divisors, the reference and the lock are derived from them)."""
+        return {"cs": self.cs, "pwr": self.pwr, "fbdiv_int": self.fbdiv_int, "prim": self.prim}
 
     def read_uint32(self, offset: int) -> int:
         if offset == PLL_CS:
-            return self.cs | (PLL_CS_LOCK if self.locked else 0)
+            return self.cs | (PLL_CS_LOCK if self._locked else 0)
         if offset == PLL_PWR:
             return self.pwr
         if offset == PLL_FBDIV_INT:

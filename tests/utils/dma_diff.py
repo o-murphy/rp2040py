@@ -33,8 +33,8 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals.peripheral import BasePeripheral
-from rp2040py.rp2040 import RP2040
 from utils.clock_tree import set_clk_sys
+from utils.twin import new_chip
 
 DMA_BASE = 0x50000000
 PROBE_BASE = 0x50400000  # an unused window (XIP_AUX on the chip), handed to the probe
@@ -106,7 +106,7 @@ class Probe:
     PIO TX FIFO does in answer to a DMA write; everything else just goes to the log. A read returns a number that changes with every read, so a copy
     from the probe is distinguishable from one of constants."""
 
-    def __init__(self, chip: RP2040, log: list) -> None:
+    def __init__(self, chip: Any, log: list) -> None:
         self.chip, self.log = chip, log
         self.reads = 0
         self.last_write = 0
@@ -138,16 +138,7 @@ class Rig:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self.chip = RP2040()
-        if kind == "pure":
-            from rp2040py.peripherals import _dma
-
-            # The DREQs the chip's peripherals asserted at construction (a UART/SPI TX FIFO is ready from the start) went to the DMA built with the chip;
-            # the replacement starts from the same levels, as a DMA reset leaves them (_dma.RPDMA.reset).
-            levels = dict(self.chip.dma.dreq)
-            self.chip.dma = _dma.RPDMA(self.chip, "DMA")
-            self.chip.dma.dreq.update(levels)
-            self.chip.peripherals[DMA_BASE >> 12] = BusView(self.chip.dma)
+        self.chip = new_chip(kind)
         self.log: list[tuple] = []
         self._mark = 0
         self.probe = Probe(self.chip, self.log)
@@ -196,7 +187,7 @@ class Rig:
         elif kind == "peek":
             return int(chip.read_uint32(op[1]))
         elif kind == "reset":
-            chip.dma.reset()
+            chip.reset()
         elif kind == "clk":
             set_clk_sys(
                 chip, op[1]
@@ -216,8 +207,10 @@ class Rig:
         for offset in CONTROLLER_REGISTERS:
             regs.append(int(chip.read_uint32(DMA_BASE + offset)))
         out: dict[str, Any] = {"regs": tuple(regs)}
-        out["int_raw"] = int(chip.dma.int_raw)
-        out["dreq"] = tuple(sorted(int(k) for k, v in chip.dma.dreq.items() if v))
+        state = chip.dma.snapshot()
+        out["int_raw"] = int(state["int_raw"])
+        out["dreq"] = state["dreq"]
+        out["channels"] = state["channels"]
         out["now"] = float(chip.clock.nanos)
         out["next_alarm"] = (bool(chip.clock.has_scheduled_alarm), float(chip.clock.nanos_to_next_alarm))
         out["probe"] = (self.probe.reads, self.probe.last_write)
@@ -273,7 +266,7 @@ def mutant_rig(name: str) -> Rig:
                 return
             super().set_dreq(dreq_channel)
 
-        def get_timer(self, treq: int) -> float:
+        def _get_timer(self, treq: int) -> float:
             timers = {
                 _dma.TREQ.TIMER0: self._timer0,
                 _dma.TREQ.TIMER1: self._timer1,
@@ -291,7 +284,7 @@ def mutant_rig(name: str) -> Rig:
             if name == "timer_rate_uncapped" and treq in timers:  # a period shorter than one clock cycle
                 dividend, divisor = timers[treq] >> 16, timers[treq] & 0xFFFF
                 return 0 if divisor == 0 or dividend == 0 else ((divisor / dividend) * 1e6) / self.rp2040.clk_sys
-            return super().get_timer(treq)
+            return super()._get_timer(treq)
 
         def read_uint32(self, offset: int) -> int:
             if name == "abort_read_warns" and offset == _dma.CHAN_ABORT:
@@ -304,9 +297,9 @@ def mutant_rig(name: str) -> Rig:
                 self.dreq.clear()
 
     rig = Rig("pure")
-    levels = dict(rig.chip.dma.dreq)
+    levels = dict.fromkeys(rig.chip.dma.snapshot()["dreq"], True)
     dma = Controller(rig.chip, "DMA")
-    dma.channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
+    dma._channels = [Channel(dma, rig.chip, index) for index in range(CHANNELS)]
     dma.dreq.update(levels)
     rig.chip.dma = dma
     rig.chip.peripherals[DMA_BASE >> 12] = BusView(dma)
@@ -574,7 +567,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
         if last:
             count("finished.quiet" if ctrl & _dma.IRQ_QUIET else "finished.irq")
             if self._chain_to != self.index:
-                count("chain.valid" if self._chain_to < len(self.dma.channels) else "chain.invalid")
+                count("chain.valid" if self._chain_to < len(self.dma._channels) else "chain.invalid")
 
     def start(self: Any) -> None:
         count(
@@ -592,7 +585,7 @@ def coverage(ops: list[tuple]) -> dict[str, int]:
             count("schedule.permanent")
         elif dma.dreq.get(self._treq_value, False):
             count("schedule.dreq_asserted")
-        elif dma.get_timer(self._treq_value):
+        elif dma._get_timer(self._treq_value):
             count("schedule.paced")
         else:
             count("schedule.stalled")

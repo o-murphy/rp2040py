@@ -55,6 +55,12 @@ inline double tick_frequency(bool enable, uint32_t cycles, double clk_ref) noexc
 
 class WatchdogBlock : public RegisterBlock<WatchdogBlock> {
 public:
+    // An observer of the tick (0: stopped), called before the chip's own consumers are told, without taking anything from them: the port a test or a debugger uses to hear what the TIMER and SysTick
+    // are told. False from the tap: the host has parked its error.
+    using TickTap = bool (*)(void* ctx, double tick_hz);
+    TickTap tick_tap = nullptr;
+    void* tick_tap_ctx = nullptr;
+
     WatchdogBlock() = default;
     WatchdogBlock(const WatchdogBlock&) = delete;  // the alarm and the clock hold pointers into this object
     WatchdogBlock& operator=(const WatchdogBlock&) = delete;
@@ -170,6 +176,7 @@ private:
         if (hz != 0.0) timer.set_frequency(hz * TICKS_PER_COUNT);  // decremented twice per tick (errata RP2040-E1)
         timer.set_enable(enable && hz > 0.0);
         alarm.set_enable(enable && hz > 0.0);
+        if (tick_tap != nullptr && !tick_tap(tick_tap_ctx, hz)) return false;
         return host_.tick_changed == nullptr || host_.tick_changed(host_.ctx, hz);
     }
 

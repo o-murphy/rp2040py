@@ -25,7 +25,6 @@ static bool alarm_fail(void*) noexcept { return false; }
 
 static uint8_t flash_image[65536];
 static uint8_t usb_dpram[4096];
-static DmaBlock dma_probe;  // (never initialised: only its DREQ bits are read)
 
 int main() {
     Mcu mcu;
@@ -178,12 +177,7 @@ int main() {
     // the absolute DREQ number.
     {
         Mcu m;
-        Clock clock;
-        DmaHost dma_host;
-        DmaBlock dma;
-        dma.init(&m.bus, &clock, nullptr, 0, 0, dma_host);  // (a block on its own: no ports)
-        CHECK(m.set_dreq(5, true) && !dma.dreq(5));  // no DMA attached: nowhere to go, not a failure
-        m.attach_dma(&dma);
+        DmaBlock& dma = m.dma();  // the requests go to the chip's own DMA block
         CHECK(m.set_dreq(5, true) && dma.dreq(5));
         CHECK(m.set_dreq(5, false) && !dma.dreq(5));
 
@@ -195,28 +189,26 @@ int main() {
         CHECK(mcu_dreq_pair(&pair, false, true) && dma.dreq(21));
         CHECK(mcu_dreq_pair(&pair, true, false) && !dma.dreq(20) && dma.dreq(21));
 
+        // The observer (`DmaBlock::dreq_tap`): called first for every request, the DMA still gets it; a failing tap fails the request.
         struct Seen {
             int n = 0;
             uint32_t number = 0;
             bool asserted = false;
             bool result = true;
         } seen;
-        m.set_dreq_hook(
-            [](void* ctx, uint32_t number, bool asserted) noexcept {
-                Seen* x = static_cast<Seen*>(ctx);
-                ++x->n;
-                x->number = number;
-                x->asserted = asserted;
-                return x->result;
-            },
-            &seen);
-        CHECK(m.set_dreq(12, true) && seen.n == 1 && seen.number == 12 && seen.asserted && !dma.dreq(12));  // the hook got it instead of the DMA
+        dma.dreq_tap = [](void* ctx, uint32_t number, bool asserted) noexcept {
+            Seen* x = static_cast<Seen*>(ctx);
+            ++x->n;
+            x->number = number;
+            x->asserted = asserted;
+            return x->result;
+        };
+        dma.dreq_tap_ctx = &seen;
+        CHECK(m.set_dreq(12, true) && seen.n == 1 && seen.number == 12 && seen.asserted && dma.dreq(12));  // the observer saw it and the DMA got it
         seen.result = false;
         CHECK(!m.set_dreq(13, true));  // its failure is the caller's
-        m.set_dreq_hook(nullptr, nullptr);
-        CHECK(m.set_dreq(12, true) && seen.n == 2 && dma.dreq(12));
-        m.attach_dma(nullptr);
-        CHECK(m.set_dreq(14, true) && !dma.dreq(14));
+        dma.dreq_tap = nullptr;
+        CHECK(m.set_dreq(14, true) && seen.n == 2 && dma.dreq(14));
     }
 
     // The RTC, built by the chip (record 0096, 3a): `build()` initialises it on the chip's clock, maps its window and binds its line - all without a shell. The host only answers for
@@ -230,7 +222,6 @@ int main() {
             int resets = 0, triggers = 0, ticks = 0;
             int pin_changes = 0;
             int bus_resets = 0, usb_resets = 0, usb_enabled = 0;
-            uint64_t reset_blocks = 0;
             uint32_t pin_bank = 99, pin_number = 99;
             int pin_new = -1, pin_old = -1;
             double last_tick = -1.0;
@@ -255,10 +246,6 @@ int main() {
             w->uart_value = byte;
             return true;
         };
-        host.reset_block = [](void* ctx, uint32_t block) {
-            static_cast<World*>(ctx)->reset_blocks |= uint64_t{1} << block;
-            return true;
-        };
         host.bus_reset = [](void* ctx) {
             ++static_cast<World*>(ctx)->bus_resets;
             return true;
@@ -276,15 +263,13 @@ int main() {
             w->pin_old = old_state;
             return true;
         };
-        host.system_reset_request = [](void* ctx) { ++static_cast<World*>(ctx)->resets; };
-        host.watchdog_trigger = [](void* ctx) {
-            ++static_cast<World*>(ctx)->triggers;
-            return true;
-        };
-        host.watchdog_tick = [](void* ctx, double hz) {
+        host.reset_requested = [](void* ctx, uint32_t cause) {
             World* w = static_cast<World*>(ctx);
-            ++w->ticks;
-            w->last_tick = hz;
+            if (cause == McuHost::kResetRequestSysResetReq) {
+                ++w->resets;
+            } else {
+                ++w->triggers;
+            }
             return true;
         };
         host.spi_transmit = [](void* ctx, uint32_t instance, uint32_t value) {
@@ -377,8 +362,8 @@ int main() {
             CHECK((m.cpu.pending_interrupts & (1u << (20 + u))) != 0);
             m.bus.write32(base + 0x48, 1u << 1);  // UARTDMACR: TXDMAE
         }
-        CHECK(m.set_dreq(40, true) && !dma_probe.dreq(20) && !dma_probe.dreq(22));  // (no DMA attached yet: nowhere to go)
-        m.attach_dma(&dma_probe);
+        DmaBlock& dma_probe = m.dma();  // the requests go to the chip's own DMA block
+        CHECK(m.set_dreq(40, true));
         for (uint32_t u = 0; u < 2; ++u) m.bus.write32(bases[2 + u] + 0x48, 0), m.bus.write32(bases[2 + u] + 0x48, 1u << 1);
         CHECK(dma_probe.dreq(20) && dma_probe.dreq(22) && !dma_probe.dreq(21));
         for (uint32_t i = 0; i < 2; ++i) {  // SPI: the TX request
@@ -394,7 +379,6 @@ int main() {
         CHECK((m.cpu.pending_interrupts & (1u << 18)) != 0);
         m.bus.write32(bases[1] + 0x1C, 1);  // ADC.INTF: forces ADC_IRQ_FIFO
         CHECK((m.cpu.pending_interrupts & (1u << 22)) != 0);
-        m.attach_dma(nullptr);
 
         // The clock tree and the oscillators (group 3): built by the same call, and the tree is the chip's own - the UART's bit time comes from its clk_peri, not from the host.
         const uint32_t tree[5] = {0x40008000, 0x40028000, 0x4002C000, 0x40024000, 0x40060000};
@@ -432,14 +416,20 @@ int main() {
         CHECK((m.cpu.pending_interrupts & (1u << 11)) != 0);
         m.bus.write32(0x50000000 + 0x418, 1);  // DMA.INTF1: forces DMA_IRQ_1 (12)
         CHECK((m.cpu.pending_interrupts & (1u << 12)) != 0);
-        m.attach_dma(&m.dma());  // (the earlier checks detached it)
         CHECK(m.set_dreq(3, true) && m.dma().dreq(3));  // the chip's own DMA is the one the requests go to
         m.bus.write32(0x40058000 + 0x00, 1u << 31);  // WATCHDOG.CTRL.TRIGGER: the chip's reset is the host's
         CHECK(world.triggers == 1);
+        m.watchdog().tick_tap = [](void* ctx, double hz) {  // an observer of the tick (the port a test uses to hear it)
+            World* w = static_cast<World*>(ctx);
+            ++w->ticks;
+            w->last_tick = hz;
+            return true;
+        };
+        m.watchdog().tick_tap_ctx = &world;
         m.watchdog().clk_ref_changed(12e6);
         m.bus.write32(0x40058000 + 0x2C, 12 | (1u << 9));  // WATCHDOG.TICK: 12 cycles of clk_ref, enabled -> 1 MHz
         CHECK(m.timer().tick_hz() == 1e6 && m.ppb().tick_hz() == 1e6);  // the TIMER and SysTick follow it in C++ ...
-        CHECK(world.ticks >= 1 && world.last_tick == 1e6);              // ... and then the host hears of it
+        CHECK(world.ticks >= 1 && world.last_tick == 1e6);              // ... and the observer heard of it
         CHECK(m.ppb(1).tick_hz() == 1e6);  // core 1's SysTick is fed the tick as well (the watchdog tells each core's PPB)
 
         // The second core's seams (record 0104, P0): present, inactive, and reached only through the bus's `initiator`.
@@ -709,11 +699,6 @@ int main() {
             CHECK(flash_image[5] == static_cast<uint8_t>(5 * 7 + 3));
             CHECK(m.reset(false, false));
             CHECK(flash_image[5] == 0xFF && flash_image[sizeof flash_image - 1] == 0xFF);
-            // a block the host holds is the host's to reset: its bit in `world` sends it there and the Mcu's own is left alone
-            dirty();
-            world.reset_blocks = 0;
-            CHECK(m.reset(false, true, uint64_t{1} << kMcuBlockPwm));
-            CHECK(world.reset_blocks == (uint64_t{1} << kMcuBlockPwm) && m.bus.read32(kPwmCh0Top) == 7 && m.bus.read32(kUart0Ibrd) == 0);
             // the cause: a watchdog reset leaves REASON / SCRATCH and CHIP_RESET alone, anything else clears the watchdog's and records HAD_RUN / HAD_POR - after the reset - and tells the USB link either way
             dirty();
             const int buses = world.bus_resets;

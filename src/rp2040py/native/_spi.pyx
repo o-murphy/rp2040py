@@ -14,13 +14,14 @@ Python. A device that finishes later (the ST7735S, the e-paper) calls `complete_
 inside `on_transmit`: the block is re-entered from its own host callback, as the reference is.
 
 The API is the reference's: the registers' private attributes (readable and writable), `rx_fifo`/`tx_fifo` (views with the reference FIFO's attribute
-names), `int_status`, `enabled`, `data_bits`, `master_mode`, `spi_mode`, `clock_frequency`, `complete_transmit`, `check_interrupts`, `reset`, plus
+names), `int_status`, `data_bits`, `spi_mode`, `clock_frequency`, `complete_transmit`, `check_interrupts`, `reset`, plus
 `BasePeripheral`'s surface. Unlike the DMA it does not need the chip's bus, but a word's time on the wire is an alarm of the chip's C++ clock, so it needs the native `SimulationClock` (as the UART and the ADC do).
 """
 
 from libc.stdint cimport int64_t, uint32_t
 
 from rp2040py.native._mcu_irq cimport Mcu
+from rp2040py.native._native_block cimport NativeBlock, register_ops
 from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
 from rp2040py.native._window_map cimport WindowHandler
@@ -36,50 +37,7 @@ cdef uint32_t SCR_MASK = 0xFF
 cdef uint32_t SCR_SHIFT = 8
 
 
-cdef class _Fifo:
-    """One of the two FIFOs as the reference's `utils.fifo.FIFO(8)` shows it."""
-
-    cdef RPSPI _owner
-    cdef bint _is_tx
-
-    cdef Fifo8* _fifo(self):
-        return &self._owner._block.tx if self._is_tx else &self._owner._block.rx
-
-    @property
-    def size(self):
-        return 8
-
-    @property
-    def item_count(self):
-        return self._fifo().count()
-
-    @property
-    def empty(self):
-        return self._fifo().empty()
-
-    @property
-    def full(self):
-        return self._fifo().full()
-
-    @property
-    def items(self):
-        cdef Fifo8* fifo = self._fifo()
-        return [fifo.at(i) for i in range(fifo.count())]
-
-    def push(self, value):
-        self._fifo().push(<uint32_t> (<int64_t> value))
-
-    def pull(self):
-        return self._fifo().pull()
-
-    def peek(self):
-        return self._fifo().peek()
-
-    def reset(self):
-        self._fifo().reset()
-
-
-cdef class RPSPI:
+cdef class RPSPI(NativeBlock):
     def __init__(self, rp2040, name, irq, dreq, mcu_index=-1):
         clock = rp2040.clock
         if not isinstance(clock, SimulationClock):
@@ -98,6 +56,7 @@ cdef class RPSPI:
         if mcu_index >= 0:
             # the chip's C++ `Mcu` has built this block already - with its window on the bus, its line and request on the chip - and this object is the Python view of it
             self._block = <SpiBlock*> <size_t> rp2040._native_spi_address(mcu_index)
+            self._ops = register_ops(self._block)
             if not self._block.power_on():
                 raise_if_pending()
             return
@@ -129,106 +88,38 @@ cdef class RPSPI:
         if not self._block.complete_transmit(<uint32_t> (<int64_t> rx_value)):
             raise_if_pending()
 
-    # --- the reference's attributes --------------------------------------------------------------
+    # --- the state, in one call ------------------------------------------------------------------
 
-    @property
-    def raw_write_value(self):
-        return self._block.raw_write_value()
+    def snapshot(self):
+        """The block's state in one call: the registers, the frame in flight, both FIFOs' contents and what is derived from them."""
+        cdef SpiBlock* b = self._block
+        cdef uint32_t i
+        return {
+            "control0": b.control0,
+            "control1": b.control1,
+            "dma_control": b.dma_control,
+            "clock_divisor": b.clock_divisor,
+            "int_raw": b.int_raw,
+            "int_enable": b.int_enable,
+            "busy": bool(b.busy),
+            "frame_active": bool(b.frame_active),
+            "reply": b.reply if b.has_reply else None,
+            "rx": tuple([b.rx.at(i) for i in range(b.rx.count())]),
+            "tx": tuple([b.tx.at(i) for i in range(b.tx.count())]),
+            "enabled": bool(b.enabled()),
+            "data_bits": b.data_bits(),
+            "master_mode": not (b.control1 & MS),
+            "spi_mode": self.spi_mode,
+            "clock_frequency": self.clock_frequency,
+            "int_status": b.int_status(),
+        }
 
-    @property
-    def rx_fifo(self):
-        cdef _Fifo view = _Fifo.__new__(_Fifo)
-        view._owner = self
-        view._is_tx = False
-        return view
-
-    @property
-    def tx_fifo(self):
-        cdef _Fifo view = _Fifo.__new__(_Fifo)
-        view._owner = self
-        view._is_tx = True
-        return view
-
-    @property
-    def _busy(self):
-        return bool(self._block.busy)
-
-    @_busy.setter
-    def _busy(self, value):
-        self._block.busy = bool(value)
-
-    @property
-    def _frame_active(self):
-        return bool(self._block.frame_active)
-
-    @property
-    def _reply(self):
-        return self._block.reply if self._block.has_reply else None
-
-    @property
-    def _control0(self):
-        return self._block.control0
-
-    @_control0.setter
-    def _control0(self, value):
-        self._block.control0 = <uint32_t> (<int64_t> value)
-
-    @property
-    def _control1(self):
-        return self._block.control1
-
-    @_control1.setter
-    def _control1(self, value):
-        self._block.control1 = <uint32_t> (<int64_t> value)
-
-    @property
-    def _dma_control(self):
-        return self._block.dma_control
-
-    @_dma_control.setter
-    def _dma_control(self, value):
-        self._block.dma_control = <uint32_t> (<int64_t> value)
-
-    @property
-    def _clock_divisor(self):
-        return self._block.clock_divisor
-
-    @_clock_divisor.setter
-    def _clock_divisor(self, value):
-        self._block.clock_divisor = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_raw(self):
-        return self._block.int_raw
-
-    @_int_raw.setter
-    def _int_raw(self, value):
-        self._block.int_raw = <uint32_t> (<int64_t> value)
-
-    @property
-    def _int_enable(self):
-        return self._block.int_enable
-
-    @_int_enable.setter
-    def _int_enable(self, value):
-        self._block.int_enable = <uint32_t> (<int64_t> value)
-
-    @property
-    def int_status(self):
-        return self._block.int_status()
-
-    @property
-    def enabled(self):
-        return bool(self._block.enabled())
+    # --- what a device on the bus reads of the configuration ---------------------------------------
 
     @property
     def data_bits(self):
         """Data size in bits: 4 to 16 bits"""
         return self._block.data_bits()
-
-    @property
-    def master_mode(self):
-        return not (self._block.control1 & MS)  # SSPCR1.MS, bit 2
 
     @property
     def spi_mode(self):
@@ -244,47 +135,9 @@ cdef class RPSPI:
 
     # --- BasePeripheral's surface ----------------------------------------------------------------
 
-    def check_interrupts(self):
-        if not self._block.check_interrupts():
-            raise_if_pending()
-
-    def read_uint32(self, offset):
-        cdef uint32_t value = self._block.read(<uint32_t> offset)
-        raise_if_pending()
-        return value
-
-    def write_uint32(self, offset, value):
-        # A direct write keeps whatever raw_write_value the last atomic write left, as the pure-Python block does.
-        if not self._block.write(<uint32_t> offset, <int64_t> value):
-            raise_if_pending()
-
-    def write_uint32_atomic(self, offset, value, atomic_type):
-        if not self._block.write_atomic(<uint32_t> offset, <int64_t> value, <uint32_t> atomic_type):
-            raise_if_pending()
-        raise_if_pending()
-
     def reset(self):
         """Registers and both FIFOs, back to power-on (0089 Phase 5). `on_transmit` is wiring - a device on the bus - and survives, as does `irq`/`dreq` identity."""
         if not self._block.reset():
             raise_if_pending()
 
-    def debug(self, msg):
-        self.rp2040.logger.debug(self.name, msg)
-
-    def info(self, msg):
-        self.rp2040.logger.info(self.name, msg)
-
-    def warn(self, msg):
-        self.rp2040.logger.warning(self.name, msg)
-
-    def error(self, msg):
-        self.rp2040.logger.error(self.name, msg)
-
     # --- the native bus protocol -----------------------------------------------------------------
-
-    def _native_window(self):
-        """What `RP2040` registers in its C++ window table when it adopts this block, instead of a Python trampoline: the addresses of the block's own
-        read/write functions and its context. Looked up on the *type* by the bus, so a wrapper that merely forwards attributes (a recorder, a profiler)
-        cannot lend its target's fast path and be bypassed."""
-        cdef WindowHandler handler = self._block.window_handler()
-        return (<size_t> handler.read32, <size_t> handler.write32, <size_t> handler.ctx)

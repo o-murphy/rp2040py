@@ -1,5 +1,4 @@
-import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.peripherals._state_machine import StateMachine
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -44,12 +43,24 @@ from rp2040py.peripherals.pio_registers import (
     TXF1,
     TXF2,
     TXF3,
+    WaitType,
 )
 
 if TYPE_CHECKING:
     from rp2040py.rp2040 import RP2040
 
 __all__ = ("RPPIO",)
+
+# What `snapshot()` reports (the native block reports the same names).
+SNAPSHOT_BLOCK_FIELDS = (
+    "irq", "fdebug", "tx_stall", "rx_stall", "input_sync_bypass", "pin_values", "pin_directions", "old_pin_values", "old_pin_directions",
+    "cycle_fp", "next_due_fp", "resolve_due_fp", "backlog_drops", "stopped", "irq0_int_enable", "irq0_int_force", "irq1_int_enable", "irq1_int_force",
+)  # fmt: skip
+SNAPSHOT_MACHINE_FIELDS = (
+    "x", "y", "pc", "input_shift_reg", "input_shift_count", "output_shift_reg", "output_shift_count", "cycles", "enabled", "waiting",
+    "wait_type", "wait_index", "wait_polarity", "wait_delay", "next_due_fp", "due_rearmed", "exec_valid", "update_pc", "exec_opcode",
+    "out_pin_values", "out_pin_direction", "div_fp", "exec_ctrl", "shift_ctrl", "pin_ctrl",
+)  # fmt: skip
 
 # "No enabled, unstalled machine has anything to do" - larger than any cycle count a simulated
 # RP2040 can reach (2**54 system clocks at 125 MHz is ~4.5 years of simulated time, and this is
@@ -76,26 +87,9 @@ class RPPIO(BasePeripheral):
         self.dreq_tx = DREQ_TX1 if self.index else DREQ_TX0
         self.machines = [StateMachine(self.rp2040, self, i) for i in range(4)]
 
-        # No lock needed here (there used to be one - see git history / CHANGELOG for the real,
-        # reproduced race a background threading.Timer caused): run()'s continuation is now an
-        # asyncio coroutine scheduled on Simulator's own engine-room event loop
-        # (rp2040py.simulator.Simulator._ensure_loop()), the same loop write_uint32() itself always
-        # runs on (it's only ever called from execute_instruction()'s bus dispatch, which only ever
-        # runs inside Simulator.execute() on that loop). Exactly one thread can reach this state
-        # now, by construction - not "races are unlikely," structurally impossible.
-        #
-        # Only used when this RP2040 has no owning Simulator at all (rp2040.simulator is None -
-        # e.g. tests/test_pio.py's fixture, driving RPPIO directly with its own bounded event
-        # loop). When a real Simulator does own this RP2040, its own _execute_batch()
-        # (_execute_batch.py/native/_simulator.pyx) steps every non-stopped RPPIO once per CPU
-        # instruction/idle-jump directly - see write_uint32()'s CTRL branch below for why a
-        # separately-scheduled task there was a real bug, not just a style choice: a competing
-        # asyncio.Task only gets a turn once per up-to-1,000,000-instruction CPU batch, so real
-        # firmware bit-banging a slow peripheral (CYW43's gSPI over PIO+DMA) could never make
-        # enough real progress before its own timeout-and-retry logic gave up and restarted it -
-        # a genuine livelock in native (fast CPU dispatch) mode, not just slow. Full derivation in
-        # docs/records/0037-pio-clock-coupled-stepping.md.
-        self._run_task: asyncio.Task[None] | None = None
+        # No lock and no task of its own: whoever advances the chip's clock steps this block (a Simulator's `_execute_batch()` once per CPU instruction /
+        # idle-jump, or the caller of `advance()` / `step()` for a chip with no Simulator). CTRL only marks the block as running - docs/records/0037 and
+        # 0043 (a competing asyncio task or an inline burst outruns a DMA-fed FIFO).
 
         self.stopped = True
         # System-clock cycles elapsed, in 1/256ths so a fractional CLKDIV needs no float anywhere
@@ -253,53 +247,11 @@ class RPPIO(BasePeripheral):
                     machine.restart()
                 if value & (1 << (8 + index)):
                     machine.clk_div_restart()
-            self.recompute_due()
+            self._recompute_due()
             should_run = value & 0xF
             if self.stopped and should_run:
                 self.stopped = False
-                # **Only run the first batch synchronously inline when no Simulator owns this
-                # RP2040** (docs/records/0043-pio-dma-first-batch-race.md - found investigating
-                # 0027's v1.23.0-vs-v1.28.0 CYW43 regression, same "shared simulator
-                # infrastructure, not CYW43-specific" theme as 0037, which this directly follows
-                # up). The comment this replaces justified running `_step_batch()` (up to 1000 PIO
-                # steps) synchronously, right here inside the MMIO write itself, as a convenience -
-                # "most PIO programs are short enough that a caller reading FIFO/register state
-                # right after this write already sees the result, with no yield in between." That's
-                # true for a program with no other peripheral dependency, but a DMA-fed transfer
-                # (exactly `cyw43_bus_pio_spi.c`'s own gSPI TX, this project's own paced-by-DREQ
-                # `RPDMAChannel`/`peripherals/_dma.py`) needs `SimulationClock` alarms to fire
-                # between FIFO drains to keep refilling it - and those alarms only fire from
-                # `clock.tick()`, called once per CPU instruction by
-                # `_execute_batch.py`/`native/_simulator.pyx`'s own outer loop, *never* from inside
-                # this write handler's own call stack. A up-to-1000-step synchronous burst here can
-                # drain a DMA-fed PIO TX FIFO (4 words deep, ~64 steps per 32-bit word for
-                # `cyw43_bus_pio_spi.pio`'s bit-at-a-time program - so a couple hundred steps, well
-                # under 1000) faster than any DMA alarm gets a chance to run, since none of those
-                # alarms are serviced during this burst - producing a real (if premature and
-                # transient) `FDEBUG_TXSTALL` the moment the FIFO runs dry mid-transfer, which a
-                # driver polling `PIO.FDEBUG` directly (as `cyw43_spi_transfer()`'s TX-only branch
-                # in the pico-sdk pinned by MicroPython v1.23.0's `cyw43-driver` does) reads as "the
-                # whole transfer is done" after only the first few words - not what MicroPython
-                # v1.28.0's newer pico-sdk observes, since it inserts
-                # `dma_channel_wait_for_finish_blocking()` (polling the DMA channel's own transfer
-                # count, not FDEBUG, via ordinary CPU instructions that a real Simulator's own
-                # `_execute_batch()` loop already correctly interleaves with `clock.tick()`) before
-                # ever reaching the same FDEBUG poll, by which point the real transfer has already
-                # finished - masking the identical race rather than avoiding it. Skipping the
-                # synchronous burst here and letting `_execute_batch()`'s own "step every
-                # non-stopped RPPIO once per CPU instruction" loop (see __init__'s `_run_task`
-                # comment) pick this SM up on its very next iteration - exactly how the >1000-step
-                # "continuation" already had to work - guarantees `clock.tick()` runs between every
-                # single PIO step whenever a real Simulator owns this RP2040, so a DMA-fed FIFO can
-                # never be observably outrun. Only `tests/test_pio.py`'s no-owning-`Simulator`
-                # fixture (which drives `RPPIO` directly, with no per-instruction outer loop to fall
-                # back on) still needs the synchronous burst - the same `rp2040.simulator is None`
-                # distinction the task-scheduling branch immediately below this already draws, now
-                # extended to gate the first batch too, not just the continuation.
-                if self.rp2040.simulator is None:
-                    self._step_batch()
-                if not self.stopped and self.rp2040.simulator is None:
-                    self._run_task = asyncio.get_running_loop().create_task(self.run())
+                # Nothing runs here: the block is stepped by whoever advances the clock (see __init__).
             if not should_run:
                 self.stopped = True
                 self.settle_held_writes()
@@ -319,14 +271,14 @@ class RPPIO(BasePeripheral):
 
         elif offset == IRQ:
             self.irq &= ~self.raw_write_value
-            self.irq_updated()
+            self._irq_updated()
 
         elif offset == INPUT_SYNC_BYPASS:
             self.input_sync_bypass = value
 
         elif offset == IRQ_FORCE:
             self.irq |= value & 0xFF  # IRQ_FORCE and IRQ have eight bits (3.7: 7:0, the rest reserved)
-            self.irq_updated()
+            self._irq_updated()
 
         elif offset in (
             FSTAT,
@@ -346,16 +298,16 @@ class RPPIO(BasePeripheral):
 
         elif offset == IRQ0_INTE:
             self.irq0_int_enable = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ0_INTF:
             self.irq0_int_force = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ1_INTE:
             self.irq1_int_enable = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == IRQ1_INTF:
             self.irq1_int_force = value & 0xFFF
-            self.check_interrupts()
+            self._check_interrupts()
 
         else:
             super().write_uint32(offset, value)
@@ -422,8 +374,8 @@ class RPPIO(BasePeripheral):
         if self.resolve_due_fp != NEVER_DUE:
             self.pin_values, self.pin_directions = self.held_image()
             self.resolve_due_fp = NEVER_DUE
-            self.recompute_due()
-            self.check_changed_pins()
+            self._recompute_due()
+            self._check_changed_pins()
 
     def schedule_resolve(self) -> None:
         """After a cycle's collation: if a held write was overwritten (by a higher-numbered machine's write, or by its own machine's side-set) the image falls back to the held
@@ -439,8 +391,7 @@ class RPPIO(BasePeripheral):
 
         Instruction memory is cleared deliberately - `PIO_INSTR_MEM` is RAM on real silicon and
         does not survive a reset, which is exactly why firmware re-uploads its programs on the way
-        back up. `_run_task` is left alone: it only exists on the no-owning-`Simulator` fallback
-        path (see `__init__`), where it is the caller's loop, not chip state."""
+        back up."""
         for machine in self.machines:
             machine.reset()
         self.instructions = [0] * 32
@@ -463,19 +414,41 @@ class RPPIO(BasePeripheral):
         self.irq0_int_force = 0
         self.irq1_int_enable = 0
         self.irq1_int_force = 0
-        self.check_interrupts()
+        self._check_interrupts()
 
-    def check_interrupts(self) -> None:
+    def snapshot(self) -> dict[str, Any]:
+        """Everything the block holds, as plain values in one call (the inspection port of docs/records/0096): the block's registers and pacing state, the instruction memory,
+        and per machine its state, config words, held `OUT_STICKY` write and both FIFOs (oldest first)."""
+        out: dict[str, Any] = {name: int(getattr(self, name)) for name in SNAPSHOT_BLOCK_FIELDS}
+        out["instructions"] = tuple(int(word) for word in self.instructions)
+        out["machines"] = tuple(
+            {
+                **{name: int(getattr(machine, name)) for name in SNAPSHOT_MACHINE_FIELDS},
+                "held_write": tuple(int(v) for v in (machine.held_write or ())),
+                "tx": tuple(int(v) for v in machine.tx_fifo.items),
+                "rx": tuple(int(v) for v in machine.rx_fifo.items),
+            }
+            for machine in self.machines
+        )
+        return out
+
+    def check_pin_waits(self, pin: int) -> None:
+        """A pin's input level changed: wakes the enabled machines waiting on it with WAIT PIN."""
+        for machine in self.machines:
+            if machine.enabled and machine.waiting and machine.wait_type == WaitType.PIN and machine.wait_index == pin:
+                machine.check_wait()
+
+    def _check_interrupts(self) -> None:
         first_irq = self.first_irq
         self.rp2040.set_interrupt(first_irq, bool(self.irq0_int_status))
         self.rp2040.set_interrupt(first_irq + 1, bool(self.irq1_int_status))
 
-    def irq_updated(self) -> None:
+    def _irq_updated(self) -> None:
         for machine in self.machines:
             machine.check_wait()
-        self.check_interrupts()
+        self._check_interrupts()
 
-    def check_changed_pins(self) -> None:
+    def _check_changed_pins(self) -> None:
         changed_pins = (self.old_pin_directions ^ self.pin_directions) | (self.old_pin_values ^ self.pin_values)
         if changed_pins:
             self.old_pin_directions = self.pin_directions
@@ -495,7 +468,7 @@ class RPPIO(BasePeripheral):
                     gpio[gpio_index].check_for_updates()
                 remaining &= remaining - 1
 
-    def recompute_due(self) -> None:
+    def _recompute_due(self) -> None:
         """Recomputes `next_due_fp` - the earliest cycle any state machine has something to do -
         from scratch. Called after anything that can change a machine's schedule other than the
         machine executing an instruction: enable/restart, a CLKDIV write, a stall beginning."""
@@ -505,7 +478,7 @@ class RPPIO(BasePeripheral):
                 next_due_fp = machine.next_due_fp
         self.next_due_fp = min(next_due_fp, self.resolve_due_fp)
 
-    def notify_due(self, due_fp: int) -> None:
+    def _notify_due(self, due_fp: int) -> None:
         """A machine just re-armed itself out of band - i.e. `check_wait()` unstalled it from an
         MMIO write, a GPIO edge or an IRQ, not from inside `advance()`. Only ever lowers
         `next_due_fp`, so the machine gets picked up on the very next `advance()` rather than
@@ -549,7 +522,7 @@ class RPPIO(BasePeripheral):
             # A held write was overwritten for one cycle and that cycle is over: back to the held image, and the pins hear it before this cycle's writes
             self.pin_values, self.pin_directions = self.held_image()
             self.resolve_due_fp = NEVER_DUE
-            self.check_changed_pins()
+            self._check_changed_pins()
         routing = self.pin_routing()
         self.in_cycle = routing
         try:
@@ -559,8 +532,8 @@ class RPPIO(BasePeripheral):
         if routing or self.pin_routing():
             self.collate()
             self.schedule_resolve()
-        self.recompute_due()
-        self.check_changed_pins()
+        self._recompute_due()
+        self._check_changed_pins()
 
     def _step_due_machines(self, cycle_fp: int) -> None:
         for machine in self.machines:
@@ -577,29 +550,10 @@ class RPPIO(BasePeripheral):
                 machine.step()
 
     def step(self) -> None:
-        """One system clock. Kept as the no-owning-`Simulator` entry point (`_step_batch()`/
-        `run()`, and tests driving `RPPIO` directly) - with the reset CLKDIV of 1 and no `[delay]`
+        """One system clock. Kept as the entry point of a chip with no `Simulator` (and of tests
+        driving `RPPIO` directly) - with the reset CLKDIV of 1 and no `[delay]`
         cycles this is exactly the "every machine executes one instruction" it has always been."""
         self.advance(1)
-
-    def _step_batch(self) -> None:
-        i = 0
-        while i < 1000 and not self.stopped:
-            self.advance(1)
-            i += 1
-
-    async def run(self) -> None:
-        # Continuation of the first batch write_uint32()'s CTRL branch already ran synchronously -
-        # only reached at all when this RP2040 has no owning Simulator (see __init__'s _run_task
-        # comment/write_uint32()'s CTRL branch) - a real Simulator's own _execute_batch() drives
-        # the continuation directly instead, once per CPU instruction/idle-jump, never scheduling
-        # this task. Upstream rp2040js uses `setTimeout(() => this.run(), 0)` for the analogous
-        # no-owning-loop-driver case, to yield back to the single-threaded JS event loop every 1000
-        # steps so external stop() calls get a chance to run - `await asyncio.sleep(0)` is the
-        # direct analogue here.
-        while not self.stopped:
-            await asyncio.sleep(0)
-            self._step_batch()
 
     def stop(self) -> None:
         for machine in self.machines:

@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals._dma import DREQChannel
@@ -188,7 +188,29 @@ class RPADC(BasePeripheral):
         self.cs &= ~(CS_AINSEL_MASK << CS_AINSEL_SHIFT)
         self.cs |= (channel & CS_AINSEL_MASK) << CS_AINSEL_SHIFT
 
-    def check_interrupts(self) -> None:
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers, the conversion in flight, the result FIFO's contents and what is derived from them (the enables, the divider, the raw and masked interrupts)."""
+        return {
+            "cs": self.cs,
+            "fcs": self.fcs,
+            "clock_div": self.clock_div,
+            "int_enable": self.int_enable,
+            "int_force": self.int_force,
+            "result": self.result,
+            "busy": bool(self.busy),
+            "current_channel": self.current_channel,
+            "active_channel": self._active_channel,
+            "fifo": tuple(self.fifo.items),
+            "temperature_enable": int(self.temperature_enable),
+            "enabled": int(self.enabled),
+            "divider": float(self.divider),
+            "int_raw": int(self.int_raw),
+            "int_status": int(self.int_status),
+            "num_channels": self.num_channels,
+            "sample_time": self.sample_time,
+        }
+
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.ADC_FIFO, bool(self.int_status))
 
     def start_adc_read(self) -> None:
@@ -224,7 +246,7 @@ class RPADC(BasePeripheral):
                     value |= FIFO_ERR
                 self.fifo.push(value)
                 self._update_dma()
-                self.check_interrupts()
+                self._check_interrupts()
 
         # Round-robin
         round_mask = (self.cs >> CS_RROBIN_SHIFT) & CS_RROBIN_MASK
@@ -265,7 +287,7 @@ class RPADC(BasePeripheral):
                 return 0
             value = self.fifo.pull()
             self._update_dma()
-            self.check_interrupts()  # "The interrupt is cleared by draining the FIFO to a level lower than FCS.THRESH" (4.9.2.6): the line follows the level down
+            self._check_interrupts()  # "The interrupt is cleared by draining the FIFO to a level lower than FCS.THRESH" (4.9.2.6): the line follows the level down
             return value
         if offset == DIV:
             return self.clock_div
@@ -291,7 +313,7 @@ class RPADC(BasePeripheral):
             self.fcs &= ~(value & (FCS_OVER | FCS_UNDER))  # Write-clear bits
             self.fcs = (self.fcs & ~FCS_WRITE_MASK) | (value & FCS_WRITE_MASK)
             self._update_dma()  # DREQ_EN or the threshold may have changed
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == DIV:
             self.clock_div = value & (
@@ -300,11 +322,11 @@ class RPADC(BasePeripheral):
 
         elif offset == INTE:
             self.int_enable = value & FIFO_INT
-            self.check_interrupts()
+            self._check_interrupts()
 
         elif offset == INTF:
             self.int_force = value & FIFO_INT
-            self.check_interrupts()
+            self._check_interrupts()
 
         else:
             super().write_uint32(offset, value)

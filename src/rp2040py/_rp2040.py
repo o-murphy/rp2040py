@@ -129,6 +129,12 @@ class RP2040:
         # (RPPPB, RPWatchdog, RPADC, RPPWM, RPPIO, RPUSBController, RPDMA) call
         # self.clock.create_alarm(...) from their own __init__.
         self.clock = clock if clock is not None else SimulationClock()
+        # An observer of the DMA requests that reach the chip's DMA, `f(number, asserted)` (the native chip has the same property): it sees every request before the DMA gets it.
+        self.dreq_tap: Callable[[int, bool], None] | None = None
+        # An observer of the pins' calls that tell the PWM an input moved, `f(pin)` (the native chip has the same property).
+        self.pwm_input_tap: Callable[[int], None] | None = None
+        # An observer of what the clock tree announces, `f(domain, hz, old)` with `domain` "sys", "peri", "ref" or "rtc" (the native chip has the same property).
+        self.clock_tree_tap: Callable[[str, float, float], None] | None = None
 
         # A plain list, not Uint32Array (same rationale as CortexM0Core.registers - see
         # docs/PORTING.md's performance section): bootrom is on the hot read_uint32 path (real
@@ -619,7 +625,8 @@ class RP2040:
         bootrom = self.bootrom
         if address < self.bootrom_byte_size:
             return bootrom[address // 4]
-        if FLASH_START_ADDRESS <= address < FLASH_END_ADDRESS:
+        # A word whose last bytes run past the end of its memory is not in that memory: it falls through to the invalid-address read below, as on the native bus (the bytes are not there to read).
+        if FLASH_START_ADDRESS <= address < FLASH_END_ADDRESS and (address & 0x00FFFFFF) + 4 <= self.flash_byte_size:
             # Flash is mirrored four times:
             # - 0x10000000 XIP
             # - 0x11000000 XIP_NOALLOC
@@ -631,9 +638,9 @@ class RP2040:
             # the cache's data RAM, usable as SRAM while the cache is off (a bus error otherwise)
             value = self.xip_ctrl.sram_read(address)
             return 0xFFFFFFFF if value is None else value
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
+        if RAM_START_ADDRESS <= address <= RAM_START_ADDRESS + self.ram_byte_size - 4:
             return read_uint32_le(self.sram, address - RAM_START_ADDRESS)
-        if DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + self.dpram_byte_size:
+        if DPRAM_START_ADDRESS <= address <= DPRAM_START_ADDRESS + self.dpram_byte_size - 4:
             return read_uint32_le(self.usb_dpram, address - DPRAM_START_ADDRESS)
         if self._sync is not None:
             self._sync()
@@ -658,11 +665,12 @@ class RP2040:
 
     def read_uint16(self, address: int) -> int:
         """We assume the address is 16-bit aligned."""
-        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size:
+        if FLASH_START_ADDRESS <= address < FLASH_START_ADDRESS + self.flash_byte_size - 1:
             self.xip_ctrl.access(address)
             return read_uint16_le(self.flash, address - FLASH_START_ADDRESS)
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size - 1:
             return read_uint16_le(self.sram, address - RAM_START_ADDRESS)
+        # (a halfword on the very last byte of a memory is not wholly in it: the aligned word's half is served, as on the native bus)
 
         value = self.read_uint32(address & 0xFFFFFFFC)
         return (value & 0xFFFF0000) >> 16 if address & 0x2 else value & 0xFFFF
@@ -692,9 +700,11 @@ class RP2040:
             self.xip_ctrl.write_access(address)
         elif address >> 24 == 0x15:
             self.xip_ctrl.sram_write(address, value)
-        elif RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
+        elif (
+            RAM_START_ADDRESS <= address <= RAM_START_ADDRESS + self.ram_byte_size - 4
+        ):  # (a word that runs past the end of its memory is not in it: "undefined address" below)
             write_uint32_le(self.sram, address - RAM_START_ADDRESS, value)
-        elif DPRAM_START_ADDRESS <= address < DPRAM_START_ADDRESS + self.dpram_byte_size:
+        elif DPRAM_START_ADDRESS <= address <= DPRAM_START_ADDRESS + self.dpram_byte_size - 4:
             offset = address - DPRAM_START_ADDRESS
             write_uint32_le(self.usb_dpram, offset, value)
             self.usb_ctrl.dpram_updated(offset, value)
@@ -746,7 +756,7 @@ class RP2040:
         # we assume that address is 16-bit aligned.
         # Ideally we should generate a fault if not!
 
-        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size:
+        if RAM_START_ADDRESS <= address < RAM_START_ADDRESS + self.ram_byte_size - 1:
             write_uint16_le(self.sram, address - RAM_START_ADDRESS, value)
             return
         if FLASH_START_ADDRESS <= address < FLASH_END_ADDRESS:
@@ -761,10 +771,11 @@ class RP2040:
             peripheral_offset = aligned_address & 0xFFF
             peripheral.write_uint32_atomic(peripheral_offset, (value & 0xFFFF) | ((value & 0xFFFF) << 16), atomic_type)
             return
+        # The aligned word with the halfword put in at its byte offset; on the last byte of a word (an unaligned halfword) the part past the word is dropped, as on the native bus.
         original_value = self.read_uint32(aligned_address)
-        patched = bytearray(u32(original_value).to_bytes(4, "little"))
-        write_uint16_le(patched, offset, value)
-        self.write_uint32(aligned_address, int.from_bytes(patched, "little"))
+        shift = offset * 8
+        patched = (u32(original_value) & ~(0xFFFF << shift) | ((value & 0xFFFF) << shift)) & 0xFFFFFFFF
+        self.write_uint32(aligned_address, patched)
 
     @property
     def gpio_values(self) -> int:

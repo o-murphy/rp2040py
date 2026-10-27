@@ -74,7 +74,7 @@ struct McuHost {
     void* ctx = nullptr;
     const int* failed = nullptr;
 
-    // The devices the world attaches to the peripherals, and the oscillators a host may have swapped for its own (`xosc_hz` / `rosc_hz`: the output in Hz, 0 while not running). Every one is optional: with none, a bus has no device on it (an I2C that NACKs every
+    // The devices the world attaches to the peripherals, Every one is optional: with none, a bus has no device on it (an I2C that NACKs every
     // address, an SPI that reads back 0, an ADC that converts what the default device gives), a UART's bytes go nowhere. `instance` is the UART / SPI / I2C number.
     // False from any of them: the host has parked its error (as everywhere), and the block's access fails with it.
     bool (*uart_byte)(void* ctx, uint32_t instance, uint32_t byte) = nullptr;           // a transmitted byte
@@ -85,34 +85,20 @@ struct McuHost {
     bool (*i2c_write)(void* ctx, uint32_t instance, uint32_t value) = nullptr;          // ... to take a byte ...
     bool (*i2c_read)(void* ctx, uint32_t instance, bool ack) = nullptr;                 // ... to give a byte ...
     bool (*i2c_stop)(void* ctx, uint32_t instance) = nullptr;                           // ... to produce a STOP; each answers with the block's `complete_*()`
-    // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (`source`: SIO's, a PIO's, the PWM's - read by the host only for a block the
-    // chip does not hold itself); a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
-    // an input level that moved reaches the PWM and the PIOs' waits inside; for a PWM or a PIO the host has replaced (`pwm`, bits of `pio_mask`) it is the host's to tell (`pin_input_changed`).
-    bool (*pin_source)(void* ctx, uint32_t bank, uint32_t source, uint32_t* value) = nullptr;
+    // The pins. `bank` is 0 for the 30 GPIO pins, 1 for the 6 QSPI pins. A pin's level comes from the registers of other blocks (SIO's, a PIO's, the PWM's), which the `Mcu` reads itself; a pin that changed state is announced to whoever listens on it (`pin_changed`, with the pin's number and the old and the new state code: the devices the host attached);
+    // an input level that moved reaches the PWM and the PIOs' waits inside.
     bool (*pin_changed)(void* ctx, uint32_t bank, uint32_t pin, int new_state, int old_state) = nullptr;
-    bool (*pin_input_changed)(void* ctx, uint32_t bank, uint32_t pin, bool pwm, uint32_t pio_mask) = nullptr;
-    // The pin banks the host has put its own over (an oracle's reference pins): SIO's reads of the pins' inputs and its updates of the pins then go to the host, which asks them of its banks.
-    bool (*pin_inputs)(void* ctx, uint32_t bank, uint32_t* value) = nullptr;
-    bool (*pin_update)(void* ctx, uint32_t bank, uint32_t pin_mask) = nullptr;
-    void (*system_reset_request)(void* ctx) = nullptr;                                  // AIRCR.SYSRESETREQ; without it the core alone is reset
-    bool (*watchdog_trigger)(void* ctx) = nullptr;                                      // the watchdog fired (or was triggered): the chip's reset; without it nothing happens
-    bool (*watchdog_tick)(void* ctx, double tick_hz) = nullptr;                         // the tick changed (0: stopped), after the TIMER and SysTick have followed it
-    // The flash path. An SSI the host has replaced is asked for its BAUDR (`ssi_baudr`) by the XIP stream's pace; with a clock tree the host has put over the chip's, `clk_sys` is the host's. Both optional.
-    bool (*ssi_baudr)(void* ctx, double* value) = nullptr;
-    bool (*clk_sys)(void* ctx, double* hz) = nullptr;
+    // A reset was asked for, and why: `kResetRequestSysResetReq` (AIRCR.SYSRESETREQ; without a host the core alone is reset) or `kResetRequestWatchdog` (the watchdog fired or was triggered; without a host
+    // nothing happens). The host decides what a reset is - the chip's cascade (`enter_reset` / `leave_reset`) and whatever side effects it has on its own end (a USB device, a console). False: the host has parked its error.
+    static constexpr uint32_t kResetRequestSysResetReq = 0, kResetRequestWatchdog = 1;
+    bool (*reset_requested)(void* ctx, uint32_t cause) = nullptr;
     // The host's end of the USB wire (the device at the other end of the link: its setup / IN / OUT handling, the endpoint transfers and the notifications of `core/usb.hpp`'s `UsbHost`). Optional: with
     // none, the controller has nothing connected. Read once, by `build()`; the line, the warning and the failure flag of that struct are the chip's, not the host's.
     const UsbHost* usb_wire = nullptr;
-    // The reset cascade (`Mcu::reset`). A block the host has replaced (named in the `world` mask the host passes) is the host's to reset: `reset_block(block)`. `usb_reset` comes before the USB block's own
-    // reset (the host drops the device and the transfers it queued), `bus_reset` is the USB link seeing the chip reset (the device's `on_reset`), `record_cause` is a host's own VREG_AND_CHIP_RESET block
-    // being told the cause flag. All optional.
-    bool (*reset_block)(void* ctx, uint32_t block) = nullptr;
+    // The reset cascade (`Mcu::reset`): `usb_reset` comes before the USB block's own reset (the host drops the device and the transfers it queued), `bus_reset` is the USB link seeing the chip reset (the
+    // device's `on_reset`). Both optional.
     bool (*usb_reset)(void* ctx) = nullptr;
     bool (*bus_reset)(void* ctx) = nullptr;
-    bool (*record_cause)(void* ctx, uint32_t flag) = nullptr;
-    bool (*pio_started)(void* ctx, uint32_t index) = nullptr;                           // CTRL started a stopped PIO: the host runs its "no owning Simulator" fallback (the asyncio task of `run()`)
-    double (*xosc_hz)(void* ctx) = nullptr;                                             // only while the host has put its own crystal block over the chip's
-    double (*rosc_hz)(void* ctx) = nullptr;                                             // ... or its own ring oscillator
     bool (*adc_read)(void* ctx, uint32_t channel) = nullptr;                            // a conversion was requested; the device answers by pushing a sample
     bool (*adc_channel_value)(void* ctx, uint32_t channel, int64_t* value) = nullptr;   // the analog value of a channel
 };
@@ -235,8 +221,6 @@ public:
         ro.ctx = this;
         rosc_.init(clock_, &ports_, kMcuBlockRosc, ro);
         ClocksHost ch;
-        ch.xosc_hz = tree_xosc_hz;  // (read only while a host's own oscillator block stands in for the chip's)
-        ch.rosc_hz = tree_rosc_hz;
         ch.ctx = this;
         clocks_.init(clock_, &ports_, kMcuBlockClocks, ch, &pll_[0], &pll_[1]);
         for (int i = 0; i < 2; ++i) pll_[i].bind_reference(clocks_xosc_hz, &clocks_);
@@ -253,7 +237,6 @@ public:
         for (uint32_t b = 0; b < 2; ++b) {
             bank_ctx_[b] = {this, b};
             PinHost ph;
-            ph.source = pin_source;
             ph.on_change = pin_change;
             ph.io_interrupt = pin_io_interrupt;
             ph.input_changed = pin_input_changed;
@@ -330,7 +313,6 @@ public:
         own_dma_.init(&bus, clock_, &ports_, kMcuBlockDma, kIrqDma[0], dm);  // (DMA_IRQ_1 is the next line)
         own_dma_.bind_clock(clocks_clk_sys, &clocks_, clocks_.clk_sys());
         bus.windows.attach(kDmaBase, own_dma_.window_handler());
-        attach_dma(&own_dma_);
 
         // The two PIOs: their lines (IRQ0 and the next one), their requests and their pins are the chip's own; the pins are the GPIO bank's (or the host's, for a bank the host holds), and a warning
         // goes to the host under the block's id. The batch loop steps them (`host_.pio_advance`). Built after the DMA: a block publishes its FIFOs' requests when it starts.
@@ -340,7 +322,6 @@ public:
             PioHost ph;
             ph.pin_update = pio_pin_update;
             ph.pin_input = pio_pin_input;
-            ph.started = pio_started;
             ph.ctx = &pio_ctx_[i];
             (void)pio_[i].init(&ports_, i == 0 ? kMcuBlockPio0 : kMcuBlockPio1, ph, i == 0 ? kIrqPio0 : kIrqPio1, i);
             bus.windows.attach(i == 0 ? kPio0Base : kPio1Base, pio_[i].window_handler());
@@ -448,12 +429,12 @@ public:
     // ---- the reset cascade (record 0096, step 3b; the pure-Python chip's `reset()` / `enter_reset()` / `leave_reset()` are its reference) ----
     // `RESETS` and `PSM` decide what a watchdog reset covers (datasheet 2.13.5, 2.14.3; record 0089): `from_watchdog` reads PSM.WDSEL and RESETS.WDSEL (RESETS.WDSEL is all ones when PSM.WDSEL selects the
     // RESETS controller itself, which holds every peripheral in reset); any other reset covers everything. SRAM and the ROM survive every path, the flash everywhere but a first reset (`preserve_flash` false).
-    // The core and the PPB are reset on every path (the one deliberate broadening, record 0096 F3). `world` has a bit (1 << McuBlock) for every block the host has put its own over: the host resets it.
-    // The two WDSEL words are arguments for a host whose PSM / RESETS are its own; the overload without them reads the ones the `Mcu` holds.
+    // The core and the PPB are reset on every path (the one deliberate broadening, record 0096 F3).
+    // The two WDSEL words are the ones the `Mcu`'s PSM and RESETS blocks hold.
     static constexpr uint32_t kPsmWdselSio = 0x4000, kPsmWdselXip = 0x1000, kPsmWdselResets = 0x8, kPsmWdselClocks = 0x4, kPsmWdselXosc = 0x2, kPsmWdselRosc = 0x1;
     static constexpr uint32_t kPsmBitsMask = 0x1FFFF, kResetsBitsMask = 0x01FFFFFF;
-    bool reset(bool from_watchdog, bool preserve_flash, uint64_t world = 0) noexcept { return reset(from_watchdog, preserve_flash, psm_.wdsel, resets_.wdsel, world); }
-    bool reset(bool from_watchdog, bool preserve_flash, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept {
+    bool reset(bool from_watchdog, bool preserve_flash) noexcept {
+        uint32_t psm_wdsel = psm_.wdsel, resets_wdsel = resets_.wdsel;
         if (from_watchdog) {
             psm_wdsel &= kPsmBitsMask;
             // "if a peripheral in the power-on state machine has the WDSEL bit set, every peripheral after it in the power-on sequence will also be reset" (datasheet 2.13.4): the bits of PSM.WDSEL
@@ -468,9 +449,9 @@ public:
         cpu1_running_ = false;
         irq_slow_ = irq_hook_ != nullptr ? 1 : 0;
         cpu1.reset_state();  // (core 1 is not running: its state goes back to power-on without a vector fetch)
-        if (!reset_step(kMcuBlockPpb, world)) return false;
-        if ((psm_wdsel & kPsmWdselSio) != 0 && !reset_step(kMcuBlockSio, world)) return false;
-        if ((psm_wdsel & kPsmWdselClocks) != 0 && !reset_step(kMcuBlockClocks, world)) return false;
+        if (!reset_step(kMcuBlockPpb)) return false;
+        if ((psm_wdsel & kPsmWdselSio) != 0 && !reset_step(kMcuBlockSio)) return false;
+        if ((psm_wdsel & kPsmWdselClocks) != 0 && !reset_step(kMcuBlockClocks)) return false;
         // the pins' registers go with their IO / PADS block (a pin bank the host holds is reset by the host with it)
         static constexpr struct { uint32_t bit; McuBlock block; } kGated[] = {
             {1u << 5, kMcuBlockIoBank0}, {1u << 8, kMcuBlockPadsBank0}, {1u << 6, kMcuBlockIoQspi}, {1u << 9, kMcuBlockPadsQspi}, {1u << 14, kMcuBlockPwm}, {1u << 2, kMcuBlockDma},
@@ -479,12 +460,12 @@ public:
             {1u << 1, kMcuBlockBusctrl}, {1u << 18, kMcuBlockSyscfg},
         };  // RESETS bit -> block, in the order the reference resets them (SYSINFO and TBMAN hold no instance state)
         for (const auto& gate : kGated) {
-            if ((resets_wdsel & gate.bit) != 0 && !reset_step(gate.block, world)) return false;
+            if ((resets_wdsel & gate.bit) != 0 && !reset_step(gate.block)) return false;
         }
-        if ((psm_wdsel & kPsmWdselXosc) != 0 && !reset_step(kMcuBlockXosc, world)) return false;
-        if ((psm_wdsel & kPsmWdselRosc) != 0 && !reset_step(kMcuBlockRosc, world)) return false;
+        if ((psm_wdsel & kPsmWdselXosc) != 0 && !reset_step(kMcuBlockXosc)) return false;
+        if ((psm_wdsel & kPsmWdselRosc) != 0 && !reset_step(kMcuBlockRosc)) return false;
         if ((psm_wdsel & kPsmWdselXip) != 0) {  // the XIP domain is a PSM bit: both halves reset together
-            if (!reset_step(kMcuBlockXip, world) || !reset_step(kMcuBlockSsi, world)) return false;
+            if (!reset_step(kMcuBlockXip) || !reset_step(kMcuBlockSsi)) return false;
         }
         if (!preserve_flash && flash_ != nullptr) {
             std::memset(flash_, 0xFF, flash_size_);  // erased flash reads 0xFF; 16 MB, so not a byte loop
@@ -493,18 +474,16 @@ public:
     }
     // Into reset: the reset (flash kept), the USB link told (the device is off the bus either way, whatever WDSEL selected), then the cause recorded - after, so the wider reset cannot wipe it. A watchdog
     // reset is the absence of bookkeeping (REASON and SCRATCH survive, CHIP_RESET is left alone); anything else resets the watchdog and records HAD_RUN / HAD_POR.
-    bool enter_reset(McuResetCause cause, uint64_t world = 0) noexcept { return enter_reset(cause, psm_.wdsel, resets_.wdsel, world); }
-    bool enter_reset(McuResetCause cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept {
-        if (!reset(cause == kMcuResetWatchdog, true, psm_wdsel, resets_wdsel, world)) return false;
+    bool enter_reset(McuResetCause cause) noexcept {
+        if (!reset(cause == kMcuResetWatchdog, true)) return false;
         if (host_world_.bus_reset != nullptr && !host_world_.bus_reset(host_world_.ctx)) return false;
         if (cause == kMcuResetWatchdog) return true;
-        if (!reset_step(kMcuBlockWatchdog, world)) return false;
+        if (!reset_step(kMcuBlockWatchdog)) return false;
         const uint32_t flag = cause == kMcuResetRunPin ? vreg_regs::HAD_RUN : vreg_regs::HAD_POR;
-        if ((world >> kMcuBlockVreg & 1u) != 0) return host_world_.record_cause == nullptr || host_world_.record_cause(host_world_.ctx, flag);
         vreg_.record_reset_cause(flag);
         return true;
     }
-    bool enter_reset_code(uint32_t cause, uint32_t psm_wdsel, uint32_t resets_wdsel, uint64_t world) noexcept { return enter_reset(static_cast<McuResetCause>(cause), psm_wdsel, resets_wdsel, world); }
+    bool enter_reset_code(uint32_t cause) noexcept { return enter_reset(static_cast<McuResetCause>(cause)); }
     // Out of reset: the core at the flash's entry point, where the boot ROM would have left it (the ROM image is optional for a host, record 0096 F2).
     void leave_reset() noexcept { cpu.registers[15] = kFlashStart; }
     static constexpr uint32_t kFlashStart = 0x10000000, kFlashEnd = 0x14000000, kRamStart = 0x20000000, kDpramStart = 0x50100000;
@@ -583,37 +562,12 @@ public:
         irq_slow_ = (hook != nullptr || cpu1_running_) ? 1 : 0;
     }
 
-    // The DMA requests (step 2c). Every block with a DREQ calls this (directly, through the adapters below, once its shell has bound it) and it reaches the DMA block the host
-    // attached - unless a hook is over it (a test double that records the requests, a DMA that is not the native one): the hook then gets the request *instead of* the DMA, as a
-    // replaced `rp2040.dma` always did. With neither, a request goes nowhere (a chip without a DMA). False: waking a channel failed (the host has parked its error).
-    // The attached block must outlive its attachment: the host re-attaches (or detaches, with null) whenever it replaces the DMA. Until the DMA is a member of this class (3a) it is the host's.
-    using DreqHook = bool (*)(void* ctx, uint32_t number, bool asserted);
+    // The DMA requests (step 2c). Every block with a DREQ calls this (directly, through the adapters below, once its shell has bound it) and it reaches the chip's own DMA block. To see the requests on
+    // their way, put a tap on the DMA block (`DmaBlock::dreq_tap`). False: waking a channel failed (the host has parked its error).
     bool set_dreq(uint32_t number, bool asserted) noexcept {
-        if (dreq_hook_ != nullptr) return dreq_hook_(dreq_hook_ctx_, number, asserted);
-        if (dma_ == nullptr) return true;
-        if (asserted) return dma_->set_dreq(number);
-        dma_->clear_dreq(number);
+        if (asserted) return own_dma_.set_dreq(number);
+        own_dma_.clear_dreq(number);
         return true;
-    }
-    // The clock tree. The crystal is the board's (12 MHz on a Pico): a parameter of the world. A change of an oscillator or of a PLL re-derives the tree, unless the host has put its own tree over
-    // this one (a reference swapped in by an oracle): `set_tree_hook()` then gets the notice instead.
-    using TreeHook = bool (*)(void* ctx);
-    void set_crystal_hz(double hz) noexcept { clocks_.set_crystal_hz(hz); }
-    void set_tree_hook(TreeHook hook, void* ctx) noexcept {
-        tree_hook_ = hook;
-        tree_hook_ctx_ = ctx;
-    }
-    // `world` true: this bank is the host's (not the `Mcu`'s own), so SIO asks the host for its inputs and tells it of its updates.
-    void set_pin_bank_world(uint32_t bank, bool world) noexcept {
-        pins_world_[bank & 1] = world;
-        if (bank == 0) bind_pio_pins();
-    }
-    // `world` true: the PWM / this PIO is the host's own (a reference an oracle swapped in), so a pin input that moved is told to the host for it, not to the `Mcu`'s block.
-    void set_pwm_world(bool world) noexcept { pwm_world_ = world; }
-    // `world` true: the SSI is the host's own: this one leaves the chip-select pin (two blocks applying every command to the one flash would double it) and the XIP stream asks the host for BAUDR.
-    void set_ssi_world(bool world) noexcept {
-        ssi_world_ = world;
-        bind_ssi_cs();
     }
     // The chip's memory, the host's buffers (they outlive the chip and are never moved): the boot ROM, the flash image, the SRAM and the USB DPRAM, mapped on the bus as the RP2040 has them (the ROM
     // word-indexed at 0; the flash as four 16 MiB read aliases - XIP, NOALLOC, NOCACHE, NOCACHE_NOALLOC - read-only to the bus, writes and sub-word accesses only below the real size, every access
@@ -662,12 +616,6 @@ public:
     UsbBlock& usb() noexcept { return usb_; }
     SsiBlock& ssi() noexcept { return ssi_; }
     XipBlock& xip() noexcept { return xip_; }
-    void set_pio_world(uint32_t index, bool world) noexcept { pio_world_[index & 1] = world; }
-    void attach_dma(DmaBlock* dma) noexcept { dma_ = dma; }
-    void set_dreq_hook(DreqHook hook, void* ctx) noexcept {
-        dreq_hook_ = hook;
-        dreq_hook_ctx_ = ctx;
-    }
 
     // The run flags. `request_stop()` may be called from any thread; the loop leaves at its next iteration and `run()` then reports `kStopRequested`. `real_io` is nonzero while
     // some device waits on the *real* world (a relayed DNS reply, a TCP connect in flight): an idle jump is then capped and ends the batch, so simulated time cannot outrun the
@@ -686,8 +634,15 @@ public:
     // monotonic clock, in seconds, for the real-time budget (the default never runs the budget out). Both are the host's: the tree's byte is the tree's, and wall time is the
     // host's to give. The function receives the chip as its context.
     void set_clk_changed_flag(const volatile uint8_t* flag) noexcept { host_.clk_changed = flag; }
+    // A host that runs batches itself (the Python `Simulator`): the flag the tree raises when `clk_sys` changes is the chip's own byte, cleared here at the start of a batch.
+    void begin_batch() noexcept {
+        clk_changed_ = 0;
+        host_.clk_changed = &clk_changed_;
+    }
     void set_monotonic(double (*monotonic)(void* chip)) noexcept { host_.monotonic = monotonic != nullptr ? monotonic : no_time; }
 
+    // The clock tree. The crystal is the board's (12 MHz on a Pico): a parameter of the world. A change of an oscillator or of a PLL re-derives the tree.
+    void set_crystal_hz(double hz) noexcept { clocks_.set_crystal_hz(hz); }
     // The clock tree tells its consumers when a rate changes: SysTick, the PWM counters and the DMA (`clk_sys`), the watchdog's tick (`clk_ref`) and the RTC (`clk_rtc`), then the flag below. Registered by
     // `build()` in the reference's order (`update_clocks()`); a shell that puts its own consumer over one of them (an oracle's reference) clears the lists and registers its own.
     void bind_tree_sinks() noexcept {
@@ -699,6 +654,13 @@ public:
         (void)clocks_.add_sys_sink(sys_changed_sink, this);
         (void)clocks_.add_ref_sink(watchdog_ref_sink, &watchdog_);
         (void)clocks_.add_rtc_sink(rtc_rtc_sink, &rtc_);
+        bind_uart_peri_sinks();
+    }
+    // The UARTs derive their baud rate from `clk_peri`: when it changes they announce the rate again (through the same `uart_baud` slot a write of IBRD / FBRD uses), unless the firmware has not set
+    // a divider yet. Added to the peri sinks in the order of the UARTs.
+    void bind_uart_peri_sinks() noexcept {
+        (void)clocks_.add_peri_sink(uart_peri_sink, &instance_[0]);
+        (void)clocks_.add_peri_sink(uart_peri_sink, &instance_[1]);
     }
     // Runs at the rate the clock tree has now: one instruction costs one `clk_sys` cycle, and a batch ends when `clk_sys` changes (so the next call starts at the new rate). What a wrapper calls in a loop
     // when it has no clock tree of its own to follow (the Python `Simulator` does it itself, with its own flag, and calls `run()`).
@@ -751,9 +713,8 @@ public:
     }
 
 private:
-    // One block of the cascade: the host's if it holds that block (`world`), the `Mcu`'s own otherwise.
-    bool reset_step(McuBlock block, uint64_t world) noexcept {
-        if ((world >> block & 1u) != 0) return host_world_.reset_block == nullptr || host_world_.reset_block(host_world_.ctx, block);
+    // One block of the cascade.
+    bool reset_step(McuBlock block) noexcept {
         switch (block) {
             case kMcuBlockPpb: ppb_.reset(); ppb1_.reset(); return true;
             case kMcuBlockSio: sio_.reset(); return true;
@@ -764,8 +725,6 @@ private:
             case kMcuBlockPadsQspi: {
                 const uint32_t bank = (block == kMcuBlockIoQspi || block == kMcuBlockPadsQspi) ? 1 : 0;
                 const bool pads = block == kMcuBlockPadsBank0 || block == kMcuBlockPadsQspi;
-                // A pin bank the host holds is the host's to reset along with the block (its pins are the host's objects).
-                if (pins_world_[bank]) return host_world_.reset_block == nullptr || host_world_.reset_block(host_world_.ctx, block);
                 // PADS_QSPI does not share BANK0's reset value: GPIO_QSPI_SS's pull-up is what holds the flash deselected and what makes BOOTSEL readable (record 0050); SCLK, SS, SD0-SD3.
                 static constexpr uint32_t kQspiPad[6] = {0x56, 0x5A, 0x52, 0x52, 0x52, 0x52};
                 PinBank& b = pins(bank);
@@ -806,7 +765,7 @@ private:
         }
     }
     static bool sys_changed_sink(void* chip, double, double) noexcept {
-        static_cast<Mcu*>(chip)->clk_changed_ = 1;
+        static_cast<Mcu*>(chip)->end_batch();  // clk_sys changed: the batch ends and the next one starts at the new rate
         return true;
     }
     static bool step_pio(void* chip, int index, int64_t cycles) noexcept { return static_cast<Mcu*>(chip)->pio_[index].advance(cycles); }
@@ -820,7 +779,7 @@ private:
     static bool ports_dreq(void* chip, uint32_t number, bool asserted) noexcept { return static_cast<Mcu*>(chip)->set_dreq(number, asserted); }
     static bool tree_changed(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        return m->tree_hook_ != nullptr ? m->tree_hook_(m->tree_hook_ctx_) : m->clocks_.retune();
+        return m->clocks_.retune();
     }
     // SIO's host: the pins' effective inputs, the pins whose SIO-driven state moved, and the cycles SIO charges the CPU.
     // The PIOs' host: `chip` is the `Mcu` for the line and the requests (the PIO passes absolute numbers), a `McuInstance` for the rest.
@@ -830,36 +789,27 @@ private:
         *level = (sio_inputs(static_cast<const McuInstance*>(ctx)->mcu, 0) >> pin & 1u) != 0;
         return true;
     }
-    static bool pio_started(void* ctx) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        const McuHost& w = i->mcu->host_world_;
-        return w.pio_started == nullptr || w.pio_started(w.ctx, i->index);
-    }
-    // The PIOs read and update the GPIO bank's pins directly; over a bank the host holds they go through the host instead.
+    // The PIOs read and update the GPIO bank's pins directly.
     void bind_pio_pins() noexcept {
         for (int p = 0; p < kPioBlocks; ++p) {
-            for (uint32_t pin = 0; pin < 30; ++pin) pio_[p].bind_pin(pin, pins_world_[0] ? nullptr : &gpio_bank_, pin);
+            for (uint32_t pin = 0; pin < 30; ++pin) pio_[p].bind_pin(pin, &gpio_bank_, pin);
         }
     }
     // The SSI's and XIP_CTRL's hosts.
     static bool xip_clk_sys(void* chip, double* hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        const McuHost& w = m->host_world_;
-        if (m->tree_hook_ != nullptr && w.clk_sys != nullptr) return w.clk_sys(w.ctx, hz);
         *hz = m->clocks_.clk_sys();
         return true;
     }
     static bool xip_baudr(void* chip, double* value) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        const McuHost& w = m->host_world_;
-        if (m->ssi_world_) return w.ssi_baudr == nullptr || w.ssi_baudr(w.ctx, value);
         *value = static_cast<double>(m->ssi_.baudr() & 0xFFFFu);
         return true;
     }
-    // The SSI listens to QSPI_SS (slot 1 of the QSPI bank) directly - unless the host has replaced the SSI, which then listens to the pin on its own.
+    // The SSI listens to QSPI_SS (slot 1 of the QSPI bank) directly.
     void bind_ssi_cs() noexcept {
         ssi_.detach();
-        if (!ssi_world_) (void)ssi_.bind_cs(&qspi_bank_, 1);
+        (void)ssi_.bind_cs(&qspi_bank_, 1);
     }
     // The PWM's host: its line and requests, and the pins it drives and reads (the GPIO bank).
     static bool pwm_pin_changed(void* chip, uint32_t pin) noexcept { return sio_update_pins(chip, 1u << pin, false); }
@@ -868,11 +818,6 @@ private:
         return true;
     }
     static uint32_t sio_inputs(Mcu* m, uint32_t bank) noexcept {
-        uint32_t value = 0;
-        if (m->pins_world_[bank]) {
-            if (m->host_world_.pin_inputs != nullptr) (void)m->host_world_.pin_inputs(m->host_world_.ctx, bank, &value);
-            return value;
-        }
         return m->pins(bank).input_values();
     }
     static uint32_t sio_gpio_in(void* chip) noexcept { return sio_inputs(static_cast<Mcu*>(chip), 0); }
@@ -880,7 +825,6 @@ private:
     static bool sio_update_pins(void* chip, uint32_t pin_mask, bool qspi) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         const uint32_t b = qspi ? 1 : 0;
-        if (m->pins_world_[b]) return m->host_world_.pin_update == nullptr || m->host_world_.pin_update(m->host_world_.ctx, b, pin_mask);
         PinBank& bank = m->pins(b);
         for (uint32_t i = 0; i < bank.count() && i < 32; ++i) {
             if ((pin_mask & (1u << i)) != 0 && !bank.check_for_updates(i)) return false;
@@ -909,42 +853,23 @@ private:
         m->core(m->bus.initiator).cycles += cycles;  // the initiating core pays (always core 0 until core 1 runs)
     }
     // The pin banks' host: `ctx` is a `McuInstance` (the bank).
-    static bool pin_source(void* ctx, uint32_t source, uint32_t* out) noexcept {
-        const McuInstance* i = static_cast<const McuInstance*>(ctx);
-        const McuHost& w = i->mcu->host_world_;
-        *out = 0;
-        return w.pin_source == nullptr || w.pin_source(w.ctx, i->index, source, out);
-    }
     static bool pin_change(void* ctx, uint32_t pin, int new_state, int old_state) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;
         return w.pin_changed == nullptr || w.pin_changed(w.ctx, i->index, pin, new_state, old_state);
     }
-    // An input level moved: the PWM (if the pin's function is PWM) and the PIO machines waiting on this pin react - inside for the blocks the `Mcu` holds, through the host for the ones it replaced.
+    // An input level moved: the PWM (if the pin's function is PWM) and the PIO machines waiting on this pin react.
     static bool pin_input_changed(void* ctx, uint32_t pin, bool function_is_pwm) noexcept {
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         Mcu* m = i->mcu;
-        bool pwm_left = false;
-        if (function_is_pwm) {
-            if (m->pwm_world_) {
-                pwm_left = true;
-            } else if (!m->pwm_.gpio_on_input(pin)) {
-                return false;
-            }
-        }
-        uint32_t pio_left = 0;
+        if (function_is_pwm && !m->pwm_.gpio_on_input(pin)) return false;
         for (uint32_t p = 0; p < kPioBlocks; ++p) {
-            if (m->pio_world_[p]) {
-                pio_left |= 1u << p;
-                continue;
-            }
             for (uint32_t k = 0; k < kPioMachines; ++k) {
                 PioMachine& machine = m->pio_[p].machines[k];
                 if (machine.enabled && machine.waiting && machine.wait_type == kPioWaitPin && machine.wait_index == pin && !machine.check_wait()) return false;
             }
         }
-        const McuHost& w = m->host_world_;
-        return (!pwm_left && pio_left == 0) || w.pin_input_changed == nullptr || w.pin_input_changed(w.ctx, i->index, pin, pwm_left, pio_left);
+        return true;
     }
     // A pin's IRQ value changed (either bank): IO_BANK0's line follows "any GPIO pin's IRQ value" - the QSPI bank's changes re-evaluate the same line, as they always did.
     static bool pin_io_interrupt(void* ctx) noexcept {
@@ -953,31 +878,23 @@ private:
     }
     static void ppb_reset_request(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        if (m->host_world_.system_reset_request != nullptr) {
-            m->host_world_.system_reset_request(m->host_world_.ctx);
+        if (m->host_world_.reset_requested != nullptr) {
+            (void)m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestSysResetReq);
         } else {
             (void)m->cpu.reset();  // "Reset the core only" (datasheet 2.4.2.9)
         }
     }
     static bool watchdog_trigger(void* chip) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.watchdog_trigger == nullptr || m->host_world_.watchdog_trigger(m->host_world_.ctx);
+        return m->host_world_.reset_requested == nullptr || m->host_world_.reset_requested(m->host_world_.ctx, McuHost::kResetRequestWatchdog);
     }
-    // The watchdog's tick moved: the TIMER and SysTick count on it, then the host's listeners hear of it.
+    // The watchdog's tick moved: the TIMER and SysTick count on it.
     static bool watchdog_tick(void* chip, double tick_hz) noexcept {
         Mcu* m = static_cast<Mcu*>(chip);
         m->timer_.tick_changed(tick_hz);
         m->ppb_.tick_changed(tick_hz);
         m->ppb1_.tick_changed(tick_hz);
-        return m->host_world_.watchdog_tick == nullptr || m->host_world_.watchdog_tick(m->host_world_.ctx, tick_hz);
-    }
-    static double tree_xosc_hz(void* chip) noexcept {
-        Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.xosc_hz != nullptr ? m->host_world_.xosc_hz(m->host_world_.ctx) : 0.0;
-    }
-    static double tree_rosc_hz(void* chip) noexcept {
-        Mcu* m = static_cast<Mcu*>(chip);
-        return m->host_world_.rosc_hz != nullptr ? m->host_world_.rosc_hz(m->host_world_.ctx) : 0.0;
+        return true;
     }
     static bool rosc_changed(void* chip, double) noexcept { return tree_changed(chip); }
     static bool sysinfo_rom_version(void* chip, uint32_t* version) noexcept {
@@ -1006,6 +923,12 @@ private:
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
         const McuHost& w = i->mcu->host_world_;
         return w.uart_baud == nullptr || w.uart_baud(w.ctx, i->index);
+    }
+    static bool uart_peri_sink(void* ctx, double, double) noexcept {  // clk_peri changed: re-announce the baud rate if a divider is set
+        const McuInstance* i = static_cast<const McuInstance*>(ctx);
+        const UartBlock& u = i->mcu->uart_[i->index];
+        if (u.int_divisor == 0 && u.frac_divisor == 0) return true;
+        return uart_baud(ctx);
     }
     static bool uart_bit_ns(void* ctx, double* nanos) noexcept {  // 16 x divisor bit-clocks of clk_peri per bit; 0 while the divisor or the clock is zero
         const McuInstance* i = static_cast<const McuInstance*>(ctx);
@@ -1060,8 +983,6 @@ private:
     PllBlock pll_[2];
     XoscBlock xosc_;
     RoscBlock rosc_;
-    TreeHook tree_hook_ = nullptr;
-    void* tree_hook_ctx_ = nullptr;
     RtcBlock rtc_;
     ChipPorts ports_;  // the lines every block shares (core_host.hpp): the host's `warn` with the block's id, and the failure flag
     TbmanBlock tbman_;
@@ -1076,9 +997,6 @@ private:
     PadsBlock pads_bank0_, pads_qspi_;
     McuInstance bank_ctx_[2];
     TimerBlock timer_;
-    bool pins_world_[2] = {false, false};
-    bool pwm_world_ = false;
-    bool pio_world_[2] = {false, false};
     PwmBlock pwm_;
     McuInstance pio_ctx_[2];
     SsiBlock ssi_;
@@ -1090,12 +1008,11 @@ private:
     XipBlock xip_;
     uint8_t* flash_ = nullptr;
     uint32_t flash_size_ = 0;
-    bool ssi_world_ = false;
     SioBlock sio_;
     PpbBlock ppb_;
     PpbBlock ppb1_;  // core 1's
     WatchdogBlock watchdog_;
-    DmaBlock own_dma_;  // (`dma_` is the block the requests go to: this one, unless the host attached another)
+    DmaBlock own_dma_;
     AdcBlock adc_;
     UartBlock uart_[2];
     SpiBlock spi_[2];
@@ -1104,9 +1021,6 @@ private:
     McuHost host_world_;
     IrqHook irq_hook_ = nullptr;
     void* irq_hook_ctx_ = nullptr;
-    DmaBlock* dma_ = nullptr;
-    DreqHook dreq_hook_ = nullptr;
-    void* dreq_hook_ctx_ = nullptr;
     volatile uint8_t stop_ = 0;
     volatile uint8_t real_io_ = 0;
     BatchHost host_;

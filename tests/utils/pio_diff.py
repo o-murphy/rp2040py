@@ -27,7 +27,7 @@ from typing import Any
 
 from rp2040py.irq import IRQ
 from rp2040py.peripherals import pio_registers as R
-from rp2040py.rp2040 import RP2040
+from utils.twin import new_chip
 
 PIO_BASES = (0x50200000, 0x50300000)
 PIO_IRQ0 = (int(IRQ.PIO0_IRQ0), int(IRQ.PIO1_IRQ0))
@@ -42,42 +42,17 @@ SNAPSHOT_REGISTERS = (
     *(R.SM0_CLKDIV + SM_STRIDE * m + (o - R.SM0_CLKDIV) for m in range(4) for o in SM_OFFSETS),
 )  # fmt: skip
 
-MACHINE_FIELDS = (
-    "x", "y", "pc", "input_shift_reg", "input_shift_count", "output_shift_reg", "output_shift_count", "cycles", "enabled", "waiting",
-    "wait_type", "wait_index", "wait_polarity", "wait_delay", "next_due_fp", "due_rearmed", "exec_valid", "update_pc", "exec_opcode",
-    "out_pin_values", "out_pin_direction", "div_fp", "exec_ctrl", "shift_ctrl", "pin_ctrl",
-)  # fmt: skip
-BLOCK_FIELDS = (
-    "irq", "fdebug", "tx_stall", "rx_stall", "input_sync_bypass", "pin_values", "pin_directions", "old_pin_values", "old_pin_directions",
-    "cycle_fp", "next_due_fp", "resolve_due_fp", "backlog_drops", "stopped", "irq0_int_enable", "irq0_int_force", "irq1_int_enable", "irq1_int_force",
-)  # fmt: skip
-
-
-class _DreqRecorder:
-    """Stands in for the chip's DMA: the DMA is a recorder here (the real one would act on the DREQs and on the FIFOs, which is a different block's behaviour)."""
-
-    def __init__(self, log: list) -> None:
-        self._log = log
-
-    def set_dreq(self, channel: int) -> None:
-        self._log.append(("dreq", int(channel), 1))
-
-    def clear_dreq(self, channel: int) -> None:
-        self._log.append(("dreq", int(channel), 0))
-
 
 class Rig:
     """One chip plus the logs of everything that left its PIOs."""
 
     def __init__(self, kind: str, modules: "tuple[Any, Any] | None" = None) -> None:
         self.kind = kind
-        self.chip = RP2040()
+        self.chip = new_chip(kind)
         # A (fake) owner for the chip, so a CTRL write does not run the "no Simulator" fallback that steps the block inline: the stimulus calls advance() itself,
         # as the batch loop does.
         self.chip.simulator = object()
-        if kind == "pure":
-            self._replace_pios_with_the_pure_python_ones()
-        elif kind == "mutant":
+        if kind == "mutant":
             assert modules is not None
             self._replace_pios_with_the_pure_python_ones(*modules)
         self.log: list[tuple] = []
@@ -104,7 +79,9 @@ class Rig:
 
     def _tap(self) -> None:
         chip, log = self.chip, self.log
-        chip.dma = _DreqRecorder(log)  # type: ignore[assignment]  # the PIO looks `rp2040.dma` up on every DREQ; the native DMA's methods cannot be replaced
+        chip.dreq_tap = lambda number, asserted: log.append(
+            ("dreq", int(number), int(asserted))
+        )  # the observer of the requests that reach the chip's real DMA
         original = chip.set_interrupt
 
         def set_interrupt(irq: int, value: bool) -> None:
@@ -152,7 +129,7 @@ class Rig:
             chip.gpio[pin].pad_value |= 0x40  # input enable
             chip.gpio[pin].check_for_updates()
         elif kind == "reset":
-            chip.pio[op[1]].reset()
+            chip.reset()
         else:
             raise ValueError(f"unknown op {op!r}")
         return None
@@ -164,13 +141,15 @@ class Rig:
         out: dict[str, Any] = {}
         for index, block in enumerate(chip.pio):
             out[f"pio{index}.regs"] = tuple(self.read(index, offset) for offset in SNAPSHOT_REGISTERS)
-            out[f"pio{index}.block"] = tuple(int(getattr(block, name)) for name in BLOCK_FIELDS)
-            out[f"pio{index}.instructions"] = tuple(int(word) for word in block.instructions)
-            for number, machine in enumerate(block.machines):
-                out[f"pio{index}.sm{number}"] = tuple(int(getattr(machine, name)) for name in MACHINE_FIELDS)
-                out[f"pio{index}.sm{number}.held"] = tuple(int(v) for v in (machine.held_write or ()))
-                out[f"pio{index}.sm{number}.tx"] = tuple(int(v) for v in machine.tx_fifo.items)
-                out[f"pio{index}.sm{number}.rx"] = tuple(int(v) for v in machine.rx_fifo.items)
+            state = block.snapshot()
+            machines = state.pop("machines")
+            out[f"pio{index}.instructions"] = state.pop("instructions")
+            out[f"pio{index}.block"] = tuple(state.values())
+            for number, machine in enumerate(machines):
+                out[f"pio{index}.sm{number}.held"] = machine.pop("held_write")
+                out[f"pio{index}.sm{number}.tx"] = machine.pop("tx")
+                out[f"pio{index}.sm{number}.rx"] = machine.pop("rx")
+                out[f"pio{index}.sm{number}"] = tuple(machine.values())
         out["pins"] = tuple(
             (int(pin.ctrl), int(pin.input_value), int(pin.output_value), int(pin.output_enable), int(pin.status))
             for pin in chip.gpio
@@ -419,7 +398,7 @@ MUTATIONS: dict[str, tuple[str, str, str, int]] = {
     "no_resolve_after_an_overwrite": ("pio", "            self.resolve_due_fp = self.cycle_fp + (1 << 8)\n        else:", "            self.resolve_due_fp = NEVER_DUE\n        else:", 1),
     "resolve_two_cycles_late": ("pio", "            self.resolve_due_fp = self.cycle_fp + (1 << 8)\n        else:", "            self.resolve_due_fp = self.cycle_fp + (2 << 8)\n        else:", 1),
     "resolve_not_a_due_time": ("pio", "        self.next_due_fp = min(next_due_fp, self.resolve_due_fp)\n", "        self.next_due_fp = next_due_fp\n", 1),
-    "resolve_unheard_by_the_pins": ("pio", "            self.resolve_due_fp = NEVER_DUE\n            self.check_changed_pins()\n", "            self.resolve_due_fp = NEVER_DUE\n", 1),
+    "resolve_unheard_by_the_pins": ("pio", "            self.resolve_due_fp = NEVER_DUE\n            self._check_changed_pins()\n", "            self.resolve_due_fp = NEVER_DUE\n", 1),
     "sticky_never_routes": ("pio", "            machine.held_write is not None or machine.exec_ctrl & EXECCTRL_OUT_STICKY for machine in self.machines", "            machine.held_write is not None for machine in self.machines", 1),
     "stop_leaves_the_overwrite_pending": ("pio", "                self.stopped = True\n                self.settle_held_writes()\n", "                self.stopped = True\n", 1),
     "pio_reset_keeps_the_resolve_time": ("pio", "        self.in_cycle = False\n        self.resolve_due_fp = NEVER_DUE\n        self.irq0_int_enable = 0", "        self.in_cycle = False\n        self.irq0_int_enable = 0", 1),

@@ -237,9 +237,9 @@ class RPDMAChannel:
             self._ctrl &= ~BUSY
             if not (self._ctrl & IRQ_QUIET):
                 self.dma.int_raw |= 1 << self.index
-                self.dma.check_interrupts()
+                self.dma._check_interrupts()
             if self._chain_to != self.index:
-                channels = self.dma.channels
+                channels = self.dma._channels
                 if 0 <= self._chain_to < len(channels):
                     channels[self._chain_to].start()
 
@@ -252,7 +252,7 @@ class RPDMAChannel:
             self._cycle_remainder = exact - whole
             self.transfer_alarm.schedule_ticks(min(MAX_TICKS, whole))
         else:
-            delay = self.dma.get_timer(self._treq_value)
+            delay = self.dma._get_timer(self._treq_value)
             if delay:
                 self.transfer_alarm.schedule(delay * 1000)
 
@@ -324,7 +324,7 @@ class RPDMAChannel:
             elif self._ctrl & IRQ_QUIET:
                 # Null trigger interrupts
                 self.dma.int_raw |= 1 << self.index
-                self.dma.check_interrupts()
+                self.dma._check_interrupts()
 
     def reset(self) -> None:
         # Every register of the channel back to its datasheet reset value (2.5.7): all 0, CHAIN_TO included (0x0 for every channel: a channel that does not set it chains to channel 0 when it
@@ -344,7 +344,7 @@ class RPDMAChannel:
 class RPDMA(BasePeripheral):
     def __init__(self, rp2040: "RP2040", name: str):
         super().__init__(rp2040, name)
-        self.channels = [RPDMAChannel(self, self.rp2040, i) for i in range(12)]
+        self._channels = [RPDMAChannel(self, self.rp2040, i) for i in range(12)]
 
         self.int_raw = 0
         self._int_enable0 = 0
@@ -369,7 +369,7 @@ class RPDMA(BasePeripheral):
         # at RP2040.__init__ - immediately wiped it back out, permanently starving any DMA
         # channel gated on that dreq until something else nudged the peripheral's FIFO) -
         # see docs/tasks/main-spi-hang.md.
-        for channel in self.channels:
+        for channel in self._channels:
             channel.transfer_alarm.cancel()
             channel.reset()
         self.int_raw = 0
@@ -381,7 +381,7 @@ class RPDMA(BasePeripheral):
         self._timer1 = 0
         self._timer2 = 0
         self._timer3 = 0
-        self.check_interrupts()
+        self._check_interrupts()
 
     @property
     def int_status0(self) -> int:
@@ -394,7 +394,7 @@ class RPDMA(BasePeripheral):
     def read_uint32(self, offset: int) -> int:
         if (offset & 0x7FF) < CHANNEL_REGISTERS_SIZE:
             channel_index = (offset & 0x7FF) >> 6
-            return self.channels[channel_index].read_uint32(offset & CHANNEL_REGISTERS_MASK)
+            return self._channels[channel_index].read_uint32(offset & CHANNEL_REGISTERS_MASK)
 
         if offset == TIMER0:
             return self._timer0
@@ -419,7 +419,7 @@ class RPDMA(BasePeripheral):
         if offset == INTS1:
             return self.int_status1
         if offset == N_CHANNELS:
-            return len(self.channels)
+            return len(self._channels)
         if offset in (MULTI_CHAN_TRIGGER, CHAN_ABORT, FIFO_LEVELS):
             # MULTI_CHAN_TRIGGER and CHAN_ABORT are self-clearing and an abort is flushed at once here, so firmware polling CHAN_ABORT "until it returns all-zero" (datasheet, CHAN_ABORT:
             # "After writing, this register must be polled until it returns all-zero") sees 0; FIFO_LEVELS are debug levels of the address/data FIFOs, which a transfer model with no FIFOs never fills.
@@ -429,7 +429,7 @@ class RPDMA(BasePeripheral):
     def write_uint32(self, offset: int, value: int) -> None:
         if (offset & 0x7FF) < CHANNEL_REGISTERS_SIZE:
             channel_index = (offset & 0x7FF) >> 6
-            self.channels[channel_index].write_uint32(offset & CHANNEL_REGISTERS_MASK, value)
+            self._channels[channel_index].write_uint32(offset & CHANNEL_REGISTERS_MASK, value)
             return
 
         if offset == TIMER0:
@@ -446,47 +446,80 @@ class RPDMA(BasePeripheral):
             return
         if offset in (INTR, INTS0, INTS1):
             self.int_raw &= ~self.raw_write_value
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTE0:
             self._int_enable0 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTF0:
             self._int_force0 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTE1:
             self._int_enable1 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == INTF1:
             self._int_force1 = value & 0xFFFF
-            self.check_interrupts()
+            self._check_interrupts()
             return
         if offset == MULTI_CHAN_TRIGGER:
-            for chan in self.channels:
+            for chan in self._channels:
                 if value & (1 << chan.index):
                     chan.start()
             return
         if offset == CHAN_ABORT:
-            for chan in self.channels:
+            for chan in self._channels:
                 if value & (1 << chan.index):
                     chan.abort()
             return
         super().write_uint32(offset, value)
 
+    def snapshot(self) -> dict[str, tuple | int]:
+        """The controller's state as plain values: every channel's registers and internals (`ctrl`, the two addresses, the counts, the DREQ counter, the decoded TREQ / size / chain / ring, `active`), the asserted DREQs, the raw interrupt word and the two statuses."""
+        return {
+            "channels": tuple(
+                (
+                    c._ctrl,
+                    c._read_addr,
+                    c._write_addr,
+                    c._trans_count,
+                    c._trans_count_reload,
+                    c._dreq_counter,
+                    c._treq_value,
+                    c._data_size,
+                    c._chain_to,
+                    c._ring_mask,
+                    c.active,
+                )
+                for c in self._channels
+            ),
+            "dreq": tuple(sorted(int(n) for n, asserted in self.dreq.items() if asserted)),
+            "int_raw": self.int_raw,
+            "int_status0": self.int_status0,
+            "int_status1": self.int_status1,
+        }
+
     def set_dreq(self, dreq_channel: int) -> None:
+        tap = getattr(
+            self.rp2040, "dreq_tap", None
+        )  # an observer of the requests that reach this DMA (the C++ block's twin); it does not take them away
+        if tap is not None:
+            tap(int(dreq_channel), True)
         if not self.dreq.get(dreq_channel, False):
             self.dreq[dreq_channel] = True
-            for channel in self.channels:
+            for channel in self._channels:
                 if channel.treq == dreq_channel and channel.active:
                     channel.schedule_transfer()
 
     def clear_dreq(self, dreq_channel: int) -> None:
+        tap = getattr(self.rp2040, "dreq_tap", None)
+        if tap is not None:
+            tap(int(dreq_channel), False)
         self.dreq[dreq_channel] = False
 
-    def get_timer(self, treq: int) -> float:
+    def _get_timer(self, treq: int) -> float:
         """Returns the number of microseconds for a cycle of the given DMA timer, or 0 if the timer is disabled."""
         # "The pacing timer produces TREQ assertions at a rate set by ((X/Y) * sys_clk) ... can only generate TREQs at a rate of 1 per sys_clk (i.e. permanent TREQ) or less": the period is
         # Y/X sys_clk cycles, at least one. X is bits 31:16 of every one of the four timers; a timer with X or Y at 0 (reset: both) asserts nothing.
@@ -502,6 +535,6 @@ class RPDMA(BasePeripheral):
             return 0
         return (cycles * 1e6) / self.rp2040.clk_sys
 
-    def check_interrupts(self) -> None:
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(IRQ.DMA_IRQ0, bool(self.int_status0))
         self.rp2040.set_interrupt(IRQ.DMA_IRQ1, bool(self.int_status1))

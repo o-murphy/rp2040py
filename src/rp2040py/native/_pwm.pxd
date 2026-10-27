@@ -6,6 +6,7 @@ from libcpp cimport bool as cppbool
 
 
 from rp2040py.native._clock cimport Clock
+from rp2040py.native._native_block cimport NativeBlock
 from rp2040py.native._window_map cimport WindowHandler
 
 cdef extern from "timer32.hpp" namespace "rp2040core":
@@ -41,6 +42,7 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
 
     ctypedef cppbool (*PwmPinChangedFn)(void* ctx, uint32_t pin)
     ctypedef cppbool (*PwmPinReadFn)(void* ctx, uint32_t pin, cppbool* level)
+    ctypedef cppbool (*PwmInputTap)(void* ctx, uint32_t index)
 
     cdef cppclass PwmChannel:
         Timer32 timer
@@ -92,14 +94,12 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         void detach() noexcept
         Clock* clock() noexcept
         double clock_freq() noexcept
-        void set_clock_freq(double freq) noexcept
         int64_t raw_write_value() noexcept
         uint32_t int_status() noexcept
         cppbool check_interrupts() noexcept
         cppbool channel_interrupt(uint32_t index) noexcept
-        cppbool gpio_set(int64_t index, cppbool value) noexcept
-        cppbool gpio_set_dir(int64_t index, cppbool output) noexcept
-        cppbool gpio_read(int64_t index, cppbool* level) noexcept
+        PwmInputTap input_tap
+        void* input_tap_ctx
         cppbool gpio_on_input(uint32_t index) noexcept
         cppbool reset() noexcept
         uint32_t read(uint32_t offset) noexcept
@@ -107,10 +107,7 @@ cdef extern from "pwm.hpp" namespace "rp2040core":
         cppbool write_atomic(uint32_t offset, int64_t raw, uint32_t atomic_type) noexcept
         WindowHandler window_handler() noexcept
 
-cdef class RPPWM:
+cdef class RPPWM(NativeBlock):
     cdef PwmBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
-    cdef public bint _from_mcu  # this is the view of the `Mcu`'s block
-    cdef public object rp2040
-    cdef public object name
     cdef public object clock
     cdef public object channels

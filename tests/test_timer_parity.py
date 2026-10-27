@@ -89,7 +89,8 @@ class Probe:
         return None
 
     def observe(self):
-        return (self.timer.int_status, self.timer.raw_write_value, self.chip.clock.nanos, self.timer.tick_hz)
+        state = self.timer.snapshot()
+        return (state["int_status"], self.timer.raw_write_value, self.chip.clock.nanos, state["tick_hz"])
 
 
 def _value(rng, now_us):
@@ -185,7 +186,9 @@ def test_an_interrupt_line_that_raises_surfaces_from_the_register_write_that_cau
         with pytest.raises(Boom):
             probe.chip.write_uint32(TIMER_BASE + 0x3C, 0x1)  # INTF: forces a line, the second announcement raises
 
-        assert probe.timer.int_status == 0x1  # the register was already updated: the exception stopped the rest
+        assert (
+            probe.timer.snapshot()["int_status"] == 0x1
+        )  # the register was already updated: the exception stopped the rest
 
 
 def test_an_interrupt_line_that_raises_surfaces_from_a_clock_tick_and_the_clock_stays_usable():

@@ -5,9 +5,9 @@ tell a faithful replay from a broken one - here with the Python TIMER against it
 import pytest
 from utils.mmio_trace import SIO, Mismatch, load, pin_levels, record, replay, save
 from utils.tick import start_tick
+from utils.twin import new_chip
 
 from rp2040py.irq import IRQ
-from rp2040py.rp2040 import RP2040
 
 TIMER_BASE = 0x40054000
 TIMER_KEY = 0x40054  # the bus looks blocks up by `address >> 12` with the low two bits clear
@@ -18,7 +18,9 @@ TIMER_IRQS = (IRQ.TIMER_0, IRQ.TIMER_1, IRQ.TIMER_2, IRQ.TIMER_3)
 
 def _session() -> "list[tuple]":
     """A scripted session over the real bus: arm ALARM0, let it fire, acknowledge it, poll TIMELR."""
-    mcu = RP2040()
+    mcu = new_chip(
+        "pure"
+    )  # the recorder stands in front of a block: inside the pure chip, the chip a trace is recorded on
     events = record(mcu, TIMER_KEY, TIMER_IRQS)
     clock = mcu.clock
     start_tick(mcu)  # the TIMER counts once the watchdog tick runs; the trace carries it as an input (kind "t")
@@ -120,7 +122,9 @@ def _sio_session():
     """Pins are driven from outside between SIO reads of GPIO_IN / GPIO_HI_IN. Returns the events, what
     the reads returned, and the pin levels in force at each stage (QSPI pads reset pulled up, so the
     levels are measured, not assumed)."""
-    mcu = RP2040()
+    mcu = new_chip(
+        "pure"
+    )  # the recorder stands in front of a block: inside the pure chip, the chip a trace is recorded on
     events = record(mcu, SIO)
     for pin in (3, 21):  # firmware enables a GPIO pad's input before reading it; a fresh chip's pads have it off
         mcu.pads_bank0.write_uint32(0x04 + 4 * pin, mcu.gpio[pin].pad_value | 0x40)

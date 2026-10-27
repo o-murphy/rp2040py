@@ -148,9 +148,7 @@ class Probe:
         return None
 
     def observe(self):
-        state = {name: getattr(self.sio, name) for name in STATE}
-        for index, interp in enumerate((self.sio.interp0, self.sio.interp1)):
-            state.update({f"i{index}.{name}": getattr(interp, name) for name in INTERP_STATE})
+        state = self.sio.snapshot()
         return state, self.chip.core.cycles
 
 

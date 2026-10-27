@@ -245,9 +245,9 @@ def test_a_running_pio_gets_the_same_cycles_from_many_short_idle_jumps_in_both_l
         alarm = chip.clock.create_alarm(on_alarm)
         holder.append(alarm)
         alarm.schedule_ticks(1000)
-        start = chip.pio[0].cycle_fp
+        start = chip.pio[0].snapshot()["cycle_fp"]
         assert run(tick_batch) == "ok"
-        results.append((chip.clock.ticks, chip.pio[0].cycle_fp - start))
+        results.append((chip.clock.ticks, chip.pio[0].snapshot()["cycle_fp"] - start))
 
     assert results[0] == results[1]
     assert results[0][1] >> 8 > 0

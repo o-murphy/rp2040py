@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from rp2040py.peripherals._dma import DREQChannel
 from rp2040py.peripherals.peripheral import BasePeripheral
@@ -150,7 +150,7 @@ class RPSPI(BasePeripheral):
         return self._int_raw & self._int_enable
 
     @property
-    def enabled(self) -> bool:
+    def _enabled(self) -> bool:
         return bool(self._control1 & SSE)
 
     @property
@@ -159,7 +159,7 @@ class RPSPI(BasePeripheral):
         return ((self._control0 >> DSS_SHIFT) & DSS_MASK) + 1
 
     @property
-    def master_mode(self) -> bool:
+    def _master_mode(self) -> bool:
         return not (self._control1 & MS)  # MS is SSPCR1 bit 2 (see 'SSPCR1 bits' above); this used to test SSPCR0
 
     @property
@@ -176,7 +176,7 @@ class RPSPI(BasePeripheral):
 
     def _frame_ns(self) -> float:
         """How long the word that just left the TX FIFO is on the wire: `data_bits` bit-clock periods. A slave (SSPCR1.MS) is clocked from outside, and an unconfigured bit clock has no time: both are instant."""
-        if not self.master_mode:
+        if not self._master_mode:
             return 0.0
         return (
             _bit_ns(self.rp2040.clk_peri, self._clock_divisor, (self._control0 >> SCR_SHIFT) & SCR_MASK)
@@ -236,11 +236,33 @@ class RPSPI(BasePeripheral):
             self._int_raw |= SSPRORINTR
             # The interrupt line is the OR of the enabled raw interrupts, so the overrun reaches it at once. (`_fifos_updated()` below compares the status with the one it
             # sees on entry - after ROR was set - and so never noticed it: the line stayed low until something else changed.)
-            self.check_interrupts()
+            self._check_interrupts()
         self._fifos_updated()
         self._do_tx()
 
-    def check_interrupts(self) -> None:
+    def snapshot(self) -> dict[str, Any]:
+        """The block's state as plain values: the registers, the frame in flight, both FIFOs' contents and what is derived from them (the mode, the data size, the clock, the masked interrupts)."""
+        return {
+            "control0": self._control0,
+            "control1": self._control1,
+            "dma_control": self._dma_control,
+            "clock_divisor": self._clock_divisor,
+            "int_raw": self._int_raw,
+            "int_enable": self._int_enable,
+            "busy": bool(self._busy),
+            "frame_active": bool(self._frame_active),
+            "reply": None if self._reply is None else int(self._reply),
+            "rx": tuple(self.rx_fifo.items),
+            "tx": tuple(self.tx_fifo.items),
+            "enabled": bool(self._enabled),
+            "data_bits": self.data_bits,
+            "master_mode": bool(self._master_mode),
+            "spi_mode": int(self.spi_mode),
+            "clock_frequency": float(self.clock_frequency),
+            "int_status": int(self.int_status),
+        }
+
+    def _check_interrupts(self) -> None:
         self.rp2040.set_interrupt(self.irq, bool(self.int_status))
 
     def _fifos_updated(self) -> None:
@@ -254,7 +276,7 @@ class RPSPI(BasePeripheral):
         else:
             self._int_raw &= ~SSPRXINTR
         if self.int_status != prev_status:
-            self.check_interrupts()
+            self._check_interrupts()
 
         self._update_dma_tx()
         self._update_dma_rx()
@@ -324,7 +346,7 @@ class RPSPI(BasePeripheral):
             self._clock_divisor = value & CPSDVSR_MASK
         elif offset == SSPIMSC:
             self._int_enable = value & IMSC_MASK
-            self.check_interrupts()
+            self._check_interrupts()
         elif offset == SSPDMACR:
             self._dma_control = value & DMACR_MASK
             self._update_dma_tx()
@@ -333,6 +355,6 @@ class RPSPI(BasePeripheral):
             # By the bits the bus passed, not the alias-decoded value - the rule of the UART's and the DMA's write-1-to-clear registers (an alias decodes against a read
             # of ICR, which is write-only and reads as all ones here, so a CLR/XOR/SET write would otherwise clear the wrong bits).
             self._int_raw &= ~(self.raw_write_value & (SSPRTINTR | SSPRORINTR))
-            self.check_interrupts()
+            self._check_interrupts()
         else:
             super().write_uint32(offset, value)
