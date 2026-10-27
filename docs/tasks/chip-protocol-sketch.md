@@ -1,18 +1,24 @@
 # A sketch of the protocol the host's glue narrows to (working note, 2026-10-27 - **nothing here is built**)
 
-Written at the maintainer's request as an example of what "the same glue, whatever runs the chip" looks like once the border is narrow ([narrow-the-border-plan.md](narrow-the-border-plan.md), [narrow-the-input-plan.md](narrow-the-input-plan.md), the lists in [0102](../records/0102-c-abi-for-the-core.md)). It is a typed sketch (`mypy --strict` clean), not the current API: it assumes the further narrowing of the input plan (no plumbing, no per-block state getters, the `complete_*` families folded into one call per bus, pins as one `pin_input`).
+Written at the maintainer's request as an example of what "the same glue, whatever runs the chip" looks like once the border is narrow ([narrow-the-border-plan.md](narrow-the-border-plan.md), [narrow-the-input-plan.md](narrow-the-input-plan.md), the lists in [0102](../records/0102-c-abi-for-the-core.md)). It is a typed sketch (`mypy --strict` clean), not the current API, and it is written for the target the core is built for - `wasm32-wasi` / `wasm32-freestanding` with `-fno-exceptions -fno-rtti` - so it has **two layers**: `CoreAbi` and the `World` callbacks as the core sees them (flat integers and offsets into linear memory, a `Status` from every call, a callback that returns False when the host failed and has parked its error; no exceptions, no objects, no strings, a snapshot is a flat array of 64-bit words plus a per-block field table), and `Chip` (the same calls with Python values, raising `ChipError` or the host's parked error - the binding turns one into the other in a single place, `raise_for`). (An earlier version of this note said "a failure raises" for the whole protocol; that was wrong for the ABI and is corrected here.) It it assumes the further narrowing of the input plan (no plumbing, no per-block state getters, the `complete_*` families folded into one call per bus, pins as one `pin_input`).
 
 **How it maps to what exists.** `World` is the 16 slots of `McuHost` (the core calls the host). `Chip` is the inward half (the host calls the core): the bus (`read32` / `write32`), the explicit inputs the bus cannot give (`uart_feed`, `spi_complete`, `i2c_complete`, `adc_complete`, `pin_input`, `dreq`, `set_crystal_hz`), `run` / `request_stop` / `set_real_io`, `snapshot(block, instance)` for everything a test or a tool wants to see, and `observe(port, ...)` for the five observer ports (`tap` and `after_tap` of the clock tree, `dreq_tap`, `pwm_input_tap`, the watchdog's tick). A `Backend` builds a `Chip` from a `World`; the three that exist or are planned - the pure-Python blocks, the C++ core through Cython, the wasm module under `wasmhost` - each implement `Backend`, and what makes them the same chip is the twin tests, not the type. The host's whole engine is `drive()` at the end: call `run`, sleep for `ticks_advanced` if it paces itself, give the control back, repeat.
 
 **What is deliberately not in it:** the per-block accessors (a block is `Block` + `instance`), the plumbing (`check_interrupts`, `*_updated`, `tick_changed`), a block's own `reset` (the chip's `reset` is the cascade), the state getters (they are `snapshot()` entries), and the USB wire / USB host, which are nested protocols of the same shape and are left out of the sketch for length.
 
-**Open in the sketch (decide when it is built):** whether failures raise (as here) or return a status for the wasm host; whether `pin_input` takes a `Drive` or the three-state code the `pin_changed` slot uses; whether the USB host is a nested protocol or part of `Chip`; and the exact set of `Block` values.
+**Open in the sketch (decide when it is built):** the layout of the flat snapshot (one table per block, generated from the snapshot code or written by hand); whether `pin_input` takes a `Drive` or the three-state code the `pin_changed` slot uses; whether the USB host is a nested protocol or part of `Chip`; and the exact set of `Block` values.
 
 ```python
 """A sketch (not built): the one interface the host's glue talks to, whatever runs the chip - the pure-Python blocks, the C++ core through Cython, or the wasm module under wasmhost.
 
-Rules the sketch keeps: only ints, floats, bools, bytes, tuples and plain dicts cross; blocks are addressed by `Block` + an instance number, never by object; a failure raises (the
-C++ side parks it and the shell re-raises); nothing is called back from inside a register write except what `World` lists; exactly two calls may come from another thread.
+Two layers, because the core is built with -fno-exceptions -fno-rtti for wasm32-wasi / wasm32-freestanding:
+
+* **the ABI** (`CoreAbi`, `World` as the core sees it): flat integers and pointers into linear memory, a `Status` returned by every call, no exceptions, no objects, no strings. A host callback returns
+  False (a wasm import: non-zero) when it failed; the host has parked its error on its own side and the core only unwinds with the status.
+* **the Python glue** (`Chip`): the same calls with Python values, which raises `ChipError` (or the host's own parked exception). That is the idiom of the glue, written once by the binding
+  (`raise_for`), not something the core does.
+
+Both keep these rules: blocks are addressed by `Block` + an instance number; nothing is called back from inside a register write except what `World` lists; exactly two calls may come from another thread.
 """
 
 from __future__ import annotations
@@ -103,11 +109,50 @@ class Port(IntEnum):
     WATCHDOG_TICK = 4  # (hz)
 
 
+class Status(IntEnum):
+    OK = 0
+    HOST_FAILED = 1  # a host call failed: the host parked its error (the core only unwound)
+    BAD_ARGUMENT = 2  # a block, an instance or an address out of range
+    FAULT = 3  # the core cannot continue from here
+
+
+class ChipError(RuntimeError):
+    """What the glue raises for a status that has no parked host error behind it."""
+
+
+def raise_for(status: Status, parked: BaseException | None) -> None:
+    """The one place a status becomes an exception: the binding calls it after every call into the ABI."""
+    if status is Status.OK:
+        return
+    if parked is not None:
+        raise parked
+    raise ChipError(status.name)
+
+
+class CoreAbi(Protocol):
+    """The shape of the C ABI and of the wasm exports: `handle` names the chip, pointers are offsets into the module's linear memory, and a result comes back in a buffer the caller owns.
+
+    A snapshot is a flat array of 64-bit words (an int, a float's bits, a bool, the length of a tuple followed by its items), written at `out`; `SNAPSHOT_FIELDS[block]` says which field is which
+    word, so a dict is rebuilt on the host side. Returns the number of words, or a negative `Status`.
+    """
+
+    def mcu_run(self, handle: int, limits: int, result: int) -> Status: ...
+    def mcu_request_stop(self, handle: int) -> None: ...  # (no status: it only sets a byte)
+    def mcu_read32(self, handle: int, address: int, out: int) -> Status: ...
+    def mcu_write32(self, handle: int, address: int, value: int) -> Status: ...
+    def mcu_uart_feed(self, handle: int, instance: int, byte: int) -> Status: ...
+    def mcu_i2c_complete(self, handle: int, instance: int, step: int, value: int) -> Status: ...
+    def mcu_snapshot(self, handle: int, block: int, instance: int, out: int, capacity: int) -> int: ...
+
+
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # What the host provides: the chip calls these (today's 16 `McuHost` slots; a missing one means "nothing on the other end")
 
 
 class World(Protocol):
+    """The glue's view of the 16 slots. At the ABI each is `bool (*)(void* ctx, ...)` (a wasm import returns i32): False means "I failed, my error is parked"; here a failure is a raised exception, which the binding
+    catches, parks and turns into that False."""
+
     def warn(self, block: Block, kind: int, offset: int, value: int) -> None: ...
     def uart_byte(self, instance: int, byte: int) -> None: ...
     def uart_baud(self, instance: int) -> None: ...  # read the new rate off the chip's snapshot
@@ -132,6 +177,8 @@ class World(Protocol):
 
 
 class Chip(Protocol):
+    """Every method may raise `ChipError` (or a host error that was parked): see `raise_for`."""
+
     # -- build / reset ----------------------------------------------------------------------------------------------------------------------------------------------------
     def reset(self, *, preserve_flash: bool = False) -> None: ...
 
