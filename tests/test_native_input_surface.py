@@ -9,6 +9,7 @@ Classes - what a host would have to be given:
   accessor   find a block of the chip from its number                                                       (a selector argument, not an export)
   port       an observer a host may install (`tap`, `after_tap`, `dreq_tap`, `input_tap`, `tick_tap`)       (an export and an import)
   input      the world tells the chip something: a byte, a device's answer, a pin, the USB host            (an export)
+  own        the shell reads its own block to compute something it offers (a divisor, a control word): not a call anyone outside makes   (nothing: not a border)
   config     a parameter the world sets or a device reads of the configuration                              (an export)
   register   the bus view of a block (`read` / `write32` / `write_atomic` / `window_handler`)               (the bus, one export)
   construct  creating / detaching the block                                                                 (the chip builds its blocks)
@@ -22,7 +23,7 @@ from pathlib import Path
 import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "src" / "rp2040py" / "native"
-CLASSES = {"control", "accessor", "port", "input", "config", "register", "construct", "test"}
+CLASSES = {"control", "accessor", "port", "input", "config", "own", "register", "construct", "test"}
 
 _ROOT = r"(?:self\._block|self\._mcu|rp2040\._mcu|chip\._mcu|self\._own|self\._core|\(<\w+> \w+\)\._block|\(<\w+> self\.\w+\)\._block|\w+\._block)"
 
@@ -55,7 +56,8 @@ SURFACE: dict[str, dict[str, str]] = {
     ),
     "_i2c": _merge(
         _c("arbitration_lost complete_connect complete_read complete_start complete_stop complete_write", "input"),
-        _c("control fs_clock_high fs_clock_low master_bits ss_clock_high ss_clock_low", "config"),
+        _c("master_bits", "config"),
+        _c("control fs_clock_high fs_clock_low ss_clock_high ss_clock_low", "own"),
         _c("reset", "test"),
     ),
     "_io": _merge(_c("read", "register"), _c("reset", "test")),
@@ -75,7 +77,11 @@ SURFACE: dict[str, dict[str, str]] = {
         _c("reset", "test"),
     ),
     "_rosc": _merge(
-        _c("bind_random_source", "input"), _c("frequency hz", "config"), _c("read", "register"), _c("reset", "test")
+        _c("bind_random_source", "input"),
+        _c("frequency", "config"),
+        _c("hz", "own"),
+        _c("read", "register"),
+        _c("reset", "test"),
     ),
     "_rp2040": _merge(
         _c(
@@ -99,7 +105,8 @@ SURFACE: dict[str, dict[str, str]] = {
     ),
     "_spi": _merge(
         _c("complete_transmit", "input"),
-        _c("clock_divisor control0 data_bits", "config"),
+        _c("data_bits", "config"),
+        _c("clock_divisor control0", "own"),
         _c("power_on", "construct"),
         _c("reset", "test"),
     ),
@@ -112,7 +119,7 @@ SURFACE: dict[str, dict[str, str]] = {
     ),
     "_uart": _merge(
         _c("feed_byte", "input"),
-        _c("frac_divisor int_divisor", "config"),
+        _c("frac_divisor int_divisor", "own"),
         _c("detach init", "construct"),
         _c("reset", "test"),
     ),
