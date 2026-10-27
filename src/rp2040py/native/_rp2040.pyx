@@ -1194,6 +1194,15 @@ cdef class RP2040:
         return self._qspi_bank_object
 
     @property
+    def clk_sys(self):
+        """The system clock, in Hz: the C++ clock tree's value (SysTick, the PWM counters, the DMA and the batch loop follow it). Assigning sets that value without telling anyone, as a host or a test that fixes the rate does."""
+        return self._mcu.clocks().clk_sys()
+
+    @clk_sys.setter
+    def clk_sys(self, value) -> None:
+        self._mcu.clocks().force_clk_sys(<double> value)
+
+    @property
     def clk_peri(self):
         """The peripheral clock, in Hz: the C++ clock tree's value (the UARTs' and SPIs' bit times follow it). Assigning sets that value, as a host or a test that fixes the rate does."""
         return self._mcu.clocks().clk_peri()

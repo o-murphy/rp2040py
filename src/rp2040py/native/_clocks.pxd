@@ -35,6 +35,7 @@ cdef extern from "clocks.hpp" namespace "rp2040core":
         double clk_sys() noexcept
         double clk_peri() noexcept
         void force_clk_peri(double hz) noexcept
+        void force_clk_sys(double hz) noexcept
         void reset() noexcept
         cppbool reset_tree() noexcept
         double ref_freq() noexcept

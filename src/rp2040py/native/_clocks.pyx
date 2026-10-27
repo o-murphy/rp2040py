@@ -33,10 +33,9 @@ XOSC_STATUS_STABLE = 1 << 31
 
 
 cdef cppbool _sys_sink(void* ctx, double hz, double old) noexcept:
-    # First of the sys sinks: the chip's own `clk_sys` (the host reads it, and so does a native PWM block's shell), and the flag that ends the running batch.
+    # First of the sys sinks: the flag that ends the running batch (`chip.clk_sys` is the tree's own value).
     cdef RPClocks block = <RPClocks> ctx
     try:
-        block.rp2040.clk_sys = hz
         block._sys_dirty = 1
     except BaseException as error:
         park_error(error)
