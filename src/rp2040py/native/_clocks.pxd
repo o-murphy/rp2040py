@@ -79,7 +79,3 @@ cdef extern from "clock_sinks.hpp" namespace "rp2040core":
 cdef class RPClocks(NativeBlock):
     cdef ClocksBlock* _block  # the chip's own (core/mcu.hpp): this object is its Python view
     cdef public object clock
-    cdef object _pll_sys
-    cdef object _pll_usb
-    cdef object _consumers  # the blocks the direct sinks point into: kept alive while they are bound
-    cdef public unsigned char _sys_dirty  # raised whenever clk_sys changes: the batch loop ends its batch on it (core/batch.hpp `clk_changed`)

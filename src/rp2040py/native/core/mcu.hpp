@@ -634,6 +634,11 @@ public:
     // monotonic clock, in seconds, for the real-time budget (the default never runs the budget out). Both are the host's: the tree's byte is the tree's, and wall time is the
     // host's to give. The function receives the chip as its context.
     void set_clk_changed_flag(const volatile uint8_t* flag) noexcept { host_.clk_changed = flag; }
+    // A host that runs batches itself (the Python `Simulator`): the flag the tree raises when `clk_sys` changes is the chip's own byte, cleared here at the start of a batch.
+    void begin_batch() noexcept {
+        clk_changed_ = 0;
+        host_.clk_changed = &clk_changed_;
+    }
     void set_monotonic(double (*monotonic)(void* chip)) noexcept { host_.monotonic = monotonic != nullptr ? monotonic : no_time; }
 
     // The clock tree. The crystal is the board's (12 MHz on a Pico): a parameter of the world. A change of an oscillator or of a PLL re-derives the tree.
@@ -760,7 +765,7 @@ private:
         }
     }
     static bool sys_changed_sink(void* chip, double, double) noexcept {
-        static_cast<Mcu*>(chip)->clk_changed_ = 1;
+        static_cast<Mcu*>(chip)->end_batch();  // clk_sys changed: the batch ends and the next one starts at the new rate
         return true;
     }
     static bool step_pio(void* chip, int index, int64_t cycles) noexcept { return static_cast<Mcu*>(chip)->pio_[index].advance(cycles); }

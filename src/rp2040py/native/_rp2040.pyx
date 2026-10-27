@@ -654,7 +654,7 @@ cdef class RP2040:
         self.io_bank0 = RPIO(self, "IO_BANK0_BASE", None, 0)
         self.io_qspi = RPIO(self, "IO_QSPI_BASE", self.qspi, 1)
         self._rosc = RPROSC(self, "ROSC_BASE", 0)
-        self._rebind_clock_sinks()  # the tree points at the oscillators too, which are built after it
+        self._clocks.set_crystal_hz(self._xosc_freq)  # the board's crystal; the tree, the oscillators and their sinks were wired by the `Mcu`
         self._install_clock_tree_tap()
 
         self.peripherals = {
@@ -1040,11 +1040,6 @@ cdef class RP2040:
     @property
     def rtc(self):
         return self._rtc
-
-    def _rebind_clock_sinks(self):
-        clocks = self._clocks  # (None while the chip is being built)
-        if clocks is not None and hasattr(clocks, "rebind_consumers"):
-            clocks.rebind_consumers()
 
     def _native_pio_address(self, index):
         """The address of this chip's PIO block `index` (0 or 1), for the native PIO shell that is its Python view; None if there is no such block."""

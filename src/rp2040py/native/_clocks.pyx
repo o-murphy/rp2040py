@@ -4,49 +4,23 @@
 
 What a firmware sees is the C++ block: when the chip adopts this object it registers the block's own C++ read/write functions in the bus's window table (see `_native_window`), so a register
 access never enters Python. The tree itself - the registers, the frequency of each generator, `clk_sys` / `clk_peri` and the frequency counter - is C++. What stays Python is the edge: the logger,
-the oscillators' output (the XOSC block's STABLE bit and the chip's `xosc_freq`, the chip's `rosc_freq`) and the four SINKS the tree tells of a change, in the order of the reference's `update_clocks()`:
-sys (the chip's `clk_sys`, then SysTick, then every PWM counter, then the host's listeners), peri (the chip's `clk_peri`, then every UART), ref (the watchdog's tick) and rtc (the RTC). Wiring those
-to the C++ blocks directly is the step that lets a headless core run the tree without Python (docs/tasks/clocks-port.md). Failures of the Python side are parked in the shared slot of
-`_pending.pyx` and re-raised by whoever called in. The frequency counter counts against the chip's C++ `Clock`, so the block needs the native `SimulationClock`.
+the oscillators' output (the XOSC block's STABLE bit and the chip's `xosc_freq`, the chip's `rosc_freq`) and the board's crystal. The four sink lists the tree tells of a change (sys: SysTick of both cores, the PWM
+counters, the DMA; peri: the UARTs; ref: the watchdog's tick; rtc: the RTC) are the `Mcu`'s own (`bind_tree_sinks()`), and the host's observers are the two ports of `ClocksBlock` (`tap` before the sinks, `after_tap`
+after them). Failures of the Python side are parked in the shared slot of `_pending.pyx` and re-raised by whoever called in. The frequency counter counts against the chip's C++ `Clock`, so the block needs the native `SimulationClock`.
 """
 
 from libc.stdint cimport int64_t, uint32_t
 from libcpp cimport bool as cppbool
 
-from rp2040py.native._dma cimport RPDMA
 from rp2040py.native._native_block cimport NativeBlock, register_ops
-from rp2040py.native._pending cimport park_error, raise_if_pending
-from rp2040py.native._pll cimport RPPLL
-from rp2040py.native._ppb cimport RPPPB
-from rp2040py.native._pwm cimport RPPWM
-from rp2040py.native._rosc cimport RPROSC
-from rp2040py.native._rtc cimport RP2040RTC
+from rp2040py.native._pending cimport raise_if_pending
 from rp2040py.native._simulation_clock cimport SimulationClock
-from rp2040py.native._watchdog cimport RPWatchdog
 from rp2040py.native._window_map cimport WindowHandler
-from rp2040py.native._xosc cimport RPXOSC
 
 __all__ = ("RPClocks",)
 
-XOSC_STATUS = 0x04
-XOSC_STATUS_STABLE = 1 << 31
-
-
-cdef cppbool _sys_sink(void* ctx, double hz, double old) noexcept:
-    # First of the sys sinks: the flag that ends the running batch (`chip.clk_sys` is the tree's own value).
-    cdef RPClocks block = <RPClocks> ctx
-    try:
-        block._sys_dirty = 1
-    except BaseException as error:
-        park_error(error)
-        return False
-    return True
-
-
 cdef class RPClocks(NativeBlock):
     def __init__(self, rp2040, name, mcu_index=-1):
-        pll_sys = rp2040.pll_sys  # the chip builds the PLLs first: the tree points at their C++ blocks
-        pll_usb = rp2040.pll_usb
         clock = rp2040.clock
         self._from_mcu = mcu_index >= 0
         if mcu_index >= 0:
@@ -54,57 +28,12 @@ cdef class RPClocks(NativeBlock):
             self.rp2040 = rp2040
             self.name = name
             self.clock = clock
-            self._pll_sys = pll_sys
-            self._pll_usb = pll_usb
             self._block = <ClocksBlock*> <size_t> rp2040._native_clocks_address()
             self._ops = register_ops(self._block)
-            self.rebind_consumers()
             return
         raise TypeError(
             "the native block is a view of the chip's C++ `Mcu` block: RPClocks is built by a native chip (the pure-Python chip has the pure-Python peripherals)"
         )
-
-    def rebind_consumers(self):
-        """(Re)registers the sinks, in the order of the reference's `update_clocks()`: the chip's `clk_sys`, SysTick, the PWM counters, the host's listeners; the chip's `clk_peri` and the UARTs (their
-        baud-rate announcement is a host callback); the watchdog's tick; the RTC. Every consumer is a native block, told directly (core/clock_sinks.hpp). Called once, when the chip has built its last oscillator."""
-        rp2040 = self.rp2040
-        ppb, pwm, watchdog, rtc, dma = rp2040.ppb, rp2040.pwm, rp2040.watchdog, rp2040.rtc, rp2040.dma
-        xosc, rosc = rp2040.xosc, rp2040.rosc
-        self._consumers = (ppb, pwm, watchdog, rtc, dma, xosc, rosc, self._pll_sys, self._pll_usb)
-        self._block.clear_sinks()
-        ok = self._block.add_sys_sink(_sys_sink, <void*> self)
-        ok = ok and self._block.add_sys_sink(ppb_sys_sink, <void*> (<RPPPB> ppb)._block)
-        # core 1's own SysTick (the chip builds it, the Python layer has no view of it yet): the tree feeds it as it feeds core 0's
-        core1_ppb_address = getattr(rp2040, "_native_ppb_address", None)  # (a stand-in chip of a test has no second core)
-        if core1_ppb_address is not None:
-            ok = ok and self._block.add_sys_sink(ppb_sys_sink, <void*> <size_t> core1_ppb_address(1))
-        ok = ok and self._block.add_sys_sink(pwm_sys_sink, <void*> (<RPPWM> pwm)._block)
-        # The oscillators are read from their C++ blocks, which tell the tree when they change, and the PLLs take the crystal from the tree: nothing of this goes through Python. The crystal's
-        # frequency is the board's (`chip.xosc_freq`, a parameter of the world). Anything else (a recorder, a reference swapped in by an oracle) is read and told through its Python methods.
-        self._block.set_crystal_hz(<double> rp2040.xosc_freq)
-        if isinstance(xosc, RPXOSC):
-            self._block.bind_xosc((<RPXOSC> xosc)._block)
-            (<RPXOSC> xosc)._block.bind_stable_listener(clocks_retune, <void*> self._block)
-        else:
-            self._block.bind_xosc(NULL)
-        if isinstance(rosc, RPROSC):
-            self._block.bind_rosc((<RPROSC> rosc)._block)
-            (<RPROSC> rosc)._block.bind_frequency_listener(clocks_retune_hz, <void*> self._block)
-        else:
-            self._block.bind_rosc(NULL)
-        for pll in (self._pll_sys, self._pll_usb):
-            (<RPPLL> pll)._block.bind_reference(clocks_xosc_hz, <void*> self._block)
-        if isinstance(dma, RPDMA):
-            # the DMA reads clk_sys from the tree and the tree keeps its cycle time current: the Python listener it registered for that is not needed any more
-            (<RPDMA> dma)._block.bind_clock(clocks_clk_sys, <void*> self._block, self._block.clk_sys())
-            ok = ok and self._block.add_sys_sink(dma_sys_sink, <void*> (<RPDMA> dma)._block)
-        bind_uart_sinks = getattr(rp2040, "_bind_uart_peri_sinks", None)  # (a stand-in chip of a test has none)
-        if bind_uart_sinks is not None:
-            bind_uart_sinks()
-        ok = ok and self._block.add_ref_sink(watchdog_ref_sink, <void*> (<RPWatchdog> watchdog)._block)
-        ok = ok and self._block.add_rtc_sink(rtc_rtc_sink, <void*> (<RP2040RTC> rtc)._block)
-        if not ok:
-            raise RuntimeError("the clock tree's sink lists are full")
 
     def reset(self):
         """The CLOCKS registers back to power-on (the clock tree's `clk_sys` / `clk_peri` are `reset_tree()`'s)."""
