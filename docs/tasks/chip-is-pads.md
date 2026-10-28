@@ -52,6 +52,10 @@ So a user keeps their own diagram and "inheriting a base diagram" is one `type` 
 
 The ~20 boards of `boards/` may move into the package so that everything with a `board.json` is one model; 0059's checklist then becomes a quality gate (a named maintainer, every number sourced), not the condition for being in the package.
 
+### Several wires on one pin: pins joined by wires are one line (decided with the maintainer, 2026-10-28)
+
+A `diagram.json` wire joins exactly two pins; there is no "net" object in the file (two I2C sensors on one bus are two wires from `mcu:GP4`). **At load we group the pins that are joined by wires, and each group is one line** (what a schematic means); a pad conflict (two sources driving one line) is checked per group, not per wire pair, and is an error as above. What Wokwi does is an inference, not a documented fact: its docs (`diagram-format.md`, `chips-api/`, read 2026-10-28) never describe nets, several wires on a pin or contention; but a shared I2C bus is its standard example and its custom-chip I2C API has a device listen on a bus by `scl` / `sda` / address, which only works if wires on one pin are one line. How Wokwi treats two outputs on one line is **not known**.
+
 ### How a part's implementation is found
 
 The diagram says only `"type": "st7735s"` - *what* the part is. *Who implements it* is decided by the registry when the board is loaded, first match wins: (1) what the user registered (`register_part`), (2) what the host registered, (3) what the core has built in (the core reports its built-in types at `boot`), (4) nothing found: an error naming the type, never a silent skip. A registry entry can have several implementations (`st7735s -> {pins, [core, host-python]}`), so the same file works on any host, and replacing a device needs no change to the file. **Decided (maintainer, 2026-10-28): a user or host registration overrides a built-in one silently** - no flag, no log line.
@@ -70,4 +74,4 @@ Later, optional: Wokwi `controls` (sliders while it runs) when there is an inter
 
 ## Not measured, not decided
 
-How many of the ~5.8 k wrapper lines survive stage 2 (NAT, the CYW43 bus glue and the USB host are the candidates to measure first); the cost of pad-level UART / SPI / I2C on the pure-Python build; whether a net of three parts (two Wokwi wires) needs more than point-to-point.
+How many of the ~5.8 k wrapper lines survive stage 2 (NAT, the CYW43 bus glue and the USB host are the candidates to measure first); the cost of pad-level UART / SPI / I2C on the pure-Python build.
