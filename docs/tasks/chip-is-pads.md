@@ -31,6 +31,10 @@ We use `id`, `type`, `attrs` and the first two elements of a connection; `left` 
 
 Device tiers behind the registry: **core** (hot and common: CYW43 gSPI, UART console, LED / button / WS2812, usual SPI/I2C slaves - mounted with no host code), **host** (niche or OS-bound: NAT, windows, viewers - the host registers them), **user** (the same registry). Replacing a device = another `type` in the file; the file's shape does not change. The present direct `attach` and `BoardSpec` stay as the low-level path and for compatibility; the data file is primary, `BoardSpec` is a layer that reads or produces it (a table test: every built-in board has an equivalent diagram).
 
+### How a part's implementation is found
+
+The diagram says only `"type": "st7735s"` - *what* the part is. *Who implements it* is decided by the registry when the board is loaded, first match wins: (1) what the user registered (`register_part`), (2) what the host registered, (3) what the core has built in (the core reports its built-in types at `boot`), (4) nothing found: an error naming the type, never a silent skip. A registry entry can have several implementations (`st7735s -> {pins, [core, host-python]}`), so the same file works on any host, and replacing a device needs no change to the file. **Decided (maintainer, 2026-10-28): a user or host registration overrides a built-in one silently** - no flag, no log line.
+
 ## 5. Three stages
 
 1. **The board file.** A reader of `diagram.json` + the `type -> pins` table; it makes the same `attach` calls as today. Changes nothing on the border, breaks nothing.
