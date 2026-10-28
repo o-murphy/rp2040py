@@ -40,7 +40,7 @@ Device tiers behind the registry (a board is a registry type too): **core** (hot
   "connections": [ ["mcu:D8", "lcd:SCK"] ] }
 ```
 
-So a user keeps their own diagram and "inheriting a base diagram" is one `type` line. `--board xiao-rp2040` stays as it is and is shorthand: the host builds a diagram holding just that one part. **Mandatory:** every named board has a `board.json` (it is its definition); only the defaults `pico` and `pico_w` (and Wokwi's `wokwi-pi-pico` / `board-pi-pico-w` in foreign diagrams) are built into the core and need no file. **Where they live:** the known boards in the package (`boards/`), the user's by an explicit path (`--board-spec path/to/x.board.json`, as `--board-spec path:ATTR` today).
+So a user keeps their own diagram and "inheriting a base diagram" is one `type` line. `--board xiao-rp2040` stays as it is and is shorthand: the host builds a diagram holding just that one part. **Mandatory:** every named board has a `board.json` (it is its definition); only the defaults `pico` and `pico_w` (and Wokwi's `wokwi-pi-pico` / `board-pi-pico-w` in foreign diagrams) are built into the core and need no file. **Where they live:** only `pico` and `pico_w` are built in (today's `BOARDS` registry and `firmware_specs.json`, which hold exactly these two). The ~20 boards of `boards/` are *not* in the package: they stay outside it as `--board-spec` examples, one `<name>.board.json` each, loaded by an explicit path (`--board-spec path/to/x.board.json`, as `--board-spec path:ATTR` today), and graduate into the package only by the promotion checklist of [0059](../records/0059-boardspec-firmware-resolution.md).
 
 ### How a part's implementation is found
 
