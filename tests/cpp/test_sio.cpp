@@ -125,6 +125,9 @@ int main() {
     CHECK(sio.read32(DIV_QUOTIENT) == 0xFFFFFFFFu && sio.read32(DIV_REMAINDER) == 0xFFFFFFF0u);
     sio.write32(DIV_SDIVIDEND, 0);
     CHECK(sio.read32(DIV_QUOTIENT) == 1u);
+    sio.write32(DIV_SDIVIDEND, 0xFFFFF448LL);  // -3000 as a bus write delivers it: a signed divide by zero gives +1 for a negative dividend
+    sio.write32(DIV_SDIVISOR, 0);
+    CHECK(sio.read32(DIV_QUOTIENT) == 1u && sio.read32(DIV_REMAINDER) == 0xFFFFF448u);
     CHECK(env.warns == 0);
 
     // A divisor that is non-zero as written but zero as a 32-bit value cannot divide: the failure is reported, state untouched.
