@@ -56,6 +56,10 @@ The ~20 boards of `boards/` may move into the package so that everything with a 
 
 The diagram says only `"type": "st7735s"` - *what* the part is. *Who implements it* is decided by the registry when the board is loaded, first match wins: (1) what the user registered (`register_part`), (2) what the host registered, (3) what the core has built in (the core reports its built-in types at `boot`), (4) nothing found: an error naming the type, never a silent skip. A registry entry can have several implementations (`st7735s -> {pins, [core, host-python]}`), so the same file works on any host, and replacing a device needs no change to the file. **Decided (maintainer, 2026-10-28): a user or host registration overrides a built-in one silently** - no flag, no log line.
 
+### Which types go into the core first: no decision needed now
+
+Part types start on the host and move into the core one at a time, without touching any diagram. In stage 1 `"type": "st7735s"` resolves to the host's Python class `St7735s`; once someone ports it to the core, the registry gets a second implementation of the same type, and the lookup order above (user, host, core) picks it. **The diagram does not change by one line.** So "which types first" is an optimisation done later, per type, and it is stage 2 that makes it worthwhile (a core-side consumer needs pads to listen to). One requirement holds from stage 1: a part's interface must be the same for both implementations - pins and data streams, no Python objects - which is why the `type -> pins` table is language-neutral.
+
 ## 5. Three stages
 
 1. **The board file.** A reader of `diagram.json` + the `type -> pins` table; it makes the same `attach` calls as today. Changes nothing on the border, breaks nothing.
