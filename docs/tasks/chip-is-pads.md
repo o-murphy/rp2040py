@@ -27,9 +27,20 @@ We use `id`, `type`, `attrs` and the first two elements of a connection; `left` 
 |---|---|
 | **Where does a part's pin list come from?** The file says `lcd.SCK`; something must know `st7735s` has SCK, MOSI, CS, DC. | A table `type -> {pins, attrs, tier}`. The existing `ExternalDevice`s already know their pins in code: copy them once. Names follow Wokwi where it has the type, `rp2040py-*` where it has not (not checked for `St7735s`, `Epd2in9G`, `BootselButton`); every pin fact checked against the datasheet (the "3g rule"). |
 | **How does a user part with host code get loaded?** `"type": "my_sensor"` says *which*, not *what it does*. | `register_part("my_sensor", impl)` in the host's program before the run. Nothing else for now. Loading by path (`--board-spec path:ATTR` exists) stays as it is; Wokwi's WASM chip API (`*.chip.json` + wasm, `docs/chips-api/`) is the language-neutral answer, later and optional. |
-| **Firmware, flash, onboard parts - the format has no place for them.** | Firmware and flash size/layout: a small sibling file (`<board>.toml`, like Wokwi's `wokwi.toml`), so `diagram.json` stays pure Wokwi. Onboard parts (Pico W's CYW43, the QSPI flash): the **board is a type** (`rp2040py-board-xiao-rp2040`) that brings its own parts and fixed nets, as Wokwi models a Pico W as one part; nobody draws them each time. |
+| **Firmware, flash, onboard parts - the format has no place for them.** | A `<name>.board.json` that **defines the board as a type** (see "The board file" below): flash size/layout, firmware per family, the board's pins and its onboard parts with their fixed nets (Pico W's CYW43, the QSPI flash, an onboard LED). `diagram.json` stays pure Wokwi. |
 
-Device tiers behind the registry: **core** (hot and common: CYW43 gSPI, UART console, LED / button / WS2812, usual SPI/I2C slaves - mounted with no host code), **host** (niche or OS-bound: NAT, windows, viewers - the host registers them), **user** (the same registry). Replacing a device = another `type` in the file; the file's shape does not change. The present direct `attach` and `BoardSpec` stay as the low-level path and for compatibility; the data file is primary, `BoardSpec` is a layer that reads or produces it (a table test: every built-in board has an equivalent diagram).
+Device tiers behind the registry (a board is a registry type too): **core** (hot and common: CYW43 gSPI, UART console, LED / button / WS2812, usual SPI/I2C slaves - mounted with no host code), **host** (niche or OS-bound: NAT, windows, viewers - the host registers them), **user** (the same registry). Replacing a device = another `type` in the file; the file's shape does not change. The present direct `attach` and `BoardSpec` stay as the low-level path and for compatibility; the data file is primary, `BoardSpec` is a layer that reads or produces it (a table test: every built-in board has an equivalent diagram).
+
+### The board file (decided with the maintainer, 2026-10-28)
+
+`<name>.board.json` (JSON, like `diagram.json` and Wokwi's `*.chip.json`; any host language reads it without a library) is the **definition of a board type** in the registry, next to the part types. It carries the flash size and layout, the firmware per family (today's `BoardSpec.firmware` / `layout` as data), the board's own pin names (`D8`, `GP17`, ...) and its onboard parts with their fixed nets. **It does not refer to any diagram.** The reference goes the other way: a user's diagram contains the board as an ordinary part, as Wokwi's contains `wokwi-pi-pico`:
+
+```json
+{ "parts": [ {"id": "mcu", "type": "xiao-rp2040"}, {"id": "lcd", "type": "st7735s"} ],
+  "connections": [ ["mcu:D8", "lcd:SCK"] ] }
+```
+
+So a user keeps their own diagram and "inheriting a base diagram" is one `type` line. `--board xiao-rp2040` stays as it is and is shorthand: the host builds a diagram holding just that one part. **Mandatory:** every named board has a `board.json` (it is its definition); only the defaults `pico` and `pico_w` (and Wokwi's `wokwi-pi-pico` / `board-pi-pico-w` in foreign diagrams) are built into the core and need no file. **Where they live:** the known boards in the package (`boards/`), the user's by an explicit path (`--board-spec path/to/x.board.json`, as `--board-spec path:ATTR` today).
 
 ### How a part's implementation is found
 
@@ -45,4 +56,4 @@ Later, optional: Wokwi `controls` (sliders while it runs) when there is an inter
 
 ## Not measured, not decided
 
-How many of the ~5.8 k wrapper lines survive stage 2 (NAT, the CYW43 bus glue and the USB host are the candidates to measure first); the cost of pad-level UART / SPI / I2C on the pure-Python build; whether a net of three parts (two Wokwi wires) needs more than point-to-point; the form of the sibling file for firmware and flash.
+How many of the ~5.8 k wrapper lines survive stage 2 (NAT, the CYW43 bus glue and the USB host are the candidates to measure first); the cost of pad-level UART / SPI / I2C on the pure-Python build; whether a net of three parts (two Wokwi wires) needs more than point-to-point.
