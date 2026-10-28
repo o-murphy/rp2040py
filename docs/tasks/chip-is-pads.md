@@ -1,4 +1,15 @@
-# The chip is its pads: a thin border and a board as data (working note, 2026-10-28 - **nothing here is built**)
+# The chip is its pads: a thin border and a board as data (working note, 2026-10-28 - **set aside, nothing built**)
+
+## Outcome (2026-10-28, the maintainer's decision): set aside; what stays open
+
+The note started from "the wrapper is still thick" and went on to a board as data (Wokwi's `diagram.json`, a registry of part types, KiCad). It ended with a narrower reading, and everything below the line is kept **as the record of what was considered and why it was set aside**:
+
+- **The border is thin enough for embedding.** `tests/cpp/gate_boot.cpp` is a 125-line C++ host, no Python and no Cython, that boots a stock MicroPython and reads the UART; it implements 2 of the 16 slots (`warn`, `uart_byte`). Moving more of the wrapper (NAT, the CYW43 bus glue, the USB host, GDB) into the core would be over-engineering for the gain; they stay optional host-side extras.
+- **Not pursued: a Wokwi/KiCad-like board simulator** (sections 3-5 and the subsections on the board file, base boards, nets and the registry). A PCB-level simulator is not a solo-maintainer task, and for CI and local testing the imperative Python API is already the better interface (a test is code, and anyone can build a system of any complexity with it). KiCad (a netlist importer, later a plugin) was discussed and is also not planned; it would only be another input to the same "parts + lines" model.
+- **What can still be done, each only on its own request:** pads for UART / SPI / I2C ([0106](../records/0106-peripheral-routing-to-pads.md)) **if** a test of the official suite needs them (`machine_uart_irq_*` want TX wired to RX); step 8 of [narrow-the-border-plan.md](narrow-the-border-plan.md) (wasm to the 16 slots) for a browser or Node demo; the packaging gaps listed in [embedding-the-core.md](embedding-the-core.md) (a contract for the call order, a build target, a C ABI beyond the wasm glue).
+
+---
+
 
 Goal: the host glue must be writable **in any language, anywhere** (Python today; JS over wasm, Rust, C tomorrow), so the border must be something a host can implement in a day. After [narrow-the-border-plan.md](narrow-the-border-plan.md) and [narrow-the-input-plan.md](narrow-the-input-plan.md) it is still 16 slots out and 84 names in, which is not thin. Per `CLAUDE.md` this is a note about what *should eventually happen*, not a go-ahead; each stage needs its own "yes". Related: [0106](../records/0106-peripheral-routing-to-pads.md) (pads for UART/SPI/I2C), [0102](../records/0102-c-abi-for-the-core.md), [0103](../records/0103-wasm-backend.md), [chip-protocol-sketch.md](chip-protocol-sketch.md), [embedding-the-core.md](embedding-the-core.md), [0049](../records/0049-external-device-authoring-docs.md) / [0067](../records/0067-external-devices-and-boards-skill.md).
 
