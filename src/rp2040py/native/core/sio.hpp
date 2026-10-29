@@ -153,7 +153,9 @@ public:
             return false;
         }
         if (c.div_divisor == 0) {
-            c.div_quotient = c.div_dividend > 0 ? -1.0 : 1.0;
+            // The sign is the dividend's as a 32-bit word (signed for SDIVIDEND, unsigned for UDIVIDEND), as a bus write delivers it - not the sign of the raw value the host passed in.
+            const int64_t dividend = signed_division ? s32(c.div_dividend) : u32(c.div_dividend);
+            c.div_quotient = dividend > 0 ? -1.0 : 1.0;
             c.div_remainder = c.div_dividend;
         } else if (signed_division) {
             const int64_t dividend = s32(c.div_dividend), divisor = s32(c.div_divisor);

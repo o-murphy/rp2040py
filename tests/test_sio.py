@@ -97,6 +97,19 @@ class TestHardwareDivider:
         assert cpu.read_int32(SIO_DIV_REMAINDER) == -3000
         assert cpu.read_int32(SIO_DIV_QUOTIENT) == 1
 
+    def test_signed_division_by_zero_negative_dividend_as_a_32_bit_word(self, cpu):
+        # What a store from firmware delivers: -3000 as 0xFFFFF448, never a negative number (record 0099, step 2a)
+        cpu.write_uint32(SIO_DIV_SDIVIDEND, 0xFFFFF448)
+        cpu.write_uint32(SIO_DIV_SDIVISOR, 0)
+        assert cpu.read_int32(SIO_DIV_REMAINDER) == -3000
+        assert cpu.read_int32(SIO_DIV_QUOTIENT) == 1
+
+    def test_unsigned_division_by_zero_negative_number_dividend(self, cpu):
+        # The same value written as a negative number through UDIVIDEND is a large unsigned dividend: the quotient is all ones
+        cpu.write_uint32(SIO_DIV_UDIVIDEND, -3000)
+        cpu.write_uint32(SIO_DIV_UDIVISOR, 0)
+        assert cpu.read_uint32(SIO_DIV_QUOTIENT) == 0xFFFFFFFF
+
     def test_signed_division_0x80000000_over_2(self, cpu):
         cpu.write_uint32(SIO_DIV_SDIVIDEND, 0x80000000)
         cpu.write_uint32(SIO_DIV_SDIVISOR, 2)

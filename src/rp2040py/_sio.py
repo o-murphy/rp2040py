@@ -315,7 +315,9 @@ class RPSIO:
 
     def update_hardware_divider(self, signed: bool) -> None:
         if self.div_divisor == 0:
-            self.div_quotient = -1 if self.div_dividend > 0 else 1
+            # The sign is the dividend's as a 32-bit word (signed for SDIVIDEND, unsigned for UDIVIDEND), as a bus write delivers it - not the sign of the raw value the host passed in.
+            dividend = s32(self.div_dividend) if signed else u32(self.div_dividend)
+            self.div_quotient = -1 if dividend > 0 else 1
             self.div_remainder = self.div_dividend
         elif signed:
             dividend, divisor = s32(self.div_dividend), s32(self.div_divisor)
