@@ -5,7 +5,7 @@ requires = [
     "setuptools-scm>=8",
     "cython>=3.2.9",
     "wheel",
-    "ziglang>=0.16.0,<0.17",
+    "ziglang>=0.16.0,<0.18",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -194,6 +194,6 @@ dev = [
     "cython>=3.2.9",
     "setuptools>=84",
     "pytest-xdist>=3.8.0",
-    "ziglang>=0.16.0,<0.17",
+    "ziglang>=0.16.0,<0.18",
     "wasmhost>=0.1.0",
 ]
