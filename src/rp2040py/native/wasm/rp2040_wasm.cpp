@@ -212,6 +212,26 @@ RP2040_EXPORT(rp2040_core_set_register) void rp2040_core_set_register(uint32_t c
 RP2040_EXPORT(rp2040_register) uint32_t rp2040_register(uint32_t index) { return rp2040_core_register(0, index); }
 RP2040_EXPORT(rp2040_set_register) void rp2040_set_register(uint32_t index, uint32_t value) { rp2040_core_set_register(0, index, value); }
 
+// The bus as the core's own loads and stores see it (docs/tasks/narrow-the-input-plan.md: `read32` / `write32` are the host's whole reach into the blocks' registers), and the CPU's special
+// registers (SYSM numbers of the Thumb MRS/MSR: 0 APSR, 3 XPSR, 5 IPSR, 8 MSP, 9 PSP, 16 PRIMASK, 20 CONTROL). A test host drives a bare core with them; `rp2040_step` runs ONE instruction of core 0
+// without advancing time (what rp2040js's `step()` and the instruction specs expect) and returns its cycle count, or -1 when the core faulted.
+RP2040_EXPORT(rp2040_read32) uint32_t rp2040_read32(uint32_t address) { return g_mcu.bus.read32(address); }
+RP2040_EXPORT(rp2040_read16) uint32_t rp2040_read16(uint32_t address) { return g_mcu.bus.read16(address); }
+RP2040_EXPORT(rp2040_read8) uint32_t rp2040_read8(uint32_t address) { return g_mcu.bus.read8(address); }
+RP2040_EXPORT(rp2040_write32) void rp2040_write32(uint32_t address, uint32_t value) { g_mcu.bus.write32(address, value); }
+RP2040_EXPORT(rp2040_write16) void rp2040_write16(uint32_t address, uint32_t value) { g_mcu.bus.write16(address, value); }
+RP2040_EXPORT(rp2040_write8) void rp2040_write8(uint32_t address, uint32_t value) { g_mcu.bus.write8(address, value); }
+
+RP2040_EXPORT(rp2040_core_special) uint32_t rp2040_core_special(uint32_t core, uint32_t sysm) {
+    uint32_t value = 0;
+    if (core < 2) g_mcu.core(static_cast<uint8_t>(core)).read_special_register(sysm, &value);
+    return value;
+}
+RP2040_EXPORT(rp2040_core_set_special) void rp2040_core_set_special(uint32_t core, uint32_t sysm, uint32_t value) {
+    if (core < 2) g_mcu.core(static_cast<uint8_t>(core)).write_special_register(sysm, value);
+}
+RP2040_EXPORT(rp2040_step) int32_t rp2040_step() { return g_mcu.core(0).execute(); }
+
 // Exactly `count` instructions at most (a host that knows how long its program is runs no more: the rest of a slice would execute whatever follows the program), capped at a million. Returns the
 // instructions run, or -1 when the core faulted.
 RP2040_EXPORT(rp2040_run_n) int64_t rp2040_run_n(uint32_t count) {
