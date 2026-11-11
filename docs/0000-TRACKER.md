@@ -87,6 +87,7 @@ and `reference/` for those). The structure itself is decided in
 
 ### Implemented
 
+- [x] [0108] no binary wheel for CPython 3.10 | `drop-cp310-wheel`; `build` loses `cp310-*`, a 3.10 install takes the pure-Python wheel, `requires-python` unchanged
 - [x] [0107] less CI load without less coverage: build once, loop the firmware versions in `scripts/ci/*.sh` | `ci/reduce-load`; one package build per runtime, no pure-build oracle repeat, no tag-push duplicates; the official-suite groups equal to the baseline
 - [x] [0098] CLOCKS and PLL: audit against datasheet 2.15 / 2.18, then the C++ port | reference fixed, `core/clocks.hpp` + `core/pll.hpp` held to a lockstep oracle; resus, switch delays, clock gating documented not built
 - [x] [0098] USB: audit against datasheet 4.1 and TinyUSB, then the C++ port | twelve findings fixed, `core/usb.hpp` held to a lockstep oracle; token-level wire, suspend/resume, device SOF documented not built
@@ -299,6 +300,7 @@ record is added.
 [0098]: records/0098-datasheet-conformance-audit.md
 [0104]: records/0104-second-core-seams-and-architecture.md
 [0107]: records/0107-ci-load-reduction.md
+[0108]: records/0108-drop-cp310-binary-wheel.md
 [0106]: records/0106-peripheral-routing-to-pads.md
 [0105]: records/0105-time-architecture-audit.md
 [0103]: records/0103-wasm-backend.md

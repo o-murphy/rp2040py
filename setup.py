@@ -25,7 +25,8 @@ directly: forcing the floor down to 3.10 fails to compile - Py_buffer's struct f
 strides/itemsize, are hidden by CPython's own headers below the 3.11 hex gate). Below that floor,
 or on free-threaded builds (Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible per PEP
 703), falls back to a normal, version-specific extension - which also means 3.10 (this project's
-default dev target, see .python-version) always gets the normal build, never abi3. What abi3
+default dev target, see .python-version) always gets the normal build, never abi3 - and, since
+docs/records/0108, no 3.10 wheel is published: pip there takes the pure-Python wheel. What abi3
 costs, measured 2026-10-20 on CPython 3.11, same source, abi3 vs. normal (docs/records/0013-cython-core.md,
 the remeasurement at its end): ~1.9x slower only for a loop that calls the native core once per
 instruction from Python (`rp2040py bench`'s synthetic mode: ~13.4M vs. ~24.9M calls/sec, about 35 ns
@@ -285,7 +286,7 @@ if USE_LIMITED_API:
     from wheel.bdist_wheel import bdist_wheel
 
     # py_limited_api=True on the Extension above tells Cython/the compiler to build against the
-    # limited API; this subclass is what actually tags the *wheel* filename as cp310-abi3-* -
+    # limited API; this subclass is what actually tags the *wheel* filename as cp311-abi3-* -
     # they're two separate settings, not one.
     class _bdist_wheel_abi3(bdist_wheel):
         def finalize_options(self):

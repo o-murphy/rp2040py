@@ -147,14 +147,16 @@ fallback_version = "0.0.0.dev0"
 [tool.cibuildwheel]
 # Use uv and build
 build-frontend = "build[uv]"
-# cp310 gets its own normal, version-specific wheel: Py_LIMITED_API's buffer-protocol support
+# No cp310 wheel (docs/records/0108): 3.10 is end-of-life, and Py_LIMITED_API's buffer-protocol support
 # (needed by this project's typed memoryviews) only entered the limited API at 3.11 - confirmed
-# by trying to force the floor down to 3.10, which fails to compile (see setup.py/docs/BACKLOG.md).
+# by trying to force the floor down to 3.10, which fails to compile (see setup.py/docs/BACKLOG.md) - so
+# it would be a fourth, non-abi3 build on every platform. pip on 3.10 takes the pure-Python wheel
+# (publish.yml's build-pure); requires-python stays >=3.10.
 # cp311-* builds once and self-tags as cp311-abi3 (setup.py's _bdist_wheel_abi3), covering every
 # 3.11+ interpreter with that one wheel. Free-threaded builds (cp314t-*, cp315t-*) are separate
 # for the usual reason: Py_LIMITED_API and Py_GIL_DISABLED are mutually incompatible, so each
 # free-threaded minor version needs its own non-abi3 wheel.
-build = "cp310-* cp311-* cp314t-* cp315t-*"
+build = "cp311-* cp314t-* cp315t-*"
 test-extras = "fs"
 # pytest-xdist: the project's addopts is `-rf -n auto` (the Android and Pyodide sections below drop it: neither can fork workers)
 test-requires = "pytest pytest-xdist"

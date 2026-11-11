@@ -592,7 +592,9 @@ reference the native blocks are tested against, and as the fallback.
 This is on by default and needs nothing from you: `pip install rp2040py` builds it automatically
 when a C compiler is available (prebuilt wheels are published for common platforms, so most
 installs don't even need one) and falls back to the identical pure-Python implementation otherwise
-- correctness is the same either way, just the speed differs. A couple of environment variables
+- correctness is the same either way, just the speed differs. (CPython 3.10 has no prebuilt wheel since
+[record 0108](docs/records/0108-drop-cp310-binary-wheel.md): pip takes the pure-Python wheel there; use
+`pip install rp2040py --no-binary rp2040py` with a compiler for the native build.) A couple of environment variables
 exist for cases where you want to control this explicitly:
 
 - `RP2040PY_SKIP_CYTHON=1` - force the pure-Python implementation at runtime, even if the compiled

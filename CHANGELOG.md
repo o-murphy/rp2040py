@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **No compiled wheel for CPython 3.10 any more** ([record 0108](docs/records/0108-drop-cp310-binary-wheel.md)): 3.10 is end-of-life, and it was the only interpreter that needed a fourth, non-abi3 build on every platform. `pip install rp2040py` on 3.10 now takes the pure-Python wheel (same behaviour, much slower: ~0.02 s against ~1.9 s for the MicroPython boot in the README); the compiled extension is still available there with `pip install rp2040py --no-binary rp2040py` and a C compiler. `requires-python` is unchanged (`>=3.10`); the `cp311-abi3` and the free-threaded wheels are as before.
+
 ## [1.0.0b2] - 2026-10-27
 
 ### Changed
