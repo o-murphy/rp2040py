@@ -186,6 +186,7 @@ and `reference/` for those). The structure itself is decided in
 - [0017] performance: pure-Python vs V8 → [0011], [0013], [0015], [0016]
 - [0018] raw-REPL cross-thread `tx_fifo` (postmortem) → [0014]
 - [0024] CYW43439 protocol reverse-engineering → [0027], [0028], [0029], [0030]
+- [0109] measurements: the Python <-> core border (ctypes, nanobind, Cython) and devices written in a script (Lua, QuickJS, MicroPython) → [0096], [0102], [0103]
 
 ## Reference (living, unnumbered)
 
@@ -299,6 +300,7 @@ record is added.
 [0098]: records/0098-datasheet-conformance-audit.md
 [0104]: records/0104-second-core-seams-and-architecture.md
 [0107]: records/0107-ci-load-reduction.md
+[0109]: records/0109-binding-and-device-runtime-measurements.md
 [0106]: records/0106-peripheral-routing-to-pads.md
 [0105]: records/0105-time-architecture-audit.md
 [0103]: records/0103-wasm-backend.md
