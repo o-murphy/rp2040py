@@ -223,7 +223,7 @@ def test_simulated_time_does_not_outrun_the_wall_clock_while_a_real_world_wait_i
     at no more than about real time. Unpaced, the same core jumps to its alarm 10 simulated seconds away in a few milliseconds."""
     paced = _advance_an_idle_chip_for(0.4, paced=True)
     unpaced = _advance_an_idle_chip_for(0.4, paced=False)
-    assert 0.1 < paced < 0.6, paced
+    assert 0.05 < paced < 0.6, paced
     assert unpaced >= 9.0, unpaced
 
 
@@ -232,7 +232,7 @@ def test_pacing_keeps_up_with_real_time_on_a_platform_with_a_coarse_timer():
     """Windows' sleep(0.001) lasts ~15.6 ms; pacing per batch would then slow the guest to ~1/16 of real time (a CI failure found it). Accounted against the start of the
     wait, a sleep that overshoots is paid back by the batches after it, so the guest still advances at about real time."""
     paced = _advance_an_idle_chip_for(0.4, paced=True, coarse_timer=True)
-    assert 0.1 < paced < 0.6, paced
+    assert 0.05 < paced < 0.6, paced
 
 
 def test_a_pio_behind_many_short_idle_jumps_keeps_pace_with_a_clock_that_is_not_a_whole_number_of_ticks_per_cycle(

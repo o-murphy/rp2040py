@@ -827,13 +827,12 @@ class StateMachine:
                 self._update_dma_tx()
                 self.pio._check_interrupts()
 
-        elif self.wait_type == WaitType.OUT:
-            if not self.tx_fifo.empty:
-                self.output_shift_reg = self.tx_fifo.pull()
-                self.out_instruction(self.wait_index)
-                self.waiting = False
-                self._update_dma_tx()
-                self.pio._check_interrupts()
+        elif self.wait_type == WaitType.OUT and not self.tx_fifo.empty:
+            self.output_shift_reg = self.tx_fifo.pull()
+            self.out_instruction(self.wait_index)
+            self.waiting = False
+            self._update_dma_tx()
+            self.pio._check_interrupts()
 
         if not self.waiting:
             self.next_pc()

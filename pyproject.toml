@@ -1,11 +1,11 @@
 [build-system]
-# ziglang compiles the wasm module of record 0103 (build_wasm.py, called from setup.py's build_py). Pinned below 0.17: 0.17.0 is only partly uploaded to PyPI (no Windows wheels).
+# ziglang compiles the wasm module of record 0103 (build_wasm.py, called from setup.py's build_py). Floor 0.17.1: 0.17.0 was yanked (only partly uploaded, no Windows wheels; pypi/support#12655), 0.17.0.post0 and 0.17.1 have all wheels. No upper bound: nothing known breaks on a newer one.
 requires = [
     "setuptools>=84",
     "setuptools-scm>=8",
     "cython>=3.2.9",
     "wheel",
-    "ziglang>=0.16.0,<0.17",
+    "ziglang>=0.17.1",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -163,6 +163,13 @@ test-requires = "pytest pytest-xdist"
 # still find the test suite itself (tests/ isn't part of the wheel).
 test-command = "pytest {project}/tests --oracle=smoke"
 
+[[tool.cibuildwheel.overrides]]
+# Docker 29.4.2 (the ubuntu-26.04 runner image) denies socketcall in its default seccomp profile; 32-bit glibc
+# makes every socket call through it, so uv aborts with ENOSYS inside the i686 container (actions/runner-images#14790,
+# astral-sh/uv#23147). 29.4.3 reverts the deny. tests/test_ci_workarounds.py fails once the runner no longer needs this.
+select = "*-manylinux_i686"
+container-engine = { name = "docker", create-args = ["--security-opt", "seccomp=unconfined"] }
+
 [tool.cibuildwheel.android]
 test-extras = ""
 test-requires = "pytest"
@@ -175,9 +182,10 @@ build = "cp313-pyodide_* cp314-pyodide_* cp315-pyodide_*"
 # Not "fs": littlefs-python has no wasm32/emscripten wheel, so installing it here fails outright
 # (confirmed 2026-10-05) - same reason as the android section's own test-extras override above.
 test-extras = ""
-# platformdirs 4.14.0 (pulled in by mpremote) does `from os import geteuid` at import time, which Pyodide's `os` lacks, so it
-# breaks pytest's own plugin loading; drop the cap once https://github.com/tox-dev/platformdirs/issues/675 is fixed.
-test-requires = "pytest platformdirs<4.14"
+# platformdirs 4.14.0 (pulled in by mpremote) did `from os import geteuid` at import time, which Pyodide's `os` lacks, so it broke pytest's own plugin
+# loading (https://github.com/tox-dev/platformdirs/issues/675). The fix (PR 676: fall back to `getuid`) is tagged 4.14.1, which was never published to PyPI, so 4.14.2+ is the first release
+# that has it (checked on Pyodide 314.0.7: 4.14.0 fails to import, 4.14.2-4.14.5 import). Only 4.14.0 is excluded, not a range.
+test-requires = "pytest platformdirs!=4.14.0"
 # The whole suite, as on every other platform: tests that need what Emscripten/WASM does not have (real sockets, subprocesses, OS threads, network firmware fetches) must skip or fail
 # loudly here rather than be left out of the command. record 0096's thread-free engine is the fix for the "no pthreads" problem that kept this platform disabled; the native
 # extension compiles and loads for wasm32-emscripten (not a silent pure-Python fallback). wasm32 is a 32-bit address space whose memory never shrinks, so it shares the 32-bit
@@ -196,6 +204,6 @@ dev = [
     "cython>=3.2.9",
     "setuptools>=84",
     "pytest-xdist>=3.8.0",
-    "ziglang>=0.16.0,<0.17",
+    "ziglang>=0.17.1",
     "wasmhost>=0.1.0",
 ]
