@@ -163,6 +163,13 @@ test-requires = "pytest pytest-xdist"
 # still find the test suite itself (tests/ isn't part of the wheel).
 test-command = "pytest {project}/tests --oracle=smoke"
 
+[[tool.cibuildwheel.overrides]]
+# Docker 29.4.2 (the ubuntu-26.04 runner image) denies socketcall in its default seccomp profile; 32-bit glibc
+# makes every socket call through it, so uv aborts with ENOSYS inside the i686 container (actions/runner-images#14790,
+# astral-sh/uv#23147). 29.4.3 reverts the deny. tests/test_ci_workarounds.py fails once the runner no longer needs this.
+select = "*-manylinux_i686"
+container-engine = { name = "docker", create-args = ["--security-opt", "seccomp=unconfined"] }
+
 [tool.cibuildwheel.android]
 test-extras = ""
 test-requires = "pytest"
