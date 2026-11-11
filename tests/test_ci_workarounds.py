@@ -11,6 +11,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from utils.emscripten import needs_processes
+
+pytestmark = needs_processes  # the Pyodide test run inherits the runner's environment but has no processes
 
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 WORKAROUND = "seccomp=unconfined"
