@@ -59,6 +59,7 @@ jobs:
           cd pico-examples && mkdir build && cd build && cmake .. && make -C hello_world/usb -j4 && make -C hello_world/serial -j4
         env:
           SDK_VERSION: ${{ matrix.sdk_version }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           PICO_SDK_PATH: ~/pico/pico-sdk
 
       - name: Collect the images
